@@ -1,0 +1,24 @@
+installationId: internal-a
+mode: sqlite
+
+image:
+  repository: ghcr.io/memeloop-online/memeloop-workspace-control
+  tag: latest
+
+secrets:
+  encryptionSecretName: mwc-internal-a-encryption
+  internalAuthSecretName: mwc-internal-a-internal-auth
+
+sqlite:
+  storageClassName: managed-delete
+  size: 10Gi
+
+workspace:
+  storageClassName: managed-delete
+  ttydImage: tsl0922/ttyd:1.7.7
+
+jumpHost:
+  enabled: false
+
+autoscaling:
+  enabled: false

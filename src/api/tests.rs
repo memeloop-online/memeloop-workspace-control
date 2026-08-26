@@ -70,6 +70,28 @@ async fn embedded_ui_and_hashed_assets_are_served() {
 }
 
 #[tokio::test]
+async fn public_listener_does_not_expose_internal_routes_or_spa_fallback_for_api_paths() {
+    let app = test_app().await;
+    for path in [
+        "/api/v1/internal/ssh/login-users",
+        "/api/v1/internal/web-shell/authorize",
+        "/api/v1/does-not-exist",
+    ] {
+        let response = app
+            .clone()
+            .oneshot(Request::get(path).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND, "{path}");
+    }
+    let spa_route = app
+        .oneshot(Request::get("/workspaces").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(spa_route.status(), StatusCode::OK);
+}
+
+#[tokio::test]
 async fn info_and_metrics_expose_only_operational_metadata() {
     let app = test_app().await;
     let response = app

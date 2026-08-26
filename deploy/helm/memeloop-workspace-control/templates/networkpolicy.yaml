@@ -17,7 +17,7 @@ spec:
               kubernetes.io/metadata.name: {{ .Values.higress.namespace }}
           podSelector:
             matchLabels:
-              app.kubernetes.io/name: higress-gateway
+              {{- toYaml .Values.higress.podLabels | nindent 14 }}
       ports:
         - protocol: TCP
           port: 8080

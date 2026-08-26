@@ -46,6 +46,13 @@ app.kubernetes.io/instance: {{ include "mwc.name" . }}
 {{- if and (eq .Values.mode "postgresql") (not .Values.database.postgresSecretName) -}}
 {{- fail "database.postgresSecretName is required in postgresql mode" -}}
 {{- end -}}
+{{- if and (eq .Values.mode "postgresql") .Values.autoscaling.enabled -}}
+{{- $cpuRequest := dig "requests" "cpu" "" .Values.resources -}}
+{{- $memoryRequest := dig "requests" "memory" "" .Values.resources -}}
+{{- if or (not $cpuRequest) (not $memoryRequest) -}}
+{{- fail "resources.requests.cpu and resources.requests.memory are required when autoscaling is enabled" -}}
+{{- end -}}
+{{- end -}}
 {{- if not .Values.secrets.encryptionSecretName -}}
 {{- fail "secrets.encryptionSecretName is required" -}}
 {{- end -}}
@@ -55,8 +62,14 @@ app.kubernetes.io/instance: {{ include "mwc.name" . }}
 {{- if not .Values.workspace.ttydImage -}}
 {{- fail "workspace.ttydImage must be an explicitly pinned image" -}}
 {{- end -}}
+{{- if and .Values.public.webShellDomain (empty .Values.higress.podLabels) -}}
+{{- fail "higress.podLabels must identify the gateway Pods when public Web Shell is configured" -}}
+{{- end -}}
 {{- if and .Values.public.webShellDomain (not .Values.higress.extAuthPluginUrl) -}}
 {{- fail "higress.extAuthPluginUrl is required when public.webShellDomain is configured" -}}
+{{- end -}}
+{{- if and .Values.public.webShellDomain (not .Values.networkPolicy.enabled) -}}
+{{- fail "networkPolicy.enabled must remain true when public.webShellDomain is configured" -}}
 {{- end -}}
 {{- if and .Values.public.webShellDomain (ne .Values.public.webShellOrigin (printf "https://%s" .Values.public.webShellDomain)) -}}
 {{- fail "public.webShellOrigin must equal https://<public.webShellDomain>" -}}

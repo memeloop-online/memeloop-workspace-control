@@ -68,11 +68,16 @@ Chart 位于 `deploy/helm/memeloop-workspace-control`：
 - 公网 SSH 始终只有一条固定 TCPRoute，后端是标准 OpenSSH 跳板 Deployment。
 - ttyd WebSocket HTTPRoute 按工作区创建，Higress external-auth 消费一次性 ticket。
 
-公网示例见 `values.example.yaml`。安装前需提供数据库、信封加密、内部鉴权和跳板 host key Secret，并确认管理型 StorageClass 的 `reclaimPolicy` 为 `Delete`。
+公网 PostgreSQL 示例见 `values.example.yaml`，内网 SQLite 示例见
+`values.internal.example.yaml`。安装前需提供数据库、信封加密、内部鉴权和跳板 host key Secret，并确认管理型 StorageClass 的 `reclaimPolicy` 为 `Delete`。
+Chart 为控制面和标准 OpenSSH 跳板提供了默认 CPU/内存 requests 与 limits；PostgreSQL
+启用 HPA 时若移除控制面 CPU 或内存 request，模板会直接拒绝渲染。
 
 ## 验收
 
 本地门禁验证纯业务、密文、迁移、租约、资源模型、HTTP API、SSE、OpenSSH 授权输出和嵌入 UI。真实 ProxyJump/SFTP/SCP/端口转发、ttyd/Higress、PostgreSQL 多副本与安装共存必须按 [KCS 验收清单](docs/KCS-ACCEPTANCE.md) 在自有 KCS 实例执行。
+清单配套的 `scripts/kcs/preflight.sh`、`verify-installation.sh` 和
+`verify-workspace-cleanup.sh` 均为只读检查，并要求显式指定目标安装信息。
 
 ## 质量门禁
 

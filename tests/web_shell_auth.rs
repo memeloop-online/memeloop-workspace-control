@@ -141,10 +141,10 @@ async fn web_shell_ticket_is_ready_only_scoped_and_consumed_once() {
     assert_eq!(page.status(), StatusCode::OK);
     assert!(!page.headers().contains_key("x-mwc-user-id"));
 
-    let first = internal_app.oneshot(authorize()).await.unwrap();
+    let first = internal_app.clone().oneshot(authorize()).await.unwrap();
     assert_eq!(first.status(), StatusCode::OK);
     assert_eq!(first.headers()["x-mwc-user-id"], user.user_id.to_string());
-    let replay = app.oneshot(authorize()).await.unwrap();
+    let replay = internal_app.oneshot(authorize()).await.unwrap();
     assert_eq!(replay.status(), StatusCode::UNAUTHORIZED);
 }
 

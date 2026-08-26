@@ -210,14 +210,34 @@ fn resource_builder(
             ));
         }
     }
+    let higress_pod_labels = match std::env::var("MWC_HIGRESS_POD_LABELS_JSON") {
+        Ok(value) => {
+            let labels: BTreeMap<String, String> =
+                serde_json::from_str(&value).map_err(|error| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        format!("MWC_HIGRESS_POD_LABELS_JSON must be a JSON string map: {error}"),
+                    )
+                })?;
+            if labels.is_empty() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "MWC_HIGRESS_POD_LABELS_JSON must not be empty",
+                ));
+            }
+            labels
+        }
+        Err(std::env::VarError::NotPresent) => BTreeMap::from([(
+            "app.kubernetes.io/name".to_owned(),
+            "higress-gateway".to_owned(),
+        )]),
+        Err(error) => return Err(io::Error::new(io::ErrorKind::InvalidInput, error)),
+    };
     Ok(ResourceBuilder {
         installation_id: config.installation_id.clone(),
         ttyd_image,
         higress_namespace,
-        higress_pod_labels: BTreeMap::from([(
-            "app.kubernetes.io/name".to_owned(),
-            "higress-gateway".to_owned(),
-        )]),
+        higress_pod_labels,
         jump_host_namespace,
         jump_host_pod_labels: BTreeMap::from([(
             "app.kubernetes.io/name".to_owned(),

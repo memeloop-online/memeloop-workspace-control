@@ -3,6 +3,45 @@
 Run this checklist only against an owned KCS instance. It deliberately does not create a local
 Kubernetes/K3s version matrix.
 
+## Automated safety gates
+
+Run the read-only preflight before Helm changes. All target-identifying values are mandatory:
+
+```bash
+export KCS_INSTALLATION_ID=public-a
+export KCS_RELEASE_NAMESPACE=mwc-public-a
+export KCS_STORAGE_CLASS=managed-delete
+export KCS_MODE=postgresql
+export KCS_PUBLIC_SSH=true
+export KCS_PUBLIC_WEB_SHELL=true
+export KCS_HIGRESS_NAMESPACE=higress-system
+export KCS_HIGRESS_GATEWAY=higress-gateway
+export KCS_HIGRESS_POD_SELECTOR=app.kubernetes.io/name=higress-gateway
+scripts/kcs/preflight.sh
+```
+
+Set Helm `higress.podLabels` to the same selector labels verified by the preflight.
+
+After rollout, verify workload shape, readiness, owner labels and workspace namespace prefixes:
+
+```bash
+export KCS_EXPECT_PUBLIC_SSH=true
+export KCS_EXPECT_PUBLIC_WEB_SHELL=true
+scripts/kcs/verify-installation.sh
+```
+
+After an API delete reaches `deleted`, prove that the namespace and all workspace-labelled
+objects are gone:
+
+```bash
+export KCS_WORKSPACE_ID=00000000-0000-0000-0000-000000000000
+export KCS_WORKSPACE_NAMESPACE=ws-public-a-00000000
+scripts/kcs/verify-workspace-cleanup.sh
+```
+
+The scripts do not install, patch or delete resources. Preserve their output together with the
+API responses and OpenSSH command transcripts as acceptance evidence.
+
 ## Installation topology
 
 1. Install `internal-a` with SQLite and no public SSH route.

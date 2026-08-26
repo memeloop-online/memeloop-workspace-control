@@ -199,15 +199,6 @@ pub fn router(state: Arc<AppState>) -> Router {
             "/api/v1/workspaces/{workspace_id}/web-shell-tickets",
             post(web_shell::issue),
         )
-        .route(
-            "/api/v1/internal/web-shell/authorize",
-            get(web_shell::authorize),
-        )
-        .route(
-            "/api/v1/internal/ssh/authorized-key",
-            get(ssh::authorized_key),
-        )
-        .route("/api/v1/internal/ssh/login-users", get(ssh::login_users))
         .route("/api/v1/openapi.json", get(openapi))
         .fallback(ui::asset)
         .layer(axum::middleware::from_fn_with_state(

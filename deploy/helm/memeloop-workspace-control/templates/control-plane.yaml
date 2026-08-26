@@ -22,7 +22,7 @@ spec:
   template:
     metadata:
       labels:
-        {{- include "mwc.selectorLabels" . | nindent 8 }}
+        {{- include "mwc.labels" . | nindent 8 }}
     spec:
       serviceAccountName: {{ include "mwc.name" . }}
       securityContext:
@@ -60,6 +60,8 @@ spec:
               value: {{ .Values.higress.namespace | quote }}
             - name: MWC_HIGRESS_GATEWAY_NAME
               value: {{ .Values.higress.gatewayName | quote }}
+            - name: MWC_HIGRESS_POD_LABELS_JSON
+              value: {{ .Values.higress.podLabels | toJson | quote }}
             - name: MWC_HIGRESS_HTTPS_SECTION_NAME
               value: {{ .Values.higress.httpsSectionName | quote }}
             - name: MWC_JUMP_HOST_NAMESPACE

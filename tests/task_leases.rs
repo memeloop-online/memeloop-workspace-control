@@ -150,6 +150,58 @@ async fn database_cannot_be_reused_by_another_installation() {
 }
 
 #[tokio::test]
+async fn sqlite_file_recovers_authoritative_state_and_expired_jobs_after_restart() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("recover.sqlite");
+    let url = format!("sqlite://{}?mode=rwc", path.display());
+    let installation_id = "sqlite-recovery"
+        .parse::<memeloop_workspace_control::config::InstallationId>()
+        .unwrap();
+    let first = Database::connect(&url, installation_id.clone())
+        .await
+        .unwrap();
+    first.migrate().await.unwrap();
+    let job_id = first
+        .enqueue_job(
+            NewJob {
+                kind: "restart-recovery".to_owned(),
+                workspace_id: None,
+                payload: serde_json::json!({"durable": true}),
+                available_at: 10,
+            },
+            10,
+        )
+        .await
+        .unwrap();
+    first
+        .claim_job("before-restart", 10, Duration::from_secs(5))
+        .await
+        .unwrap()
+        .unwrap();
+    drop(first);
+
+    let recovered = Database::connect(&url, installation_id).await.unwrap();
+    recovered.migrate().await.unwrap();
+    assert!(
+        recovered
+            .claim_job("after-restart", 15, Duration::from_secs(5))
+            .await
+            .unwrap()
+            .is_none(),
+        "a lease is still valid at its exact expiry boundary"
+    );
+    assert_eq!(
+        recovered
+            .claim_job("after-restart", 16, Duration::from_secs(5))
+            .await
+            .unwrap()
+            .unwrap()
+            .id,
+        job_id
+    );
+}
+
+#[tokio::test]
 async fn migrations_are_versioned_and_idempotent() {
     let database = Database::connect("sqlite::memory:", "migration-test".parse().unwrap())
         .await

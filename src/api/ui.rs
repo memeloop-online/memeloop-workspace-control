@@ -18,7 +18,8 @@ pub(super) async fn asset(uri: Uri) -> Response<Body> {
     if let Some(asset) = UiAssets::get(path) {
         return response(path, asset.data.into_owned(), StatusCode::OK);
     }
-    if !path.contains('.')
+    if !path.starts_with("api/")
+        && !path.contains('.')
         && let Some(index) = UiAssets::get("index.html")
     {
         return response("index.html", index.data.into_owned(), StatusCode::OK);

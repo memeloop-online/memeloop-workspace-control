@@ -11,8 +11,44 @@ permissions:
 jobs:
   verify:
     runs-on: ubuntu-latest
+    outputs:
+      image-inputs-changed: ${{ steps.image-inputs.outputs.changed }}
+    services:
+      postgres:
+        image: postgres:17-bookworm
+        env:
+          POSTGRES_DB: mwc_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d mwc_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - id: image-inputs
+        name: Detect container image input changes
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BEFORE_SHA: ${{ github.event.before }}
+          CURRENT_SHA: ${{ github.sha }}
+        run: |
+          if [ "${EVENT_NAME}" != "push" ]; then
+            changed=false
+          elif [ "${BEFORE_SHA}" = "0000000000000000000000000000000000000000" ]; then
+            changed=true
+          elif git diff --quiet "${BEFORE_SHA}" "${CURRENT_SHA}" -- \
+            .dockerignore Cargo.toml Cargo.lock Dockerfile src web images; then
+            changed=false
+          else
+            changed=true
+          fi
+          echo "changed=${changed}" >> "${GITHUB_OUTPUT}"
       - uses: dtolnay/rust-toolchain@1.97.1
         with:
           components: rustfmt, clippy
@@ -26,6 +62,8 @@ jobs:
       - run: cargo fmt --all -- --check
       - run: cargo clippy --locked --all-targets --all-features -- -D warnings
       - run: cargo test --locked --all-features
+        env:
+          MWC_TEST_POSTGRES_URL: postgresql://postgres:postgres@localhost:5432/mwc_test
       - name: Verify Helm chart
         run: |
           curl -fsSL https://get.helm.sh/helm-v4.2.4-linux-amd64.tar.gz -o helm.tgz
@@ -39,6 +77,8 @@ jobs:
             --set jumpHost.enabled=false
           linux-amd64/helm lint deploy/helm/memeloop-workspace-control \
             -f deploy/helm/memeloop-workspace-control/values.example.yaml
+          linux-amd64/helm lint deploy/helm/memeloop-workspace-control \
+            -f deploy/helm/memeloop-workspace-control/values.internal.example.yaml
           linux-amd64/helm template digest-pinned deploy/helm/memeloop-workspace-control \
             --set installationId=digest-pinned \
             --set secrets.encryptionSecretName=enc \
@@ -68,10 +108,41 @@ jobs:
             echo "unsafe Web Shell route rendered without external-auth" >&2
             exit 1
           fi
+          if linux-amd64/helm template unsafe-network deploy/helm/memeloop-workspace-control \
+            --set installationId=unsafe-network \
+            --set secrets.encryptionSecretName=enc \
+            --set secrets.internalAuthSecretName=auth \
+            --set workspace.ttydImage=tsl0922/ttyd:1.7.7 \
+            --set jumpHost.enabled=false \
+            --set public.webShellDomain=shell.example.com \
+            --set public.webShellOrigin=https://shell.example.com \
+            --set higress.extAuthPluginUrl=oci://example.invalid/ext-auth@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
+            --set networkPolicy.enabled=false >/dev/null 2>&1; then
+            echo "unsafe Web Shell route rendered without NetworkPolicy" >&2
+            exit 1
+          fi
+          if linux-amd64/helm template invalid-hpa deploy/helm/memeloop-workspace-control \
+            -f deploy/helm/memeloop-workspace-control/values.example.yaml \
+            --set resources.requests.cpu=null >/dev/null 2>&1; then
+            echo "HPA rendered without a CPU request" >&2
+            exit 1
+          fi
+          if linux-amd64/helm template invalid-selector deploy/helm/memeloop-workspace-control \
+            -f deploy/helm/memeloop-workspace-control/values.example.yaml \
+            --set higress.podLabels=null >/dev/null 2>&1; then
+            echo "public Web Shell rendered without a Higress Pod selector" >&2
+            exit 1
+          fi
+          bash -n scripts/kcs/preflight.sh \
+            scripts/kcs/verify-installation.sh \
+            scripts/kcs/verify-workspace-cleanup.sh
 
   publish-images:
     needs: verify
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: >-
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/main' &&
+      needs.verify.outputs.image-inputs-changed == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -126,6 +197,20 @@ jobs:
           labels: ${{ steps.metadata.outputs.labels }}
           cache-from: type=gha,scope=${{ matrix.suffix || 'control-plane' }}
           cache-to: type=gha,mode=max,scope=${{ matrix.suffix || 'control-plane' }}
+      - name: Verify workspace Image Contract v1 runtime
+        if: matrix.suffix == '-workspace'
+        env:
+          PUBLISHED_DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          docker run --rm --entrypoint /bin/sh \
+            "${IMAGE_NAME}@${PUBLISHED_DIGEST}" -ec '
+              test -x /usr/local/bin/mwc-workspace-bootstrap
+              command -v ssh-keygen
+              command -v jq
+              command -v install
+              command -v sshd
+              test "$(id -u workspace)" -gt 0
+            '
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-name: ${{ env.IMAGE_NAME }}

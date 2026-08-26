@@ -38,6 +38,8 @@ public:
 higress:
   namespace: higress-system
   gatewayName: higress-gateway
+  podLabels:
+    app.kubernetes.io/name: higress-gateway
   httpSectionName: http
   httpsSectionName: https
   sshListenerPort: 22
@@ -53,8 +55,20 @@ jumpHost:
     pullPolicy: IfNotPresent
   hostKeySecretName: ""
 
-resources: {}
-jumpHostResources: {}
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: "1"
+    memory: 512Mi
+jumpHostResources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
 
 autoscaling:
   enabled: true

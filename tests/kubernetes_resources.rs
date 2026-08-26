@@ -22,7 +22,7 @@ fn builder() -> ResourceBuilder {
         jump_host_namespace: "workspace-access".to_owned(),
         jump_host_pod_labels: std::collections::BTreeMap::from([(
             "app.kubernetes.io/name".to_owned(),
-            "workspace-jump-host".to_owned(),
+            "mwc-ssh-jump".to_owned(),
         )]),
         storage_class_name: Some("managed-delete".to_owned()),
         web_shell_domain: Some("shell.example.com".to_owned()),

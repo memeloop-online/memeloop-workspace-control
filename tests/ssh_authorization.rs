@@ -7,7 +7,7 @@ use axum::{
 use base64::{Engine, engine::general_purpose::STANDARD};
 use http_body_util::BodyExt;
 use memeloop_workspace_control::{
-    api::{AppState, router},
+    api::{AppState, internal_router},
     config::{AppConfig, InstallationId},
     crypto::EnvelopeCipher,
     injections::{InjectionItem, InjectionKind, InjectionScope, InjectionValue},
@@ -101,7 +101,7 @@ async fn authorized_keys_command_returns_only_restricted_workspace_target() {
         cipher.clone(),
     );
     state.set_internal_auth_token(INTERNAL_TOKEN);
-    let app = router(Arc::new(state));
+    let app = internal_router(Arc::new(state));
     let uri = format!(
         "/api/v1/internal/ssh/authorized-key?login=access%2B{}&key_type=ssh-ed25519&key_base64=AQIDBA%3D%3D",
         workspace.short_id
