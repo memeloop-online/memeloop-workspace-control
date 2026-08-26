@@ -25,6 +25,10 @@ pinned official Higress ext-auth plugin OCI URL to protect all `/shell/` paths.
 The chart refuses to render a Web Shell domain without that plugin and an exact
 `https://<webShellDomain>` public origin.
 
+For reproducible deployments set `image.digest` and `jumpHost.image.digest` to
+the verified `sha256:...` values published by CI. A digest takes precedence over
+the corresponding tag, and the chart rejects malformed digest values.
+
 Example values are in `values.example.yaml`. Install each coexisting instance
 into its own namespace and use a separate database, secrets, ServiceAccount,
 PVC, domains, and (when public SSH is enabled) LoadBalancer IP or shared jump

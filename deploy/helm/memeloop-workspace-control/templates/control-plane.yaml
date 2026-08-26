@@ -31,7 +31,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: control-plane
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          image: {{ include "mwc.controlPlaneImage" . | quote }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args: ["--installation-id", {{ .Values.installationId | quote }}]
           securityContext:

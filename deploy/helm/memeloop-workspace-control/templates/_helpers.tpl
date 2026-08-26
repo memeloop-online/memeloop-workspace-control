@@ -14,12 +14,34 @@ app.kubernetes.io/name: memeloop-workspace-control
 app.kubernetes.io/instance: {{ include "mwc.name" . }}
 {{- end -}}
 
+{{- define "mwc.controlPlaneImage" -}}
+{{- if .Values.image.digest -}}
+{{- printf "%s@%s" .Values.image.repository .Values.image.digest -}}
+{{- else -}}
+{{- printf "%s:%s" .Values.image.repository .Values.image.tag -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "mwc.jumpHostImage" -}}
+{{- if .Values.jumpHost.image.digest -}}
+{{- printf "%s@%s" .Values.jumpHost.image.repository .Values.jumpHost.image.digest -}}
+{{- else -}}
+{{- printf "%s:%s" .Values.jumpHost.image.repository .Values.jumpHost.image.tag -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "mwc.validate" -}}
 {{- if not (regexMatch "^[a-z0-9]([-a-z0-9]{0,18}[a-z0-9])?$" .Values.installationId) -}}
 {{- fail "installationId must be a lower-case DNS label of at most 20 characters" -}}
 {{- end -}}
 {{- if not (has .Values.mode (list "sqlite" "postgresql")) -}}
 {{- fail "mode must be sqlite or postgresql" -}}
+{{- end -}}
+{{- if and .Values.image.digest (not (regexMatch "^sha256:[0-9a-f]{64}$" .Values.image.digest)) -}}
+{{- fail "image.digest must be an OCI sha256 digest" -}}
+{{- end -}}
+{{- if and .Values.jumpHost.image.digest (not (regexMatch "^sha256:[0-9a-f]{64}$" .Values.jumpHost.image.digest)) -}}
+{{- fail "jumpHost.image.digest must be an OCI sha256 digest" -}}
 {{- end -}}
 {{- if and (eq .Values.mode "postgresql") (not .Values.database.postgresSecretName) -}}
 {{- fail "database.postgresSecretName is required in postgresql mode" -}}

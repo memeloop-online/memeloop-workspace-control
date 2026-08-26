@@ -4,6 +4,7 @@ mode: sqlite
 image:
   repository: memeloop-workspace-control
   tag: latest
+  digest: ""
   pullPolicy: IfNotPresent
 
 replicaCount: 2
@@ -48,6 +49,7 @@ jumpHost:
   image:
     repository: memeloop-workspace-control-ssh-jump
     tag: latest
+    digest: ""
     pullPolicy: IfNotPresent
   hostKeySecretName: ""
 
