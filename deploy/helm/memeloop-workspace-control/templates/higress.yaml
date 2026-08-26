@@ -1,0 +1,67 @@
+{{- if and .Values.jumpHost.enabled .Values.public.sshHost }}
+apiVersion: gateway.networking.k8s.io/v1alpha2
+kind: TCPRoute
+metadata:
+  name: {{ include "mwc.name" . }}-ssh
+  labels:
+    {{- include "mwc.labels" . | nindent 4 }}
+spec:
+  parentRefs:
+    - name: {{ .Values.higress.gatewayName }}
+      namespace: {{ .Values.higress.namespace }}
+      port: {{ .Values.higress.sshListenerPort }}
+  rules:
+    - backendRefs:
+        - name: {{ include "mwc.name" . }}-ssh-jump
+          port: 22
+{{- end }}
+{{- if .Values.public.apiDomain }}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: {{ include "mwc.name" . }}-api
+  labels:
+    {{- include "mwc.labels" . | nindent 4 }}
+spec:
+  parentRefs:
+    - name: {{ .Values.higress.gatewayName }}
+      namespace: {{ .Values.higress.namespace }}
+      sectionName: {{ .Values.higress.httpsSectionName }}
+  hostnames: [{{ .Values.public.apiDomain | quote }}]
+  rules:
+    - backendRefs:
+        - name: {{ include "mwc.name" . }}
+          port: 8080
+{{- end }}
+{{- if and .Values.public.webShellDomain .Values.higress.extAuthPluginUrl }}
+---
+apiVersion: extensions.higress.io/v1alpha1
+kind: WasmPlugin
+metadata:
+  name: {{ include "mwc.name" . }}-web-shell-auth
+  namespace: {{ .Values.higress.namespace }}
+  labels:
+    {{- include "mwc.labels" . | nindent 4 }}
+spec:
+  url: {{ .Values.higress.extAuthPluginUrl | quote }}
+  defaultConfig:
+    match_type: blacklist
+    match_list:
+      - match_rule_domain: {{ .Values.public.webShellDomain | quote }}
+        match_rule_path: /shell/
+        match_rule_type: prefix
+    failure_mode_allow: false
+    status_on_error: 503
+    http_service:
+      endpoint_mode: forward_auth
+      endpoint:
+        service_name: {{ include "mwc.name" . }}-internal.{{ .Release.Namespace }}.svc.cluster.local
+        service_port: 8081
+        path: /api/v1/internal/web-shell/authorize
+        request_method: GET
+      authorization_response:
+        allowed_upstream_headers:
+          - exact: x-mwc-user-id
+          - exact: x-mwc-workspace-id
+{{- end }}

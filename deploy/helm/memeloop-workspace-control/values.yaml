@@ -1,0 +1,71 @@
+installationId: ""
+mode: sqlite
+
+image:
+  repository: memeloop-workspace-control
+  tag: latest
+  pullPolicy: IfNotPresent
+
+replicaCount: 2
+serviceAccount:
+  create: true
+
+database:
+  postgresSecretName: ""
+  postgresSecretKey: database-url
+
+secrets:
+  encryptionSecretName: ""
+  encryptionSecretKey: encryption-key
+  internalAuthSecretName: ""
+  internalAuthSecretKey: internal-auth-token
+
+sqlite:
+  storageClassName: ""
+  size: 10Gi
+
+workspace:
+  storageClassName: ""
+  ttydImage: ""
+
+public:
+  sshHost: ""
+  apiDomain: ""
+  webShellDomain: ""
+  webShellOrigin: ""
+
+higress:
+  namespace: higress-system
+  gatewayName: higress-gateway
+  httpSectionName: http
+  httpsSectionName: https
+  sshListenerPort: 22
+  extAuthPluginUrl: ""
+
+jumpHost:
+  enabled: true
+  replicas: 2
+  image:
+    repository: memeloop-workspace-control-ssh-jump
+    tag: latest
+    pullPolicy: IfNotPresent
+  hostKeySecretName: ""
+
+resources: {}
+jumpHostResources: {}
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 75
+  customMetrics:
+    enabled: false
+    requestsMetricName: mwc_http_requests_per_second
+    targetRequestsPerSecond: "20"
+    backlogMetricName: mwc_jobs_pending
+    targetBacklogPerPod: "5"
+
+networkPolicy:
+  enabled: true

@@ -1,0 +1,58 @@
+#!/bin/sh
+set -eu
+
+workspace_root=/workspace
+state_dir="$workspace_root/.mwc"
+authorized_keys="$state_dir/authorized_keys"
+runtime_dir=/run/mwc-ssh
+manifest=/var/run/workspace-injections/config/workspace-files.json
+
+prepare() {
+    install -d -m 0700 -o workspace -g workspace "$state_dir"
+    install -d -m 0700 "$runtime_dir"
+
+    if [ ! -s "$runtime_dir/ttyd_client_key" ]; then
+        ssh-keygen -q -t ed25519 -N '' -f "$runtime_dir/ttyd_client_key"
+    fi
+
+    : > "$authorized_keys"
+    cat "$runtime_dir/ttyd_client_key.pub" >> "$authorized_keys"
+    if [ -r "$manifest" ]; then
+        jq -c '.files[]' "$manifest" | while IFS= read -r entry; do
+            object=$(printf '%s' "$entry" | jq -r '.object')
+            data_key=$(printf '%s' "$entry" | jq -r '.data_key')
+            target=$(printf '%s' "$entry" | jq -r '.target')
+            mode=$(printf '%s' "$entry" | jq -r '.mode // 384')
+            owner=$(printf '%s' "$entry" | jq -r '.owner // "workspace"')
+            group=$(printf '%s' "$entry" | jq -r '.group // "workspace"')
+            kind=$(printf '%s' "$entry" | jq -r '.kind')
+            case "$object" in
+                secret) source=/var/run/workspace-injections/secret/$data_key ;;
+                config_map) source=/var/run/workspace-injections/config/$data_key ;;
+                *) echo "invalid injection object" >&2; exit 1 ;;
+            esac
+            numeric_mode=$(printf '%o' "$mode")
+            install -D -m "$numeric_mode" -o "$owner" -g "$group" "$source" "$target"
+            if [ "$kind" = ssh_public_key ]; then
+                cat "$source" >> "$authorized_keys"
+                printf '\n' >> "$authorized_keys"
+            fi
+        done
+    fi
+    chown workspace:workspace "$authorized_keys"
+    chmod 0600 "$authorized_keys"
+    chmod 0600 "$runtime_dir/ttyd_client_key"
+    cp /etc/ssh/platform/ssh_host_ed25519_key.pub "$runtime_dir/host_key.pub"
+    printf 'localhost,127.0.0.1 ' > "$runtime_dir/known_hosts"
+    cat "$runtime_dir/host_key.pub" >> "$runtime_dir/known_hosts"
+    chmod 0644 "$runtime_dir/known_hosts"
+}
+
+case "${1:-serve}" in
+    prepare) prepare ;;
+    serve)
+        prepare
+        exec /usr/sbin/sshd -D -e -f /etc/workspace-platform/sshd_config
+        ;;
+    *) echo "usage: mwc-workspace-bootstrap prepare|serve" >&2; exit 64 ;;
+esac

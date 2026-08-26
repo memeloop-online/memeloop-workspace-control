@@ -1,0 +1,14 @@
+#!/bin/sh
+set -eu
+
+login=$1
+key_type=$2
+key_base64=$3
+token=$(cat "${MWC_INTERNAL_AUTH_TOKEN_FILE:?}")
+
+exec curl --fail --silent --show-error --max-time 3 --get \
+  --header "Authorization: Bearer ${token}" \
+  --data-urlencode "login=${login}" \
+  --data-urlencode "key_type=${key_type}" \
+  --data-urlencode "key_base64=${key_base64}" \
+  "${MWC_CONTROL_PLANE_URL:?}/api/v1/internal/ssh/authorized-key" 2>/dev/null

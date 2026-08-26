@@ -1,0 +1,6 @@
+apiVersion: v2
+name: memeloop-workspace-control
+description: Rust control plane for isolated Kubernetes workspaces
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

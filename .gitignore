@@ -1,0 +1,9 @@
+/target/
+/.env
+/.env.*
+!/.env.example
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+/web/node_modules/
+/web/*.tsbuildinfo

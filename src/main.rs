@@ -1,0 +1,270 @@
+use std::{collections::BTreeMap, io, sync::Arc};
+
+use clap::Parser;
+use memeloop_workspace_control::{
+    admin::{Cli, Command, execute_admin, execute_database},
+    api::{AppState, internal_router, router},
+    crypto::EnvelopeCipher,
+    jobs::{ControlPlaneJobHandler, JobWorker, WebhookDeliveryHandler, WorkspaceReconcileHandler},
+    kubernetes::{KubernetesCoordinator, ResourceBuilder},
+    storage::Database,
+};
+use tokio::net::TcpListener;
+use tracing::info;
+use tracing_subscriber::EnvFilter;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
+        .init();
+
+    let cli = Cli::parse();
+    let config = cli.config;
+    config.validate()?;
+    let database = Database::connect(&config.database_url, config.installation_id.clone()).await?;
+    database.migrate().await?;
+    match cli.command.unwrap_or(Command::Serve) {
+        Command::Serve => serve(config, database).await?,
+        Command::Admin { command } => execute_admin(&database, command).await?,
+        Command::Database { command } => execute_database(&database, command).await?,
+    }
+    Ok(())
+}
+
+async fn serve(
+    config: memeloop_workspace_control::config::AppConfig,
+    database: Database,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let listener = TcpListener::bind(config.listen_address).await?;
+    let address = listener.local_addr()?;
+    let installation_id = config.installation_id.clone();
+    let cipher = match std::env::var("MWC_ENCRYPTION_KEY") {
+        Ok(encoded_key) => Some(EnvelopeCipher::from_base64(&encoded_key)?),
+        Err(std::env::VarError::NotPresent) => None,
+        Err(error) => return Err(error.into()),
+    };
+    let kubernetes_enabled = env_bool("MWC_KUBERNETES_ENABLED", false)?;
+    let kubernetes_client = if kubernetes_enabled {
+        Some(kube::Client::try_default().await?)
+    } else {
+        None
+    };
+    let workspace_handler = if kubernetes_enabled {
+        let workspace_cipher = cipher.clone().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "MWC_ENCRYPTION_KEY is required when Kubernetes coordination is enabled",
+            )
+        })?;
+        let client = kubernetes_client.clone().expect("client initialized above");
+        let builder = resource_builder(&config)?;
+        let coordinator = KubernetesCoordinator::new(client, builder.clone());
+        Some(WorkspaceReconcileHandler::new(
+            database.clone(),
+            workspace_cipher,
+            builder,
+            coordinator,
+        ))
+    } else {
+        None
+    };
+    let worker = if let Some(worker_cipher) = cipher.clone() {
+        let webhook_handler = WebhookDeliveryHandler::new(database.clone(), worker_cipher)?;
+        let handler = Arc::new(ControlPlaneJobHandler::new(
+            workspace_handler,
+            webhook_handler,
+        ));
+        Some(JobWorker::new(
+            database.clone(),
+            handler,
+            config.instance_id.clone(),
+        ))
+    } else {
+        None
+    };
+    let mut state = match cipher {
+        Some(cipher) => AppState::with_cipher(config.clone(), database, cipher),
+        None => AppState::new(config.clone(), database),
+    };
+    if let Some(client) = kubernetes_client {
+        state.set_kubernetes_client(client);
+    }
+    if let Ok(public_key) = std::env::var("MWC_SSH_JUMP_HOST_PUBLIC_KEY") {
+        state.set_jump_host_public_key(&public_key)?;
+    }
+    match std::env::var("MWC_INTERNAL_AUTH_TOKEN") {
+        Ok(token) if token.len() >= 32 => state.set_internal_auth_token(&token),
+        Ok(_) => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "MWC_INTERNAL_AUTH_TOKEN must contain at least 32 bytes",
+            )
+            .into());
+        }
+        Err(std::env::VarError::NotPresent) if kubernetes_enabled => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "MWC_INTERNAL_AUTH_TOKEN is required when Kubernetes coordination is enabled",
+            )
+            .into());
+        }
+        Err(std::env::VarError::NotPresent) => {}
+        Err(error) => return Err(error.into()),
+    }
+    let internal_listen_address: Option<std::net::SocketAddr> =
+        match std::env::var("MWC_INTERNAL_LISTEN_ADDRESS") {
+            Ok(value) => Some(value.parse()?),
+            Err(std::env::VarError::NotPresent) if kubernetes_enabled => {
+                Some("0.0.0.0:8081".parse()?)
+            }
+            Err(std::env::VarError::NotPresent) => None,
+            Err(error) => return Err(error.into()),
+        };
+    let internal_state = internal_listen_address.map(|_| {
+        let mut internal_state = state.clone();
+        internal_state.trust_internal_network();
+        Arc::new(internal_state)
+    });
+    let app = router(Arc::new(state));
+
+    let (shutdown_tx, _) = tokio::sync::watch::channel(false);
+    let worker_handle = worker.map(|worker| {
+        let shutdown = shutdown_tx.subscribe();
+        tokio::spawn(async move { worker.run_until_shutdown(shutdown).await })
+    });
+    let internal_handle = match (internal_listen_address, internal_state) {
+        (Some(internal_address), Some(internal_state)) => {
+            let internal_listener = TcpListener::bind(internal_address).await?;
+            let actual_address = internal_listener.local_addr()?;
+            let shutdown = shutdown_tx.subscribe();
+            info!(%actual_address, "internal authorization listener started");
+            Some(tokio::spawn(async move {
+                axum::serve(internal_listener, internal_router(internal_state))
+                    .with_graceful_shutdown(wait_for_shutdown(shutdown))
+                    .await
+            }))
+        }
+        (None, None) => None,
+        _ => unreachable!(),
+    };
+    let signal_tx = shutdown_tx.clone();
+
+    info!(%address, %installation_id, kubernetes_enabled, "control plane listening");
+    let server_result = axum::serve(listener, app)
+        .with_graceful_shutdown(async move {
+            shutdown_signal().await;
+            let _ = signal_tx.send(true);
+        })
+        .await;
+    let _ = shutdown_tx.send(true);
+    if let Some(handle) = worker_handle {
+        handle.await??;
+    }
+    if let Some(handle) = internal_handle {
+        handle.await??;
+    }
+    server_result?;
+    Ok(())
+}
+
+async fn wait_for_shutdown(mut shutdown: tokio::sync::watch::Receiver<bool>) {
+    while !*shutdown.borrow() {
+        if shutdown.changed().await.is_err() {
+            return;
+        }
+    }
+}
+
+fn resource_builder(
+    config: &memeloop_workspace_control::config::AppConfig,
+) -> Result<ResourceBuilder, io::Error> {
+    let ttyd_image = std::env::var("MWC_TTYD_IMAGE").map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "MWC_TTYD_IMAGE is required when Kubernetes coordination is enabled",
+        )
+    })?;
+    let higress_namespace =
+        std::env::var("MWC_HIGRESS_NAMESPACE").unwrap_or_else(|_| "higress-system".to_owned());
+    let jump_host_namespace = std::env::var("MWC_JUMP_HOST_NAMESPACE")
+        .unwrap_or_else(|_| format!("mwc-{}", config.installation_id));
+    let storage_class_name = std::env::var("MWC_STORAGE_CLASS_NAME")
+        .ok()
+        .filter(|value| !value.trim().is_empty());
+    let web_shell_domain = std::env::var("MWC_WEB_SHELL_DOMAIN")
+        .ok()
+        .filter(|value| !value.trim().is_empty());
+    if web_shell_domain.is_some() && !env_bool("MWC_WEB_SHELL_AUTH_CONFIGURED", false)? {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "MWC_WEB_SHELL_AUTH_CONFIGURED=true is required before exposing ttyd routes",
+        ));
+    }
+    if let Some(domain) = web_shell_domain.as_deref() {
+        let expected_origin = format!("https://{domain}");
+        if config.web_shell_public_origin.as_deref() != Some(expected_origin.as_str()) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "MWC_WEB_SHELL_PUBLIC_ORIGIN must exactly match the configured Web Shell domain",
+            ));
+        }
+    }
+    Ok(ResourceBuilder {
+        installation_id: config.installation_id.clone(),
+        ttyd_image,
+        higress_namespace,
+        higress_pod_labels: BTreeMap::from([(
+            "app.kubernetes.io/name".to_owned(),
+            "higress-gateway".to_owned(),
+        )]),
+        jump_host_namespace,
+        jump_host_pod_labels: BTreeMap::from([(
+            "app.kubernetes.io/name".to_owned(),
+            "mwc-ssh-jump".to_owned(),
+        )]),
+        storage_class_name,
+        web_shell_domain,
+        higress_gateway_name: std::env::var("MWC_HIGRESS_GATEWAY_NAME")
+            .unwrap_or_else(|_| "higress-gateway".to_owned()),
+        higress_https_section_name: std::env::var("MWC_HIGRESS_HTTPS_SECTION_NAME")
+            .unwrap_or_else(|_| "https".to_owned()),
+    })
+}
+
+fn env_bool(name: &'static str, default: bool) -> Result<bool, io::Error> {
+    match std::env::var(name) {
+        Ok(value) if matches!(value.as_str(), "1" | "true") => Ok(true),
+        Ok(value) if matches!(value.as_str(), "0" | "false") => Ok(false),
+        Ok(value) => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{name} must be true, false, 1, or 0; got {value}"),
+        )),
+        Err(std::env::VarError::NotPresent) => Ok(default),
+        Err(error) => Err(io::Error::new(io::ErrorKind::InvalidInput, error)),
+    }
+}
+
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl+C handler");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("failed to install SIGTERM handler")
+            .recv()
+            .await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        () = ctrl_c => {},
+        () = terminate => {},
+    }
+}

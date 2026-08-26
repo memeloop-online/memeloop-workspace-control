@@ -1,0 +1,114 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.97.1
+        with:
+          components: rustfmt, clippy
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci && npm run check && npm run build
+        working-directory: web
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --locked --all-targets --all-features -- -D warnings
+      - run: cargo test --locked --all-features
+      - name: Verify Helm chart
+        run: |
+          curl -fsSL https://get.helm.sh/helm-v4.2.4-linux-amd64.tar.gz -o helm.tgz
+          printf '%s  %s\n' c306b46f719b0a4da32d0f78ee21bf90ce8d602f15b22ab753f0674d1670a7f3 helm.tgz | sha256sum -c -
+          tar -xzf helm.tgz
+          linux-amd64/helm lint deploy/helm/memeloop-workspace-control \
+            --set installationId=ci-a \
+            --set secrets.encryptionSecretName=enc \
+            --set secrets.internalAuthSecretName=auth \
+            --set workspace.ttydImage=tsl0922/ttyd:1.7.7 \
+            --set jumpHost.enabled=false
+          linux-amd64/helm lint deploy/helm/memeloop-workspace-control \
+            -f deploy/helm/memeloop-workspace-control/values.example.yaml
+          if linux-amd64/helm template unsafe deploy/helm/memeloop-workspace-control \
+            --set installationId=unsafe \
+            --set secrets.encryptionSecretName=enc \
+            --set secrets.internalAuthSecretName=auth \
+            --set workspace.ttydImage=tsl0922/ttyd:1.7.7 \
+            --set jumpHost.enabled=false \
+            --set public.webShellDomain=shell.example.com \
+            --set public.webShellOrigin=https://shell.example.com >/dev/null 2>&1; then
+            echo "unsafe Web Shell route rendered without external-auth" >&2
+            exit 1
+          fi
+
+  publish-images:
+    needs: verify
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      attestations: write
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - suffix: ""
+            context: .
+            dockerfile: Dockerfile
+            description: Memeloop workspace control plane
+          - suffix: -workspace
+            context: images/workspace-base
+            dockerfile: images/workspace-base/Dockerfile
+            description: Image Contract v1 OpenSSH workspace base
+          - suffix: -ssh-jump
+            context: images/ssh-jump
+            dockerfile: images/ssh-jump/Dockerfile
+            description: Restricted standard OpenSSH jump host
+    env:
+      IMAGE_NAME: ghcr.io/${{ github.repository }}${{ matrix.suffix }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: metadata
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          tags: |
+            type=sha,prefix=sha-
+            type=raw,value=latest
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.description=${{ matrix.description }}
+      - id: push
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.metadata.outputs.tags }}
+          labels: ${{ steps.metadata.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.suffix || 'control-plane' }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.suffix || 'control-plane' }}
+      - uses: actions/attest-build-provenance@v3
+        with:
+          subject-name: ${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true

@@ -1,0 +1,88 @@
+use std::collections::BTreeMap;
+
+use k8s_openapi::{
+    api::networking::v1::{
+        NetworkPolicy, NetworkPolicyIngressRule, NetworkPolicyPeer, NetworkPolicyPort,
+        NetworkPolicySpec,
+    },
+    apimachinery::pkg::{apis::meta::v1::LabelSelector, util::intstr::IntOrString},
+};
+
+use super::namespaced_metadata;
+use crate::workspaces::AccessMode;
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn build(
+    namespace: &str,
+    ownership_labels: &BTreeMap<String, String>,
+    pod_labels: &BTreeMap<String, String>,
+    higress_namespace: &str,
+    higress_pod_labels: &BTreeMap<String, String>,
+    jump_host_namespace: &str,
+    jump_host_pod_labels: &BTreeMap<String, String>,
+    access_mode: AccessMode,
+) -> NetworkPolicy {
+    let ssh_rule = match access_mode {
+        AccessMode::Public => ingress_rule(jump_host_namespace, jump_host_pod_labels, 2222),
+        AccessMode::Internal => internal_cluster_ssh_rule(),
+    };
+    NetworkPolicy {
+        metadata: namespaced_metadata("workspace-ingress", namespace, ownership_labels),
+        spec: Some(NetworkPolicySpec {
+            pod_selector: Some(LabelSelector {
+                match_labels: Some(pod_labels.clone()),
+                ..LabelSelector::default()
+            }),
+            policy_types: Some(vec!["Ingress".to_owned()]),
+            ingress: Some(vec![
+                ingress_rule(higress_namespace, higress_pod_labels, 7681),
+                ssh_rule,
+            ]),
+            ..NetworkPolicySpec::default()
+        }),
+    }
+}
+
+fn internal_cluster_ssh_rule() -> NetworkPolicyIngressRule {
+    NetworkPolicyIngressRule {
+        from: Some(vec![NetworkPolicyPeer {
+            // An empty namespace selector matches all cluster namespaces while
+            // still excluding traffic that did not enter through Kubernetes.
+            namespace_selector: Some(LabelSelector::default()),
+            ..NetworkPolicyPeer::default()
+        }]),
+        ports: Some(vec![NetworkPolicyPort {
+            port: Some(IntOrString::Int(2222)),
+            protocol: Some("TCP".to_owned()),
+            ..NetworkPolicyPort::default()
+        }]),
+    }
+}
+
+fn ingress_rule(
+    namespace: &str,
+    pod_labels: &BTreeMap<String, String>,
+    port: i32,
+) -> NetworkPolicyIngressRule {
+    NetworkPolicyIngressRule {
+        from: Some(vec![NetworkPolicyPeer {
+            namespace_selector: Some(LabelSelector {
+                match_labels: Some(BTreeMap::from([(
+                    "kubernetes.io/metadata.name".to_owned(),
+                    namespace.to_owned(),
+                )])),
+                ..LabelSelector::default()
+            }),
+            pod_selector: Some(LabelSelector {
+                match_labels: Some(pod_labels.clone()),
+                ..LabelSelector::default()
+            }),
+            ..NetworkPolicyPeer::default()
+        }]),
+        ports: Some(vec![NetworkPolicyPort {
+            port: Some(IntOrString::Int(port)),
+            protocol: Some("TCP".to_owned()),
+            ..NetworkPolicyPort::default()
+        }]),
+    }
+}

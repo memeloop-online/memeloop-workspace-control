@@ -1,0 +1,44 @@
+{{- if and (eq .Values.mode "postgresql") .Values.autoscaling.enabled }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "mwc.name" . }}
+  labels:
+    {{- include "mwc.labels" . | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "mwc.name" . }}
+  minReplicas: {{ .Values.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.autoscaling.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.autoscaling.targetCPUUtilizationPercentage }}
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.autoscaling.targetMemoryUtilizationPercentage }}
+    {{- if .Values.autoscaling.customMetrics.enabled }}
+    - type: Pods
+      pods:
+        metric:
+          name: {{ .Values.autoscaling.customMetrics.requestsMetricName }}
+        target:
+          type: AverageValue
+          averageValue: {{ .Values.autoscaling.customMetrics.targetRequestsPerSecond | quote }}
+    - type: Pods
+      pods:
+        metric:
+          name: {{ .Values.autoscaling.customMetrics.backlogMetricName }}
+        target:
+          type: AverageValue
+          averageValue: {{ .Values.autoscaling.customMetrics.targetBacklogPerPod | quote }}
+    {{- end }}
+{{- end }}

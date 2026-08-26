@@ -1,0 +1,140 @@
+{{- if eq .Values.mode "sqlite" }}
+apiVersion: apps/v1
+kind: StatefulSet
+{{- else }}
+apiVersion: apps/v1
+kind: Deployment
+{{- end }}
+metadata:
+  name: {{ include "mwc.name" . }}
+  labels:
+    {{- include "mwc.labels" . | nindent 4 }}
+spec:
+  {{- if eq .Values.mode "sqlite" }}
+  serviceName: {{ include "mwc.name" . }}
+  replicas: 1
+  {{- else }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "mwc.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "mwc.selectorLabels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "mwc.name" . }}
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: control-plane
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["--installation-id", {{ .Values.installationId | quote }}]
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          ports:
+            - name: api
+              containerPort: 8080
+            - name: internal-auth
+              containerPort: 8081
+          env:
+            - name: MWC_INSTANCE_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: MWC_REPLICA_COUNT
+              value: {{ ternary "1" (.Values.replicaCount | toString) (eq .Values.mode "sqlite") | quote }}
+            - name: MWC_KUBERNETES_ENABLED
+              value: "true"
+            - name: MWC_INTERNAL_LISTEN_ADDRESS
+              value: "0.0.0.0:8081"
+            - name: MWC_TTYD_IMAGE
+              value: {{ .Values.workspace.ttydImage | quote }}
+            - name: MWC_HIGRESS_NAMESPACE
+              value: {{ .Values.higress.namespace | quote }}
+            - name: MWC_HIGRESS_GATEWAY_NAME
+              value: {{ .Values.higress.gatewayName | quote }}
+            - name: MWC_HIGRESS_HTTPS_SECTION_NAME
+              value: {{ .Values.higress.httpsSectionName | quote }}
+            - name: MWC_JUMP_HOST_NAMESPACE
+              value: {{ .Release.Namespace | quote }}
+            {{- if .Values.public.webShellDomain }}
+            - name: MWC_WEB_SHELL_DOMAIN
+              value: {{ .Values.public.webShellDomain | quote }}
+            - name: MWC_WEB_SHELL_AUTH_CONFIGURED
+              value: "true"
+            {{- end }}
+            {{- if .Values.public.sshHost }}
+            - name: MWC_SSH_PUBLIC_HOST
+              value: {{ .Values.public.sshHost | quote }}
+            {{- end }}
+            {{- if .Values.public.webShellOrigin }}
+            - name: MWC_WEB_SHELL_PUBLIC_ORIGIN
+              value: {{ .Values.public.webShellOrigin | quote }}
+            {{- end }}
+            {{- if .Values.workspace.storageClassName }}
+            - name: MWC_STORAGE_CLASS_NAME
+              value: {{ .Values.workspace.storageClassName | quote }}
+            {{- end }}
+            - name: MWC_ENCRYPTION_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.encryptionSecretName }}
+                  key: {{ .Values.secrets.encryptionSecretKey }}
+            - name: MWC_INTERNAL_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.internalAuthSecretName }}
+                  key: {{ .Values.secrets.internalAuthSecretKey }}
+            {{- if .Values.jumpHost.enabled }}
+            - name: MWC_SSH_JUMP_HOST_PUBLIC_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.jumpHost.hostKeySecretName }}
+                  key: ssh_host_ed25519_key.pub
+            {{- end }}
+            - name: MWC_DATABASE_URL
+              {{- if eq .Values.mode "sqlite" }}
+              value: "sqlite:///var/lib/mwc/control-plane.sqlite?mode=rwc"
+              {{- else }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.database.postgresSecretName }}
+                  key: {{ .Values.database.postgresSecretKey }}
+              {{- end }}
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: api
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: api
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          {{- if eq .Values.mode "sqlite" }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/mwc
+          {{- end }}
+  {{- if eq .Values.mode "sqlite" }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          {{- include "mwc.labels" . | nindent 10 }}
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- if .Values.sqlite.storageClassName }}
+        storageClassName: {{ .Values.sqlite.storageClassName }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.sqlite.size }}
+  {{- end }}
