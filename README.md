@@ -33,6 +33,14 @@ export MWC_TTYD_IMAGE='tsl0922/ttyd:1.7.7'
 - `ghcr.io/memeloop-online/memeloop-workspace-control-workspace`
 - `ghcr.io/memeloop-online/memeloop-workspace-control-ssh-jump`
 
+提交 `579bbfe973d98f04d6aa315e658e9a380cf7a473` 经
+[CI run 32971286106](https://github.com/memeloop-online/memeloop-workspace-control/actions/runs/32971286106)
+验证并发布的不可变摘要为：
+
+- 控制面：`sha256:25f62b76f22ae4acab17ce0bd4c87de8afcc24962ed366181a3e7d972e679651`
+- 标准工作区：`sha256:9159f713019b3828978b8b09bc2c5bdc95c008cdc54d5e04fbcc26c7b80b1717`
+- OpenSSH 跳板：`sha256:e4d9c26644aef7764769e4c0ae5ff8b446aa2021d483f50d465118d2b7da4824`
+
 探针与 OpenAPI：
 
 - `GET /healthz`

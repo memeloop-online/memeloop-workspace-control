@@ -5,6 +5,14 @@ Kubernetes/K3s version matrix.
 
 ## Automated safety gates
 
+The currently accepted amd64 images are pinned by registry digest:
+
+- control plane: `ghcr.io/memeloop-online/memeloop-workspace-control@sha256:25f62b76f22ae4acab17ce0bd4c87de8afcc24962ed366181a3e7d972e679651`
+- workspace Contract v1: `ghcr.io/memeloop-online/memeloop-workspace-control-workspace@sha256:9159f713019b3828978b8b09bc2c5bdc95c008cdc54d5e04fbcc26c7b80b1717`
+- OpenSSH jump: `ghcr.io/memeloop-online/memeloop-workspace-control-ssh-jump@sha256:e4d9c26644aef7764769e4c0ae5ff8b446aa2021d483f50d465118d2b7da4824`
+
+These are the outputs of CI run `32971286106`; do not substitute a mutable tag during acceptance.
+
 Run the read-only preflight before Helm changes. All target-identifying values are mandatory:
 
 ```bash

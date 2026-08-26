@@ -4,6 +4,7 @@ mode: sqlite
 image:
   repository: ghcr.io/memeloop-online/memeloop-workspace-control
   tag: latest
+  digest: sha256:25f62b76f22ae4acab17ce0bd4c87de8afcc24962ed366181a3e7d972e679651
 
 secrets:
   encryptionSecretName: mwc-internal-a-encryption
