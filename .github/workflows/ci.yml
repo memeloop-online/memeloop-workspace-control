@@ -135,7 +135,9 @@ jobs:
           fi
           bash -n scripts/kcs/preflight.sh \
             scripts/kcs/verify-installation.sh \
-            scripts/kcs/verify-workspace-cleanup.sh
+            scripts/kcs/verify-workspace-cleanup.sh \
+            tests/kcs_preflight.sh
+          bash tests/kcs_preflight.sh
 
   publish-images:
     needs: verify

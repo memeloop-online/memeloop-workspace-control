@@ -24,7 +24,6 @@ if [[ $KCS_MODE != sqlite && $KCS_MODE != postgresql ]]; then
 fi
 
 command -v kubectl >/dev/null
-command -v jq >/dev/null
 
 context=$(kubectl config current-context)
 server=$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}')
@@ -56,14 +55,16 @@ if [[ $KCS_MODE == postgresql ]] && [[ $(kubectl auth can-i create horizontalpod
 fi
 
 if kubectl get namespace "$KCS_RELEASE_NAMESPACE" >/dev/null 2>&1; then
-  mismatches=$(kubectl get all,configmap,secret,pvc,networkpolicy,httproute \
-    -n "$KCS_RELEASE_NAMESPACE" -o json 2>/dev/null \
-    | jq --arg owner "$KCS_INSTALLATION_ID" \
-      '[.items[] | select(.metadata.labels["workspace.memeloop.dev/owner-installation"] != null and .metadata.labels["workspace.memeloop.dev/owner-installation"] != $owner)] | length')
-  if [[ $mismatches != 0 ]]; then
-    printf 'release namespace contains resources owned by another installation\n' >&2
-    exit 1
-  fi
+  owners=$(kubectl get all,configmap,secret,pvc,networkpolicy,httproute \
+    -n "$KCS_RELEASE_NAMESPACE" \
+    -o go-template='{{range .items}}{{if .metadata.labels}}{{with index .metadata.labels "workspace.memeloop.dev/owner-installation"}}{{printf "%s\n" .}}{{end}}{{end}}{{end}}' \
+    2>/dev/null)
+  while IFS= read -r owner; do
+    if [[ -n $owner && $owner != "$KCS_INSTALLATION_ID" ]]; then
+      printf 'release namespace contains resources owned by another installation\n' >&2
+      exit 1
+    fi
+  done <<< "$owners"
 fi
 
 public_ssh=${KCS_PUBLIC_SSH:-false}
@@ -77,8 +78,14 @@ if [[ $public_ssh == true || $public_web_shell == true ]]; then
 fi
 if [[ $public_ssh == true ]]; then
   kubectl get crd tcproutes.gateway.networking.k8s.io >/dev/null
-  listener_count=$(kubectl get gateway -n "$KCS_HIGRESS_NAMESPACE" "$KCS_HIGRESS_GATEWAY" -o json \
-    | jq '[.spec.listeners[] | select(.port == 22)] | length')
+  listener_ports=$(kubectl get gateway -n "$KCS_HIGRESS_NAMESPACE" "$KCS_HIGRESS_GATEWAY" \
+    -o go-template='{{range .spec.listeners}}{{printf "%v\n" .port}}{{end}}')
+  listener_count=0
+  while IFS= read -r port; do
+    if [[ $port == 22 ]]; then
+      ((listener_count += 1))
+    fi
+  done <<< "$listener_ports"
   if [[ $listener_count != 1 ]]; then
     printf 'Higress Gateway must expose exactly one listener on port 22; found %s\n' "$listener_count" >&2
     exit 1
@@ -91,7 +98,14 @@ fi
 if [[ $public_web_shell == true ]]; then
   kubectl get crd wasmplugins.extensions.higress.io >/dev/null
   selector=${KCS_HIGRESS_POD_SELECTOR:-app.kubernetes.io/name=higress-gateway}
-  gateway_pods=$(kubectl get pods -n "$KCS_HIGRESS_NAMESPACE" -l "$selector" -o json | jq '.items | length')
+  gateway_pod_names=$(kubectl get pods -n "$KCS_HIGRESS_NAMESPACE" -l "$selector" \
+    -o go-template='{{range .items}}{{printf "%s\n" .metadata.name}}{{end}}')
+  gateway_pods=0
+  while IFS= read -r pod_name; do
+    if [[ -n $pod_name ]]; then
+      ((gateway_pods += 1))
+    fi
+  done <<< "$gateway_pod_names"
   if [[ $gateway_pods == 0 ]]; then
     printf 'no Higress gateway Pods match selector %s in %s\n' "$selector" "$KCS_HIGRESS_NAMESPACE" >&2
     exit 1
