@@ -217,6 +217,13 @@ jobs:
               command -v sshd
               test "$(id -u workspace)" -gt 0
               test "$(passwd --status workspace | cut -d " " -f 2)" = NP
+              install -d /etc/ssh/platform
+              ssh-keygen -q -t ed25519 -N "" -f /etc/ssh/platform/ssh_host_ed25519_key
+              chown root:root /workspace
+              chmod 0777 /workspace
+              /usr/local/bin/mwc-workspace-bootstrap prepare
+              test "$(stat -c %a /workspace)" = 750
+              test "$(stat -c %U:%G /workspace)" = workspace:workspace
             '
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:

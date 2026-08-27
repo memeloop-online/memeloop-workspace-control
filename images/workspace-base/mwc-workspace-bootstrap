@@ -8,6 +8,7 @@ runtime_dir=/run/mwc-ssh
 manifest=/var/run/workspace-injections/config/workspace-files.json
 
 prepare() {
+    install -d -m 0750 -o workspace -g workspace "$workspace_root"
     install -d -m 0700 -o workspace -g workspace "$state_dir"
     install -d -m 0700 "$runtime_dir"
 
