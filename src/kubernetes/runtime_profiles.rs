@@ -93,6 +93,17 @@ impl RuntimeProfile {
         quantities(cpu, memory, ephemeral)
     }
 
+    pub fn ssh_strict_modes(self) -> &'static str {
+        if matches!(self.kind, WorkspaceRuntimeProfile::Standard) {
+            "yes"
+        } else {
+            // Migrated Coder PVC roots are intentionally root:1000/2775. The platform owns the
+            // generated authorized_keys file and keeps it 0600, so retaining the legacy root
+            // metadata requires disabling only sshd's parent-directory ownership check.
+            "no"
+        }
+    }
+
     pub fn resource_limits(&self, resources: Resources) -> BTreeMap<String, Quantity> {
         let (cpu, ephemeral) = match self.kind {
             WorkspaceRuntimeProfile::Standard => (format!("{}m", resources.cpu_millis), None),

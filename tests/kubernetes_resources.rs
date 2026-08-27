@@ -236,6 +236,10 @@ fn builds_isolated_single_replica_workspace_with_standard_components() {
             .find(|line| line.starts_with("HostKey")),
         Some("HostKey /run/mwc-ssh/ssh_host_ed25519_key")
     );
+    assert!(
+        resources.workspace_config.data.as_ref().unwrap()["sshd_config"]
+            .contains("StrictModes yes")
+    );
     assert_eq!(
         resources.service.spec.as_ref().unwrap().type_.as_deref(),
         Some("ClusterIP")
@@ -369,6 +373,9 @@ fn coder_node_profile_reuses_the_legacy_image_with_platform_bootstrap() {
     assert!(
         resources.workspace_config.data.as_ref().unwrap()["sshd_config"]
             .contains("AllowUsers node-dev")
+    );
+    assert!(
+        resources.workspace_config.data.as_ref().unwrap()["sshd_config"].contains("StrictModes no")
     );
     assert!(
         resources.workspace_config.data.as_ref().unwrap()["mwc-workspace-bootstrap"]

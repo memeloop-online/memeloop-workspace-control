@@ -177,7 +177,7 @@ impl WorkspaceReconcileHandler {
         let workspace_items = select_injections(&workspace_items, selection);
         let mut resolved =
             resolve_injections(&organization, &user, &workspace_items).map_err(job_error)?;
-        normalize_resolved_ssh_targets(&mut resolved, workspace.runtime_profile, "cascade");
+        normalize_resolved_ssh_items(&mut resolved, workspace.runtime_profile);
 
         for candidate in self
             .database
@@ -234,18 +234,19 @@ impl WorkspaceReconcileHandler {
     }
 }
 
-fn normalize_resolved_ssh_targets(
+fn normalize_resolved_ssh_items(
     resolved: &mut [crate::injections::ResolvedInjection],
     profile: crate::workspaces::WorkspaceRuntimeProfile,
-    prefix: &str,
 ) {
-    for (index, item) in resolved
+    let login_user = profile.login_user();
+    for item in resolved
         .iter_mut()
         .filter(|item| item.item.kind == crate::injections::InjectionKind::SshPublicKey)
-        .enumerate()
     {
-        normalize_ssh_target(&mut item.item, profile, &format!("{prefix}-{index}"));
         item.item.sensitive = false;
+        item.item.file_mode.get_or_insert(0o600);
+        item.item.owner.get_or_insert_with(|| login_user.to_owned());
+        item.item.group.get_or_insert_with(|| login_user.to_owned());
     }
 }
 
@@ -317,10 +318,10 @@ mod tests {
         workspaces::WorkspaceRuntimeProfile,
     };
 
-    use super::normalize_resolved_ssh_targets;
+    use super::normalize_resolved_ssh_items;
 
     #[test]
-    fn ssh_materialization_uses_the_profile_home_and_login_user() {
+    fn ssh_materialization_preserves_the_requested_target_and_defaults_runtime_ownership() {
         let mut resolved = vec![ResolvedInjection {
             source: InjectionScope::User,
             item: InjectionItem {
@@ -339,14 +340,10 @@ mod tests {
             },
         }];
 
-        normalize_resolved_ssh_targets(
-            &mut resolved,
-            WorkspaceRuntimeProfile::CoderNodeDev,
-            "cascade",
-        );
+        normalize_resolved_ssh_items(&mut resolved, WorkspaceRuntimeProfile::CoderNodeDev);
 
         let item = &resolved[0].item;
-        assert_eq!(item.target, "/home/node-dev/.mwc/cascade-0.pub");
+        assert_eq!(item.target, "/wrong/location");
         assert_eq!(item.file_mode, Some(0o600));
         assert_eq!(item.owner.as_deref(), Some("node-dev"));
         assert_eq!(item.group.as_deref(), Some("node-dev"));
