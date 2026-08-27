@@ -2,8 +2,8 @@ use std::collections::BTreeMap;
 
 use k8s_openapi::{
     api::core::v1::{
-        Affinity, Capabilities, ConfigMapEnvSource, Container, ContainerPort, EnvFromSource,
-        EnvVar, ExecAction, LocalObjectReference, NodeAffinity, NodeSelector,
+        Affinity, AppArmorProfile, Capabilities, ConfigMapEnvSource, Container, ContainerPort,
+        EnvFromSource, EnvVar, ExecAction, LocalObjectReference, NodeAffinity, NodeSelector,
         NodeSelectorRequirement, NodeSelectorTerm, PodSecurityContext, PreferredSchedulingTerm,
         Probe, ResourceRequirements, SeccompProfile, SecretEnvSource, SecurityContext, VolumeMount,
     },
@@ -503,6 +503,10 @@ fn non_root_security_context(
         capabilities: (!allow_privilege_escalation).then(|| Capabilities {
             drop: Some(vec!["ALL".to_owned()]),
             ..Capabilities::default()
+        }),
+        app_armor_profile: unconfined.then(|| AppArmorProfile {
+            type_: "Unconfined".to_owned(),
+            ..AppArmorProfile::default()
         }),
         seccomp_profile: Some(SeccompProfile {
             type_: if unconfined {

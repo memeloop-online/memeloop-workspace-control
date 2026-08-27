@@ -18,9 +18,13 @@ prepare_layout() {
         install -d -m 0750 -o "$workspace_user" -g "$workspace_group" "$workspace_root"
     fi
     install -d -m 0700 -o "$workspace_user" -g "$workspace_group" "$state_dir"
+    # These PVC subdirectories are mounted as /tmp and /var/tmp. Keep normal sticky
+    # world-writable semantics so the compatibility package manager and image user can both use
+    # them; the BuildKit-only directory remains private.
+    install -d -m 1777 -o "$workspace_user" -g "$workspace_group" \
+        "$workspace_root/.tmp/dev" "$workspace_root/.tmp/var"
     install -d -m 0700 -o "$workspace_user" -g "$workspace_group" \
-        "$workspace_root/.tmp/dev" "$workspace_root/.tmp/buildkit" \
-        "$workspace_root/.tmp/var"
+        "$workspace_root/.tmp/buildkit"
     install -d -m 0700 "$runtime_dir"
 }
 

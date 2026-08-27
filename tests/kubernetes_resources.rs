@@ -271,6 +271,22 @@ fn coder_node_profile_reuses_the_legacy_image_with_platform_bootstrap() {
                 image.starts_with("harbor.k3s.onetwo.website/") && image.contains("@sha256:")
             })
     }));
+    let buildkit = pod
+        .containers
+        .iter()
+        .find(|container| container.name == "buildkitd")
+        .unwrap();
+    assert_eq!(
+        buildkit
+            .security_context
+            .as_ref()
+            .unwrap()
+            .app_armor_profile
+            .as_ref()
+            .unwrap()
+            .type_,
+        "Unconfined"
+    );
     assert!(
         pod.init_containers
             .as_ref()
@@ -291,6 +307,10 @@ fn coder_node_profile_reuses_the_legacy_image_with_platform_bootstrap() {
     assert!(
         resources.workspace_config.data.as_ref().unwrap()["mwc-workspace-bootstrap"]
             .contains("apt-get install -y --no-install-recommends jq openssh-server")
+    );
+    assert!(
+        resources.workspace_config.data.as_ref().unwrap()["mwc-workspace-bootstrap"]
+            .contains("install -d -m 1777")
     );
 }
 
