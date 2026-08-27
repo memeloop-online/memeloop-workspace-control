@@ -4,6 +4,7 @@ RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         ca-certificates jq openssh-client openssh-server tini \
     && useradd --create-home --shell /bin/bash workspace \
+    && passwd --delete workspace \
     && mkdir -p /run/sshd /workspace \
     && chown workspace:workspace /workspace \
     && rm -rf /var/lib/apt/lists/*
