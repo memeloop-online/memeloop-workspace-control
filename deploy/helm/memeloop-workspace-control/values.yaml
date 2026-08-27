@@ -28,6 +28,8 @@ sqlite:
 workspace:
   storageClassName: ""
   ttydImage: ""
+  # Stable Tailnet node DNS name or IP. Enables per-workspace, auto-assigned SSH NodePorts.
+  internalSshHost: ""
 
 public:
   sshHost: ""

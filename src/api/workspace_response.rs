@@ -38,7 +38,27 @@ pub(super) async fn workspace_response(
         .workspace_namespace(&workspace.short_id)
         .map_err(|_| ApiError::BadRequest("workspace namespace is invalid"))?;
     let connectable = workspace.state == WorkspaceState::Ready;
-    let internal_host = format!("workspace.{namespace}.svc.cluster.local");
+    let cluster_host = format!("workspace.{namespace}.svc.cluster.local");
+    let internal_endpoint = if workspace.access_mode == AccessMode::Internal {
+        if let Some(host) = state.config.internal_ssh_host.as_ref() {
+            if connectable {
+                let client = state
+                    .kubernetes_client
+                    .clone()
+                    .ok_or(ApiError::KubernetesUnavailable)?;
+                crate::kubernetes::workspace_ssh_node_port(client, &namespace)
+                    .await
+                    .map_err(ApiError::Kubernetes)?
+                    .map(|port| (host.clone(), port))
+            } else {
+                None
+            }
+        } else {
+            Some((cluster_host.clone(), 2222))
+        }
+    } else {
+        Some((cluster_host.clone(), 2222))
+    };
     let login_user = workspace.runtime_profile.login_user();
     let (ssh_command, ssh_config) = if connectable {
         match (
@@ -47,23 +67,27 @@ pub(super) async fn workspace_response(
         ) {
             (AccessMode::Public, Some(jump_host)) => {
                 let jump_login = format!("access+{}@{jump_host}", workspace.short_id);
+                let (internal_host, internal_port) = internal_endpoint
+                    .as_ref()
+                    .expect("public workspaces always have a cluster endpoint");
                 (
                     Some(format!(
-                        "ssh -J {jump_login} -p 2222 {login_user}@{internal_host}"
+                        "ssh -J {jump_login} -p {internal_port} {login_user}@{internal_host}"
                     )),
                     Some(format!(
-                        "Host mwc-{short}\n  HostName {internal_host}\n  Port 2222\n  User {login_user}\n  ProxyJump {jump_login}\n  HostKeyAlias workspace-{short}\n",
+                        "Host mwc-{short}\n  HostName {internal_host}\n  Port {internal_port}\n  User {login_user}\n  ProxyJump {jump_login}\n  HostKeyAlias workspace-{short}\n",
                         short = workspace.short_id
                     )),
                 )
             }
-            (AccessMode::Internal, _) => (
-                Some(format!("ssh -p 2222 {login_user}@{internal_host}")),
-                Some(format!(
-                    "Host mwc-{short}\n  HostName {internal_host}\n  Port 2222\n  User {login_user}\n  HostKeyAlias workspace-{short}\n",
-                    short = workspace.short_id
+            (AccessMode::Internal, _) => internal_endpoint.as_ref().map_or((None, None),
+                |(internal_host, internal_port)| (
+                    Some(format!("ssh -p {internal_port} {login_user}@{internal_host}")),
+                    Some(format!(
+                        "Host mwc-{short}\n  HostName {internal_host}\n  Port {internal_port}\n  User {login_user}\n  HostKeyAlias workspace-{short}\n",
+                        short = workspace.short_id
+                    )),
                 )),
-            ),
             (AccessMode::Public, None) => (None, None),
         }
     } else {
@@ -93,6 +117,12 @@ pub(super) async fn workspace_response(
     Ok(WorkspaceResponse {
         workspace,
         namespace,
+        ssh_host: connectable
+            .then(|| internal_endpoint.as_ref().map(|(host, _)| host.clone()))
+            .flatten(),
+        ssh_port: connectable
+            .then(|| internal_endpoint.as_ref().map(|(_, port)| *port))
+            .flatten(),
         ssh_command,
         ssh_config,
         web_shell_url,

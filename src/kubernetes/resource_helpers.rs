@@ -7,6 +7,7 @@ use k8s_openapi::{
 };
 
 use super::{COMPONENT_LABEL, runtime_profiles::RuntimeProfile};
+use crate::workspaces::AccessMode;
 
 pub(super) fn service(
     namespace: &str,
@@ -26,6 +27,27 @@ pub(super) fn service(
         }),
         ..Service::default()
     }
+}
+
+pub(super) fn internal_ssh_service(
+    namespace: &str,
+    labels: &BTreeMap<String, String>,
+    pod_labels: &BTreeMap<String, String>,
+    access_mode: AccessMode,
+    enabled: bool,
+) -> Option<Service> {
+    (enabled && access_mode == AccessMode::Internal).then(|| Service {
+        metadata: namespaced_metadata("workspace-ssh", namespace, labels),
+        spec: Some(ServiceSpec {
+            type_: Some("NodePort".to_owned()),
+            selector: Some(pod_labels.clone()),
+            // Deliberately omit nodePort: Kubernetes owns stable allocation for the life of
+            // this Service. ttyd remains reachable only on the separate ClusterIP Service.
+            ports: Some(vec![service_port("ssh", 2222)]),
+            ..ServiceSpec::default()
+        }),
+        ..Service::default()
+    })
 }
 
 pub(super) fn pod_labels(labels: &BTreeMap<String, String>) -> BTreeMap<String, String> {

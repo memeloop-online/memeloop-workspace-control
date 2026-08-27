@@ -56,6 +56,10 @@ spec:
               value: "0.0.0.0:8081"
             - name: MWC_TTYD_IMAGE
               value: {{ .Values.workspace.ttydImage | quote }}
+            {{- if .Values.workspace.internalSshHost }}
+            - name: MWC_INTERNAL_SSH_HOST
+              value: {{ .Values.workspace.internalSshHost | quote }}
+            {{- end }}
             - name: MWC_HIGRESS_NAMESPACE
               value: {{ .Values.higress.namespace | quote }}
             - name: MWC_HIGRESS_GATEWAY_NAME

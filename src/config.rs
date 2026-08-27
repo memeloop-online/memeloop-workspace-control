@@ -35,6 +35,11 @@ pub struct AppConfig {
     #[arg(long, env = "MWC_SSH_PUBLIC_HOST")]
     pub ssh_public_host: Option<String>,
 
+    /// Stable Tailnet node address used with Kubernetes-assigned workspace SSH NodePorts.
+    /// When omitted, internal SSH remains available only through ClusterIP DNS.
+    #[arg(long, env = "MWC_INTERNAL_SSH_HOST")]
+    pub internal_ssh_host: Option<String>,
+
     /// Public origin used for ttyd links, for example https://shell.example.com.
     #[arg(long, env = "MWC_WEB_SHELL_PUBLIC_ORIGIN")]
     pub web_shell_public_origin: Option<String>,
@@ -62,6 +67,13 @@ impl AppConfig {
                 })
         }) {
             return Err(ConfigError::InvalidSshPublicHost);
+        }
+        if self
+            .internal_ssh_host
+            .as_deref()
+            .is_some_and(|host| !valid_ssh_host(host))
+        {
+            return Err(ConfigError::InvalidInternalSshHost);
         }
         if self
             .web_shell_public_origin
@@ -173,8 +185,25 @@ pub enum ConfigError {
     EmptyInstanceId,
     #[error("SSH public host must be a lower-case DNS hostname")]
     InvalidSshPublicHost,
+    #[error("internal SSH host must be an IP address or lower-case DNS hostname")]
+    InvalidInternalSshHost,
     #[error("Web Shell public origin must be an https origin without a trailing slash")]
     InvalidWebShellOrigin,
+}
+
+fn valid_ssh_host(host: &str) -> bool {
+    if host.parse::<std::net::IpAddr>().is_ok() {
+        return true;
+    }
+    !host.is_empty()
+        && host.len() <= 253
+        && !host.starts_with(['.', '-'])
+        && !host.ends_with(['.', '-'])
+        && host.chars().all(|character| {
+            character.is_ascii_lowercase()
+                || character.is_ascii_digit()
+                || matches!(character, '.' | '-')
+        })
 }
 
 #[cfg(test)]
@@ -206,11 +235,43 @@ mod tests {
             replica_count: 2,
             instance_id: "one".to_owned(),
             ssh_public_host: None,
+            internal_ssh_host: None,
             web_shell_public_origin: None,
         };
         assert_eq!(
             config.validate(),
             Err(ConfigError::SqliteMultipleReplicas(2))
+        );
+    }
+
+    #[test]
+    fn internal_ssh_host_accepts_tailnet_addresses_and_rejects_shell_text() {
+        let base = AppConfig {
+            installation_id: "test".parse().unwrap(),
+            listen_address: "127.0.0.1:8080".parse().unwrap(),
+            database_url: "sqlite::memory:".to_owned(),
+            replica_count: 1,
+            instance_id: "one".to_owned(),
+            ssh_public_host: None,
+            internal_ssh_host: Some("100.64.12.34".to_owned()),
+            web_shell_public_origin: None,
+        };
+        assert!(base.validate().is_ok());
+        assert!(
+            AppConfig {
+                internal_ssh_host: Some("workspace-node.tailnet.example".to_owned()),
+                ..base.clone()
+            }
+            .validate()
+            .is_ok()
+        );
+        assert_eq!(
+            AppConfig {
+                internal_ssh_host: Some("node;touch /tmp/no".to_owned()),
+                ..base
+            }
+            .validate(),
+            Err(ConfigError::InvalidInternalSshHost)
         );
     }
 }

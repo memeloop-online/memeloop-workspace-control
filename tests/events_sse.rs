@@ -72,6 +72,7 @@ async fn sse_resumes_after_durable_last_event_id_and_filters_organization() {
         replica_count: 1,
         instance_id: "test".to_owned(),
         ssh_public_host: None,
+        internal_ssh_host: None,
         web_shell_public_origin: None,
     };
     let app = router(Arc::new(AppState::new(config, database)));

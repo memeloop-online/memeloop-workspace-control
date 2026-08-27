@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use k8s_openapi::{
     api::networking::v1::{
-        NetworkPolicy, NetworkPolicyIngressRule, NetworkPolicyPeer, NetworkPolicyPort,
+        IPBlock, NetworkPolicy, NetworkPolicyIngressRule, NetworkPolicyPeer, NetworkPolicyPort,
         NetworkPolicySpec,
     },
     apimachinery::pkg::{apis::meta::v1::LabelSelector, util::intstr::IntOrString},
@@ -21,10 +21,11 @@ pub(super) fn build(
     jump_host_namespace: &str,
     jump_host_pod_labels: &BTreeMap<String, String>,
     access_mode: AccessMode,
+    internal_ssh_node_port_enabled: bool,
 ) -> NetworkPolicy {
     let ssh_rule = match access_mode {
         AccessMode::Public => ingress_rule(jump_host_namespace, jump_host_pod_labels, 2222),
-        AccessMode::Internal => internal_cluster_ssh_rule(),
+        AccessMode::Internal => internal_cluster_ssh_rule(internal_ssh_node_port_enabled),
     };
     NetworkPolicy {
         metadata: namespaced_metadata("workspace-ingress", namespace, ownership_labels),
@@ -43,14 +44,24 @@ pub(super) fn build(
     }
 }
 
-fn internal_cluster_ssh_rule() -> NetworkPolicyIngressRule {
-    NetworkPolicyIngressRule {
-        from: Some(vec![NetworkPolicyPeer {
-            // An empty namespace selector matches all cluster namespaces while
-            // still excluding traffic that did not enter through Kubernetes.
-            namespace_selector: Some(LabelSelector::default()),
+fn internal_cluster_ssh_rule(tailnet_enabled: bool) -> NetworkPolicyIngressRule {
+    let mut peers = vec![NetworkPolicyPeer {
+        // An empty namespace selector matches all cluster namespaces while
+        // still excluding traffic that did not enter through Kubernetes.
+        namespace_selector: Some(LabelSelector::default()),
+        ..NetworkPolicyPeer::default()
+    }];
+    if tailnet_enabled {
+        peers.push(NetworkPolicyPeer {
+            ip_block: Some(IPBlock {
+                cidr: "100.64.0.0/10".to_owned(),
+                except: None,
+            }),
             ..NetworkPolicyPeer::default()
-        }]),
+        });
+    }
+    NetworkPolicyIngressRule {
+        from: Some(peers),
         ports: Some(vec![NetworkPolicyPort {
             port: Some(IntOrString::Int(2222)),
             protocol: Some("TCP".to_owned()),

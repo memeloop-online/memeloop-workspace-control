@@ -249,6 +249,7 @@ fn resource_builder(
             .unwrap_or_else(|_| "higress-gateway".to_owned()),
         higress_https_section_name: std::env::var("MWC_HIGRESS_HTTPS_SECTION_NAME")
             .unwrap_or_else(|_| "https".to_owned()),
+        internal_ssh_node_port_enabled: config.internal_ssh_host.is_some(),
     })
 }
 

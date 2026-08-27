@@ -24,6 +24,7 @@ async fn test_app() -> Router {
             replica_count: 1,
             instance_id: "test".to_owned(),
             ssh_public_host: None,
+            internal_ssh_host: None,
             web_shell_public_origin: None,
         },
         database,

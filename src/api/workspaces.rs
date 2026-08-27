@@ -45,6 +45,8 @@ pub(super) struct CreateWorkspaceQuery {
 pub(super) struct WorkspaceResponse {
     pub workspace: Workspace,
     pub namespace: String,
+    pub ssh_host: Option<String>,
+    pub ssh_port: Option<u16>,
     pub ssh_command: Option<String>,
     pub ssh_config: Option<String>,
     pub web_shell_url: Option<String>,

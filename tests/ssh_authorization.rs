@@ -95,6 +95,7 @@ async fn authorized_keys_command_returns_only_restricted_workspace_target() {
             replica_count: 1,
             instance_id: "test".to_owned(),
             ssh_public_host: None,
+            internal_ssh_host: None,
             web_shell_public_origin: None,
         },
         database.clone(),

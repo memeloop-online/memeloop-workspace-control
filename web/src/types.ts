@@ -122,6 +122,8 @@ export interface Workspace {
 export interface WorkspaceResponse {
   workspace: Workspace;
   namespace: string;
+  ssh_host: string | null;
+  ssh_port: number | null;
   ssh_command: string | null;
   ssh_config: string | null;
   web_shell_url: string | null;

@@ -121,6 +121,18 @@ impl KubernetesCoordinator {
         services
             .patch("workspace", &apply, &Patch::Apply(&desired.service))
             .await?;
+        if let Some(service) = &desired.internal_ssh_service {
+            verify_existing(&services, "workspace-ssh", &self.builder, workspace_id).await?;
+            services
+                .patch("workspace-ssh", &apply, &Patch::Apply(service))
+                .await?;
+        } else if let Some(existing) = services.get_opt("workspace-ssh").await? {
+            self.builder
+                .verify_delete_ownership(&existing.metadata, workspace_id)?;
+            services
+                .delete("workspace-ssh", &DeleteParams::default())
+                .await?;
+        }
         let stateful_sets = Api::<StatefulSet>::namespaced(self.client.clone(), namespace_name);
         verify_existing(&stateful_sets, "workspace", &self.builder, workspace_id).await?;
         stateful_sets
@@ -324,6 +336,59 @@ impl KubernetesCoordinator {
             )
             .await?;
         Ok(())
+    }
+}
+
+/// Returns the apiserver-assigned SSH NodePort for an internal workspace.
+pub async fn workspace_ssh_node_port(
+    client: kube::Client,
+    namespace: &str,
+) -> Result<Option<u16>, kube::Error> {
+    let service = Api::<Service>::namespaced(client, namespace)
+        .get_opt("workspace-ssh")
+        .await?;
+    Ok(service.as_ref().and_then(node_port_from_service))
+}
+
+fn node_port_from_service(service: &Service) -> Option<u16> {
+    service
+        .spec
+        .as_ref()?
+        .ports
+        .as_ref()?
+        .iter()
+        .find(|port| port.name.as_deref() == Some("ssh"))?
+        .node_port
+        .and_then(|port| u16::try_from(port).ok())
+}
+
+#[cfg(test)]
+mod node_port_tests {
+    use k8s_openapi::api::core::v1::{ServicePort, ServiceSpec};
+
+    use super::*;
+
+    #[test]
+    fn reads_only_the_assigned_ssh_node_port() {
+        let service = Service {
+            spec: Some(ServiceSpec {
+                ports: Some(vec![
+                    ServicePort {
+                        name: Some("web-shell".to_owned()),
+                        node_port: Some(32767),
+                        ..ServicePort::default()
+                    },
+                    ServicePort {
+                        name: Some("ssh".to_owned()),
+                        node_port: Some(31022),
+                        ..ServicePort::default()
+                    },
+                ]),
+                ..ServiceSpec::default()
+            }),
+            ..Service::default()
+        };
+        assert_eq!(node_port_from_service(&service), Some(31022));
     }
 }
 

@@ -28,12 +28,12 @@ mod ownership;
 mod resource_helpers;
 mod runtime_profiles;
 
-pub use client::{DeleteProgress, KubernetesCoordinator, ReconcileError};
+pub use client::{DeleteProgress, KubernetesCoordinator, ReconcileError, workspace_ssh_node_port};
 pub use materialization::{InjectionMaterialization, MaterializationError};
 pub use ownership::OwnershipError;
 
 pub(crate) use resource_helpers::namespaced_metadata;
-use resource_helpers::{mount, pod_labels, service, workspace_config};
+use resource_helpers::{internal_ssh_service, mount, pod_labels, service, workspace_config};
 use runtime_profiles::RuntimeProfile;
 
 pub const OWNER_INSTALLATION_LABEL: &str = "workspace.memeloop.dev/owner-installation";
@@ -53,6 +53,7 @@ pub struct ResourceBuilder {
     pub web_shell_domain: Option<String>,
     pub higress_gateway_name: String,
     pub higress_https_section_name: String,
+    pub internal_ssh_node_port_enabled: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -71,6 +72,7 @@ pub struct WorkspaceResourceSpec {
 pub struct DesiredResources {
     pub namespace: Namespace,
     pub service: Service,
+    pub internal_ssh_service: Option<Service>,
     pub stateful_set: StatefulSet,
     pub network_policy: NetworkPolicy,
     pub injections: InjectionMaterialization,
@@ -116,6 +118,13 @@ impl ResourceBuilder {
                 ..Namespace::default()
             },
             service: service(&namespace_name, &labels, &pod_labels),
+            internal_ssh_service: internal_ssh_service(
+                &namespace_name,
+                &labels,
+                &pod_labels,
+                workspace.access_mode,
+                self.internal_ssh_node_port_enabled,
+            ),
             stateful_set: self.stateful_set(
                 &namespace_name,
                 &labels,
@@ -132,6 +141,7 @@ impl ResourceBuilder {
                 &self.jump_host_namespace,
                 &self.jump_host_pod_labels,
                 workspace.access_mode,
+                self.internal_ssh_node_port_enabled,
             ),
             injections,
             workspace_config: workspace_config(

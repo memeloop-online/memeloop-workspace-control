@@ -28,6 +28,7 @@ fn builder() -> ResourceBuilder {
         web_shell_domain: Some("shell.example.com".to_owned()),
         higress_gateway_name: "higress-gateway".to_owned(),
         higress_https_section_name: "https".to_owned(),
+        internal_ssh_node_port_enabled: false,
     }
 }
 
@@ -104,6 +105,66 @@ fn internal_workspace_allows_cluster_ssh_without_a_public_jump_host() {
     let peer = &ssh.from.as_ref().unwrap()[0];
     assert!(peer.namespace_selector.is_some());
     assert!(peer.pod_selector.is_none());
+}
+
+#[test]
+fn configured_tailnet_access_adds_an_ssh_only_automatic_node_port() {
+    let mut workspace = workspace(WorkspaceState::Ready);
+    workspace.access_mode = AccessMode::Internal;
+    let mut tailnet_builder = builder();
+    tailnet_builder.internal_ssh_node_port_enabled = true;
+    let resources = tailnet_builder.build(&workspace).unwrap();
+
+    assert_eq!(
+        resources.service.spec.as_ref().unwrap().type_.as_deref(),
+        Some("ClusterIP")
+    );
+    let ssh_service = resources.internal_ssh_service.unwrap();
+    let spec = ssh_service.spec.unwrap();
+    assert_eq!(spec.type_.as_deref(), Some("NodePort"));
+    let ports = spec.ports.unwrap();
+    assert_eq!(ports.len(), 1, "ttyd must never be published by NodePort");
+    assert_eq!(ports[0].name.as_deref(), Some("ssh"));
+    assert_eq!(ports[0].port, 2222);
+    assert_eq!(ports[0].node_port, None, "Kubernetes assigns the port");
+
+    let ssh_rule = resources
+        .network_policy
+        .spec
+        .unwrap()
+        .ingress
+        .unwrap()
+        .into_iter()
+        .find(|rule| {
+            rule.ports.as_ref().is_some_and(|ports| {
+                ports.iter().any(|port| {
+                    port.port
+                        == Some(
+                            k8s_openapi::apimachinery::pkg::util::intstr::IntOrString::Int(2222),
+                        )
+                })
+            })
+        })
+        .unwrap();
+    assert!(ssh_rule.from.unwrap().iter().any(|peer| {
+        peer.ip_block
+            .as_ref()
+            .is_some_and(|block| block.cidr == "100.64.0.0/10")
+    }));
+}
+
+#[test]
+fn tailnet_node_port_is_not_created_for_public_workspaces() {
+    let workspace = workspace(WorkspaceState::Ready);
+    let mut tailnet_builder = builder();
+    tailnet_builder.internal_ssh_node_port_enabled = true;
+    assert!(
+        tailnet_builder
+            .build(&workspace)
+            .unwrap()
+            .internal_ssh_service
+            .is_none()
+    );
 }
 
 #[test]

@@ -263,6 +263,7 @@ export function WorkspacePanel(props: Props) {
               <span>{runtimeProfileLabel(item.workspace.runtime_profile)}</span>
             </div>
             <p className="namespace">{item.namespace}</p>
+            {item.ssh_host && item.ssh_port && <p className="namespace">SSH endpoint: <code>{item.ssh_host}:{item.ssh_port}</code></p>}
             {item.ssh_command && <CopyLine label="SSH" value={item.ssh_command} />}
             {item.workspace_host_key && <CopyLine label="Host key" value={`${item.workspace_host_key.fingerprint} ${item.workspace_host_key.public_key}`} />}
             {item.jump_host_key && <CopyLine label="Jump key" value={`${item.jump_host_key.fingerprint} ${item.jump_host_key.public_key}`} />}
