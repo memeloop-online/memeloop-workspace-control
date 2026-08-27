@@ -137,9 +137,11 @@ jobs:
             scripts/k3s/verify-installation.sh \
             scripts/k3s/verify-workspace-cleanup.sh \
             tests/k3s_preflight.sh \
-            tests/k3s_verify_installation.sh
+            tests/k3s_verify_installation.sh \
+            tests/k3s_verify_workspace_cleanup.sh
           bash tests/k3s_preflight.sh
           bash tests/k3s_verify_installation.sh
+          bash tests/k3s_verify_workspace_cleanup.sh
 
   publish-images:
     needs: verify

@@ -18,7 +18,11 @@ if kubectl get namespace "$K3S_WORKSPACE_NAMESPACE" >/dev/null 2>&1; then
   exit 1
 fi
 
-remaining=$(kubectl get statefulset,service,secret,configmap,pvc,networkpolicy,httproute \
+resource_kinds='statefulset,service,secret,configmap,pvc,networkpolicy'
+if kubectl get crd httproutes.gateway.networking.k8s.io >/dev/null 2>&1; then
+  resource_kinds+=',httproute'
+fi
+remaining=$(kubectl get "$resource_kinds" \
   --all-namespaces -l "workspace.memeloop.dev/workspace-id=$K3S_WORKSPACE_ID" -o json 2>/dev/null \
   | jq '.items | length')
 if [[ $remaining != 0 ]]; then
