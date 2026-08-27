@@ -2,7 +2,7 @@ use std::fmt::Debug;
 
 use k8s_openapi::api::{
     apps::v1::StatefulSet,
-    core::v1::{ConfigMap, Namespace, Secret, Service},
+    core::v1::{ConfigMap, Namespace, Pod, Secret, Service},
     networking::v1::NetworkPolicy,
 };
 use kube::{
@@ -33,7 +33,7 @@ impl KubernetesCoordinator {
 
     pub async fn reconcile(&self, workspace: &WorkspaceResourceSpec) -> Result<(), ReconcileError> {
         let desired = self.builder.build(workspace)?;
-        self.apply_desired(workspace.id, &desired).await
+        self.apply_desired(workspace, &desired).await
     }
 
     pub async fn reconcile_with_injections(
@@ -59,14 +59,15 @@ impl KubernetesCoordinator {
                 "workspace.memeloop.dev/injection-revision".to_owned(),
                 revision,
             );
-        self.apply_desired(workspace.id, &desired).await
+        self.apply_desired(workspace, &desired).await
     }
 
     async fn apply_desired(
         &self,
-        workspace_id: Uuid,
+        workspace: &WorkspaceResourceSpec,
         desired: &super::DesiredResources,
     ) -> Result<(), ReconcileError> {
+        let workspace_id = workspace.id;
         let namespace_name = desired
             .namespace
             .metadata
@@ -125,6 +126,16 @@ impl KubernetesCoordinator {
         stateful_sets
             .patch("workspace", &apply, &Patch::Apply(&desired.stateful_set))
             .await?;
+        if workspace.state == crate::workspaces::WorkspaceState::Restarting {
+            let pods = Api::<Pod>::namespaced(self.client.clone(), namespace_name);
+            if let Some(pod) = pods.get_opt("workspace-0").await? {
+                self.builder
+                    .verify_delete_ownership(&pod.metadata, workspace_id)?;
+                if restart_generation_is_stale(&pod, workspace.generation) {
+                    pods.delete("workspace-0", &DeleteParams::default()).await?;
+                }
+            }
+        }
         let network_policies =
             Api::<NetworkPolicy>::namespaced(self.client.clone(), namespace_name);
         verify_existing(
@@ -316,6 +327,14 @@ impl KubernetesCoordinator {
     }
 }
 
+fn restart_generation_is_stale(pod: &Pod, expected: u64) -> bool {
+    pod.metadata
+        .annotations
+        .as_ref()
+        .and_then(|annotations| annotations.get("workspace.memeloop.dev/generation"))
+        .is_none_or(|generation| generation != &expected.to_string())
+}
+
 async fn verify_existing<K>(
     api: &Api<K>,
     name: &str,
@@ -354,4 +373,33 @@ pub enum ReconcileError {
     MissingObjectName,
     #[error("desired workspace StatefulSet has no Pod template metadata")]
     MissingPodTemplateMetadata,
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use k8s_openapi::{api::core::v1::Pod, apimachinery::pkg::apis::meta::v1::ObjectMeta};
+
+    use super::restart_generation_is_stale;
+
+    #[test]
+    fn restart_deletes_only_a_pod_from_an_older_generation() {
+        let pod = |generation: Option<&str>| Pod {
+            metadata: ObjectMeta {
+                annotations: generation.map(|value| {
+                    BTreeMap::from([(
+                        "workspace.memeloop.dev/generation".to_owned(),
+                        value.to_owned(),
+                    )])
+                }),
+                ..ObjectMeta::default()
+            },
+            ..Pod::default()
+        };
+
+        assert!(restart_generation_is_stale(&pod(None), 2));
+        assert!(restart_generation_is_stale(&pod(Some("1")), 2));
+        assert!(!restart_generation_is_stale(&pod(Some("2")), 2));
+    }
 }
