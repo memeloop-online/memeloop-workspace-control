@@ -2,11 +2,11 @@
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-preflight="$repo_root/scripts/kcs/preflight.sh"
+preflight="$repo_root/scripts/k3s/preflight.sh"
 
 kubectl() {
   if [[ $1 == config && $2 == current-context ]]; then
-    printf 'kcs-test\n'
+    printf 'k3s-test\n'
     return
   fi
   if [[ $1 == config && $2 == view ]]; then
@@ -57,15 +57,15 @@ kubectl() {
 export -f kubectl
 
 run_preflight() {
-  KCS_INSTALLATION_ID=test-a \
-  KCS_RELEASE_NAMESPACE=mwc-test-a \
-  KCS_STORAGE_CLASS=managed-delete \
-  KCS_MODE=${KCS_MODE:-sqlite} \
-  KCS_PUBLIC_SSH=${KCS_PUBLIC_SSH:-false} \
-  KCS_PUBLIC_WEB_SHELL=${KCS_PUBLIC_WEB_SHELL:-false} \
-  KCS_PUBLIC_API=${KCS_PUBLIC_API:-false} \
-  KCS_HIGRESS_NAMESPACE=${KCS_HIGRESS_NAMESPACE:-higress-system} \
-  KCS_HIGRESS_GATEWAY=${KCS_HIGRESS_GATEWAY:-higress-gateway} \
+  K3S_INSTALLATION_ID=test-a \
+  K3S_RELEASE_NAMESPACE=mwc-test-a \
+  K3S_STORAGE_CLASS=managed-delete \
+  K3S_MODE=${K3S_MODE:-sqlite} \
+  K3S_PUBLIC_SSH=${K3S_PUBLIC_SSH:-false} \
+  K3S_PUBLIC_WEB_SHELL=${K3S_PUBLIC_WEB_SHELL:-false} \
+  K3S_PUBLIC_API=${K3S_PUBLIC_API:-false} \
+  K3S_HIGRESS_NAMESPACE=${K3S_HIGRESS_NAMESPACE:-higress-system} \
+  K3S_HIGRESS_GATEWAY=${K3S_HIGRESS_GATEWAY:-higress-gateway} \
   bash "$preflight"
 }
 
@@ -73,7 +73,7 @@ FAKE_NAMESPACE_EXISTS=false FAKE_HTTPROUTE_CRD=false run_preflight >/dev/null
 
 if FAKE_NAMESPACE_EXISTS=false \
   FAKE_HTTPROUTE_CRD=false \
-  KCS_PUBLIC_API=true \
+  K3S_PUBLIC_API=true \
   run_preflight >/dev/null 2>&1; then
   printf 'preflight accepted a public API without HTTPRoute CRDs\n' >&2
   exit 1
@@ -93,13 +93,13 @@ fi
 FAKE_NAMESPACE_EXISTS=false \
 FAKE_LISTENER_PORTS=$'80\n22\n443\n' \
 FAKE_GATEWAY_PODS=$'gateway-a\ngateway-b\n' \
-KCS_PUBLIC_SSH=true \
-KCS_PUBLIC_WEB_SHELL=true \
+K3S_PUBLIC_SSH=true \
+K3S_PUBLIC_WEB_SHELL=true \
 run_preflight >/dev/null
 
 if FAKE_NAMESPACE_EXISTS=false \
   FAKE_LISTENER_PORTS=$'22\n22\n' \
-  KCS_PUBLIC_SSH=true \
+  K3S_PUBLIC_SSH=true \
   run_preflight >/dev/null 2>&1; then
   printf 'preflight accepted multiple TCP 22 listeners\n' >&2
   exit 1
@@ -107,10 +107,10 @@ fi
 
 if FAKE_NAMESPACE_EXISTS=false \
   FAKE_GATEWAY_PODS='' \
-  KCS_PUBLIC_WEB_SHELL=true \
+  K3S_PUBLIC_WEB_SHELL=true \
   run_preflight >/dev/null 2>&1; then
   printf 'preflight accepted an empty Higress gateway selector\n' >&2
   exit 1
 fi
 
-printf 'KCS preflight tests passed\n'
+printf 'K3S preflight tests passed\n'

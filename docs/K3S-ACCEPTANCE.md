@@ -1,6 +1,6 @@
-# KCS acceptance checklist
+# K3S acceptance checklist
 
-Run this checklist only against an owned KCS instance. It deliberately does not create a local
+Run this checklist only against an owned K3S instance. It deliberately does not create a local
 Kubernetes/K3s version matrix.
 
 ## Automated safety gates
@@ -16,20 +16,20 @@ These are the outputs of CI run `32971286106`; do not substitute a mutable tag d
 Run the read-only preflight before Helm changes. All target-identifying values are mandatory:
 
 ```bash
-export KCS_INSTALLATION_ID=public-a
-export KCS_RELEASE_NAMESPACE=mwc-public-a
-export KCS_STORAGE_CLASS=managed-delete
-export KCS_MODE=postgresql
-export KCS_PUBLIC_API=true
-export KCS_PUBLIC_SSH=true
-export KCS_PUBLIC_WEB_SHELL=true
-export KCS_HIGRESS_NAMESPACE=higress-system
-export KCS_HIGRESS_GATEWAY=higress-gateway
-export KCS_HIGRESS_POD_SELECTOR=app.kubernetes.io/name=higress-gateway
-scripts/kcs/preflight.sh
+export K3S_INSTALLATION_ID=public-a
+export K3S_RELEASE_NAMESPACE=mwc-public-a
+export K3S_STORAGE_CLASS=managed-delete
+export K3S_MODE=postgresql
+export K3S_PUBLIC_API=true
+export K3S_PUBLIC_SSH=true
+export K3S_PUBLIC_WEB_SHELL=true
+export K3S_HIGRESS_NAMESPACE=higress-system
+export K3S_HIGRESS_GATEWAY=higress-gateway
+export K3S_HIGRESS_POD_SELECTOR=app.kubernetes.io/name=higress-gateway
+scripts/k3s/preflight.sh
 ```
 
-Set each `KCS_PUBLIC_*` flag to `false` for an internal installation. Gateway API CRDs and a
+Set each `K3S_PUBLIC_*` flag to `false` for an internal installation. Gateway API CRDs and a
 Higress Gateway are required only when at least one public API, SSH or Web Shell path is enabled.
 
 Set Helm `higress.podLabels` to the same selector labels verified by the preflight.
@@ -37,18 +37,18 @@ Set Helm `higress.podLabels` to the same selector labels verified by the preflig
 After rollout, verify workload shape, readiness, owner labels and workspace namespace prefixes:
 
 ```bash
-export KCS_EXPECT_PUBLIC_SSH=true
-export KCS_EXPECT_PUBLIC_WEB_SHELL=true
-scripts/kcs/verify-installation.sh
+export K3S_EXPECT_PUBLIC_SSH=true
+export K3S_EXPECT_PUBLIC_WEB_SHELL=true
+scripts/k3s/verify-installation.sh
 ```
 
 After an API delete reaches `deleted`, prove that the namespace and all workspace-labelled
 objects are gone:
 
 ```bash
-export KCS_WORKSPACE_ID=00000000-0000-0000-0000-000000000000
-export KCS_WORKSPACE_NAMESPACE=ws-public-a-00000000
-scripts/kcs/verify-workspace-cleanup.sh
+export K3S_WORKSPACE_ID=00000000-0000-0000-0000-000000000000
+export K3S_WORKSPACE_NAMESPACE=ws-public-a-00000000
+scripts/k3s/verify-workspace-cleanup.sh
 ```
 
 The scripts do not install, patch or delete resources. Preserve their output together with the

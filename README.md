@@ -2,7 +2,7 @@
 
 Rust 模块化单体 Kubernetes 工作区管理平台。权威范围与验收要求见 [PLAN.md](PLAN.md)。
 
-实现覆盖安装隔离、RBAC、额度与审计、工作区状态机、Image Contract v1、三级注入级联、签名 Webhook、SQLite/PostgreSQL 任务租约、持久 SSE、Kubernetes 资源协调、Higress、标准 OpenSSH 跳板和 ttyd Web Shell。集群集成只在自有 KCS 环境验收，不以本地模拟集群替代。
+实现覆盖安装隔离、RBAC、额度与审计、工作区状态机、Image Contract v1、三级注入级联、签名 Webhook、SQLite/PostgreSQL 任务租约、持久 SSE、Kubernetes 资源协调、Higress、标准 OpenSSH 跳板和 ttyd Web Shell。集群集成只在自有 K3S 环境验收，不以本地模拟集群替代。
 
 代码是单个 Rust crate 和单个可执行文件。React/TypeScript 生产构建位于 `web/dist`，通过 `rust-embed` 内嵌到可执行文件。
 
@@ -83,8 +83,8 @@ Chart 为控制面和标准 OpenSSH 跳板提供了默认 CPU/内存 requests �
 
 ## 验收
 
-本地门禁验证纯业务、密文、迁移、租约、资源模型、HTTP API、SSE、OpenSSH 授权输出和嵌入 UI。真实 ProxyJump/SFTP/SCP/端口转发、ttyd/Higress、PostgreSQL 多副本与安装共存必须按 [KCS 验收清单](docs/KCS-ACCEPTANCE.md) 在自有 KCS 实例执行。
-清单配套的 `scripts/kcs/preflight.sh`、`verify-installation.sh` 和
+本地门禁验证纯业务、密文、迁移、租约、资源模型、HTTP API、SSE、OpenSSH 授权输出和嵌入 UI。真实 ProxyJump/SFTP/SCP/端口转发、ttyd/Higress、PostgreSQL 多副本与安装共存必须按 [K3S 验收清单](docs/K3S-ACCEPTANCE.md) 在自有 K3S 实例执行。
+清单配套的 `scripts/k3s/preflight.sh`、`verify-installation.sh` 和
 `verify-workspace-cleanup.sh` 均为只读检查，并要求显式指定目标安装信息。
 
 ## 质量门禁

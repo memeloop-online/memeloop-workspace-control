@@ -27,7 +27,7 @@ does not allocate a port per workspace. Set `higress.extAuthPluginUrl` to the
 pinned official Higress ext-auth plugin OCI URL to protect all `/shell/` paths.
 The chart refuses to render a Web Shell domain without that plugin and an exact
 `https://<webShellDomain>` public origin.
-Set `higress.podLabels` to the labels actually present on the KCS Higress gateway Pods. The same
+Set `higress.podLabels` to the labels actually present on the K3S Higress gateway Pods. The same
 selector is used by both the control-plane and workspace NetworkPolicies.
 
 For reproducible deployments set `image.digest` and `jumpHost.image.digest` to
@@ -40,6 +40,6 @@ into its own namespace and use a separate database, secrets, ServiceAccount,
 PVC, domains, and (when public SSH is enabled) LoadBalancer IP or shared jump
 facility.
 
-Before installing on KCS, run `scripts/kcs/preflight.sh`. After rollout, run
-`scripts/kcs/verify-installation.sh`; both scripts are read-only and require explicit environment
+Before installing on K3S, run `scripts/k3s/preflight.sh`. After rollout, run
+`scripts/k3s/verify-installation.sh`; both scripts are read-only and require explicit environment
 variables so they cannot silently target a default installation.
