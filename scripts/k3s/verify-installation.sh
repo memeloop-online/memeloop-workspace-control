@@ -65,9 +65,19 @@ fi
 kubectl get endpoints "$name" -n "$K3S_RELEASE_NAMESPACE" -o json \
   | jq -e '[.subsets[]?.addresses[]?] | length > 0' >/dev/null
 
+release_owner=$(kubectl get namespace "$K3S_RELEASE_NAMESPACE" -o json \
+  | jq -r --arg key "$owner_label" '.metadata.labels[$key] // ""')
+if [[ $release_owner != "$K3S_INSTALLATION_ID" ]]; then
+  printf 'release namespace has owner %s, expected %s\n' \
+    "$release_owner" "$K3S_INSTALLATION_ID" >&2
+  exit 1
+fi
+
 workspace_namespaces=$(kubectl get namespaces -l "$owner_label=$K3S_INSTALLATION_ID" -o json)
 bad_prefix=$(jq --arg prefix "ws-${K3S_INSTALLATION_ID}-" \
-  '[.items[].metadata.name | select(startswith($prefix) | not)] | length' <<<"$workspace_namespaces")
+  --arg release "$K3S_RELEASE_NAMESPACE" \
+  '[.items[].metadata.name | select(. != $release) | select(startswith($prefix) | not)] | length' \
+  <<<"$workspace_namespaces")
 if [[ $bad_prefix != 0 ]]; then
   printf 'managed workspace namespace does not use the installation prefix\n' >&2
   exit 1
@@ -105,5 +115,7 @@ if [[ ${K3S_EXPECT_PUBLIC_WEB_SHELL:-false} == true ]]; then
   fi
 fi
 
+workspace_count=$(jq --arg release "$K3S_RELEASE_NAMESPACE" \
+  '[.items[] | select(.metadata.name != $release)] | length' <<<"$workspace_namespaces")
 printf 'installation verification passed: %s resources, %s managed workspace namespaces\n' \
-  "$count" "$(jq '.items | length' <<<"$workspace_namespaces")"
+  "$count" "$workspace_count"
