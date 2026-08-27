@@ -221,6 +221,16 @@ impl WorkspaceRuntimeProfile {
             Self::CoderClusterAdmin => "cluster-admin",
         }
     }
+
+    pub fn home(self) -> &'static str {
+        match self {
+            Self::Standard => "/workspace",
+            Self::CoderRustDev => "/home/rust-dev",
+            Self::CoderNodeDev => "/home/node-dev",
+            Self::CoderTokenCenterRustDev => "/home/token-center-dev",
+            Self::CoderClusterAdmin => "/home/cluster-admin",
+        }
+    }
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]

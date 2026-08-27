@@ -177,7 +177,7 @@ impl WorkspaceReconcileHandler {
         let workspace_items = select_injections(&workspace_items, selection);
         let mut resolved =
             resolve_injections(&organization, &user, &workspace_items).map_err(job_error)?;
-        normalize_resolved_ssh_targets(&mut resolved, "cascade");
+        normalize_resolved_ssh_targets(&mut resolved, workspace.runtime_profile, "cascade");
 
         for candidate in self
             .database
@@ -205,7 +205,11 @@ impl WorkspaceReconcileHandler {
                 .enumerate()
             {
                 item.key = format!("mwc-access-{}-{index}", candidate.user_id);
-                item.target = format!("/workspace/.mwc/access-{}-{index}.pub", candidate.user_id);
+                normalize_ssh_target(
+                    &mut item,
+                    workspace.runtime_profile,
+                    &format!("access-{}-{index}", candidate.user_id),
+                );
                 item.locked = false;
                 item.sensitive = false;
                 resolved.push(crate::injections::ResolvedInjection {
@@ -232,6 +236,7 @@ impl WorkspaceReconcileHandler {
 
 fn normalize_resolved_ssh_targets(
     resolved: &mut [crate::injections::ResolvedInjection],
+    profile: crate::workspaces::WorkspaceRuntimeProfile,
     prefix: &str,
 ) {
     for (index, item) in resolved
@@ -239,9 +244,21 @@ fn normalize_resolved_ssh_targets(
         .filter(|item| item.item.kind == crate::injections::InjectionKind::SshPublicKey)
         .enumerate()
     {
-        item.item.target = format!("/workspace/.mwc/{prefix}-{index}.pub");
+        normalize_ssh_target(&mut item.item, profile, &format!("{prefix}-{index}"));
         item.item.sensitive = false;
     }
+}
+
+fn normalize_ssh_target(
+    item: &mut crate::injections::InjectionItem,
+    profile: crate::workspaces::WorkspaceRuntimeProfile,
+    name: &str,
+) {
+    let login_user = profile.login_user();
+    item.target = format!("{}/.mwc/{name}.pub", profile.home());
+    item.file_mode = Some(0o600);
+    item.owner = Some(login_user.to_owned());
+    item.group = Some(login_user.to_owned());
 }
 
 impl JobHandler for WorkspaceReconcileHandler {
@@ -287,4 +304,52 @@ fn unix_timestamp() -> Result<i64, JobHandlerError> {
         .map_err(job_error)?
         .as_secs();
     i64::try_from(seconds).map_err(job_error)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use crate::{
+        injections::{
+            InjectionItem, InjectionKind, InjectionScope, InjectionValue, ResolvedInjection,
+        },
+        workspaces::WorkspaceRuntimeProfile,
+    };
+
+    use super::normalize_resolved_ssh_targets;
+
+    #[test]
+    fn ssh_materialization_uses_the_profile_home_and_login_user() {
+        let mut resolved = vec![ResolvedInjection {
+            source: InjectionScope::User,
+            item: InjectionItem {
+                key: "personal-key".to_owned(),
+                kind: InjectionKind::SshPublicKey,
+                target: "/wrong/location".to_owned(),
+                value: InjectionValue::Utf8("ssh-ed25519 test".to_owned()),
+                sensitive: true,
+                locked: false,
+                version: 1,
+                file_mode: None,
+                owner: None,
+                group: None,
+                template_selector: None,
+                labels: BTreeMap::new(),
+            },
+        }];
+
+        normalize_resolved_ssh_targets(
+            &mut resolved,
+            WorkspaceRuntimeProfile::CoderNodeDev,
+            "cascade",
+        );
+
+        let item = &resolved[0].item;
+        assert_eq!(item.target, "/home/node-dev/.mwc/cascade-0.pub");
+        assert_eq!(item.file_mode, Some(0o600));
+        assert_eq!(item.owner.as_deref(), Some("node-dev"));
+        assert_eq!(item.group.as_deref(), Some("node-dev"));
+        assert!(!item.sensitive);
+    }
 }
