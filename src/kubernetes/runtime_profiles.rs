@@ -352,6 +352,14 @@ impl RuntimeProfile {
             env("MWC_WORKSPACE_USER", self.login_user),
             env("MWC_WORKSPACE_HOME", self.home),
             env(
+                "MWC_IN_CLUSTER_KUBECONFIG",
+                if matches!(self.kind, WorkspaceRuntimeProfile::CoderClusterAdmin) {
+                    "true"
+                } else {
+                    "false"
+                },
+            ),
+            env(
                 "MWC_PRESERVE_HOME_ROOT",
                 if matches!(self.kind, WorkspaceRuntimeProfile::Standard) {
                     "false"
@@ -367,6 +375,7 @@ impl RuntimeProfile {
             WorkspaceRuntimeProfile::Standard => Vec::new(),
             WorkspaceRuntimeProfile::CoderClusterAdmin => vec![
                 env("HOME", self.home),
+                env("KUBECONFIG", "/home/cluster-admin/.mwc/kubeconfig"),
                 env(
                     "PATH",
                     "/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin:/home/cluster-admin/.local/bin:/home/cluster-admin/.local/share/pnpm",

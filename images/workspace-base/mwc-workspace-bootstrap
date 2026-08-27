@@ -8,6 +8,7 @@ state_dir="$workspace_root/.mwc"
 authorized_keys="$state_dir/authorized_keys"
 runtime_dir=/run/mwc-ssh
 manifest=/var/run/workspace-injections/config/workspace-files.json
+kubeconfig="$state_dir/kubeconfig"
 
 prepare_layout() {
     if [ "${MWC_PRESERVE_HOME_ROOT:-false}" = true ]; then
@@ -28,8 +29,39 @@ prepare_layout() {
     install -d -m 0700 "$runtime_dir"
 }
 
+prepare_kubeconfig() {
+    if [ "${MWC_IN_CLUSTER_KUBECONFIG:-false}" != true ]; then
+        rm -f "$kubeconfig"
+        return
+    fi
+    temporary_kubeconfig="$state_dir/.kubeconfig.tmp"
+    cat > "$temporary_kubeconfig" <<'EOF'
+apiVersion: v1
+kind: Config
+clusters:
+  - name: in-cluster
+    cluster:
+      certificate-authority: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+      server: https://kubernetes.default.svc
+users:
+  - name: workspace-admin
+    user:
+      tokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
+contexts:
+  - name: workspace-admin@in-cluster
+    context:
+      cluster: in-cluster
+      user: workspace-admin
+current-context: workspace-admin@in-cluster
+EOF
+    install -m 0600 -o "$workspace_user" -g "$workspace_group" \
+        "$temporary_kubeconfig" "$kubeconfig"
+    rm -f "$temporary_kubeconfig"
+}
+
 prepare() {
     prepare_layout
+    prepare_kubeconfig
 
     # Debian images commonly create service users with a leading `!` in shadow. sshd treats that
     # as a fully locked account and rejects public keys before checking authorized_keys. Replace

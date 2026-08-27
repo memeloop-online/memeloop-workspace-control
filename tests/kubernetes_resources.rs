@@ -239,6 +239,26 @@ fn only_cluster_admin_profile_receives_a_owned_cluster_admin_identity() {
     let pod = resources.stateful_set.spec.unwrap().template.spec.unwrap();
     assert_eq!(pod.service_account_name.as_deref(), Some("workspace-admin"));
     assert_eq!(pod.automount_service_account_token, Some(true));
+    let workspace_container = pod
+        .containers
+        .iter()
+        .find(|container| container.name == "workspace")
+        .unwrap();
+    let environment = workspace_container.env.as_ref().unwrap();
+    assert!(environment.iter().any(|variable| {
+        variable.name == "MWC_IN_CLUSTER_KUBECONFIG" && variable.value.as_deref() == Some("true")
+    }));
+    assert!(environment.iter().any(|variable| {
+        variable.name == "KUBECONFIG"
+            && variable.value.as_deref() == Some("/home/cluster-admin/.mwc/kubeconfig")
+    }));
+    let config = resources.workspace_config.data.as_ref().unwrap();
+    assert!(config["sshd_config"].contains(" KUBECONFIG=/home/cluster-admin/.mwc/kubeconfig"));
+    assert!(config["mwc-workspace-bootstrap"].contains("server: https://kubernetes.default.svc"));
+    assert!(
+        config["mwc-workspace-bootstrap"]
+            .contains("tokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token")
+    );
 }
 
 #[test]
@@ -260,6 +280,30 @@ fn non_admin_profiles_never_receive_a_service_account_token() {
             pod.automount_service_account_token,
             Some(false),
             "{profile:?}"
+        );
+        let workspace_container = pod
+            .containers
+            .iter()
+            .find(|container| container.name == "workspace")
+            .unwrap();
+        assert!(
+            workspace_container
+                .env
+                .as_ref()
+                .unwrap()
+                .iter()
+                .any(|variable| {
+                    variable.name == "MWC_IN_CLUSTER_KUBECONFIG"
+                        && variable.value.as_deref() == Some("false")
+                })
+        );
+        assert!(
+            !workspace_container
+                .env
+                .as_ref()
+                .unwrap()
+                .iter()
+                .any(|variable| variable.name == "KUBECONFIG")
         );
     }
 }
