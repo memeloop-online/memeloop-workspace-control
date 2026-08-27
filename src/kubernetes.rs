@@ -6,9 +6,11 @@ use k8s_openapi::{
         core::v1::{
             ConfigMap, ConfigMapVolumeSource, Container, ContainerPort, EmptyDirVolumeSource,
             Namespace, PersistentVolumeClaim, PersistentVolumeClaimSpec, PodSpec, PodTemplateSpec,
-            ResourceRequirements, SecretVolumeSource, Service, Volume, VolumeResourceRequirements,
+            ResourceRequirements, SecretVolumeSource, Service, ServiceAccount, Volume,
+            VolumeResourceRequirements,
         },
         networking::v1::{Ingress, NetworkPolicy},
+        rbac::v1::ClusterRoleBinding,
     },
     apimachinery::pkg::{
         api::resource::Quantity,
@@ -33,7 +35,10 @@ pub use materialization::{InjectionMaterialization, MaterializationError};
 pub use ownership::OwnershipError;
 
 pub(crate) use resource_helpers::namespaced_metadata;
-use resource_helpers::{internal_ssh_service, mount, pod_labels, service, workspace_config};
+use resource_helpers::{
+    cluster_admin_binding, cluster_admin_service_account, internal_ssh_service, mount, pod_labels,
+    service, workspace_config,
+};
 use runtime_profiles::RuntimeProfile;
 
 pub const OWNER_INSTALLATION_LABEL: &str = "workspace.memeloop.dev/owner-installation";
@@ -74,6 +79,8 @@ pub struct DesiredResources {
     pub namespace: Namespace,
     pub service: Service,
     pub internal_ssh_service: Option<Service>,
+    pub service_account: Option<ServiceAccount>,
+    pub cluster_role_binding: Option<ClusterRoleBinding>,
     pub stateful_set: StatefulSet,
     pub network_policy: NetworkPolicy,
     pub injections: InjectionMaterialization,
@@ -99,6 +106,9 @@ impl ResourceBuilder {
             .workspace_namespace(&workspace.short_id)?;
         let labels = self.labels(workspace.id);
         let pod_labels = pod_labels(&labels);
+        let cluster_admin = workspace.runtime_profile
+            == crate::workspaces::WorkspaceRuntimeProfile::CoderClusterAdmin;
+        let cluster_admin_binding_name = self.cluster_admin_binding_name(&workspace.short_id);
         let replicas = match workspace.state {
             WorkspaceState::Stopping | WorkspaceState::Stopped | WorkspaceState::Failed => 0,
             WorkspaceState::Provisioning
@@ -125,6 +135,13 @@ impl ResourceBuilder {
                 &pod_labels,
                 workspace.access_mode,
                 self.internal_ssh_node_port_enabled,
+            ),
+            service_account: cluster_admin_service_account(&namespace_name, &labels, cluster_admin),
+            cluster_role_binding: cluster_admin_binding(
+                &cluster_admin_binding_name,
+                &namespace_name,
+                &labels,
+                cluster_admin,
             ),
             stateful_set: self.stateful_set(
                 &namespace_name,
@@ -167,6 +184,13 @@ impl ResourceBuilder {
             metadata,
             self.installation_id.as_str(),
             &workspace_id.to_string(),
+        )
+    }
+
+    pub(crate) fn cluster_admin_binding_name(&self, workspace_short_id: &str) -> String {
+        format!(
+            "mwc-{}-{workspace_short_id}-admin",
+            self.installation_id.as_str()
         )
     }
 
@@ -222,6 +246,8 @@ impl ResourceBuilder {
         replicas: i32,
     ) -> StatefulSet {
         let profile = RuntimeProfile::for_workspace(workspace.runtime_profile);
+        let cluster_admin = workspace.runtime_profile
+            == crate::workspaces::WorkspaceRuntimeProfile::CoderClusterAdmin;
         let mut requests = profile.resource_requests(workspace.resources);
         let mut limits = profile.resource_limits(workspace.resources);
         if workspace.resources.gpu_count > 0 {
@@ -276,7 +302,8 @@ impl ResourceBuilder {
             ..Container::default()
         });
         let pod_spec = PodSpec {
-            automount_service_account_token: Some(false),
+            automount_service_account_token: Some(cluster_admin),
+            service_account_name: cluster_admin.then(|| "workspace-admin".to_owned()),
             init_containers: Some(init_containers),
             containers,
             affinity: profile.affinity(),

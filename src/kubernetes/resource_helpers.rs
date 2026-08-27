@@ -2,7 +2,12 @@ use std::collections::BTreeMap;
 
 use k8s_openapi::{
     ByteString,
-    api::core::v1::{ConfigMap, Secret, Service, ServicePort, ServiceSpec, VolumeMount},
+    api::{
+        core::v1::{
+            ConfigMap, Secret, Service, ServiceAccount, ServicePort, ServiceSpec, VolumeMount,
+        },
+        rbac::v1::{ClusterRoleBinding, RoleRef, Subject},
+    },
     apimachinery::pkg::{apis::meta::v1::ObjectMeta, util::intstr::IntOrString},
 };
 
@@ -47,6 +52,44 @@ pub(super) fn internal_ssh_service(
             ..ServiceSpec::default()
         }),
         ..Service::default()
+    })
+}
+
+pub(super) fn cluster_admin_service_account(
+    namespace: &str,
+    labels: &BTreeMap<String, String>,
+    enabled: bool,
+) -> Option<ServiceAccount> {
+    enabled.then(|| ServiceAccount {
+        metadata: namespaced_metadata("workspace-admin", namespace, labels),
+        automount_service_account_token: Some(true),
+        ..ServiceAccount::default()
+    })
+}
+
+pub(super) fn cluster_admin_binding(
+    name: &str,
+    namespace: &str,
+    labels: &BTreeMap<String, String>,
+    enabled: bool,
+) -> Option<ClusterRoleBinding> {
+    enabled.then(|| ClusterRoleBinding {
+        metadata: ObjectMeta {
+            name: Some(name.to_owned()),
+            labels: Some(labels.clone()),
+            ..ObjectMeta::default()
+        },
+        role_ref: RoleRef {
+            api_group: Some("rbac.authorization.k8s.io".to_owned()),
+            kind: "ClusterRole".to_owned(),
+            name: "cluster-admin".to_owned(),
+        },
+        subjects: Some(vec![Subject {
+            kind: "ServiceAccount".to_owned(),
+            name: "workspace-admin".to_owned(),
+            namespace: Some(namespace.to_owned()),
+            ..Subject::default()
+        }]),
     })
 }
 

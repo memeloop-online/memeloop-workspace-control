@@ -193,6 +193,78 @@ fn tailnet_node_port_is_not_created_for_public_workspaces() {
 }
 
 #[test]
+fn only_cluster_admin_profile_receives_a_owned_cluster_admin_identity() {
+    let mut workspace = workspace(WorkspaceState::Ready);
+    workspace.runtime_profile = WorkspaceRuntimeProfile::CoderClusterAdmin;
+    let workspace_id = workspace.id;
+    let resources = builder().build(&workspace).unwrap();
+
+    let service_account = resources.service_account.unwrap();
+    assert_eq!(
+        service_account.metadata.name.as_deref(),
+        Some("workspace-admin")
+    );
+    assert_eq!(
+        service_account.metadata.namespace.as_deref(),
+        Some("ws-public-a-01jabc")
+    );
+    assert_eq!(service_account.automount_service_account_token, Some(true));
+
+    let binding = resources.cluster_role_binding.unwrap();
+    assert_eq!(
+        binding.metadata.name.as_deref(),
+        Some("mwc-public-a-01jabc-admin")
+    );
+    assert_eq!(binding.role_ref.kind, "ClusterRole");
+    assert_eq!(binding.role_ref.name, "cluster-admin");
+    let subject = &binding.subjects.unwrap()[0];
+    assert_eq!(subject.kind, "ServiceAccount");
+    assert_eq!(subject.name, "workspace-admin");
+    assert_eq!(subject.namespace.as_deref(), Some("ws-public-a-01jabc"));
+    builder()
+        .verify_delete_ownership(&binding.metadata, workspace_id)
+        .unwrap();
+    assert!(matches!(
+        ResourceBuilder {
+            installation_id: "other".parse().unwrap(),
+            ..builder()
+        }
+        .verify_delete_ownership(&binding.metadata, workspace_id),
+        Err(OwnershipError::LabelMismatch {
+            key: OWNER_INSTALLATION_LABEL,
+            ..
+        })
+    ));
+
+    let pod = resources.stateful_set.spec.unwrap().template.spec.unwrap();
+    assert_eq!(pod.service_account_name.as_deref(), Some("workspace-admin"));
+    assert_eq!(pod.automount_service_account_token, Some(true));
+}
+
+#[test]
+fn non_admin_profiles_never_receive_a_service_account_token() {
+    for profile in [
+        WorkspaceRuntimeProfile::Standard,
+        WorkspaceRuntimeProfile::CoderRustDev,
+        WorkspaceRuntimeProfile::CoderNodeDev,
+        WorkspaceRuntimeProfile::CoderTokenCenterRustDev,
+    ] {
+        let mut workspace = workspace(WorkspaceState::Ready);
+        workspace.runtime_profile = profile;
+        let resources = builder().build(&workspace).unwrap();
+        assert!(resources.service_account.is_none(), "{profile:?}");
+        assert!(resources.cluster_role_binding.is_none(), "{profile:?}");
+        let pod = resources.stateful_set.spec.unwrap().template.spec.unwrap();
+        assert_eq!(pod.service_account_name, None, "{profile:?}");
+        assert_eq!(
+            pod.automount_service_account_token,
+            Some(false),
+            "{profile:?}"
+        );
+    }
+}
+
+#[test]
 fn builds_isolated_single_replica_workspace_with_standard_components() {
     let workspace = workspace(WorkspaceState::Ready);
     let resources = builder().build(&workspace).unwrap();
