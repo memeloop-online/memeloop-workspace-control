@@ -87,6 +87,7 @@ jobs:
           grep -q 'matchRules:' <<<"${rendered_public}"
           grep -q 'name: web-shell-auth' <<<"${rendered_public}"
           grep -q 'service_name: mwc-public-a.default.svc.cluster.local' <<<"${rendered_public}"
+          grep -q 'name: MWC_HIGRESS_SOURCE_CIDRS_JSON' <<<"${rendered_public}"
           grep -q 'resources: \["networkpolicies", "ingresses"\]' <<<"${rendered_public}"
           linux-amd64/helm lint deploy/helm/memeloop-workspace-control \
             -f deploy/helm/memeloop-workspace-control/values.internal.example.yaml

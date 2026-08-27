@@ -42,6 +42,8 @@ higress:
   gatewayName: higress-gateway
   podLabels:
     app.kubernetes.io/name: higress-gateway
+  # Required when gateway Pods use hostNetwork and the CNI sees node source addresses.
+  sourceCidrs: []
   httpSectionName: http
   httpsSectionName: https
   sshListenerPort: 22

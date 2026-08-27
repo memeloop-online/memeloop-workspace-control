@@ -19,6 +19,7 @@ fn builder() -> ResourceBuilder {
             "app.kubernetes.io/name".to_owned(),
             "higress-gateway".to_owned(),
         )]),
+        higress_source_cidrs: vec!["100.64.0.6/31".to_owned()],
         jump_host_namespace: "workspace-access".to_owned(),
         jump_host_pod_labels: std::collections::BTreeMap::from([(
             "app.kubernetes.io/name".to_owned(),
@@ -105,6 +106,30 @@ fn internal_workspace_allows_cluster_ssh_without_a_public_jump_host() {
     let peer = &ssh.from.as_ref().unwrap()[0];
     assert!(peer.namespace_selector.is_some());
     assert!(peer.pod_selector.is_none());
+}
+
+#[test]
+fn web_shell_allows_configured_host_network_gateway_sources() {
+    let resources = builder().build(&workspace(WorkspaceState::Ready)).unwrap();
+    let ingress = resources.network_policy.spec.unwrap().ingress.unwrap();
+    let ttyd = ingress
+        .iter()
+        .find(|rule| {
+            rule.ports.as_ref().is_some_and(|ports| {
+                ports.iter().any(|port| {
+                    port.port
+                        == Some(
+                            k8s_openapi::apimachinery::pkg::util::intstr::IntOrString::Int(7681),
+                        )
+                })
+            })
+        })
+        .unwrap();
+    assert!(ttyd.from.as_ref().unwrap().iter().any(|peer| {
+        peer.ip_block
+            .as_ref()
+            .is_some_and(|block| block.cidr == "100.64.0.6/31")
+    }));
 }
 
 #[test]

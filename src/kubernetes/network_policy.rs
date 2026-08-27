@@ -18,6 +18,7 @@ pub(super) fn build(
     pod_labels: &BTreeMap<String, String>,
     higress_namespace: &str,
     higress_pod_labels: &BTreeMap<String, String>,
+    higress_source_cidrs: &[String],
     jump_host_namespace: &str,
     jump_host_pod_labels: &BTreeMap<String, String>,
     access_mode: AccessMode,
@@ -36,12 +37,36 @@ pub(super) fn build(
             }),
             policy_types: Some(vec!["Ingress".to_owned()]),
             ingress: Some(vec![
-                ingress_rule(higress_namespace, higress_pod_labels, 7681),
+                ingress_rule_with_ip_blocks(
+                    higress_namespace,
+                    higress_pod_labels,
+                    higress_source_cidrs,
+                    7681,
+                ),
                 ssh_rule,
             ]),
             ..NetworkPolicySpec::default()
         }),
     }
+}
+
+fn ingress_rule_with_ip_blocks(
+    namespace: &str,
+    pod_labels: &BTreeMap<String, String>,
+    source_cidrs: &[String],
+    port: i32,
+) -> NetworkPolicyIngressRule {
+    let mut rule = ingress_rule(namespace, pod_labels, port);
+    rule.from
+        .get_or_insert_default()
+        .extend(source_cidrs.iter().map(|cidr| NetworkPolicyPeer {
+            ip_block: Some(IPBlock {
+                cidr: cidr.clone(),
+                except: None,
+            }),
+            ..NetworkPolicyPeer::default()
+        }));
+    rule
 }
 
 fn internal_cluster_ssh_rule(tailnet_enabled: bool) -> NetworkPolicyIngressRule {

@@ -233,11 +233,31 @@ fn resource_builder(
         )]),
         Err(error) => return Err(io::Error::new(io::ErrorKind::InvalidInput, error)),
     };
+    let higress_source_cidrs = match std::env::var("MWC_HIGRESS_SOURCE_CIDRS_JSON") {
+        Ok(value) => {
+            let cidrs: Vec<String> = serde_json::from_str(&value).map_err(|error| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("MWC_HIGRESS_SOURCE_CIDRS_JSON must be a JSON string array: {error}"),
+                )
+            })?;
+            if cidrs.iter().any(|cidr| cidr.trim().is_empty()) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "MWC_HIGRESS_SOURCE_CIDRS_JSON must not contain empty CIDRs",
+                ));
+            }
+            cidrs
+        }
+        Err(std::env::VarError::NotPresent) => Vec::new(),
+        Err(error) => return Err(io::Error::new(io::ErrorKind::InvalidInput, error)),
+    };
     Ok(ResourceBuilder {
         installation_id: config.installation_id.clone(),
         ttyd_image,
         higress_namespace,
         higress_pod_labels,
+        higress_source_cidrs,
         jump_host_namespace,
         jump_host_pod_labels: BTreeMap::from([(
             "app.kubernetes.io/name".to_owned(),
