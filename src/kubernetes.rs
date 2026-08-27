@@ -4,10 +4,9 @@ use k8s_openapi::{
     api::{
         apps::v1::{StatefulSet, StatefulSetSpec},
         core::v1::{
-            ConfigMap, ConfigMapEnvSource, ConfigMapVolumeSource, Container, ContainerPort,
-            EmptyDirVolumeSource, EnvFromSource, Namespace, PersistentVolumeClaim,
-            PersistentVolumeClaimSpec, PodSpec, PodTemplateSpec, ResourceRequirements,
-            SecretEnvSource, SecretVolumeSource, Service, Volume, VolumeResourceRequirements,
+            ConfigMap, ConfigMapVolumeSource, Container, ContainerPort, EmptyDirVolumeSource,
+            Namespace, PersistentVolumeClaim, PersistentVolumeClaimSpec, PodSpec, PodTemplateSpec,
+            ResourceRequirements, SecretVolumeSource, Service, Volume, VolumeResourceRequirements,
         },
         networking::v1::NetworkPolicy,
     },
@@ -27,13 +26,15 @@ mod materialization;
 mod network_policy;
 mod ownership;
 mod resource_helpers;
+mod runtime_profiles;
 
 pub use client::{DeleteProgress, KubernetesCoordinator, ReconcileError};
 pub use materialization::{InjectionMaterialization, MaterializationError};
 pub use ownership::OwnershipError;
 
 pub(crate) use resource_helpers::namespaced_metadata;
-use resource_helpers::{mount, pod_labels, service, workspace_config, workspace_mounts};
+use resource_helpers::{mount, pod_labels, service, workspace_config};
+use runtime_profiles::RuntimeProfile;
 
 pub const OWNER_INSTALLATION_LABEL: &str = "workspace.memeloop.dev/owner-installation";
 pub const WORKSPACE_ID_LABEL: &str = "workspace.memeloop.dev/workspace-id";
@@ -63,6 +64,7 @@ pub struct WorkspaceResourceSpec {
     pub access_mode: crate::workspaces::AccessMode,
     pub state: WorkspaceState,
     pub generation: u64,
+    pub runtime_profile: crate::workspaces::WorkspaceRuntimeProfile,
 }
 
 #[derive(Debug)]
@@ -132,7 +134,11 @@ impl ResourceBuilder {
                 workspace.access_mode,
             ),
             injections,
-            workspace_config: workspace_config(&namespace_name, &labels),
+            workspace_config: workspace_config(
+                &namespace_name,
+                &labels,
+                RuntimeProfile::for_workspace(workspace.runtime_profile),
+            ),
             ssh_identity: resource_helpers::ssh_identity(&namespace_name, &labels, None),
             web_shell_route: self.web_shell_domain.as_ref().map(|domain| {
                 higress::web_shell_route(
@@ -211,26 +217,9 @@ impl ResourceBuilder {
         workspace: &WorkspaceResourceSpec,
         replicas: i32,
     ) -> StatefulSet {
-        let mut requests = BTreeMap::from([
-            (
-                "cpu".to_owned(),
-                Quantity(format!("{}m", workspace.resources.cpu_millis)),
-            ),
-            (
-                "memory".to_owned(),
-                Quantity(format!("{}Mi", workspace.resources.memory_mib)),
-            ),
-        ]);
-        let mut limits = BTreeMap::from([
-            (
-                "cpu".to_owned(),
-                Quantity(format!("{}m", workspace.resources.cpu_millis)),
-            ),
-            (
-                "memory".to_owned(),
-                Quantity(format!("{}Mi", workspace.resources.memory_mib)),
-            ),
-        ]);
+        let profile = RuntimeProfile::for_workspace(workspace.runtime_profile);
+        let mut requests = profile.resource_requests(workspace.resources);
+        let mut limits = profile.resource_limits(workspace.resources);
         if workspace.resources.gpu_count > 0 {
             let quantity = Quantity(workspace.resources.gpu_count.to_string());
             requests.insert("nvidia.com/gpu".to_owned(), quantity.clone());
@@ -241,83 +230,56 @@ impl ResourceBuilder {
             limits: Some(limits),
             ..ResourceRequirements::default()
         };
+        let mut init_containers = vec![profile.workspace_init_container(&workspace.image)];
+        if let Some(buildkit_init) = profile.buildkit_init_container() {
+            init_containers.push(buildkit_init);
+        }
+        let mut containers =
+            vec![profile.workspace_container(&workspace.image, workspace_resources)];
+        if let Some(buildkit) = profile.buildkit_container() {
+            containers.push(buildkit);
+        }
+        containers.push(Container {
+            name: "ttyd".to_owned(),
+            image: Some(self.ttyd_image.clone()),
+            command: Some(vec!["ttyd".to_owned()]),
+            args: Some(vec![
+                "--port".to_owned(),
+                "7681".to_owned(),
+                "--writable".to_owned(),
+                "ssh".to_owned(),
+                "-p".to_owned(),
+                "2222".to_owned(),
+                "-o".to_owned(),
+                "StrictHostKeyChecking=yes".to_owned(),
+                "-o".to_owned(),
+                "UserKnownHostsFile=/etc/ssh/platform/known_hosts".to_owned(),
+                "-o".to_owned(),
+                "BatchMode=yes".to_owned(),
+                "-i".to_owned(),
+                "/etc/ssh/platform/ttyd_client_key".to_owned(),
+                format!("{}@127.0.0.1", profile.login_user),
+            ]),
+            ports: Some(vec![ContainerPort {
+                container_port: 7681,
+                name: Some("web-shell".to_owned()),
+                protocol: Some("TCP".to_owned()),
+                ..ContainerPort::default()
+            }]),
+            volume_mounts: Some(vec![mount("runtime-ssh", "/etc/ssh/platform", true)]),
+            ..Container::default()
+        });
         let pod_spec = PodSpec {
             automount_service_account_token: Some(false),
-            init_containers: Some(vec![Container {
-                name: "workspace-bootstrap".to_owned(),
-                image: Some(workspace.image.clone()),
-                command: Some(vec![
-                    "/usr/local/bin/mwc-workspace-bootstrap".to_owned(),
-                    "prepare".to_owned(),
-                ]),
-                volume_mounts: Some(workspace_mounts()),
-                ..Container::default()
-            }]),
-            containers: vec![
-                Container {
-                    name: "workspace".to_owned(),
-                    image: Some(workspace.image.clone()),
-                    command: Some(vec![
-                        "/usr/local/bin/mwc-workspace-bootstrap".to_owned(),
-                        "serve".to_owned(),
-                    ]),
-                    ports: Some(vec![ContainerPort {
-                        container_port: 2222,
-                        name: Some("ssh".to_owned()),
-                        protocol: Some("TCP".to_owned()),
-                        ..ContainerPort::default()
-                    }]),
-                    resources: Some(workspace_resources),
-                    env_from: Some(vec![
-                        EnvFromSource {
-                            config_map_ref: Some(ConfigMapEnvSource {
-                                name: "workspace-environment-config".to_owned(),
-                                optional: Some(false),
-                            }),
-                            ..EnvFromSource::default()
-                        },
-                        EnvFromSource {
-                            secret_ref: Some(SecretEnvSource {
-                                name: "workspace-environment-secret".to_owned(),
-                                optional: Some(false),
-                            }),
-                            ..EnvFromSource::default()
-                        },
-                    ]),
-                    volume_mounts: Some(workspace_mounts()),
-                    ..Container::default()
-                },
-                Container {
-                    name: "ttyd".to_owned(),
-                    image: Some(self.ttyd_image.clone()),
-                    command: Some(vec!["ttyd".to_owned()]),
-                    args: Some(vec![
-                        "--port".to_owned(),
-                        "7681".to_owned(),
-                        "--writable".to_owned(),
-                        "ssh".to_owned(),
-                        "-p".to_owned(),
-                        "2222".to_owned(),
-                        "-o".to_owned(),
-                        "StrictHostKeyChecking=yes".to_owned(),
-                        "-o".to_owned(),
-                        "UserKnownHostsFile=/etc/ssh/platform/known_hosts".to_owned(),
-                        "-o".to_owned(),
-                        "BatchMode=yes".to_owned(),
-                        "-i".to_owned(),
-                        "/etc/ssh/platform/ttyd_client_key".to_owned(),
-                        "workspace@127.0.0.1".to_owned(),
-                    ]),
-                    ports: Some(vec![ContainerPort {
-                        container_port: 7681,
-                        name: Some("web-shell".to_owned()),
-                        protocol: Some("TCP".to_owned()),
-                        ..ContainerPort::default()
-                    }]),
-                    volume_mounts: Some(vec![mount("runtime-ssh", "/etc/ssh/platform", true)]),
-                    ..Container::default()
-                },
-            ],
+            init_containers: Some(init_containers),
+            containers,
+            affinity: profile.affinity(),
+            node_selector: profile.node_selector(),
+            security_context: profile.pod_security_context(),
+            // Harbor's current library images are pullable without credentials. Keep this
+            // explicit so a future private-image resolver can add a namespaced pull Secret
+            // without changing any runtime-profile semantics.
+            image_pull_secrets: profile.image_pull_secrets(),
             volumes: Some(vec![
                 Volume {
                     name: "ssh-identity".to_owned(),
@@ -348,6 +310,7 @@ impl ResourceBuilder {
                     name: "workspace-config".to_owned(),
                     config_map: Some(ConfigMapVolumeSource {
                         name: "workspace-config".to_owned(),
+                        default_mode: Some(0o555),
                         ..ConfigMapVolumeSource::default()
                     }),
                     ..Volume::default()

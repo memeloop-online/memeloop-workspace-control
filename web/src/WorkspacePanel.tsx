@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
 import type { ApiClient } from "./api";
+import { isHighRiskRuntimeProfile, runtimeProfileLabel, runtimeProfileOption } from "./runtimeProfiles";
 import type {
   AccessMode,
   CreateWorkspace,
   Principal,
+  RuntimeProfile,
   StoredInjection,
   WorkspaceResponse,
   WorkspaceRuntime,
@@ -26,7 +28,8 @@ export function WorkspacePanel(props: Props) {
   const [templates, setTemplates] = useState<WorkspaceTemplate[]>([]);
   const [templateId, setTemplateId] = useState("");
   const [name, setName] = useState("");
-  const [image, setImage] = useState("registry.example.com/workspace:latest");
+  const [image, setImage] = useState("");
+  const [runtimeProfile, setRuntimeProfile] = useState<RuntimeProfile | "">("");
   const [accessMode, setAccessMode] = useState<AccessMode>("internal");
   const [cpu, setCpu] = useState(1000);
   const [memory, setMemory] = useState(2048);
@@ -83,6 +86,14 @@ export function WorkspacePanel(props: Props) {
 
   async function create(event: FormEvent) {
     event.preventDefault();
+    if (!templateId || !runtimeProfile) {
+      props.onError("必须选择一个受控工作区模板");
+      return;
+    }
+    if (
+      isHighRiskRuntimeProfile(runtimeProfile)
+      && !confirm("该工作区将使用集群管理员运行时配置，可能拥有集群级权限。确认创建？")
+    ) return;
     const command: CreateWorkspace = {
       organization_id: props.organizationId,
       owner_id: props.principal.user_id,
@@ -95,6 +106,7 @@ export function WorkspacePanel(props: Props) {
         : null,
       user_injection_refs: explicitInjectionRefs ? userRefs : null,
       image,
+      runtime_profile: runtimeProfile,
       access_mode: accessMode,
       resources: {
         cpu_millis: cpu,
@@ -108,6 +120,8 @@ export function WorkspacePanel(props: Props) {
       await props.api.createWorkspace(command);
       setName("");
       setTemplateId("");
+      setRuntimeProfile("");
+      setImage("");
       setShowCreate(false);
       await props.onRefresh();
     } catch (error) {
@@ -136,8 +150,13 @@ export function WorkspacePanel(props: Props) {
   function selectTemplate(id: string) {
     setTemplateId(id);
     const template = templates.find((item) => item.id === id);
-    if (!template) return;
+    if (!template) {
+      setImage("");
+      setRuntimeProfile("");
+      return;
+    }
     setImage(template.image);
+    setRuntimeProfile(template.runtime_profile);
     setAccessMode(template.access_mode);
     setCpu(template.resources.cpu_millis);
     setMemory(template.resources.memory_mib);
@@ -198,13 +217,15 @@ export function WorkspacePanel(props: Props) {
       {showCreate && (
         <form className="create-card" onSubmit={create}>
           <label>名称<input required value={name} onChange={(e) => setName(e.target.value)} /></label>
-          <label>模板<select value={templateId} onChange={(e) => selectTemplate(e.target.value)}><option value="">自定义</option>{templates.map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}</select></label>
-          <label className="wide">镜像<input required disabled={Boolean(templateId)} value={image} onChange={(e) => setImage(e.target.value)} /></label>
-          <label>CPU（m）<input type="number" min="100" disabled={Boolean(templateId)} value={cpu} onChange={(e) => setCpu(Number(e.target.value))} /></label>
-          <label>内存（MiB）<input type="number" min="128" disabled={Boolean(templateId)} value={memory} onChange={(e) => setMemory(Number(e.target.value))} /></label>
-          <label>GPU<input type="number" min="0" disabled={Boolean(templateId)} value={gpu} onChange={(e) => setGpu(Number(e.target.value))} /></label>
-          <label>磁盘（GiB）<input type="number" min="1" disabled={Boolean(templateId)} value={disk} onChange={(e) => setDisk(Number(e.target.value))} /></label>
-          <label>访问模式<select disabled={Boolean(templateId)} value={accessMode} onChange={(e) => setAccessMode(e.target.value as AccessMode)}><option value="internal">内网</option><option value="public">公网</option></select></label>
+          <label>模板<select required value={templateId} onChange={(e) => selectTemplate(e.target.value)}><option value="">选择受控模板</option>{templates.map((template) => <option key={template.id} value={template.id}>{template.name} · {runtimeProfileLabel(template.runtime_profile)}</option>)}</select></label>
+          <label>运行时配置<input readOnly value={runtimeProfile ? runtimeProfileLabel(runtimeProfile) : "由模板继承"} /></label>
+          <label className="wide">镜像<input required readOnly value={image} /></label>
+          <label>CPU（m）<input type="number" min="100" readOnly value={cpu} /></label>
+          <label>内存（MiB）<input type="number" min="128" readOnly value={memory} /></label>
+          <label>GPU<input type="number" min="0" readOnly value={gpu} /></label>
+          <label>磁盘（GiB）<input type="number" min="1" readOnly value={disk} /></label>
+          <label>访问模式<select disabled value={accessMode}><option value="internal">内网</option><option value="public">公网</option></select></label>
+          {runtimeProfile && <p className={isHighRiskRuntimeProfile(runtimeProfile) ? "risk-note wide" : "profile-note wide"}>{runtimeProfileOption(runtimeProfile).description}{isHighRiskRuntimeProfile(runtimeProfile) ? " 创建时还会要求二次确认。" : ""}</p>}
           <label>注入引用<select value={explicitInjectionRefs ? "selected" : "all"} onChange={(e) => setReferenceMode(e.target.value === "selected")}><option value="all">全部匹配项</option><option value="selected">自选引用</option></select></label>
           {explicitInjectionRefs && (
             <fieldset className="injection-ref-picker wide">
@@ -222,7 +243,7 @@ export function WorkspacePanel(props: Props) {
               <p>这里只显示引用元数据；Secret 值不会回显。模板与标签选择器仍会在服务端过滤不匹配项。</p>
             </fieldset>
           )}
-          <div className="form-actions"><button className="button primary" disabled={submitting}>{submitting ? "创建中…" : "提交创建"}</button></div>
+          <div className="form-actions"><button className="button primary" disabled={submitting || !templateId}>{submitting ? "创建中…" : "提交创建"}</button></div>
         </form>
       )}
 
@@ -239,6 +260,7 @@ export function WorkspacePanel(props: Props) {
               <span>{item.workspace.resources.memory_mib} MiB</span>
               <span>{item.workspace.resources.disk_gib} GiB</span>
               <span>{item.workspace.access_mode === "public" ? "公网" : "内网"}</span>
+              <span>{runtimeProfileLabel(item.workspace.runtime_profile)}</span>
             </div>
             <p className="namespace">{item.namespace}</p>
             {item.ssh_command && <CopyLine label="SSH" value={item.ssh_command} />}

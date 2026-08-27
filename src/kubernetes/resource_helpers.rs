@@ -6,7 +6,7 @@ use k8s_openapi::{
     apimachinery::pkg::{apis::meta::v1::ObjectMeta, util::intstr::IntOrString},
 };
 
-use super::COMPONENT_LABEL;
+use super::{COMPONENT_LABEL, runtime_profiles::RuntimeProfile};
 
 pub(super) fn service(
     namespace: &str,
@@ -56,9 +56,9 @@ pub(super) fn mount(name: &str, path: &str, read_only: bool) -> VolumeMount {
     }
 }
 
-pub(super) fn workspace_mounts() -> Vec<VolumeMount> {
-    vec![
-        mount("workspace-data", "/workspace", false),
+pub(super) fn workspace_mounts(home: &str, secondary_home: Option<&str>) -> Vec<VolumeMount> {
+    let mut mounts = vec![
+        mount("workspace-data", home, false),
         mount("runtime-ssh", "/run/mwc-ssh", false),
         mount("ssh-identity", "/etc/ssh/platform", true),
         mount("workspace-config", "/etc/workspace-platform", true),
@@ -72,16 +72,33 @@ pub(super) fn workspace_mounts() -> Vec<VolumeMount> {
             "/var/run/workspace-injections/config",
             true,
         ),
-    ]
+    ];
+    if let Some(secondary_home) = secondary_home {
+        mounts.push(mount("workspace-data", secondary_home, false));
+    }
+    mounts
 }
 
-pub(super) fn workspace_config(namespace: &str, labels: &BTreeMap<String, String>) -> ConfigMap {
+pub(super) fn workspace_config(
+    namespace: &str,
+    labels: &BTreeMap<String, String>,
+    profile: RuntimeProfile,
+) -> ConfigMap {
     ConfigMap {
         metadata: namespaced_metadata("workspace-config", namespace, labels),
-        data: Some(BTreeMap::from([(
-            "sshd_config".to_owned(),
-            "Port 2222\nListenAddress 0.0.0.0\nHostKey /etc/ssh/platform/ssh_host_ed25519_key\nAuthorizedKeysFile /workspace/.mwc/authorized_keys\nPasswordAuthentication no\nKbdInteractiveAuthentication no\nPermitRootLogin no\nAllowUsers workspace\nAllowTcpForwarding yes\nPermitTunnel no\nX11Forwarding no\nSubsystem sftp internal-sftp\nPidFile /run/mwc-ssh/sshd.pid\n".to_owned(),
-        )])),
+        data: Some(BTreeMap::from([
+            (
+                "sshd_config".to_owned(),
+                format!(
+                    "Port 2222\nListenAddress 0.0.0.0\nHostKey /etc/ssh/platform/ssh_host_ed25519_key\nAuthorizedKeysFile {}/.mwc/authorized_keys\nPasswordAuthentication no\nKbdInteractiveAuthentication no\nPermitRootLogin no\nAllowUsers {}\nAllowTcpForwarding yes\nPermitTunnel no\nX11Forwarding no\nSubsystem sftp internal-sftp\nPidFile /run/mwc-ssh/sshd.pid\n",
+                    profile.home, profile.login_user
+                ),
+            ),
+            (
+                "mwc-workspace-bootstrap".to_owned(),
+                include_str!("../../images/workspace-base/mwc-workspace-bootstrap").to_owned(),
+            ),
+        ])),
         ..ConfigMap::default()
     }
 }

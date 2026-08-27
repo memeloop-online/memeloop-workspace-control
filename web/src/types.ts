@@ -10,6 +10,12 @@ export type WorkspaceState =
   | "deleted"
   | "failed";
 export type AccessMode = "internal" | "public";
+export type RuntimeProfile =
+  | "standard"
+  | "coder_rust_dev"
+  | "coder_node_dev"
+  | "coder_token_center_rust_dev"
+  | "coder_cluster_admin";
 export type InjectionScope = "organization" | "user" | "workspace";
 export type InjectionKind =
   | "environment_variable"
@@ -56,6 +62,7 @@ export interface WorkspaceTemplate {
   organization_id: string | null;
   name: string;
   image: string;
+  runtime_profile: RuntimeProfile;
   access_mode: AccessMode;
   resources: Resources;
   enabled: boolean;
@@ -103,6 +110,7 @@ export interface Workspace {
   name: string;
   template_id: string | null;
   image: string;
+  runtime_profile: RuntimeProfile;
   access_mode: AccessMode;
   state: WorkspaceState;
   resources: Resources;
@@ -139,6 +147,7 @@ export interface CreateWorkspace {
   organization_injection_refs: string[] | null;
   user_injection_refs: string[] | null;
   image: string;
+  runtime_profile: RuntimeProfile;
   access_mode: AccessMode;
   resources: Resources;
 }

@@ -7,7 +7,7 @@ use memeloop_workspace_control::{
         CreateOrganization, CreateWorkspace, CreateWorkspaceTemplate, Database,
         IdempotencyDecision, InjectionScopeRef, StorageError,
     },
-    workspaces::{AccessMode, WorkspaceAction, WorkspaceState},
+    workspaces::{AccessMode, WorkspaceAction, WorkspaceRuntimeProfile, WorkspaceState},
 };
 use std::collections::BTreeMap;
 
@@ -173,6 +173,7 @@ async fn image_allowlist_and_template_contract_are_admitted_atomically() {
             CreateWorkspaceTemplate {
                 organization_id: Some(organization.id),
                 name: "Standard".to_owned(),
+                runtime_profile: WorkspaceRuntimeProfile::CoderRustDev,
                 image: image.to_owned(),
                 access_mode: AccessMode::Internal,
                 resources,
@@ -196,6 +197,18 @@ async fn image_allowlist_and_template_contract_are_admitted_atomically() {
         .create_workspace(command.clone(), admin.user_id, 104)
         .await
         .unwrap();
+    assert_eq!(
+        created.runtime_profile,
+        WorkspaceRuntimeProfile::CoderRustDev
+    );
+    assert_eq!(
+        database
+            .get_workspace(created.id)
+            .await
+            .unwrap()
+            .runtime_profile,
+        WorkspaceRuntimeProfile::CoderRustDev
+    );
     let refs = database.workspace_injection_refs(created.id).await.unwrap();
     assert_eq!(refs.organization, Some(vec!["org-key".to_owned()]));
     assert_eq!(refs.user, Some(Vec::new()));
@@ -320,6 +333,7 @@ async fn workspace_creation_enforces_quota_and_enqueues_lifecycle_actions() {
         .await
         .unwrap();
     assert_eq!(workspace.state, WorkspaceState::Provisioning);
+    assert_eq!(workspace.runtime_profile, WorkspaceRuntimeProfile::Standard);
     let created_events = database
         .list_events(organization.id, None, 100)
         .await

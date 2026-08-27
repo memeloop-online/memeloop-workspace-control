@@ -39,6 +39,7 @@ pub(super) async fn workspace_response(
         .map_err(|_| ApiError::BadRequest("workspace namespace is invalid"))?;
     let connectable = workspace.state == WorkspaceState::Ready;
     let internal_host = format!("workspace.{namespace}.svc.cluster.local");
+    let login_user = workspace.runtime_profile.login_user();
     let (ssh_command, ssh_config) = if connectable {
         match (
             workspace.access_mode,
@@ -48,18 +49,18 @@ pub(super) async fn workspace_response(
                 let jump_login = format!("access+{}@{jump_host}", workspace.short_id);
                 (
                     Some(format!(
-                        "ssh -J {jump_login} -p 2222 workspace@{internal_host}"
+                        "ssh -J {jump_login} -p 2222 {login_user}@{internal_host}"
                     )),
                     Some(format!(
-                        "Host mwc-{short}\n  HostName {internal_host}\n  Port 2222\n  User workspace\n  ProxyJump {jump_login}\n  HostKeyAlias workspace-{short}\n",
+                        "Host mwc-{short}\n  HostName {internal_host}\n  Port 2222\n  User {login_user}\n  ProxyJump {jump_login}\n  HostKeyAlias workspace-{short}\n",
                         short = workspace.short_id
                     )),
                 )
             }
             (AccessMode::Internal, _) => (
-                Some(format!("ssh -p 2222 workspace@{internal_host}")),
+                Some(format!("ssh -p 2222 {login_user}@{internal_host}")),
                 Some(format!(
-                    "Host mwc-{short}\n  HostName {internal_host}\n  Port 2222\n  User workspace\n  HostKeyAlias workspace-{short}\n",
+                    "Host mwc-{short}\n  HostName {internal_host}\n  Port 2222\n  User {login_user}\n  HostKeyAlias workspace-{short}\n",
                     short = workspace.short_id
                 )),
             ),

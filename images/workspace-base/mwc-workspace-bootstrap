@@ -1,16 +1,31 @@
 #!/bin/sh
 set -eu
 
-workspace_root=/workspace
+workspace_user=${MWC_WORKSPACE_USER:-workspace}
+workspace_root=${MWC_WORKSPACE_HOME:-/workspace}
+workspace_group=$(id -gn "$workspace_user")
 state_dir="$workspace_root/.mwc"
 authorized_keys="$state_dir/authorized_keys"
 runtime_dir=/run/mwc-ssh
 manifest=/var/run/workspace-injections/config/workspace-files.json
 
-prepare() {
-    install -d -m 0750 -o workspace -g workspace "$workspace_root"
-    install -d -m 0700 -o workspace -g workspace "$state_dir"
+prepare_layout() {
+    if [ "${MWC_PRESERVE_HOME_ROOT:-false}" = true ]; then
+        # A migrated Coder PVC root is intentionally root:1000/2775. Do not rewrite it;
+        # only create and own platform-managed children beneath that mount.
+        mkdir -p "$workspace_root"
+    else
+        install -d -m 0750 -o "$workspace_user" -g "$workspace_group" "$workspace_root"
+    fi
+    install -d -m 0700 -o "$workspace_user" -g "$workspace_group" "$state_dir"
+    install -d -m 0700 -o "$workspace_user" -g "$workspace_group" \
+        "$workspace_root/.tmp/dev" "$workspace_root/.tmp/buildkit" \
+        "$workspace_root/.tmp/var"
     install -d -m 0700 "$runtime_dir"
+}
+
+prepare() {
+    prepare_layout
 
     if [ ! -s "$runtime_dir/ttyd_client_key" ]; then
         ssh-keygen -q -t ed25519 -N '' -f "$runtime_dir/ttyd_client_key"
@@ -40,7 +55,7 @@ prepare() {
             fi
         done
     fi
-    chown workspace:workspace "$authorized_keys"
+    chown "$workspace_user:$workspace_group" "$authorized_keys"
     chmod 0600 "$authorized_keys"
     chmod 0600 "$runtime_dir/ttyd_client_key"
     cp /etc/ssh/platform/ssh_host_ed25519_key.pub "$runtime_dir/host_key.pub"
@@ -49,11 +64,27 @@ prepare() {
     chmod 0644 "$runtime_dir/known_hosts"
 }
 
+install_compat_openssh() {
+    if [ ! -x /usr/sbin/sshd ] || ! command -v jq >/dev/null 2>&1; then
+        export DEBIAN_FRONTEND=noninteractive
+        apt-get update
+        apt-get install -y --no-install-recommends jq openssh-server
+        rm -rf /var/lib/apt/lists/*
+    fi
+    mkdir -p /run/sshd
+}
+
 case "${1:-serve}" in
+    prepare-layout) prepare_layout ;;
     prepare) prepare ;;
     serve)
         prepare
         exec /usr/sbin/sshd -D -e -f /etc/workspace-platform/sshd_config
         ;;
-    *) echo "usage: mwc-workspace-bootstrap prepare|serve" >&2; exit 64 ;;
+    compat-serve)
+        install_compat_openssh
+        prepare
+        exec /usr/sbin/sshd -D -e -f /etc/workspace-platform/sshd_config
+        ;;
+    *) echo "usage: mwc-workspace-bootstrap prepare-layout|prepare|serve|compat-serve" >&2; exit 64 ;;
 esac

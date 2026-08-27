@@ -1,4 +1,4 @@
-pub(super) const SCHEMA_VERSION: i64 = 7;
+pub(super) const SCHEMA_VERSION: i64 = 8;
 pub(super) const MIGRATION_TABLE: &str = "CREATE TABLE IF NOT EXISTS schema_migrations (\
     version BIGINT PRIMARY KEY, applied_at BIGINT NOT NULL\
 )";
@@ -147,4 +147,6 @@ pub(super) const MIGRATIONS: &[&str] = &[
         installation_id TEXT NOT NULL, workspace_id TEXT NOT NULL, organization_id TEXT NOT NULL, \
         deleted_at BIGINT NOT NULL, PRIMARY KEY (installation_id, workspace_id)\
     )",
+    "ALTER TABLE workspace_templates ADD COLUMN runtime_profile TEXT NOT NULL DEFAULT 'standard'",
+    "ALTER TABLE workspaces ADD COLUMN runtime_profile TEXT NOT NULL DEFAULT 'standard'",
 ];

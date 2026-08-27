@@ -7,7 +7,7 @@ use crate::{
     crypto::EnvelopeCipher,
     injections::InjectionItem,
     quota::Resources,
-    workspaces::{AccessMode, Workspace, WorkspaceState},
+    workspaces::{AccessMode, Workspace, WorkspaceRuntimeProfile, WorkspaceState},
 };
 
 use super::{Database, StorageError, WorkspaceInjectionRefs};
@@ -70,13 +70,14 @@ impl Database {
         };
         injection_refs.validate()?;
         let id = Uuid::now_v7();
-        let workspace = Workspace {
+        let mut workspace = Workspace {
             id,
             short_id: id.simple().to_string()[..8].to_owned(),
             organization_id: command.organization_id,
             owner_id: command.owner_id,
             name: command.name.trim().to_owned(),
             template_id: command.template_id,
+            runtime_profile: WorkspaceRuntimeProfile::Standard,
             image: command.image.trim().to_owned(),
             access_mode: command.access_mode,
             state: WorkspaceState::Provisioning,
@@ -94,7 +95,7 @@ impl Database {
                 create_sqlite(
                     &mut transaction,
                     installation_id.as_str(),
-                    &workspace,
+                    &mut workspace,
                     actor_user_id,
                     &injection_refs,
                     inline,
@@ -111,7 +112,7 @@ impl Database {
                 create_postgres(
                     &mut transaction,
                     installation_id.as_str(),
-                    &workspace,
+                    &mut workspace,
                     actor_user_id,
                     &injection_refs,
                     inline,
@@ -159,7 +160,7 @@ impl Database {
         &self,
         organization_id: Uuid,
     ) -> Result<Vec<Workspace>, StorageError> {
-        let sql = "SELECT id, short_id, organization_id, owner_id, name, template_id, image, \
+        let sql = "SELECT id, short_id, organization_id, owner_id, name, template_id, runtime_profile, image, \
             access_mode, state, cpu_millis, memory_mib, gpu_count, disk_gib, generation, \
             created_at, updated_at FROM workspaces WHERE installation_id = {install} AND \
             organization_id = {organization} AND state <> 'deleted' ORDER BY created_at, id";
@@ -199,18 +200,25 @@ impl Database {
 async fn create_sqlite(
     connection: &mut SqliteConnection,
     installation_id: &str,
-    workspace: &Workspace,
+    workspace: &mut Workspace,
     actor_user_id: Uuid,
     injection_refs: &WorkspaceInjectionRefs,
     inline: Option<(&EnvelopeCipher, &[InjectionItem])>,
     now: i64,
 ) -> Result<(), StorageError> {
+    workspace.runtime_profile = super::catalog_store::resolve_runtime_profile_sqlite(
+        connection,
+        installation_id,
+        workspace.template_id,
+        workspace.organization_id,
+    )
+    .await?;
     super::workspace_admission::admit_sqlite(connection, installation_id, workspace).await?;
     sqlx::query(
         "INSERT INTO workspaces (id, installation_id, short_id, organization_id, owner_id, \
-        name, template_id, image, access_mode, state, cpu_millis, memory_mib, gpu_count, \
+        name, template_id, runtime_profile, image, access_mode, state, cpu_millis, memory_mib, gpu_count, \
         disk_gib, generation, created_at, updated_at, deleted_at) VALUES \
-        (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, 1, ?15, ?15, NULL)",
+        (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, 1, ?16, ?16, NULL)",
     )
     .bind(workspace.id.to_string())
     .bind(installation_id)
@@ -219,6 +227,7 @@ async fn create_sqlite(
     .bind(workspace.owner_id.to_string())
     .bind(&workspace.name)
     .bind(workspace.template_id.map(|id| id.to_string()))
+    .bind(workspace.runtime_profile.as_str())
     .bind(&workspace.image)
     .bind(workspace.access_mode.as_str())
     .bind(workspace.state.as_str())
@@ -257,18 +266,25 @@ async fn create_sqlite(
 async fn create_postgres(
     connection: &mut PgConnection,
     installation_id: &str,
-    workspace: &Workspace,
+    workspace: &mut Workspace,
     actor_user_id: Uuid,
     injection_refs: &WorkspaceInjectionRefs,
     inline: Option<(&EnvelopeCipher, &[InjectionItem])>,
     now: i64,
 ) -> Result<(), StorageError> {
+    workspace.runtime_profile = super::catalog_store::resolve_runtime_profile_postgres(
+        connection,
+        installation_id,
+        workspace.template_id,
+        workspace.organization_id,
+    )
+    .await?;
     super::workspace_admission::admit_postgres(connection, installation_id, workspace).await?;
     sqlx::query(
         "INSERT INTO workspaces (id, installation_id, short_id, organization_id, owner_id, \
-        name, template_id, image, access_mode, state, cpu_millis, memory_mib, gpu_count, \
+        name, template_id, runtime_profile, image, access_mode, state, cpu_millis, memory_mib, gpu_count, \
         disk_gib, generation, created_at, updated_at, deleted_at) VALUES \
-        ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 1, $15, $15, NULL)",
+        ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, 1, $16, $16, NULL)",
     )
     .bind(workspace.id.to_string())
     .bind(installation_id)
@@ -277,6 +293,7 @@ async fn create_postgres(
     .bind(workspace.owner_id.to_string())
     .bind(&workspace.name)
     .bind(workspace.template_id.map(|id| id.to_string()))
+    .bind(workspace.runtime_profile.as_str())
     .bind(&workspace.image)
     .bind(workspace.access_mode.as_str())
     .bind(workspace.state.as_str())
@@ -368,7 +385,7 @@ async fn insert_job_and_audit(
 
 pub(super) fn select_workspace_sql(installation: &str, id: &str) -> String {
     format!(
-        "SELECT id, short_id, organization_id, owner_id, name, template_id, image, access_mode, state, cpu_millis, memory_mib, gpu_count, disk_gib, generation, created_at, updated_at FROM workspaces WHERE installation_id = {installation} AND id = {id}"
+        "SELECT id, short_id, organization_id, owner_id, name, template_id, runtime_profile, image, access_mode, state, cpu_millis, memory_mib, gpu_count, disk_gib, generation, created_at, updated_at FROM workspaces WHERE installation_id = {installation} AND id = {id}"
     )
 }
 
@@ -378,7 +395,7 @@ pub(super) fn select_workspace_by_short_id_sql(installation: &str, short_id: &st
 
 fn select_workspace_columns(installation: &str, predicate: &str) -> String {
     format!(
-        "SELECT id, short_id, organization_id, owner_id, name, template_id, image, access_mode, state, cpu_millis, memory_mib, gpu_count, disk_gib, generation, created_at, updated_at FROM workspaces WHERE installation_id = {installation} AND {predicate}"
+        "SELECT id, short_id, organization_id, owner_id, name, template_id, runtime_profile, image, access_mode, state, cpu_millis, memory_mib, gpu_count, disk_gib, generation, created_at, updated_at FROM workspaces WHERE installation_id = {installation} AND {predicate}"
     )
 }
 
@@ -397,6 +414,7 @@ where
 {
     let state: String = row.try_get("state")?;
     let access_mode: String = row.try_get("access_mode")?;
+    let runtime_profile: String = row.try_get("runtime_profile")?;
     let template_id: Option<String> = row.try_get("template_id")?;
     Ok(Workspace {
         id: Uuid::parse_str(&row.try_get::<String, _>("id")?)?,
@@ -405,6 +423,8 @@ where
         owner_id: Uuid::parse_str(&row.try_get::<String, _>("owner_id")?)?,
         name: row.try_get("name")?,
         template_id: template_id.map(|id| Uuid::parse_str(&id)).transpose()?,
+        runtime_profile: WorkspaceRuntimeProfile::from_database(&runtime_profile)
+            .ok_or(StorageError::InvalidWorkspace)?,
         image: row.try_get("image")?,
         access_mode: AccessMode::from_database(&access_mode)
             .ok_or(StorageError::UnknownAccessMode(access_mode))?,

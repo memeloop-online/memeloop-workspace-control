@@ -135,7 +135,7 @@ pub(super) async fn create_template(
             return Err(error.into());
         }
     };
-    state.database.record_audit(Some(actor.user_id), template.organization_id, None, "template.create", serde_json::json!({"template_id": template.id, "name": template.name, "image": template.image}), now).await?;
+    state.database.record_audit(Some(actor.user_id), template.organization_id, None, "template.create", serde_json::json!({"template_id": template.id, "name": template.name, "image": template.image, "runtime_profile": template.runtime_profile}), now).await?;
     finish(
         &state,
         &scope,

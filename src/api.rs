@@ -323,6 +323,7 @@ async fn system_info(State(state): State<Arc<AppState>>) -> Json<SystemInfoRespo
         crate::workspaces::Workspace,
         crate::workspaces::WorkspaceState,
         crate::workspaces::AccessMode,
+        crate::workspaces::WorkspaceRuntimeProfile,
         crate::quota::Resources,
         crate::injections::InjectionItem,
         crate::injections::InjectionValue,

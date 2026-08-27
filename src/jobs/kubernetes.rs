@@ -273,6 +273,7 @@ fn workspace_spec(workspace: &Workspace) -> WorkspaceResourceSpec {
         access_mode: workspace.access_mode,
         state: workspace.state,
         generation: workspace.generation,
+        runtime_profile: workspace.runtime_profile,
     }
 }
 

@@ -39,6 +39,22 @@ pub enum AccessMode {
     Public,
 }
 
+/// A platform-owned runtime contract for a workspace image.
+///
+/// Profiles are deliberately an enum instead of an arbitrary pod fragment: a template may select
+/// one of the runtime shapes implemented by the control plane, and every workspace stores a
+/// snapshot of that selection.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceRuntimeProfile {
+    #[default]
+    Standard,
+    CoderRustDev,
+    CoderNodeDev,
+    CoderTokenCenterRustDev,
+    CoderClusterAdmin,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct Workspace {
     pub id: Uuid,
@@ -47,6 +63,7 @@ pub struct Workspace {
     pub owner_id: Uuid,
     pub name: String,
     pub template_id: Option<Uuid>,
+    pub runtime_profile: WorkspaceRuntimeProfile,
     pub image: String,
     pub access_mode: AccessMode,
     pub state: WorkspaceState,
@@ -171,6 +188,41 @@ impl AccessMode {
     }
 }
 
+impl WorkspaceRuntimeProfile {
+    pub const ALL: [Self; 5] = [
+        Self::Standard,
+        Self::CoderRustDev,
+        Self::CoderNodeDev,
+        Self::CoderTokenCenterRustDev,
+        Self::CoderClusterAdmin,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Standard => "standard",
+            Self::CoderRustDev => "coder_rust_dev",
+            Self::CoderNodeDev => "coder_node_dev",
+            Self::CoderTokenCenterRustDev => "coder_token_center_rust_dev",
+            Self::CoderClusterAdmin => "coder_cluster_admin",
+        }
+    }
+
+    pub fn from_database(value: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|profile| profile.as_str() == value)
+    }
+
+    pub fn login_user(self) -> &'static str {
+        match self {
+            Self::Standard => "workspace",
+            Self::CoderRustDev | Self::CoderTokenCenterRustDev => "rust-dev",
+            Self::CoderNodeDev => "node-dev",
+            Self::CoderClusterAdmin => "cluster-admin",
+        }
+    }
+}
+
 #[derive(Debug, Error, PartialEq, Eq)]
 #[error("workspace action {action:?} is invalid while state is {state:?}")]
 pub struct TransitionError {
@@ -228,5 +280,26 @@ mod tests {
             deleting.transition(WorkspaceAction::MarkDeleted).unwrap(),
             WorkspaceState::Deleted
         );
+    }
+
+    #[test]
+    fn runtime_profiles_use_stable_snake_case_names() {
+        for profile in WorkspaceRuntimeProfile::ALL {
+            let encoded = serde_json::to_string(&profile).unwrap();
+            assert_eq!(encoded, format!("\"{}\"", profile.as_str()));
+            assert_eq!(
+                serde_json::from_str::<WorkspaceRuntimeProfile>(&encoded).unwrap(),
+                profile
+            );
+            assert_eq!(
+                WorkspaceRuntimeProfile::from_database(profile.as_str()),
+                Some(profile)
+            );
+        }
+        assert_eq!(
+            WorkspaceRuntimeProfile::default(),
+            WorkspaceRuntimeProfile::Standard
+        );
+        assert!(WorkspaceRuntimeProfile::from_database("arbitrary_pod_spec").is_none());
     }
 }

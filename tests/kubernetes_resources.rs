@@ -5,7 +5,7 @@ use memeloop_workspace_control::{
         WorkspaceResourceSpec,
     },
     quota::Resources,
-    workspaces::{AccessMode, WorkspaceState},
+    workspaces::{AccessMode, WorkspaceRuntimeProfile, WorkspaceState},
 };
 use std::collections::BTreeMap;
 use uuid::Uuid;
@@ -45,6 +45,7 @@ fn workspace(state: WorkspaceState) -> WorkspaceResourceSpec {
         access_mode: AccessMode::Public,
         state,
         generation: 1,
+        runtime_profile: WorkspaceRuntimeProfile::Standard,
     }
 }
 
@@ -166,7 +167,7 @@ fn builds_isolated_single_replica_workspace_with_standard_components() {
             .command
             .as_ref()
             .unwrap()[0],
-        "/usr/local/bin/mwc-workspace-bootstrap"
+        "/etc/workspace-platform/mwc-workspace-bootstrap"
     );
     assert_eq!(
         resources.workspace_config.data.as_ref().unwrap()["sshd_config"]
@@ -219,6 +220,106 @@ fn gpu_workspaces_request_the_standard_extended_resource() {
 
     assert_eq!(resources.requests.unwrap()["nvidia.com/gpu"].0, "2");
     assert_eq!(resources.limits.unwrap()["nvidia.com/gpu"].0, "2");
+}
+
+#[test]
+fn coder_node_profile_reuses_the_legacy_image_with_platform_bootstrap() {
+    let mut workspace = workspace(WorkspaceState::Ready);
+    workspace.runtime_profile = WorkspaceRuntimeProfile::CoderNodeDev;
+    workspace.image = "harbor.k3s.onetwo.website/library/node-dev:fixed@sha256:abc".to_owned();
+    workspace.resources.cpu_millis = 6_000;
+    workspace.resources.memory_mib = 4_096;
+    workspace.resources.disk_gib = 30;
+
+    let resources = builder().build(&workspace).unwrap();
+    let pod = resources
+        .stateful_set
+        .spec
+        .as_ref()
+        .unwrap()
+        .template
+        .spec
+        .as_ref()
+        .unwrap();
+    let dev = pod
+        .containers
+        .iter()
+        .find(|container| container.name == "workspace")
+        .unwrap();
+    assert_eq!(dev.image.as_deref(), Some(workspace.image.as_str()));
+    assert_eq!(
+        dev.command.as_deref(),
+        Some(["/etc/workspace-platform/mwc-workspace-bootstrap".to_owned()].as_slice())
+    );
+    assert_eq!(
+        dev.args.as_deref(),
+        Some(["compat-serve".to_owned()].as_slice())
+    );
+    assert!(
+        dev.volume_mounts.as_ref().unwrap().iter().any(|mount| {
+            mount.name == "workspace-data" && mount.mount_path == "/home/node-dev"
+        })
+    );
+    let quantities = dev.resources.as_ref().unwrap();
+    assert_eq!(quantities.requests.as_ref().unwrap()["cpu"].0, "1");
+    assert_eq!(quantities.requests.as_ref().unwrap()["memory"].0, "1Gi");
+    assert_eq!(quantities.limits.as_ref().unwrap()["cpu"].0, "6");
+    assert_eq!(quantities.limits.as_ref().unwrap()["memory"].0, "4096Mi");
+    assert!(pod.containers.iter().any(|container| {
+        container.name == "buildkitd"
+            && container.image.as_deref().is_some_and(|image| {
+                image.starts_with("harbor.k3s.onetwo.website/") && image.contains("@sha256:")
+            })
+    }));
+    assert!(
+        pod.init_containers
+            .as_ref()
+            .unwrap()
+            .iter()
+            .any(|container| {
+                container.name == "buildctl"
+                    && container.image.as_deref().is_some_and(|image| {
+                        image.starts_with("harbor.k3s.onetwo.website/")
+                            && image.contains("@sha256:")
+                    })
+            })
+    );
+    assert!(
+        resources.workspace_config.data.as_ref().unwrap()["sshd_config"]
+            .contains("AllowUsers node-dev")
+    );
+    assert!(
+        resources.workspace_config.data.as_ref().unwrap()["mwc-workspace-bootstrap"]
+            .contains("apt-get install -y --no-install-recommends jq openssh-server")
+    );
+}
+
+#[test]
+fn token_center_profile_preserves_both_legacy_home_mounts() {
+    let mut workspace = workspace(WorkspaceState::Ready);
+    workspace.runtime_profile = WorkspaceRuntimeProfile::CoderTokenCenterRustDev;
+    let resources = builder().build(&workspace).unwrap();
+    let mounts = resources
+        .stateful_set
+        .spec
+        .unwrap()
+        .template
+        .spec
+        .unwrap()
+        .containers
+        .into_iter()
+        .find(|container| container.name == "workspace")
+        .unwrap()
+        .volume_mounts
+        .unwrap();
+    assert!(mounts.iter().any(|mount| {
+        mount.name == "workspace-data" && mount.mount_path == "/home/token-center-dev"
+    }));
+    assert!(
+        mounts.iter().any(|mount| {
+            mount.name == "workspace-data" && mount.mount_path == "/home/rust-dev"
+        })
+    );
 }
 
 #[test]

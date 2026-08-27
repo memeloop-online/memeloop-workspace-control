@@ -96,7 +96,8 @@ impl Database {
             if rows.is_empty() {
                 continue;
             }
-            let json = serde_json::to_string(rows)?;
+            let rows = normalize_snapshot_rows(table, rows, snapshot.schema_version);
+            let json = serde_json::to_string(&rows)?;
             let sql = format!(
                 "INSERT INTO {table} SELECT * FROM json_populate_recordset(NULL::{table}, $1::json)"
             );
@@ -108,6 +109,27 @@ impl Database {
         transaction.commit().await?;
         Ok(())
     }
+}
+
+fn normalize_snapshot_rows(
+    table: &str,
+    rows: &[serde_json::Value],
+    schema_version: i64,
+) -> Vec<serde_json::Value> {
+    if schema_version >= 8 || !matches!(table, "workspace_templates" | "workspaces") {
+        return rows.to_vec();
+    }
+    rows.iter()
+        .cloned()
+        .map(|mut row| {
+            if let Some(object) = row.as_object_mut() {
+                object
+                    .entry("runtime_profile")
+                    .or_insert_with(|| serde_json::Value::String("standard".to_owned()));
+            }
+            row
+        })
+        .collect()
 }
 
 const IMPORT_ORDER: &[&str] = &[
@@ -156,11 +178,11 @@ const EXPORT_QUERIES: &[(&str, &str)] = &[
     ),
     (
         "workspace_templates",
-        "SELECT json_object('id', id, 'installation_id', installation_id, 'organization_id', organization_id, 'name', name, 'image', image, 'access_mode', access_mode, 'cpu_millis', cpu_millis, 'memory_mib', memory_mib, 'gpu_count', gpu_count, 'disk_gib', disk_gib, 'enabled', enabled, 'created_at', created_at, 'updated_at', updated_at) item FROM workspace_templates WHERE installation_id = ?1 ORDER BY id",
+        "SELECT json_object('id', id, 'installation_id', installation_id, 'organization_id', organization_id, 'name', name, 'image', image, 'access_mode', access_mode, 'cpu_millis', cpu_millis, 'memory_mib', memory_mib, 'gpu_count', gpu_count, 'disk_gib', disk_gib, 'enabled', enabled, 'created_at', created_at, 'updated_at', updated_at, 'runtime_profile', runtime_profile) item FROM workspace_templates WHERE installation_id = ?1 ORDER BY id",
     ),
     (
         "workspaces",
-        "SELECT json_object('id', id, 'installation_id', installation_id, 'short_id', short_id, 'organization_id', organization_id, 'owner_id', owner_id, 'name', name, 'template_id', template_id, 'image', image, 'access_mode', access_mode, 'state', state, 'cpu_millis', cpu_millis, 'memory_mib', memory_mib, 'gpu_count', gpu_count, 'disk_gib', disk_gib, 'generation', generation, 'created_at', created_at, 'updated_at', updated_at, 'deleted_at', deleted_at) item FROM workspaces WHERE installation_id = ?1 ORDER BY id",
+        "SELECT json_object('id', id, 'installation_id', installation_id, 'short_id', short_id, 'organization_id', organization_id, 'owner_id', owner_id, 'name', name, 'template_id', template_id, 'image', image, 'access_mode', access_mode, 'state', state, 'cpu_millis', cpu_millis, 'memory_mib', memory_mib, 'gpu_count', gpu_count, 'disk_gib', disk_gib, 'generation', generation, 'created_at', created_at, 'updated_at', updated_at, 'deleted_at', deleted_at, 'runtime_profile', runtime_profile) item FROM workspaces WHERE installation_id = ?1 ORDER BY id",
     ),
     (
         "workspace_injection_refs",
@@ -195,3 +217,18 @@ const EXPORT_QUERIES: &[(&str, &str)] = &[
         "SELECT json_object('id', id, 'installation_id', installation_id, 'organization_id', organization_id, 'workspace_id', workspace_id, 'kind', kind, 'payload_json', payload_json, 'created_at', created_at) item FROM events WHERE installation_id = ?1 ORDER BY id",
     ),
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_snapshot_rows;
+
+    #[test]
+    fn old_catalog_rows_are_upgraded_to_standard_runtime_profile() {
+        for table in ["workspace_templates", "workspaces"] {
+            let rows = vec![serde_json::json!({"id": "legacy"})];
+            let normalized = normalize_snapshot_rows(table, &rows, 7);
+            assert_eq!(normalized[0]["runtime_profile"], "standard");
+            assert!(rows[0].get("runtime_profile").is_none());
+        }
+    }
+}

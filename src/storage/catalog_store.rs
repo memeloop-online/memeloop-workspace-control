@@ -3,11 +3,61 @@ use sqlx::{PgConnection, Row, SqliteConnection, postgres::PgRow, sqlite::SqliteR
 use utoipa::ToSchema;
 use uuid::Uuid;
 
-use crate::{quota::Resources, workspaces::AccessMode};
+use crate::{
+    quota::Resources,
+    workspaces::{AccessMode, WorkspaceRuntimeProfile},
+};
 
 use super::{Database, StorageError};
 
 pub const IMAGE_CONTRACT_VERSION: u16 = 1;
+
+pub(super) async fn resolve_runtime_profile_sqlite(
+    connection: &mut SqliteConnection,
+    installation_id: &str,
+    template_id: Option<Uuid>,
+    organization_id: Uuid,
+) -> Result<WorkspaceRuntimeProfile, StorageError> {
+    let Some(template_id) = template_id else {
+        return Ok(WorkspaceRuntimeProfile::Standard);
+    };
+    let value: Option<String> = sqlx::query_scalar(
+        "SELECT runtime_profile FROM workspace_templates WHERE installation_id = ?1 AND id = ?2 \
+         AND enabled = 1 AND (organization_id IS NULL OR organization_id = ?3)",
+    )
+    .bind(installation_id)
+    .bind(template_id.to_string())
+    .bind(organization_id.to_string())
+    .fetch_optional(&mut *connection)
+    .await?;
+    decode_runtime_profile(value)
+}
+
+pub(super) async fn resolve_runtime_profile_postgres(
+    connection: &mut PgConnection,
+    installation_id: &str,
+    template_id: Option<Uuid>,
+    organization_id: Uuid,
+) -> Result<WorkspaceRuntimeProfile, StorageError> {
+    let Some(template_id) = template_id else {
+        return Ok(WorkspaceRuntimeProfile::Standard);
+    };
+    let value: Option<String> = sqlx::query_scalar(
+        "SELECT runtime_profile FROM workspace_templates WHERE installation_id = $1 AND id = $2 \
+         AND enabled = 1 AND (organization_id IS NULL OR organization_id = $3)",
+    )
+    .bind(installation_id)
+    .bind(template_id.to_string())
+    .bind(organization_id.to_string())
+    .fetch_optional(&mut *connection)
+    .await?;
+    decode_runtime_profile(value)
+}
+
+fn decode_runtime_profile(value: Option<String>) -> Result<WorkspaceRuntimeProfile, StorageError> {
+    let value = value.ok_or(StorageError::TemplateNotFound)?;
+    WorkspaceRuntimeProfile::from_database(&value).ok_or(StorageError::InvalidTemplate)
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct ImagePolicy {
@@ -29,8 +79,8 @@ pub(super) async fn admit_sqlite(
         return Err(StorageError::ImageNotAllowed);
     }
     if let Some(template_id) = workspace.template_id {
-        let matched: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM workspace_templates WHERE installation_id = ?1 AND id = ?2 AND enabled = 1 AND (organization_id IS NULL OR organization_id = ?3) AND image = ?4 AND access_mode = ?5 AND cpu_millis = ?6 AND memory_mib = ?7 AND gpu_count = ?8 AND disk_gib = ?9")
-            .bind(installation_id).bind(template_id.to_string()).bind(workspace.organization_id.to_string()).bind(&workspace.image).bind(workspace.access_mode.as_str()).bind(as_i64(workspace.resources.cpu_millis)?).bind(as_i64(workspace.resources.memory_mib)?).bind(i64::from(workspace.resources.gpu_count)).bind(as_i64(workspace.resources.disk_gib)?).fetch_one(&mut *connection).await?;
+        let matched: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM workspace_templates WHERE installation_id = ?1 AND id = ?2 AND enabled = 1 AND (organization_id IS NULL OR organization_id = ?3) AND image = ?4 AND access_mode = ?5 AND cpu_millis = ?6 AND memory_mib = ?7 AND gpu_count = ?8 AND disk_gib = ?9 AND runtime_profile = ?10")
+            .bind(installation_id).bind(template_id.to_string()).bind(workspace.organization_id.to_string()).bind(&workspace.image).bind(workspace.access_mode.as_str()).bind(as_i64(workspace.resources.cpu_millis)?).bind(as_i64(workspace.resources.memory_mib)?).bind(i64::from(workspace.resources.gpu_count)).bind(as_i64(workspace.resources.disk_gib)?).bind(workspace.runtime_profile.as_str()).fetch_one(&mut *connection).await?;
         if matched != 1 {
             return Err(StorageError::TemplateNotFound);
         }
@@ -49,8 +99,8 @@ pub(super) async fn admit_postgres(
         return Err(StorageError::ImageNotAllowed);
     }
     if let Some(template_id) = workspace.template_id {
-        let matched: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM workspace_templates WHERE installation_id = $1 AND id = $2 AND enabled = 1 AND (organization_id IS NULL OR organization_id = $3) AND image = $4 AND access_mode = $5 AND cpu_millis = $6 AND memory_mib = $7 AND gpu_count = $8 AND disk_gib = $9")
-            .bind(installation_id).bind(template_id.to_string()).bind(workspace.organization_id.to_string()).bind(&workspace.image).bind(workspace.access_mode.as_str()).bind(as_i64(workspace.resources.cpu_millis)?).bind(as_i64(workspace.resources.memory_mib)?).bind(i64::from(workspace.resources.gpu_count)).bind(as_i64(workspace.resources.disk_gib)?).fetch_one(&mut *connection).await?;
+        let matched: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM workspace_templates WHERE installation_id = $1 AND id = $2 AND enabled = 1 AND (organization_id IS NULL OR organization_id = $3) AND image = $4 AND access_mode = $5 AND cpu_millis = $6 AND memory_mib = $7 AND gpu_count = $8 AND disk_gib = $9 AND runtime_profile = $10")
+            .bind(installation_id).bind(template_id.to_string()).bind(workspace.organization_id.to_string()).bind(&workspace.image).bind(workspace.access_mode.as_str()).bind(as_i64(workspace.resources.cpu_millis)?).bind(as_i64(workspace.resources.memory_mib)?).bind(i64::from(workspace.resources.gpu_count)).bind(as_i64(workspace.resources.disk_gib)?).bind(workspace.runtime_profile.as_str()).fetch_one(&mut *connection).await?;
         if matched != 1 {
             return Err(StorageError::TemplateNotFound);
         }
@@ -63,6 +113,7 @@ pub struct WorkspaceTemplate {
     pub id: Uuid,
     pub organization_id: Option<Uuid>,
     pub name: String,
+    pub runtime_profile: WorkspaceRuntimeProfile,
     pub image: String,
     pub access_mode: AccessMode,
     pub resources: Resources,
@@ -75,6 +126,8 @@ pub struct WorkspaceTemplate {
 pub struct CreateWorkspaceTemplate {
     pub organization_id: Option<Uuid>,
     pub name: String,
+    #[serde(default)]
+    pub runtime_profile: WorkspaceRuntimeProfile,
     pub image: String,
     pub access_mode: AccessMode,
     pub resources: Resources,
@@ -129,9 +182,9 @@ impl Database {
     ) -> Result<Vec<WorkspaceTemplate>, StorageError> {
         let organization = organization_id.map(|id| id.to_string());
         match self {
-            Self::Sqlite { pool, installation_id } => sqlx::query("SELECT id, organization_id, name, image, access_mode, cpu_millis, memory_mib, gpu_count, disk_gib, enabled, created_at, updated_at FROM workspace_templates WHERE installation_id = ?1 AND (organization_id IS NULL OR organization_id = ?2) ORDER BY organization_id, name")
+            Self::Sqlite { pool, installation_id } => sqlx::query("SELECT id, organization_id, name, runtime_profile, image, access_mode, cpu_millis, memory_mib, gpu_count, disk_gib, enabled, created_at, updated_at FROM workspace_templates WHERE installation_id = ?1 AND (organization_id IS NULL OR organization_id = ?2) ORDER BY organization_id, name")
                 .bind(installation_id.as_str()).bind(organization).fetch_all(pool).await?.into_iter().map(decode_template).collect(),
-            Self::Postgres { pool, installation_id } => sqlx::query("SELECT id, organization_id, name, image, access_mode, cpu_millis, memory_mib, gpu_count, disk_gib, enabled, created_at, updated_at FROM workspace_templates WHERE installation_id = $1 AND (organization_id IS NULL OR organization_id = $2) ORDER BY organization_id, name")
+            Self::Postgres { pool, installation_id } => sqlx::query("SELECT id, organization_id, name, runtime_profile, image, access_mode, cpu_millis, memory_mib, gpu_count, disk_gib, enabled, created_at, updated_at FROM workspace_templates WHERE installation_id = $1 AND (organization_id IS NULL OR organization_id = $2) ORDER BY organization_id, name")
                 .bind(installation_id.as_str()).bind(organization).fetch_all(pool).await?.into_iter().map(decode_template).collect(),
         }
     }
@@ -152,6 +205,7 @@ impl Database {
             id: Uuid::now_v7(),
             organization_id: command.organization_id,
             name: command.name.trim().to_owned(),
+            runtime_profile: command.runtime_profile,
             image: command.image.trim().to_owned(),
             access_mode: command.access_mode,
             resources: command.resources,
@@ -164,15 +218,15 @@ impl Database {
                 pool,
                 installation_id,
             } => {
-                sqlx::query("INSERT INTO workspace_templates (id, installation_id, organization_id, name, image, access_mode, cpu_millis, memory_mib, gpu_count, disk_gib, enabled, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 1, ?11, ?11)")
-                .bind(template.id.to_string()).bind(installation_id.as_str()).bind(template.organization_id.map(|id| id.to_string())).bind(&template.name).bind(&template.image).bind(template.access_mode.as_str()).bind(as_i64(template.resources.cpu_millis)?).bind(as_i64(template.resources.memory_mib)?).bind(i64::from(template.resources.gpu_count)).bind(as_i64(template.resources.disk_gib)?).bind(now).execute(pool).await?;
+                sqlx::query("INSERT INTO workspace_templates (id, installation_id, organization_id, name, runtime_profile, image, access_mode, cpu_millis, memory_mib, gpu_count, disk_gib, enabled, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 1, ?12, ?12)")
+                .bind(template.id.to_string()).bind(installation_id.as_str()).bind(template.organization_id.map(|id| id.to_string())).bind(&template.name).bind(template.runtime_profile.as_str()).bind(&template.image).bind(template.access_mode.as_str()).bind(as_i64(template.resources.cpu_millis)?).bind(as_i64(template.resources.memory_mib)?).bind(i64::from(template.resources.gpu_count)).bind(as_i64(template.resources.disk_gib)?).bind(now).execute(pool).await?;
             }
             Self::Postgres {
                 pool,
                 installation_id,
             } => {
-                sqlx::query("INSERT INTO workspace_templates (id, installation_id, organization_id, name, image, access_mode, cpu_millis, memory_mib, gpu_count, disk_gib, enabled, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 1, $11, $11)")
-                .bind(template.id.to_string()).bind(installation_id.as_str()).bind(template.organization_id.map(|id| id.to_string())).bind(&template.name).bind(&template.image).bind(template.access_mode.as_str()).bind(as_i64(template.resources.cpu_millis)?).bind(as_i64(template.resources.memory_mib)?).bind(i64::from(template.resources.gpu_count)).bind(as_i64(template.resources.disk_gib)?).bind(now).execute(pool).await?;
+                sqlx::query("INSERT INTO workspace_templates (id, installation_id, organization_id, name, runtime_profile, image, access_mode, cpu_millis, memory_mib, gpu_count, disk_gib, enabled, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 1, $12, $12)")
+                .bind(template.id.to_string()).bind(installation_id.as_str()).bind(template.organization_id.map(|id| id.to_string())).bind(&template.name).bind(template.runtime_profile.as_str()).bind(&template.image).bind(template.access_mode.as_str()).bind(as_i64(template.resources.cpu_millis)?).bind(as_i64(template.resources.memory_mib)?).bind(i64::from(template.resources.gpu_count)).bind(as_i64(template.resources.disk_gib)?).bind(now).execute(pool).await?;
             }
         };
         Ok(template)
@@ -229,10 +283,13 @@ where
 {
     let organization: Option<String> = row.try_get("organization_id")?;
     let access: String = row.try_get("access_mode")?;
+    let runtime_profile: String = row.try_get("runtime_profile")?;
     Ok(WorkspaceTemplate {
         id: Uuid::parse_str(&row.try_get::<String, _>("id")?)?,
         organization_id: organization.map(|id| Uuid::parse_str(&id)).transpose()?,
         name: row.try_get("name")?,
+        runtime_profile: WorkspaceRuntimeProfile::from_database(&runtime_profile)
+            .ok_or(StorageError::InvalidTemplate)?,
         image: row.try_get("image")?,
         access_mode: AccessMode::from_database(&access)
             .ok_or(StorageError::UnknownAccessMode(access))?,
