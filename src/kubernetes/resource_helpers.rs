@@ -112,9 +112,10 @@ pub(super) fn workspace_config(
             (
                 "sshd_config".to_owned(),
                 format!(
-                    "Port 2222\nListenAddress 0.0.0.0\nHostKey /run/mwc-ssh/ssh_host_ed25519_key\nAuthorizedKeysFile {}/.mwc/authorized_keys\nStrictModes {}\nPasswordAuthentication no\nKbdInteractiveAuthentication no\nPermitRootLogin no\nAllowUsers {}\nAllowTcpForwarding yes\nPermitTunnel no\nX11Forwarding no\nSubsystem sftp internal-sftp\nPidFile /run/mwc-ssh/sshd.pid\n",
+                    "Port 2222\nListenAddress 0.0.0.0\nHostKey /run/mwc-ssh/ssh_host_ed25519_key\nAuthorizedKeysFile {}/.mwc/authorized_keys\nStrictModes {}\n{}PasswordAuthentication no\nKbdInteractiveAuthentication no\nPermitRootLogin no\nAllowUsers {}\nAllowTcpForwarding yes\nPermitTunnel no\nX11Forwarding no\nSubsystem sftp internal-sftp\nPidFile /run/mwc-ssh/sshd.pid\n",
                     profile.home,
                     profile.ssh_strict_modes(),
+                    profile.ssh_set_env(),
                     profile.login_user
                 ),
             ),

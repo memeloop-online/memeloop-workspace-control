@@ -104,6 +104,17 @@ impl RuntimeProfile {
         }
     }
 
+    pub fn ssh_set_env(self) -> String {
+        self.development_env()
+            .into_iter()
+            .filter_map(|variable| {
+                variable
+                    .value
+                    .map(|value| format!("SetEnv {}={value}\n", variable.name))
+            })
+            .collect()
+    }
+
     pub fn resource_limits(&self, resources: Resources) -> BTreeMap<String, Quantity> {
         let (cpu, ephemeral) = match self.kind {
             WorkspaceRuntimeProfile::Standard => (format!("{}m", resources.cpu_millis), None),

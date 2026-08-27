@@ -399,6 +399,15 @@ fn coder_node_profile_reuses_the_legacy_image_with_platform_bootstrap() {
         resources.workspace_config.data.as_ref().unwrap()["sshd_config"].contains("StrictModes no")
     );
     assert!(
+        resources.workspace_config.data.as_ref().unwrap()["sshd_config"]
+            .contains("SetEnv PATH=/usr/local/bin:/usr/local/sbin:/home/node-dev/.local/bin")
+    );
+    assert!(
+        resources.workspace_config.data.as_ref().unwrap()["sshd_config"].contains(
+            "SetEnv BUILDKIT_HOST=unix:///home/node-dev/.cache/buildkit/runtime/buildkit/buildkitd.sock"
+        )
+    );
+    assert!(
         resources.workspace_config.data.as_ref().unwrap()["mwc-workspace-bootstrap"]
             .contains("apt-get install -y --no-install-recommends jq openssh-server")
     );
