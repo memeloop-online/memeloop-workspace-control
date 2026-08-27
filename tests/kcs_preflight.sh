@@ -28,8 +28,12 @@ kubectl() {
     [[ ${FAKE_NAMESPACE_EXISTS:-false} == true ]]
     return
   fi
-  if [[ $1 == get && $2 == all,configmap,secret,pvc,networkpolicy,httproute ]]; then
+  if [[ $1 == get && $2 == deployment,statefulset,service,serviceaccount,configmap,secret,pvc,networkpolicy ]]; then
     printf '%s' "${FAKE_OWNER_OUTPUT:-}"
+    return
+  fi
+  if [[ $1 == get && $2 == httproute ]]; then
+    printf '%s' "${FAKE_ROUTE_OWNER_OUTPUT:-}"
     return
   fi
   if [[ $1 == get && $2 == gateway ]]; then
@@ -41,6 +45,9 @@ kubectl() {
     return
   fi
   if [[ $1 == get && $2 == crd ]]; then
+    if [[ $3 == httproutes.gateway.networking.k8s.io && ${FAKE_HTTPROUTE_CRD:-true} != true ]]; then
+      return 1
+    fi
     return
   fi
   printf 'unexpected kubectl arguments: %q' "$@" >&2
@@ -56,12 +63,21 @@ run_preflight() {
   KCS_MODE=${KCS_MODE:-sqlite} \
   KCS_PUBLIC_SSH=${KCS_PUBLIC_SSH:-false} \
   KCS_PUBLIC_WEB_SHELL=${KCS_PUBLIC_WEB_SHELL:-false} \
+  KCS_PUBLIC_API=${KCS_PUBLIC_API:-false} \
   KCS_HIGRESS_NAMESPACE=${KCS_HIGRESS_NAMESPACE:-higress-system} \
   KCS_HIGRESS_GATEWAY=${KCS_HIGRESS_GATEWAY:-higress-gateway} \
   bash "$preflight"
 }
 
-FAKE_NAMESPACE_EXISTS=false run_preflight >/dev/null
+FAKE_NAMESPACE_EXISTS=false FAKE_HTTPROUTE_CRD=false run_preflight >/dev/null
+
+if FAKE_NAMESPACE_EXISTS=false \
+  FAKE_HTTPROUTE_CRD=false \
+  KCS_PUBLIC_API=true \
+  run_preflight >/dev/null 2>&1; then
+  printf 'preflight accepted a public API without HTTPRoute CRDs\n' >&2
+  exit 1
+fi
 
 FAKE_NAMESPACE_EXISTS=true \
 FAKE_OWNER_OUTPUT=$'test-a\ntest-a\n' \

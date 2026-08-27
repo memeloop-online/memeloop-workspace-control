@@ -17,7 +17,11 @@ command -v jq >/dev/null
 
 selector="app.kubernetes.io/instance=mwc-${KCS_INSTALLATION_ID}"
 owner_label='workspace.memeloop.dev/owner-installation'
-objects=$(kubectl get all,serviceaccount,configmap,secret,pvc,networkpolicy,httproute,hpa \
+resource_kinds='pod,service,deployment,statefulset,replicaset,serviceaccount,configmap,secret,pvc,networkpolicy,hpa'
+if kubectl get crd httproutes.gateway.networking.k8s.io >/dev/null 2>&1; then
+  resource_kinds+=',httproute'
+fi
+objects=$(kubectl get "$resource_kinds" \
   -n "$KCS_RELEASE_NAMESPACE" -l "$selector" -o json)
 count=$(jq '.items | length' <<<"$objects")
 if [[ $count == 0 ]]; then

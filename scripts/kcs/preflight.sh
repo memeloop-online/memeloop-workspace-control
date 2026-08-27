@@ -43,7 +43,7 @@ for resource in namespaces clusterroles.rbac.authorization.k8s.io clusterrolebin
     exit 1
   fi
 done
-for resource in serviceaccounts deployments.apps statefulsets.apps services secrets configmaps persistentvolumeclaims networkpolicies.networking.k8s.io httproutes.gateway.networking.k8s.io; do
+for resource in serviceaccounts deployments.apps statefulsets.apps services secrets configmaps persistentvolumeclaims networkpolicies.networking.k8s.io; do
   if [[ $(kubectl auth can-i create "$resource" --namespace "$KCS_RELEASE_NAMESPACE") != yes ]]; then
     printf 'current identity cannot create %s in %s\n' "$resource" "$KCS_RELEASE_NAMESPACE" >&2
     exit 1
@@ -55,10 +55,16 @@ if [[ $KCS_MODE == postgresql ]] && [[ $(kubectl auth can-i create horizontalpod
 fi
 
 if kubectl get namespace "$KCS_RELEASE_NAMESPACE" >/dev/null 2>&1; then
-  owners=$(kubectl get all,configmap,secret,pvc,networkpolicy,httproute \
+  owners=$(kubectl get deployment,statefulset,service,serviceaccount,configmap,secret,pvc,networkpolicy \
     -n "$KCS_RELEASE_NAMESPACE" \
     -o go-template='{{range .items}}{{if .metadata.labels}}{{with index .metadata.labels "workspace.memeloop.dev/owner-installation"}}{{printf "%s\n" .}}{{end}}{{end}}{{end}}' \
     2>/dev/null)
+  if kubectl get crd httproutes.gateway.networking.k8s.io >/dev/null 2>&1; then
+    route_owners=$(kubectl get httproute -n "$KCS_RELEASE_NAMESPACE" \
+      -o go-template='{{range .items}}{{if .metadata.labels}}{{with index .metadata.labels "workspace.memeloop.dev/owner-installation"}}{{printf "%s\n" .}}{{end}}{{end}}{{end}}' \
+      2>/dev/null)
+    owners+=$'\n'"$route_owners"
+  fi
   while IFS= read -r owner; do
     if [[ -n $owner && $owner != "$KCS_INSTALLATION_ID" ]]; then
       printf 'release namespace contains resources owned by another installation\n' >&2
@@ -69,12 +75,19 @@ fi
 
 public_ssh=${KCS_PUBLIC_SSH:-false}
 public_web_shell=${KCS_PUBLIC_WEB_SHELL:-false}
-if [[ $public_ssh == true || $public_web_shell == true ]]; then
+public_api=${KCS_PUBLIC_API:-false}
+if [[ $public_ssh == true || $public_web_shell == true || $public_api == true ]]; then
   required KCS_HIGRESS_NAMESPACE
   required KCS_HIGRESS_GATEWAY
   kubectl get crd gateways.gateway.networking.k8s.io >/dev/null
   kubectl get crd httproutes.gateway.networking.k8s.io >/dev/null
   kubectl get gateway -n "$KCS_HIGRESS_NAMESPACE" "$KCS_HIGRESS_GATEWAY" >/dev/null
+fi
+if [[ $public_web_shell == true || $public_api == true ]]; then
+  if [[ $(kubectl auth can-i create httproutes.gateway.networking.k8s.io --namespace "$KCS_RELEASE_NAMESPACE") != yes ]]; then
+    printf 'current identity cannot create HTTPRoute in %s\n' "$KCS_RELEASE_NAMESPACE" >&2
+    exit 1
+  fi
 fi
 if [[ $public_ssh == true ]]; then
   kubectl get crd tcproutes.gateway.networking.k8s.io >/dev/null

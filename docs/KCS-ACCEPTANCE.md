@@ -20,6 +20,7 @@ export KCS_INSTALLATION_ID=public-a
 export KCS_RELEASE_NAMESPACE=mwc-public-a
 export KCS_STORAGE_CLASS=managed-delete
 export KCS_MODE=postgresql
+export KCS_PUBLIC_API=true
 export KCS_PUBLIC_SSH=true
 export KCS_PUBLIC_WEB_SHELL=true
 export KCS_HIGRESS_NAMESPACE=higress-system
@@ -27,6 +28,9 @@ export KCS_HIGRESS_GATEWAY=higress-gateway
 export KCS_HIGRESS_POD_SELECTOR=app.kubernetes.io/name=higress-gateway
 scripts/kcs/preflight.sh
 ```
+
+Set each `KCS_PUBLIC_*` flag to `false` for an internal installation. Gateway API CRDs and a
+Higress Gateway are required only when at least one public API, SSH or Web Shell path is enabled.
 
 Set Helm `higress.podLabels` to the same selector labels verified by the preflight.
 
