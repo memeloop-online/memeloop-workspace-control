@@ -410,6 +410,10 @@ fn coder_node_profile_reuses_the_legacy_image_with_platform_bootstrap() {
         resources.workspace_config.data.as_ref().unwrap()["mwc-workspace-bootstrap"]
             .contains("$runtime_dir/ssh_host_ed25519_key")
     );
+    assert!(
+        resources.workspace_config.data.as_ref().unwrap()["mwc-workspace-bootstrap"]
+            .contains("usermod -p '*' \"$workspace_user\"")
+    );
 }
 
 #[test]

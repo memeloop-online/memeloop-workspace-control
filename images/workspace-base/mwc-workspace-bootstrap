@@ -31,6 +31,17 @@ prepare_layout() {
 prepare() {
     prepare_layout
 
+    # Debian images commonly create service users with a leading `!` in shadow. sshd treats that
+    # as a fully locked account and rejects public keys before checking authorized_keys. Replace
+    # only that marker with an unusable password hash; password and keyboard authentication stay
+    # disabled in the platform sshd_config.
+    if command -v usermod >/dev/null 2>&1; then
+        shadow_password=$(getent shadow "$workspace_user" | cut -d: -f2)
+        case "$shadow_password" in
+            !*) usermod -p '*' "$workspace_user" ;;
+        esac
+    fi
+
     if [ ! -s "$runtime_dir/ttyd_client_key" ]; then
         ssh-keygen -q -t ed25519 -N '' -f "$runtime_dir/ttyd_client_key"
     fi
