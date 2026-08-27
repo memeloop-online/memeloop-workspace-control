@@ -82,14 +82,11 @@ fn workspace_generation_changes_the_pod_template_for_restart() {
 fn internal_workspace_allows_cluster_ssh_without_a_public_jump_host() {
     let mut workspace = workspace(WorkspaceState::Ready);
     workspace.access_mode = AccessMode::Internal;
-    let ingress = builder()
-        .build(&workspace)
-        .unwrap()
-        .network_policy
-        .spec
-        .unwrap()
-        .ingress
-        .unwrap();
+    let mut internal_builder = builder();
+    internal_builder.web_shell_domain = None;
+    let resources = internal_builder.build(&workspace).unwrap();
+    assert!(resources.web_shell_route.is_none());
+    let ingress = resources.network_policy.spec.unwrap().ingress.unwrap();
     let ssh = ingress
         .iter()
         .find(|rule| {

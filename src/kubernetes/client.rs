@@ -141,22 +141,27 @@ impl KubernetesCoordinator {
                 &Patch::Apply(&desired.network_policy),
             )
             .await?;
-        let routes = Api::<DynamicObject>::namespaced_with(
-            self.client.clone(),
-            namespace_name,
-            &super::higress::http_route_resource(),
-        );
-        if let Some(existing) = routes.get_opt("web-shell").await? {
-            self.builder
-                .verify_delete_ownership(&existing.metadata, workspace_id)?;
-            if desired.web_shell_route.is_none() {
-                routes.delete("web-shell", &DeleteParams::default()).await?;
+        // Internal installations deliberately do not require Gateway API CRDs. A request to a
+        // missing API group returns a plain-text 404 that kube cannot normalize as NotFound, so
+        // do not construct or query the dynamic API unless Web Shell routing is configured.
+        if self.builder.web_shell_domain.is_some() {
+            let routes = Api::<DynamicObject>::namespaced_with(
+                self.client.clone(),
+                namespace_name,
+                &super::higress::http_route_resource(),
+            );
+            if let Some(existing) = routes.get_opt("web-shell").await? {
+                self.builder
+                    .verify_delete_ownership(&existing.metadata, workspace_id)?;
+                if desired.web_shell_route.is_none() {
+                    routes.delete("web-shell", &DeleteParams::default()).await?;
+                }
             }
-        }
-        if let Some(route) = &desired.web_shell_route {
-            routes
-                .patch("web-shell", &apply, &Patch::Apply(route))
-                .await?;
+            if let Some(route) = &desired.web_shell_route {
+                routes
+                    .patch("web-shell", &apply, &Patch::Apply(route))
+                    .await?;
+            }
         }
         Ok(())
     }
@@ -213,18 +218,20 @@ impl KubernetesCoordinator {
 
         self.builder
             .verify_delete_ownership(&namespace.metadata, workspace_id)?;
-        let routes = Api::<DynamicObject>::namespaced_with(
-            self.client.clone(),
-            &namespace_name,
-            &super::higress::http_route_resource(),
-        );
-        if let Some(route) = routes.get_opt("web-shell").await? {
-            self.builder
-                .verify_delete_ownership(&route.metadata, workspace_id)?;
-            routes.delete("web-shell", &DeleteParams::default()).await?;
-            // Keep deletion deliberately staged: do not start Namespace removal
-            // until the externally visible Web Shell route is confirmed gone.
-            return Ok(DeleteProgress::DeletionRequested);
+        if self.builder.web_shell_domain.is_some() {
+            let routes = Api::<DynamicObject>::namespaced_with(
+                self.client.clone(),
+                &namespace_name,
+                &super::higress::http_route_resource(),
+            );
+            if let Some(route) = routes.get_opt("web-shell").await? {
+                self.builder
+                    .verify_delete_ownership(&route.metadata, workspace_id)?;
+                routes.delete("web-shell", &DeleteParams::default()).await?;
+                // Keep deletion deliberately staged: do not start Namespace removal
+                // until the externally visible Web Shell route is confirmed gone.
+                return Ok(DeleteProgress::DeletionRequested);
+            }
         }
         if namespace.metadata.deletion_timestamp.is_some() {
             return Ok(DeleteProgress::Terminating);
