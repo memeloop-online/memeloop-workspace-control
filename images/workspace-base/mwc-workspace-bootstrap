@@ -34,6 +34,15 @@ prepare() {
     if [ ! -s "$runtime_dir/ttyd_client_key" ]; then
         ssh-keygen -q -t ed25519 -N '' -f "$runtime_dir/ttyd_client_key"
     fi
+    # Kubernetes may mirror owner permissions to the Pod fsGroup on projected Secret files.
+    # OpenSSH correctly rejects a group-readable host private key, so copy it into the
+    # Pod-lifetime EmptyDir and normalize the mode instead of serving directly from the Secret.
+    install -m 0600 -o root -g root \
+        /etc/ssh/platform/ssh_host_ed25519_key \
+        "$runtime_dir/ssh_host_ed25519_key"
+    install -m 0644 -o root -g root \
+        /etc/ssh/platform/ssh_host_ed25519_key.pub \
+        "$runtime_dir/ssh_host_ed25519_key.pub"
 
     : > "$authorized_keys"
     cat "$runtime_dir/ttyd_client_key.pub" >> "$authorized_keys"
@@ -62,9 +71,8 @@ prepare() {
     chown "$workspace_user:$workspace_group" "$authorized_keys"
     chmod 0600 "$authorized_keys"
     chmod 0600 "$runtime_dir/ttyd_client_key"
-    cp /etc/ssh/platform/ssh_host_ed25519_key.pub "$runtime_dir/host_key.pub"
     printf 'localhost,127.0.0.1 ' > "$runtime_dir/known_hosts"
-    cat "$runtime_dir/host_key.pub" >> "$runtime_dir/known_hosts"
+    cat "$runtime_dir/ssh_host_ed25519_key.pub" >> "$runtime_dir/known_hosts"
     chmod 0644 "$runtime_dir/known_hosts"
 }
 

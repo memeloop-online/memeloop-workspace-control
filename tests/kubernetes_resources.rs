@@ -173,7 +173,7 @@ fn builds_isolated_single_replica_workspace_with_standard_components() {
         resources.workspace_config.data.as_ref().unwrap()["sshd_config"]
             .lines()
             .find(|line| line.starts_with("HostKey")),
-        Some("HostKey /etc/ssh/platform/ssh_host_ed25519_key")
+        Some("HostKey /run/mwc-ssh/ssh_host_ed25519_key")
     );
     assert_eq!(
         resources.service.spec.as_ref().unwrap().type_.as_deref(),
@@ -316,6 +316,10 @@ fn coder_node_profile_reuses_the_legacy_image_with_platform_bootstrap() {
     assert!(
         resources.workspace_config.data.as_ref().unwrap()["mwc-workspace-bootstrap"]
             .contains("install -d -m 1777")
+    );
+    assert!(
+        resources.workspace_config.data.as_ref().unwrap()["mwc-workspace-bootstrap"]
+            .contains("$runtime_dir/ssh_host_ed25519_key")
     );
 }
 
