@@ -3,6 +3,7 @@ WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
 COPY web/dist ./web/dist
+COPY images/workspace-base/mwc-workspace-bootstrap ./images/workspace-base/mwc-workspace-bootstrap
 RUN cargo build --locked --release
 
 FROM debian:bookworm-slim
