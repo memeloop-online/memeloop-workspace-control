@@ -129,6 +129,10 @@ fn builds_isolated_single_replica_workspace_with_standard_components() {
         .containers;
     assert_eq!(containers[0].name, "workspace");
     assert_eq!(containers[1].name, "ttyd");
+    assert_eq!(
+        containers[1].command.as_deref(),
+        Some(["ttyd".to_owned()].as_slice())
+    );
     assert!(
         containers[1]
             .args

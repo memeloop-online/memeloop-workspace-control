@@ -290,6 +290,7 @@ impl ResourceBuilder {
                 Container {
                     name: "ttyd".to_owned(),
                     image: Some(self.ttyd_image.clone()),
+                    command: Some(vec!["ttyd".to_owned()]),
                     args: Some(vec![
                         "--port".to_owned(),
                         "7681".to_owned(),
