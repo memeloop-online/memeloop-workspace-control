@@ -105,14 +105,20 @@ impl RuntimeProfile {
     }
 
     pub fn ssh_set_env(self) -> String {
-        self.development_env()
+        let assignments = self
+            .development_env()
             .into_iter()
             .filter_map(|variable| {
                 variable
                     .value
-                    .map(|value| format!("SetEnv {}={value}\n", variable.name))
+                    .map(|value| format!("{}={value}", variable.name))
             })
-            .collect()
+            .collect::<Vec<_>>();
+        if assignments.is_empty() {
+            String::new()
+        } else {
+            format!("SetEnv {}\n", assignments.join(" "))
+        }
     }
 
     pub fn resource_limits(&self, resources: Resources) -> BTreeMap<String, Quantity> {
