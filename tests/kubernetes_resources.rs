@@ -255,6 +255,11 @@ fn coder_node_profile_reuses_the_legacy_image_with_platform_bootstrap() {
         dev.args.as_deref(),
         Some(["compat-serve".to_owned()].as_slice())
     );
+    let readiness = dev.readiness_probe.as_ref().unwrap();
+    assert_eq!(
+        readiness.tcp_socket.as_ref().unwrap().port,
+        k8s_openapi::apimachinery::pkg::util::intstr::IntOrString::Int(2222)
+    );
     assert!(
         dev.volume_mounts.as_ref().unwrap().iter().any(|mount| {
             mount.name == "workspace-data" && mount.mount_path == "/home/node-dev"

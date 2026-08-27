@@ -5,9 +5,10 @@ use k8s_openapi::{
         Affinity, AppArmorProfile, Capabilities, ConfigMapEnvSource, Container, ContainerPort,
         EnvFromSource, EnvVar, ExecAction, LocalObjectReference, NodeAffinity, NodeSelector,
         NodeSelectorRequirement, NodeSelectorTerm, PodSecurityContext, PreferredSchedulingTerm,
-        Probe, ResourceRequirements, SeccompProfile, SecretEnvSource, SecurityContext, VolumeMount,
+        Probe, ResourceRequirements, SeccompProfile, SecretEnvSource, SecurityContext,
+        TCPSocketAction, VolumeMount,
     },
-    apimachinery::pkg::api::resource::Quantity,
+    apimachinery::pkg::{api::resource::Quantity, util::intstr::IntOrString},
 };
 
 use crate::{quota::Resources, workspaces::WorkspaceRuntimeProfile};
@@ -138,6 +139,18 @@ impl RuntimeProfile {
                 protocol: Some("TCP".to_owned()),
                 ..ContainerPort::default()
             }]),
+            readiness_probe: Some(Probe {
+                tcp_socket: Some(TCPSocketAction {
+                    port: IntOrString::Int(2222),
+                    host: None,
+                }),
+                initial_delay_seconds: Some(1),
+                period_seconds: Some(2),
+                timeout_seconds: Some(1),
+                success_threshold: Some(1),
+                failure_threshold: Some(3),
+                ..Probe::default()
+            }),
             resources: Some(resources),
             env: Some(env),
             env_from: Some(injection_env_from()),
