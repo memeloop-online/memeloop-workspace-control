@@ -87,7 +87,7 @@ fn internal_workspace_allows_cluster_ssh_without_a_public_jump_host() {
     let mut internal_builder = builder();
     internal_builder.web_shell_domain = None;
     let resources = internal_builder.build(&workspace).unwrap();
-    assert!(resources.web_shell_route.is_none());
+    assert!(resources.web_shell_ingress.is_none());
     let ingress = resources.network_policy.spec.unwrap().ingress.unwrap();
     let ssh = ingress
         .iter()
@@ -202,6 +202,12 @@ fn builds_isolated_single_replica_workspace_with_standard_components() {
             .unwrap()
             .contains(&"ssh".to_owned())
     );
+    let ttyd_args = containers[1].args.as_ref().unwrap();
+    let base_path_index = ttyd_args
+        .iter()
+        .position(|argument| argument == "--base-path")
+        .unwrap();
+    assert_eq!(ttyd_args[base_path_index + 1], "/shell/01jabc");
     assert_eq!(
         containers[1].volume_mounts.as_ref().unwrap()[0].name,
         "runtime-ssh"
@@ -244,16 +250,31 @@ fn builds_isolated_single_replica_workspace_with_standard_components() {
         resources.service.spec.as_ref().unwrap().type_.as_deref(),
         Some("ClusterIP")
     );
-    let route = resources.web_shell_route.as_ref().unwrap();
-    assert_eq!(route.data["spec"]["hostnames"][0], "shell.example.com");
+    let web_shell_ingress = resources.web_shell_ingress.as_ref().unwrap();
     assert_eq!(
-        route.data["spec"]["rules"][0]["backendRefs"][0]["port"],
-        7681
+        web_shell_ingress.metadata.name.as_deref(),
+        Some("web-shell")
     );
     assert_eq!(
-        route.data["spec"]["rules"][0]["matches"][0]["path"]["value"],
-        "/shell/01jabc/"
+        web_shell_ingress.metadata.namespace.as_deref(),
+        Some("ws-public-a-01jabc")
     );
+    let web_shell_labels = web_shell_ingress.metadata.labels.as_ref().unwrap();
+    assert_eq!(web_shell_labels[OWNER_INSTALLATION_LABEL], "public-a");
+    assert_eq!(
+        web_shell_labels["workspace.memeloop.dev/workspace-id"],
+        workspace.id.to_string()
+    );
+    let web_shell_spec = web_shell_ingress.spec.as_ref().unwrap();
+    assert_eq!(web_shell_spec.ingress_class_name.as_deref(), Some("nginx"));
+    let web_shell_rule = &web_shell_spec.rules.as_ref().unwrap()[0];
+    assert_eq!(web_shell_rule.host.as_deref(), Some("shell.example.com"));
+    let web_shell_path = &web_shell_rule.http.as_ref().unwrap().paths[0];
+    assert_eq!(web_shell_path.path.as_deref(), Some("/shell/01jabc/"));
+    assert_eq!(web_shell_path.path_type, "Prefix");
+    let web_shell_backend = web_shell_path.backend.service.as_ref().unwrap();
+    assert_eq!(web_shell_backend.name, "workspace");
+    assert_eq!(web_shell_backend.port.as_ref().unwrap().number, Some(7681));
     let ingress = resources.network_policy.spec.unwrap().ingress.unwrap();
     assert!(ingress.iter().all(|rule| {
         let peer = &rule.from.as_ref().unwrap()[0];

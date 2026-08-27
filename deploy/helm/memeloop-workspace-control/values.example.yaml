@@ -25,7 +25,7 @@ public:
   webShellOrigin: https://shell.example.com
 
 higress:
-  extAuthPluginUrl: oci://REPLACE_WITH_PINNED_OFFICIAL_EXT_AUTH_PLUGIN
+  extAuthPluginUrl: oci://higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/ext-auth@sha256:7179a769128a6db8612242ae4ccc1486d0cf48eacacbf56445c85915d7c9c2bf
 
 jumpHost:
   image:

@@ -9,7 +9,7 @@ kubectl() {
   if [[ $1 == get && $2 == crd ]]; then
     return 1
   fi
-  if [[ $1 == get && $2 == pod,service,deployment,statefulset,replicaset,serviceaccount,configmap,secret,pvc,networkpolicy,hpa ]]; then
+  if [[ $1 == get && $2 == pod,service,deployment,statefulset,replicaset,serviceaccount,configmap,secret,pvc,networkpolicy,ingress,hpa ]]; then
     printf '{"items":[{"metadata":{"labels":{"app.kubernetes.io/instance":"mwc-test-a","%s":"test-a"}}}]}' "$owner_label"
     return
   fi

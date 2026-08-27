@@ -77,6 +77,15 @@ jobs:
             --set jumpHost.enabled=false
           linux-amd64/helm lint deploy/helm/memeloop-workspace-control \
             -f deploy/helm/memeloop-workspace-control/values.example.yaml
+          rendered_public=$(linux-amd64/helm template public \
+            deploy/helm/memeloop-workspace-control \
+            -f deploy/helm/memeloop-workspace-control/values.example.yaml)
+          grep -q 'phase: AUTHN' <<<"${rendered_public}"
+          grep -q 'priority: 360' <<<"${rendered_public}"
+          grep -q 'failStrategy: FAIL_CLOSE' <<<"${rendered_public}"
+          grep -q 'defaultConfigDisable: true' <<<"${rendered_public}"
+          grep -q 'matchRules:' <<<"${rendered_public}"
+          grep -q 'resources: \["networkpolicies", "ingresses"\]' <<<"${rendered_public}"
           linux-amd64/helm lint deploy/helm/memeloop-workspace-control \
             -f deploy/helm/memeloop-workspace-control/values.internal.example.yaml
           linux-amd64/helm template digest-pinned deploy/helm/memeloop-workspace-control \

@@ -17,7 +17,7 @@ command -v jq >/dev/null
 
 selector="app.kubernetes.io/instance=mwc-${K3S_INSTALLATION_ID}"
 owner_label='workspace.memeloop.dev/owner-installation'
-resource_kinds='pod,service,deployment,statefulset,replicaset,serviceaccount,configmap,secret,pvc,networkpolicy,hpa'
+resource_kinds='pod,service,deployment,statefulset,replicaset,serviceaccount,configmap,secret,pvc,networkpolicy,ingress,hpa'
 if kubectl get crd httproutes.gateway.networking.k8s.io >/dev/null 2>&1; then
   resource_kinds+=',httproute'
 fi

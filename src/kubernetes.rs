@@ -8,7 +8,7 @@ use k8s_openapi::{
             Namespace, PersistentVolumeClaim, PersistentVolumeClaimSpec, PodSpec, PodTemplateSpec,
             ResourceRequirements, SecretVolumeSource, Service, Volume, VolumeResourceRequirements,
         },
-        networking::v1::NetworkPolicy,
+        networking::v1::{Ingress, NetworkPolicy},
     },
     apimachinery::pkg::{
         api::resource::Quantity,
@@ -78,7 +78,7 @@ pub struct DesiredResources {
     pub injections: InjectionMaterialization,
     pub workspace_config: ConfigMap,
     pub ssh_identity: k8s_openapi::api::core::v1::Secret,
-    pub web_shell_route: Option<kube::core::DynamicObject>,
+    pub web_shell_ingress: Option<Ingress>,
 }
 
 impl ResourceBuilder {
@@ -150,16 +150,8 @@ impl ResourceBuilder {
                 RuntimeProfile::for_workspace(workspace.runtime_profile),
             ),
             ssh_identity: resource_helpers::ssh_identity(&namespace_name, &labels, None),
-            web_shell_route: self.web_shell_domain.as_ref().map(|domain| {
-                higress::web_shell_route(
-                    &namespace_name,
-                    &labels,
-                    &workspace.short_id,
-                    domain,
-                    &self.higress_namespace,
-                    &self.higress_gateway_name,
-                    &self.higress_https_section_name,
-                )
+            web_shell_ingress: self.web_shell_domain.as_ref().map(|domain| {
+                higress::web_shell_ingress(&namespace_name, &labels, &workspace.short_id, domain)
             }),
         })
     }
@@ -257,6 +249,8 @@ impl ResourceBuilder {
                 "--port".to_owned(),
                 "7681".to_owned(),
                 "--writable".to_owned(),
+                "--base-path".to_owned(),
+                format!("/shell/{}", workspace.short_id),
                 "ssh".to_owned(),
                 "-p".to_owned(),
                 "2222".to_owned(),

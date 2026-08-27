@@ -28,7 +28,7 @@ kubectl() {
     [[ ${FAKE_NAMESPACE_EXISTS:-false} == true ]]
     return
   fi
-  if [[ $1 == get && $2 == deployment,statefulset,service,serviceaccount,configmap,secret,pvc,networkpolicy ]]; then
+  if [[ $1 == get && $2 == deployment,statefulset,service,serviceaccount,configmap,secret,pvc,networkpolicy,ingress ]]; then
     printf '%s' "${FAKE_OWNER_OUTPUT:-}"
     return
   fi
@@ -70,6 +70,12 @@ run_preflight() {
 }
 
 FAKE_NAMESPACE_EXISTS=false FAKE_HTTPROUTE_CRD=false run_preflight >/dev/null
+
+FAKE_NAMESPACE_EXISTS=false \
+FAKE_HTTPROUTE_CRD=false \
+FAKE_GATEWAY_PODS='gateway-a' \
+K3S_PUBLIC_WEB_SHELL=true \
+run_preflight >/dev/null
 
 if FAKE_NAMESPACE_EXISTS=false \
   FAKE_HTTPROUTE_CRD=false \

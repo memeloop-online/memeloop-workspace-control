@@ -18,7 +18,7 @@ if kubectl get namespace "$K3S_WORKSPACE_NAMESPACE" >/dev/null 2>&1; then
   exit 1
 fi
 
-resource_kinds='statefulset,service,secret,configmap,pvc,networkpolicy'
+resource_kinds='statefulset,service,secret,configmap,pvc,networkpolicy,ingress'
 if kubectl get crd httproutes.gateway.networking.k8s.io >/dev/null 2>&1; then
   resource_kinds+=',httproute'
 fi

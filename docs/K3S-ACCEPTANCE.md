@@ -68,7 +68,7 @@ API responses and OpenSSH command transcripts as acceptance evidence.
 1. Create internal and public workspaces with the standard Image Contract v1 image.
 2. Wait for Ready; verify one StatefulSet replica, ClusterIP ports 2222/7681 and one RWO PVC.
 3. Stop and start; confirm replicas change 1→0→1 while the PVC and OpenSSH host identity persist.
-4. Delete; confirm new SSH/Web Shell authorization fails immediately, the HTTPRoute is removed,
+4. Delete; confirm new SSH/Web Shell authorization fails immediately, the workspace Ingress is removed,
    then Namespace, StatefulSet, Pod, Service, Secrets, ConfigMaps and PVC disappear before the
    database state becomes `deleted`.
 
@@ -85,7 +85,8 @@ injection and confirm a new connection is rejected.
 Issue a one-time Web Shell ticket, open the returned URL through Higress and exercise resize and
 interactive input. Reload or reconnect with the consumed ticket and confirm rejection, then issue
 a fresh ticket and confirm a new session succeeds. Confirm only Higress can reach port 7681 and
-terminal bytes do not traverse the control-plane API.
+terminal bytes do not traverse the control-plane API. Confirm ttyd HTML assets and the WebSocket
+upgrade both remain below `/shell/<short>/`; no URL prefix rewrite is allowed.
 
 ## Injection cascade
 

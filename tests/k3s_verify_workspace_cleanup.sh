@@ -12,7 +12,7 @@ kubectl() {
   if [[ $1 == get && $2 == crd ]]; then
     return 1
   fi
-  if [[ $1 == get && $2 == statefulset,service,secret,configmap,pvc,networkpolicy ]]; then
+  if [[ $1 == get && $2 == statefulset,service,secret,configmap,pvc,networkpolicy,ingress ]]; then
     printf '{"items":[]}'
     return
   fi

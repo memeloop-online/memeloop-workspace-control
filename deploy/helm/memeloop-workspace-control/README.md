@@ -19,12 +19,15 @@ an independent internal-auth token, a pinned ttyd image, and a persistent
 OpenSSH host-key Secret. The chart never generates or stores those values in a
 rendered manifest.
 
-Higress prerequisites are intentionally explicit: Gateway API CRDs must be
-installed, the referenced Higress Gateway must allow routes from this namespace,
-and it must expose a TCP listener and Service port 22. The chart creates one
-fixed TCPRoute from that listener to the standard OpenSSH jump Deployment; it
-does not allocate a port per workspace. Set `higress.extAuthPluginUrl` to the
-pinned official Higress ext-auth plugin OCI URL to protect all `/shell/` paths.
+Higress prerequisites are intentionally explicit. Gateway API CRDs and a referenced Gateway are
+needed only for the fixed public API HTTPRoute and public SSH TCPRoute; the Gateway must allow
+routes from this namespace and public SSH additionally needs listener and Service port 22. Web
+Shell instead uses a built-in `networking.k8s.io/v1` Ingress in each workspace Namespace, with
+`ingressClassName: nginx`, and therefore needs neither Gateway API CRDs nor ReferenceGrant. Set
+`higress.extAuthPluginUrl` to the pinned official Higress ext-auth plugin OCI URL to protect all
+`/shell/` paths. The example pins the official ext-auth 1.0.0 artifact by digest; mirror that OCI
+artifact into Harbor only if gateway nodes cannot reach the official registry, then update the
+value to the verified mirror digest.
 The chart refuses to render a Web Shell domain without that plugin and an exact
 `https://<webShellDomain>` public origin.
 Set `higress.podLabels` to the labels actually present on the K3S Higress gateway Pods. The same

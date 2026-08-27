@@ -74,7 +74,9 @@ Chart 位于 `deploy/helm/memeloop-workspace-control`：
 - `mode=sqlite` 渲染单副本 StatefulSet 与独立 RWO PVC。
 - `mode=postgresql` 渲染 Deployment 与 HPA。
 - 公网 SSH 始终只有一条固定 TCPRoute，后端是标准 OpenSSH 跳板 Deployment。
-- ttyd WebSocket HTTPRoute 按工作区创建，Higress external-auth 消费一次性 ticket。
+- 每个工作区在自身 Namespace 创建 `networking.k8s.io/v1` Ingress，将
+  `/shell/<short>/` 原样转发给使用相同 `--base-path` 的 ttyd；Higress external-auth
+  消费一次性 ticket。Web Shell 不依赖 Gateway API CRD 或跨 Namespace ReferenceGrant。
 
 公网 PostgreSQL 示例见 `values.example.yaml`，内网 SQLite 示例见
 `values.internal.example.yaml`。安装前需提供数据库、信封加密、内部鉴权和跳板 host key Secret，并确认管理型 StorageClass 的 `reclaimPolicy` 为 `Delete`。

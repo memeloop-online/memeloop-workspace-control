@@ -3,12 +3,11 @@ use std::fmt::Debug;
 use k8s_openapi::api::{
     apps::v1::StatefulSet,
     core::v1::{ConfigMap, Namespace, Pod, Secret, Service},
-    networking::v1::NetworkPolicy,
+    networking::v1::{Ingress, NetworkPolicy},
 };
 use kube::{
     Api, Client,
     api::{DeleteParams, Patch, PatchParams},
-    core::DynamicObject,
 };
 use serde::de::DeserializeOwned;
 use thiserror::Error;
@@ -164,27 +163,20 @@ impl KubernetesCoordinator {
                 &Patch::Apply(&desired.network_policy),
             )
             .await?;
-        // Internal installations deliberately do not require Gateway API CRDs. A request to a
-        // missing API group returns a plain-text 404 that kube cannot normalize as NotFound, so
-        // do not construct or query the dynamic API unless Web Shell routing is configured.
-        if self.builder.web_shell_domain.is_some() {
-            let routes = Api::<DynamicObject>::namespaced_with(
-                self.client.clone(),
-                namespace_name,
-                &super::higress::http_route_resource(),
-            );
-            if let Some(existing) = routes.get_opt("web-shell").await? {
-                self.builder
-                    .verify_delete_ownership(&existing.metadata, workspace_id)?;
-                if desired.web_shell_route.is_none() {
-                    routes.delete("web-shell", &DeleteParams::default()).await?;
-                }
-            }
-            if let Some(route) = &desired.web_shell_route {
-                routes
-                    .patch("web-shell", &apply, &Patch::Apply(route))
+        let ingresses = Api::<Ingress>::namespaced(self.client.clone(), namespace_name);
+        if let Some(existing) = ingresses.get_opt("web-shell").await? {
+            self.builder
+                .verify_delete_ownership(&existing.metadata, workspace_id)?;
+            if desired.web_shell_ingress.is_none() {
+                ingresses
+                    .delete("web-shell", &DeleteParams::default())
                     .await?;
             }
+        }
+        if let Some(ingress) = &desired.web_shell_ingress {
+            ingresses
+                .patch("web-shell", &apply, &Patch::Apply(ingress))
+                .await?;
         }
         Ok(())
     }
@@ -241,20 +233,16 @@ impl KubernetesCoordinator {
 
         self.builder
             .verify_delete_ownership(&namespace.metadata, workspace_id)?;
-        if self.builder.web_shell_domain.is_some() {
-            let routes = Api::<DynamicObject>::namespaced_with(
-                self.client.clone(),
-                &namespace_name,
-                &super::higress::http_route_resource(),
-            );
-            if let Some(route) = routes.get_opt("web-shell").await? {
-                self.builder
-                    .verify_delete_ownership(&route.metadata, workspace_id)?;
-                routes.delete("web-shell", &DeleteParams::default()).await?;
-                // Keep deletion deliberately staged: do not start Namespace removal
-                // until the externally visible Web Shell route is confirmed gone.
-                return Ok(DeleteProgress::DeletionRequested);
-            }
+        let ingresses = Api::<Ingress>::namespaced(self.client.clone(), &namespace_name);
+        if let Some(ingress) = ingresses.get_opt("web-shell").await? {
+            self.builder
+                .verify_delete_ownership(&ingress.metadata, workspace_id)?;
+            ingresses
+                .delete("web-shell", &DeleteParams::default())
+                .await?;
+            // Keep deletion deliberately staged: do not start Namespace removal
+            // until the externally visible Web Shell route is confirmed gone.
+            return Ok(DeleteProgress::DeletionRequested);
         }
         if namespace.metadata.deletion_timestamp.is_some() {
             return Ok(DeleteProgress::Terminating);

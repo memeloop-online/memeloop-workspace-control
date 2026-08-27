@@ -45,23 +45,36 @@ metadata:
     {{- include "mwc.labels" . | nindent 4 }}
 spec:
   url: {{ .Values.higress.extAuthPluginUrl | quote }}
-  defaultConfig:
-    match_type: blacklist
-    match_list:
-      - match_rule_domain: {{ .Values.public.webShellDomain | quote }}
-        match_rule_path: /shell/
-        match_rule_type: prefix
-    failure_mode_allow: false
-    status_on_error: 503
-    http_service:
-      endpoint_mode: forward_auth
-      endpoint:
-        service_name: {{ include "mwc.name" . }}-internal.{{ .Release.Namespace }}.svc.cluster.local
-        service_port: 8081
-        path: /api/v1/internal/web-shell/authorize
-        request_method: GET
-      authorization_response:
-        allowed_upstream_headers:
-          - exact: x-mwc-user-id
-          - exact: x-mwc-workspace-id
+  imagePullPolicy: IfNotPresent
+  phase: AUTHN
+  priority: 360
+  failStrategy: FAIL_CLOSE
+  defaultConfigDisable: true
+  matchRules:
+    - domain:
+        - {{ .Values.public.webShellDomain | quote }}
+      config:
+        match_type: blacklist
+        match_list:
+          - match_rule_domain: {{ .Values.public.webShellDomain | quote }}
+            match_rule_path: /shell/
+            match_rule_type: prefix
+        failure_mode_allow: false
+        status_on_error: 503
+        http_service:
+          endpoint_mode: forward_auth
+          endpoint:
+            service_name: {{ include "mwc.name" . }}-internal.{{ .Release.Namespace }}.svc.cluster.local
+            service_port: 8081
+            path: /api/v1/internal/web-shell/authorize
+            request_method: GET
+          timeout: 1000
+          authorization_request:
+            with_request_body: false
+          authorization_response:
+            allowed_upstream_headers:
+              - exact: x-mwc-user-id
+              - exact: x-mwc-workspace-id
+            allowed_client_headers:
+              - exact: content-type
 {{- end }}

@@ -1,55 +1,44 @@
 use std::collections::BTreeMap;
 
-use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
-use kube::core::{ApiResource, DynamicObject, GroupVersionKind};
+use k8s_openapi::api::networking::v1::{
+    HTTPIngressPath, HTTPIngressRuleValue, Ingress, IngressBackend, IngressRule,
+    IngressServiceBackend, IngressSpec, ServiceBackendPort,
+};
 
-pub(super) fn http_route_resource() -> ApiResource {
-    ApiResource::from_gvk(&GroupVersionKind::gvk(
-        "gateway.networking.k8s.io",
-        "v1",
-        "HTTPRoute",
-    ))
-}
+use super::namespaced_metadata;
 
-#[allow(clippy::too_many_arguments)]
-pub(super) fn web_shell_route(
+pub(super) fn web_shell_ingress(
     namespace: &str,
     labels: &BTreeMap<String, String>,
     workspace_short_id: &str,
     domain: &str,
-    gateway_namespace: &str,
-    gateway_name: &str,
-    https_section_name: &str,
-) -> DynamicObject {
+) -> Ingress {
     let path = format!("/shell/{workspace_short_id}/");
-    let mut route = DynamicObject::new("web-shell", &http_route_resource())
-        .within(namespace)
-        .data(serde_json::json!({
-            "spec": {
-                "parentRefs": [{
-                    "name": gateway_name,
-                    "namespace": gateway_namespace,
-                    "sectionName": https_section_name,
-                }],
-                "hostnames": [domain],
-                "rules": [{
-                    "matches": [{"path": {"type": "PathPrefix", "value": path}}],
-                    "filters": [{
-                        "type": "URLRewrite",
-                        "urlRewrite": {"path": {
-                            "type": "ReplacePrefixMatch",
-                            "replacePrefixMatch": "/"
-                        }}
+    Ingress {
+        metadata: namespaced_metadata("web-shell", namespace, labels),
+        spec: Some(IngressSpec {
+            ingress_class_name: Some("nginx".to_owned()),
+            rules: Some(vec![IngressRule {
+                host: Some(domain.to_owned()),
+                http: Some(HTTPIngressRuleValue {
+                    paths: vec![HTTPIngressPath {
+                        backend: IngressBackend {
+                            service: Some(IngressServiceBackend {
+                                name: "workspace".to_owned(),
+                                port: Some(ServiceBackendPort {
+                                    number: Some(7681),
+                                    ..ServiceBackendPort::default()
+                                }),
+                            }),
+                            ..IngressBackend::default()
+                        },
+                        path: Some(path),
+                        path_type: "Prefix".to_owned(),
                     }],
-                    "backendRefs": [{"name": "workspace", "port": 7681}],
-                }],
-            }
-        }));
-    route.metadata = ObjectMeta {
-        name: Some("web-shell".to_owned()),
-        namespace: Some(namespace.to_owned()),
-        labels: Some(labels.clone()),
-        ..ObjectMeta::default()
-    };
-    route
+                }),
+            }]),
+            ..IngressSpec::default()
+        }),
+        ..Ingress::default()
+    }
 }
