@@ -64,7 +64,7 @@ spec:
         http_service:
           endpoint_mode: forward_auth
           endpoint:
-            service_name: {{ include "mwc.name" . }}-internal.{{ .Release.Namespace }}.svc.cluster.local
+            service_name: {{ include "mwc.name" . }}.{{ .Release.Namespace }}.svc.cluster.local
             service_port: 8081
             path: /api/v1/internal/web-shell/authorize
             request_method: GET
