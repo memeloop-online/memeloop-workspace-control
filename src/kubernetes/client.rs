@@ -503,8 +503,10 @@ mod tests {
         },
     };
 
-    use axum::body::Body;
-    use http::{Method, Request, Response, StatusCode};
+    use axum::{
+        body::Body,
+        http::{Method, Request, Response, StatusCode},
+    };
     use k8s_openapi::{api::core::v1::Pod, apimachinery::pkg::apis::meta::v1::ObjectMeta};
     use tower::service_fn;
     use uuid::Uuid;
