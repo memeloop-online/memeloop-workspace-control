@@ -1,4 +1,4 @@
-pub(super) const SCHEMA_VERSION: i64 = 8;
+pub(super) const SCHEMA_VERSION: i64 = 9;
 pub(super) const MIGRATION_TABLE: &str = "CREATE TABLE IF NOT EXISTS schema_migrations (\
     version BIGINT PRIMARY KEY, applied_at BIGINT NOT NULL\
 )";
@@ -149,4 +149,19 @@ pub(super) const MIGRATIONS: &[&str] = &[
     )",
     "ALTER TABLE workspace_templates ADD COLUMN runtime_profile TEXT NOT NULL DEFAULT 'standard'",
     "ALTER TABLE workspaces ADD COLUMN runtime_profile TEXT NOT NULL DEFAULT 'standard'",
+];
+
+pub(super) const PROFILE_RENAME_MIGRATIONS: &[&str] = &[
+    "UPDATE workspace_templates SET runtime_profile = CASE runtime_profile \
+        WHEN 'coder_rust_dev' THEN 'rust_dev' \
+        WHEN 'coder_token_center_rust_dev' THEN 'rust_dev' \
+        WHEN 'coder_node_dev' THEN 'node_dev' \
+        WHEN 'coder_cluster_admin' THEN 'maintainance' \
+        ELSE runtime_profile END",
+    "UPDATE workspaces SET runtime_profile = CASE runtime_profile \
+        WHEN 'coder_rust_dev' THEN 'rust_dev' \
+        WHEN 'coder_token_center_rust_dev' THEN 'rust_dev' \
+        WHEN 'coder_node_dev' THEN 'node_dev' \
+        WHEN 'coder_cluster_admin' THEN 'maintainance' \
+        ELSE runtime_profile END",
 ];

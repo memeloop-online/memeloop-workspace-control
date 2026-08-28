@@ -116,16 +116,27 @@ fn normalize_snapshot_rows(
     rows: &[serde_json::Value],
     schema_version: i64,
 ) -> Vec<serde_json::Value> {
-    if schema_version >= 8 || !matches!(table, "workspace_templates" | "workspaces") {
+    if !matches!(table, "workspace_templates" | "workspaces") {
         return rows.to_vec();
     }
     rows.iter()
         .cloned()
         .map(|mut row| {
             if let Some(object) = row.as_object_mut() {
-                object
+                let profile = object
                     .entry("runtime_profile")
                     .or_insert_with(|| serde_json::Value::String("standard".to_owned()));
+                if schema_version < 9 {
+                    let canonical = match profile.as_str() {
+                        Some("coder_rust_dev" | "coder_token_center_rust_dev") => Some("rust_dev"),
+                        Some("coder_node_dev") => Some("node_dev"),
+                        Some("coder_cluster_admin") => Some("maintainance"),
+                        _ => None,
+                    };
+                    if let Some(canonical) = canonical {
+                        *profile = serde_json::Value::String(canonical.to_owned());
+                    }
+                }
             }
             row
         })

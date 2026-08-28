@@ -231,6 +231,52 @@ impl Database {
         };
         Ok(template)
     }
+
+    pub async fn set_workspace_template_enabled(
+        &self,
+        template_id: Uuid,
+        enabled: bool,
+        now: i64,
+    ) -> Result<WorkspaceTemplate, StorageError> {
+        let row = match self {
+            Self::Sqlite {
+                pool,
+                installation_id,
+            } => {
+                sqlx::query("UPDATE workspace_templates SET enabled = ?1, updated_at = ?2 WHERE installation_id = ?3 AND id = ?4 RETURNING id, organization_id, name, runtime_profile, image, access_mode, cpu_millis, memory_mib, gpu_count, disk_gib, enabled, created_at, updated_at")
+                    .bind(i64::from(enabled))
+                    .bind(now)
+                    .bind(installation_id.as_str())
+                    .bind(template_id.to_string())
+                    .fetch_optional(pool)
+                    .await?
+                    .map(TemplateDatabaseRow::Sqlite)
+            }
+            Self::Postgres {
+                pool,
+                installation_id,
+            } => {
+                sqlx::query("UPDATE workspace_templates SET enabled = $1, updated_at = $2 WHERE installation_id = $3 AND id = $4 RETURNING id, organization_id, name, runtime_profile, image, access_mode, cpu_millis, memory_mib, gpu_count, disk_gib, enabled, created_at, updated_at")
+                    .bind(i64::from(enabled))
+                    .bind(now)
+                    .bind(installation_id.as_str())
+                    .bind(template_id.to_string())
+                    .fetch_optional(pool)
+                    .await?
+                    .map(TemplateDatabaseRow::Postgres)
+            }
+        };
+        match row {
+            Some(TemplateDatabaseRow::Sqlite(row)) => decode_template(row),
+            Some(TemplateDatabaseRow::Postgres(row)) => decode_template(row),
+            None => Err(StorageError::TemplateNotFound),
+        }
+    }
+}
+
+enum TemplateDatabaseRow {
+    Sqlite(SqliteRow),
+    Postgres(PgRow),
 }
 
 fn validate_image(image: &str) -> Result<(), StorageError> {

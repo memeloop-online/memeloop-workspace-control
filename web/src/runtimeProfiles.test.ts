@@ -12,20 +12,19 @@ test("runtime profiles expose the complete controlled set", () => {
     RUNTIME_PROFILES.map((profile) => profile.value),
     [
       "standard",
-      "coder_rust_dev",
-      "coder_node_dev",
-      "coder_token_center_rust_dev",
-      "coder_cluster_admin",
+      "rust_dev",
+      "node_dev",
+      "maintainance",
     ],
   );
 });
 
-test("only the cluster administrator profile is marked high risk", () => {
+test("only the maintainance profile is marked high risk", () => {
   for (const profile of RUNTIME_PROFILES) {
     assert.equal(
       isHighRiskRuntimeProfile(profile.value),
-      profile.value === "coder_cluster_admin",
+      profile.value === "maintainance",
     );
   }
-  assert.equal(runtimeProfileLabel("coder_cluster_admin"), "Coder 集群管理员");
+  assert.equal(runtimeProfileLabel("maintainance"), "Maintainance");
 });

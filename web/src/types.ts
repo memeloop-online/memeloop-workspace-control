@@ -12,10 +12,9 @@ export type WorkspaceState =
 export type AccessMode = "internal" | "public";
 export type RuntimeProfile =
   | "standard"
-  | "coder_rust_dev"
-  | "coder_node_dev"
-  | "coder_token_center_rust_dev"
-  | "coder_cluster_admin";
+  | "rust_dev"
+  | "node_dev"
+  | "maintainance";
 export type InjectionScope = "organization" | "user" | "workspace";
 export type InjectionKind =
   | "environment_variable"

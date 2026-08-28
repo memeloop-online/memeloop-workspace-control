@@ -43,25 +43,19 @@ impl RuntimeProfile {
                 kind,
                 ssh_mode: SshMode::Native,
             },
-            WorkspaceRuntimeProfile::CoderRustDev => Self {
+            WorkspaceRuntimeProfile::RustDev => Self {
                 login_user: "rust-dev",
                 home: "/home/rust-dev",
                 kind,
                 ssh_mode: SshMode::Native,
             },
-            WorkspaceRuntimeProfile::CoderNodeDev => Self {
+            WorkspaceRuntimeProfile::NodeDev => Self {
                 login_user: "node-dev",
                 home: "/home/node-dev",
                 kind,
                 ssh_mode: SshMode::AptCompat,
             },
-            WorkspaceRuntimeProfile::CoderTokenCenterRustDev => Self {
-                login_user: "rust-dev",
-                home: "/home/token-center-dev",
-                kind,
-                ssh_mode: SshMode::Native,
-            },
-            WorkspaceRuntimeProfile::CoderClusterAdmin => Self {
+            WorkspaceRuntimeProfile::Maintainance => Self {
                 login_user: "cluster-admin",
                 home: "/home/cluster-admin",
                 kind,
@@ -77,14 +71,9 @@ impl RuntimeProfile {
                 format!("{}Mi", resources.memory_mib),
                 None,
             ),
-            WorkspaceRuntimeProfile::CoderNodeDev => {
-                ("1".to_owned(), "1Gi".to_owned(), Some("256Mi"))
-            }
-            WorkspaceRuntimeProfile::CoderRustDev
-            | WorkspaceRuntimeProfile::CoderTokenCenterRustDev => {
-                ("2".to_owned(), "4Gi".to_owned(), Some("256Mi"))
-            }
-            WorkspaceRuntimeProfile::CoderClusterAdmin => (
+            WorkspaceRuntimeProfile::NodeDev => ("1".to_owned(), "1Gi".to_owned(), Some("256Mi")),
+            WorkspaceRuntimeProfile::RustDev => ("2".to_owned(), "4Gi".to_owned(), Some("256Mi")),
+            WorkspaceRuntimeProfile::Maintainance => (
                 "100m".to_owned(),
                 format!("{}Mi", resources.memory_mib),
                 None,
@@ -124,10 +113,9 @@ impl RuntimeProfile {
     pub fn resource_limits(&self, resources: Resources) -> BTreeMap<String, Quantity> {
         let (cpu, ephemeral) = match self.kind {
             WorkspaceRuntimeProfile::Standard => (format!("{}m", resources.cpu_millis), None),
-            WorkspaceRuntimeProfile::CoderNodeDev => ("6".to_owned(), Some("1Gi")),
-            WorkspaceRuntimeProfile::CoderRustDev
-            | WorkspaceRuntimeProfile::CoderTokenCenterRustDev => ("10".to_owned(), Some("1Gi")),
-            WorkspaceRuntimeProfile::CoderClusterAdmin => ("1".to_owned(), None),
+            WorkspaceRuntimeProfile::NodeDev => ("6".to_owned(), Some("1Gi")),
+            WorkspaceRuntimeProfile::RustDev => ("10".to_owned(), Some("1Gi")),
+            WorkspaceRuntimeProfile::Maintainance => ("1".to_owned(), None),
         };
         quantities(cpu, format!("{}Mi", resources.memory_mib), ephemeral)
     }
@@ -269,9 +257,7 @@ impl RuntimeProfile {
 
     pub fn affinity(&self) -> Option<Affinity> {
         match self.kind {
-            WorkspaceRuntimeProfile::CoderNodeDev
-            | WorkspaceRuntimeProfile::CoderRustDev
-            | WorkspaceRuntimeProfile::CoderTokenCenterRustDev => Some(Affinity {
+            WorkspaceRuntimeProfile::NodeDev | WorkspaceRuntimeProfile::RustDev => Some(Affinity {
                 node_affinity: Some(NodeAffinity {
                     required_during_scheduling_ignored_during_execution: Some(NodeSelector {
                         node_selector_terms: vec![NodeSelectorTerm {
@@ -287,7 +273,7 @@ impl RuntimeProfile {
                 }),
                 ..Affinity::default()
             }),
-            WorkspaceRuntimeProfile::CoderClusterAdmin => Some(Affinity {
+            WorkspaceRuntimeProfile::Maintainance => Some(Affinity {
                 node_affinity: Some(NodeAffinity {
                     preferred_during_scheduling_ignored_during_execution: Some(vec![
                         PreferredSchedulingTerm {
@@ -311,7 +297,7 @@ impl RuntimeProfile {
     }
 
     pub fn node_selector(&self) -> Option<BTreeMap<String, String>> {
-        matches!(self.kind, WorkspaceRuntimeProfile::CoderClusterAdmin)
+        matches!(self.kind, WorkspaceRuntimeProfile::Maintainance)
             .then(|| BTreeMap::from([("k3s-worker-ready".to_owned(), "true".to_owned())]))
     }
 
@@ -336,15 +322,12 @@ impl RuntimeProfile {
     fn has_buildkit(&self) -> bool {
         matches!(
             self.kind,
-            WorkspaceRuntimeProfile::CoderNodeDev
-                | WorkspaceRuntimeProfile::CoderRustDev
-                | WorkspaceRuntimeProfile::CoderTokenCenterRustDev
+            WorkspaceRuntimeProfile::NodeDev | WorkspaceRuntimeProfile::RustDev
         )
     }
 
     fn secondary_home(&self) -> Option<&'static str> {
-        matches!(self.kind, WorkspaceRuntimeProfile::CoderTokenCenterRustDev)
-            .then_some("/home/rust-dev")
+        None
     }
 
     fn platform_env(&self) -> Vec<EnvVar> {
@@ -353,7 +336,7 @@ impl RuntimeProfile {
             env("MWC_WORKSPACE_HOME", self.home),
             env(
                 "MWC_IN_CLUSTER_KUBECONFIG",
-                if matches!(self.kind, WorkspaceRuntimeProfile::CoderClusterAdmin) {
+                if matches!(self.kind, WorkspaceRuntimeProfile::Maintainance) {
                     "true"
                 } else {
                     "false"
@@ -373,7 +356,7 @@ impl RuntimeProfile {
     fn development_env(&self) -> Vec<EnvVar> {
         match self.kind {
             WorkspaceRuntimeProfile::Standard => Vec::new(),
-            WorkspaceRuntimeProfile::CoderClusterAdmin => vec![
+            WorkspaceRuntimeProfile::Maintainance => vec![
                 env("HOME", self.home),
                 env("KUBECONFIG", "/home/cluster-admin/.mwc/kubeconfig"),
                 env(
@@ -381,14 +364,11 @@ impl RuntimeProfile {
                     "/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin:/home/cluster-admin/.local/bin:/home/cluster-admin/.local/share/pnpm",
                 ),
             ],
-            WorkspaceRuntimeProfile::CoderNodeDev => {
+            WorkspaceRuntimeProfile::NodeDev => {
                 development_env(self.home, NO_PROXY_NODE, false, false)
             }
-            WorkspaceRuntimeProfile::CoderRustDev => {
+            WorkspaceRuntimeProfile::RustDev => {
                 development_env(self.home, NO_PROXY_RUST, true, true)
-            }
-            WorkspaceRuntimeProfile::CoderTokenCenterRustDev => {
-                development_env(self.home, NO_PROXY_RUST, true, false)
             }
         }
     }

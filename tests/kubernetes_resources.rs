@@ -193,9 +193,9 @@ fn tailnet_node_port_is_not_created_for_public_workspaces() {
 }
 
 #[test]
-fn only_cluster_admin_profile_receives_a_owned_cluster_admin_identity() {
+fn only_maintainance_profile_receives_a_owned_cluster_admin_identity() {
     let mut workspace = workspace(WorkspaceState::Ready);
-    workspace.runtime_profile = WorkspaceRuntimeProfile::CoderClusterAdmin;
+    workspace.runtime_profile = WorkspaceRuntimeProfile::Maintainance;
     let workspace_id = workspace.id;
     let resources = builder().build(&workspace).unwrap();
 
@@ -265,9 +265,8 @@ fn only_cluster_admin_profile_receives_a_owned_cluster_admin_identity() {
 fn non_admin_profiles_never_receive_a_service_account_token() {
     for profile in [
         WorkspaceRuntimeProfile::Standard,
-        WorkspaceRuntimeProfile::CoderRustDev,
-        WorkspaceRuntimeProfile::CoderNodeDev,
-        WorkspaceRuntimeProfile::CoderTokenCenterRustDev,
+        WorkspaceRuntimeProfile::RustDev,
+        WorkspaceRuntimeProfile::NodeDev,
     ] {
         let mut workspace = workspace(WorkspaceState::Ready);
         workspace.runtime_profile = profile;
@@ -450,9 +449,9 @@ fn gpu_workspaces_request_the_standard_extended_resource() {
 }
 
 #[test]
-fn coder_node_profile_reuses_the_legacy_image_with_platform_bootstrap() {
+fn node_profile_reuses_the_existing_image_with_platform_bootstrap() {
     let mut workspace = workspace(WorkspaceState::Ready);
-    workspace.runtime_profile = WorkspaceRuntimeProfile::CoderNodeDev;
+    workspace.runtime_profile = WorkspaceRuntimeProfile::NodeDev;
     workspace.image = "harbor.k3s.onetwo.website/library/node-dev:fixed@sha256:abc".to_owned();
     workspace.resources.cpu_millis = 6_000;
     workspace.resources.memory_mib = 4_096;
@@ -564,9 +563,9 @@ fn coder_node_profile_reuses_the_legacy_image_with_platform_bootstrap() {
 }
 
 #[test]
-fn token_center_profile_preserves_both_legacy_home_mounts() {
+fn rust_profile_uses_the_single_canonical_rust_home() {
     let mut workspace = workspace(WorkspaceState::Ready);
-    workspace.runtime_profile = WorkspaceRuntimeProfile::CoderTokenCenterRustDev;
+    workspace.runtime_profile = WorkspaceRuntimeProfile::RustDev;
     let resources = builder().build(&workspace).unwrap();
     let mounts = resources
         .stateful_set
@@ -581,14 +580,14 @@ fn token_center_profile_preserves_both_legacy_home_mounts() {
         .unwrap()
         .volume_mounts
         .unwrap();
-    assert!(mounts.iter().any(|mount| {
-        mount.name == "workspace-data" && mount.mount_path == "/home/token-center-dev"
-    }));
     assert!(
         mounts.iter().any(|mount| {
             mount.name == "workspace-data" && mount.mount_path == "/home/rust-dev"
         })
     );
+    assert!(!mounts.iter().any(|mount| {
+        mount.name == "workspace-data" && mount.mount_path == "/home/token-center-dev"
+    }));
 }
 
 #[test]

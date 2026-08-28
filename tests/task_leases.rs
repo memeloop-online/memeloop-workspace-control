@@ -207,9 +207,45 @@ async fn migrations_are_versioned_and_idempotent() {
         .await
         .unwrap();
     database.migrate().await.unwrap();
-    assert_eq!(database.schema_version().await.unwrap(), 8);
+    assert_eq!(database.schema_version().await.unwrap(), 9);
     database.migrate().await.unwrap();
-    assert_eq!(database.schema_version().await.unwrap(), 8);
+    assert_eq!(database.schema_version().await.unwrap(), 9);
+}
+
+#[tokio::test]
+async fn schema_nine_canonicalizes_legacy_runtime_profile_names() {
+    let database = Database::connect("sqlite::memory:", "profile-migration".parse().unwrap())
+        .await
+        .unwrap();
+    database.migrate().await.unwrap();
+    let Database::Sqlite { pool, .. } = &database else {
+        unreachable!();
+    };
+    let template_id = Uuid::now_v7().to_string();
+    sqlx::query("INSERT INTO workspace_templates (id, installation_id, organization_id, name, runtime_profile, image, access_mode, cpu_millis, memory_mib, gpu_count, disk_gib, enabled, created_at, updated_at) VALUES (?1, 'profile-migration', NULL, 'Legacy Rust', 'coder_token_center_rust_dev', 'registry.example/rust:legacy', 'internal', 2000, 4096, 0, 40, 1, 1, 1)")
+        .bind(&template_id)
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM schema_migrations WHERE version = 9")
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO schema_migrations (version, applied_at) VALUES (8, 1)")
+        .execute(pool)
+        .await
+        .unwrap();
+
+    database.migrate().await.unwrap();
+
+    let profile: String =
+        sqlx::query_scalar("SELECT runtime_profile FROM workspace_templates WHERE id = ?1")
+            .bind(template_id)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    assert_eq!(profile, "rust_dev");
+    assert_eq!(database.schema_version().await.unwrap(), 9);
 }
 
 #[tokio::test]

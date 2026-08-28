@@ -173,7 +173,7 @@ async fn image_allowlist_and_template_contract_are_admitted_atomically() {
             CreateWorkspaceTemplate {
                 organization_id: Some(organization.id),
                 name: "Standard".to_owned(),
-                runtime_profile: WorkspaceRuntimeProfile::CoderRustDev,
+                runtime_profile: WorkspaceRuntimeProfile::RustDev,
                 image: image.to_owned(),
                 access_mode: AccessMode::Internal,
                 resources,
@@ -197,17 +197,14 @@ async fn image_allowlist_and_template_contract_are_admitted_atomically() {
         .create_workspace(command.clone(), admin.user_id, 104)
         .await
         .unwrap();
-    assert_eq!(
-        created.runtime_profile,
-        WorkspaceRuntimeProfile::CoderRustDev
-    );
+    assert_eq!(created.runtime_profile, WorkspaceRuntimeProfile::RustDev);
     assert_eq!(
         database
             .get_workspace(created.id)
             .await
             .unwrap()
             .runtime_profile,
-        WorkspaceRuntimeProfile::CoderRustDev
+        WorkspaceRuntimeProfile::RustDev
     );
     let refs = database.workspace_injection_refs(created.id).await.unwrap();
     assert_eq!(refs.organization, Some(vec!["org-key".to_owned()]));

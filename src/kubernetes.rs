@@ -106,8 +106,8 @@ impl ResourceBuilder {
             .workspace_namespace(&workspace.short_id)?;
         let labels = self.labels(workspace.id);
         let pod_labels = pod_labels(&labels);
-        let cluster_admin = workspace.runtime_profile
-            == crate::workspaces::WorkspaceRuntimeProfile::CoderClusterAdmin;
+        let cluster_admin =
+            workspace.runtime_profile == crate::workspaces::WorkspaceRuntimeProfile::Maintainance;
         let cluster_admin_binding_name = self.cluster_admin_binding_name(&workspace.short_id);
         let replicas = match workspace.state {
             WorkspaceState::Stopping | WorkspaceState::Stopped | WorkspaceState::Failed => 0,
@@ -246,8 +246,8 @@ impl ResourceBuilder {
         replicas: i32,
     ) -> StatefulSet {
         let profile = RuntimeProfile::for_workspace(workspace.runtime_profile);
-        let cluster_admin = workspace.runtime_profile
-            == crate::workspaces::WorkspaceRuntimeProfile::CoderClusterAdmin;
+        let cluster_admin =
+            workspace.runtime_profile == crate::workspaces::WorkspaceRuntimeProfile::Maintainance;
         let mut requests = profile.resource_requests(workspace.resources);
         let mut limits = profile.resource_limits(workspace.resources);
         if workspace.resources.gpu_count > 0 {

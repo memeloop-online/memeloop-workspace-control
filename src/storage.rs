@@ -132,10 +132,17 @@ impl Database {
                 )
                 .fetch_one(&mut *transaction)
                 .await?;
-                if version < schema::SCHEMA_VERSION {
+                if version < 8 {
                     for migration in schema::MIGRATIONS {
                         sqlx::query(migration).execute(&mut *transaction).await?;
                     }
+                }
+                if version < 9 {
+                    for migration in schema::PROFILE_RENAME_MIGRATIONS {
+                        sqlx::query(migration).execute(&mut *transaction).await?;
+                    }
+                }
+                if version < schema::SCHEMA_VERSION {
                     sqlx::query(
                         "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, ?2)",
                     )
@@ -163,10 +170,17 @@ impl Database {
                 )
                 .fetch_one(&mut *transaction)
                 .await?;
-                if version < schema::SCHEMA_VERSION {
+                if version < 8 {
                     for migration in schema::MIGRATIONS {
                         sqlx::query(migration).execute(&mut *transaction).await?;
                     }
+                }
+                if version < 9 {
+                    for migration in schema::PROFILE_RENAME_MIGRATIONS {
+                        sqlx::query(migration).execute(&mut *transaction).await?;
+                    }
+                }
+                if version < schema::SCHEMA_VERSION {
                     sqlx::query(
                         "INSERT INTO schema_migrations (version, applied_at) VALUES ($1, $2)",
                     )

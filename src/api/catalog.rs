@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use axum::{
     Json,
-    extract::{Query, State},
+    extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
     response::Response,
 };
@@ -28,6 +28,11 @@ use super::{
 pub(super) struct PutImageRequest {
     image: String,
     #[serde(default = "enabled_by_default")]
+    enabled: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub(super) struct SetTemplateEnabledRequest {
     enabled: bool,
 }
 
@@ -142,6 +147,60 @@ pub(super) async fn create_template(
         key,
         &request_hash,
         StatusCode::CREATED,
+        &template,
+    )
+    .await
+}
+
+#[utoipa::path(put, path = "/api/v1/templates/{template_id}", request_body = SetTemplateEnabledRequest, params(("template_id" = Uuid, Path), ("Idempotency-Key" = String, Header)), responses((status = 200, body = WorkspaceTemplate), (status = 403, body = super::ErrorEnvelope), (status = 422, body = super::ErrorEnvelope)))]
+pub(super) async fn set_template_enabled(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(template_id): Path<Uuid>,
+    Json(request): Json<SetTemplateEnabledRequest>,
+) -> Result<Response, ApiError> {
+    let actor = principal(&state, &headers).await?;
+    if !actor.system_admin {
+        return Err(ApiError::Forbidden);
+    }
+    let key = idempotency_key(&headers)?;
+    let request_hash = hash(&(template_id, &request))?;
+    let scope = format!("{}:set-template-enabled", actor.user_id);
+    let now = unix_timestamp()?;
+    if let Some(response) = reserve(&state, &scope, key, &request_hash, now).await? {
+        return Ok(response);
+    }
+    let template = match state
+        .database
+        .set_workspace_template_enabled(template_id, request.enabled, now)
+        .await
+    {
+        Ok(template) => template,
+        Err(error) => {
+            state
+                .database
+                .abandon_idempotency(&scope, key, &request_hash)
+                .await?;
+            return Err(error.into());
+        }
+    };
+    state
+        .database
+        .record_audit(
+            Some(actor.user_id),
+            template.organization_id,
+            None,
+            "template.enabled",
+            serde_json::json!({"template_id": template.id, "enabled": template.enabled}),
+            now,
+        )
+        .await?;
+    finish(
+        &state,
+        &scope,
+        key,
+        &request_hash,
+        StatusCode::OK,
         &template,
     )
     .await

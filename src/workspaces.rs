@@ -49,10 +49,12 @@ pub enum AccessMode {
 pub enum WorkspaceRuntimeProfile {
     #[default]
     Standard,
-    CoderRustDev,
-    CoderNodeDev,
-    CoderTokenCenterRustDev,
-    CoderClusterAdmin,
+    #[serde(alias = "coder_rust_dev", alias = "coder_token_center_rust_dev")]
+    RustDev,
+    #[serde(alias = "coder_node_dev")]
+    NodeDev,
+    #[serde(alias = "coder_cluster_admin")]
+    Maintainance,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
@@ -189,46 +191,47 @@ impl AccessMode {
 }
 
 impl WorkspaceRuntimeProfile {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 4] = [
         Self::Standard,
-        Self::CoderRustDev,
-        Self::CoderNodeDev,
-        Self::CoderTokenCenterRustDev,
-        Self::CoderClusterAdmin,
+        Self::RustDev,
+        Self::NodeDev,
+        Self::Maintainance,
     ];
 
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Standard => "standard",
-            Self::CoderRustDev => "coder_rust_dev",
-            Self::CoderNodeDev => "coder_node_dev",
-            Self::CoderTokenCenterRustDev => "coder_token_center_rust_dev",
-            Self::CoderClusterAdmin => "coder_cluster_admin",
+            Self::RustDev => "rust_dev",
+            Self::NodeDev => "node_dev",
+            Self::Maintainance => "maintainance",
         }
     }
 
     pub fn from_database(value: &str) -> Option<Self> {
-        Self::ALL
-            .into_iter()
-            .find(|profile| profile.as_str() == value)
+        match value {
+            "standard" => Some(Self::Standard),
+            "rust_dev" | "coder_rust_dev" | "coder_token_center_rust_dev" => Some(Self::RustDev),
+            "node_dev" | "coder_node_dev" => Some(Self::NodeDev),
+            "maintainance" | "coder_cluster_admin" => Some(Self::Maintainance),
+            _ => None,
+        }
     }
 
     pub fn login_user(self) -> &'static str {
         match self {
             Self::Standard => "workspace",
-            Self::CoderRustDev | Self::CoderTokenCenterRustDev => "rust-dev",
-            Self::CoderNodeDev => "node-dev",
-            Self::CoderClusterAdmin => "cluster-admin",
+            Self::RustDev => "rust-dev",
+            Self::NodeDev => "node-dev",
+            Self::Maintainance => "cluster-admin",
         }
     }
 
     pub fn home(self) -> &'static str {
         match self {
             Self::Standard => "/workspace",
-            Self::CoderRustDev => "/home/rust-dev",
-            Self::CoderNodeDev => "/home/node-dev",
-            Self::CoderTokenCenterRustDev => "/home/token-center-dev",
-            Self::CoderClusterAdmin => "/home/cluster-admin",
+            Self::RustDev => "/home/rust-dev",
+            Self::NodeDev => "/home/node-dev",
+            Self::Maintainance => "/home/cluster-admin",
         }
     }
 }

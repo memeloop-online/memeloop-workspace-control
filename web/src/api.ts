@@ -123,6 +123,12 @@ export class ApiClient {
     });
   }
 
+  setTemplateEnabled(templateId: string, enabled: boolean): Promise<WorkspaceTemplate> {
+    return this.request(`/api/v1/templates/${templateId}`, {
+      method: "PUT", body: JSON.stringify({ enabled }), idempotent: true,
+    });
+  }
+
   webhooks(organizationId: string): Promise<WebhookSubscription[]> {
     return this.request(`/api/v1/webhooks?organization_id=${organizationId}`);
   }

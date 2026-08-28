@@ -340,7 +340,7 @@ mod tests {
             },
         }];
 
-        normalize_resolved_ssh_items(&mut resolved, WorkspaceRuntimeProfile::CoderNodeDev);
+        normalize_resolved_ssh_items(&mut resolved, WorkspaceRuntimeProfile::NodeDev);
 
         let item = &resolved[0].item;
         assert_eq!(item.target, "/wrong/location");

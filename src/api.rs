@@ -183,6 +183,10 @@ pub fn router(state: Arc<AppState>) -> Router {
             get(catalog::list_templates).post(catalog::create_template),
         )
         .route(
+            "/api/v1/templates/{template_id}",
+            axum::routing::put(catalog::set_template_enabled),
+        )
+        .route(
             "/api/v1/workspaces",
             get(workspaces::list).post(workspaces::create),
         )
@@ -291,6 +295,7 @@ async fn system_info(State(state): State<Arc<AppState>>) -> Json<SystemInfoRespo
         catalog::put_image,
         catalog::list_templates,
         catalog::create_template,
+        catalog::set_template_enabled,
         workspaces::create,
         workspaces::list,
         workspaces::get,

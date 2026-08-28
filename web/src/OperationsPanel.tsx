@@ -125,6 +125,14 @@ export function OperationsPanel({ api, principal, organizationId, workspaces, on
     try { await api.createWebhook({ organization_id: organizationId, url, event_prefix: "workspace.", signing_secret: secret }); await refresh(); } catch (error) { onError(message(error)); }
   }
 
+  async function toggleTemplate(template: WorkspaceTemplate) {
+    if (template.enabled && !confirm(`停用模板“${template.name}”？现有工作区不会被删除。`)) return;
+    try {
+      await api.setTemplateEnabled(template.id, !template.enabled);
+      await refresh();
+    } catch (error) { onError(message(error)); }
+  }
+
   async function newUser() {
     const name = prompt("用户显示名"); const token = prompt("初始 API Token（至少 32 字节，不会回显）");
     if (!name || !token) return;
@@ -166,7 +174,7 @@ export function OperationsPanel({ api, principal, organizationId, workspaces, on
             <div className="form-actions wide"><button className="button primary" disabled={creatingTemplate}>{creatingTemplate ? "创建中…" : "保存模板"}</button></div>
           </form>
         )}
-        {templates.length ? <div className="state-bars template-list">{templates.map((template) => <div key={template.id}><span>{template.name} · {template.access_mode} · {runtimeProfileLabel(template.runtime_profile)}</span><code>{template.image}</code></div>)}</div> : <p>暂无可用模板。</p>}
+        {templates.length ? <div className="state-bars template-list">{templates.map((template) => <div key={template.id}><span>{template.name} · {template.access_mode} · {runtimeProfileLabel(template.runtime_profile)} · {template.enabled ? "启用" : "停用"}</span><code>{template.image}</code>{principal.system_admin && <button className={template.enabled ? "button danger" : "button"} onClick={() => void toggleTemplate(template)}>{template.enabled ? "停用" : "启用"}</button>}</div>)}</div> : <p>暂无可用模板。</p>}
       </div>
       <div className="system-card wide"><h3>Webhook</h3><button className="button" onClick={() => void newWebhook()}>添加签名订阅</button>{webhooks.length ? <div className="state-bars">{webhooks.map((hook) => <div key={hook.id}><span>{hook.event_prefix}</span><code>{hook.url}</code></div>)}</div> : <p>暂无 Webhook 订阅。</p>}</div>
     </div>

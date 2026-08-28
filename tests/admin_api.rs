@@ -204,6 +204,7 @@ async fn management_api_enforces_system_and_organization_boundaries() {
         .await
         .unwrap();
     assert_eq!(template.status(), StatusCode::CREATED);
+    let template_id = body_json(template).await["id"].as_str().unwrap().to_owned();
 
     let templates = app
         .clone()
@@ -222,6 +223,23 @@ async fn management_api_enforces_system_and_organization_boundaries() {
         .unwrap();
     assert_eq!(templates.status(), StatusCode::OK);
     assert_eq!(body_json(templates).await[0]["name"], "Standard");
+
+    let disabled = app
+        .clone()
+        .oneshot(
+            authenticated(
+                Request::put(format!("/api/v1/templates/{template_id}")),
+                ADMIN_TOKEN,
+            )
+            .header("content-type", "application/json")
+            .header("idempotency-key", "disable-standard-template")
+            .body(Body::from(json!({"enabled": false}).to_string()))
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(disabled.status(), StatusCode::OK);
+    assert_eq!(body_json(disabled).await["enabled"], false);
 
     let revoked = app
         .clone()
@@ -263,7 +281,7 @@ async fn management_api_enforces_system_and_organization_boundaries() {
     let scaling: Value = body_json(scaling).await;
     assert_eq!(scaling["database_mode"], "sqlite");
     assert_eq!(scaling["configured_replicas"], 1);
-    assert_eq!(scaling["schema_version"], 8);
+    assert_eq!(scaling["schema_version"], 9);
 }
 
 fn authenticated(
