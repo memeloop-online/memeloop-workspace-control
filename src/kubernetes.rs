@@ -108,7 +108,12 @@ impl ResourceBuilder {
         let namespace_name = self
             .installation_id
             .workspace_namespace(&workspace.short_id)?;
+        let stable_labels = self.labels(workspace.id);
         let labels = self.workspace_labels(workspace);
+        // StatefulSet selectors and volumeClaimTemplates are immutable. Keep those
+        // labels limited to the original ownership identity so an upgrade can add
+        // observability labels to existing workspaces without replacing storage.
+        let selector_labels = pod_labels(&stable_labels);
         let pod_labels = pod_labels(&labels);
         let cluster_admin =
             workspace.runtime_profile == crate::workspaces::WorkspaceRuntimeProfile::Maintainance;
@@ -132,11 +137,11 @@ impl ResourceBuilder {
                 },
                 ..Namespace::default()
             },
-            service: service(&namespace_name, &labels, &pod_labels),
+            service: service(&namespace_name, &labels, &selector_labels),
             internal_ssh_service: internal_ssh_service(
                 &namespace_name,
                 &labels,
-                &pod_labels,
+                &selector_labels,
                 workspace.access_mode,
                 self.internal_ssh_node_port_enabled,
             ),
@@ -157,7 +162,7 @@ impl ResourceBuilder {
             network_policy: network_policy::build(
                 &namespace_name,
                 &labels,
-                &pod_labels,
+                &selector_labels,
                 &self.higress_namespace,
                 &self.higress_pod_labels,
                 &self.higress_source_cidrs,
@@ -258,10 +263,12 @@ impl ResourceBuilder {
         &self,
         namespace: &str,
         labels: &BTreeMap<String, String>,
-        pod_labels: &BTreeMap<String, String>,
+        template_labels: &BTreeMap<String, String>,
         workspace: &WorkspaceResourceSpec,
         replicas: i32,
     ) -> StatefulSet {
+        let stable_labels = self.labels(workspace.id);
+        let selector_labels = pod_labels(&stable_labels);
         let profile = RuntimeProfile::for_workspace(workspace.runtime_profile);
         let cluster_admin =
             workspace.runtime_profile == crate::workspaces::WorkspaceRuntimeProfile::Maintainance;
@@ -390,12 +397,12 @@ impl ResourceBuilder {
                 replicas: Some(replicas),
                 service_name: Some("workspace".to_owned()),
                 selector: LabelSelector {
-                    match_labels: Some(pod_labels.clone()),
+                    match_labels: Some(selector_labels),
                     ..LabelSelector::default()
                 },
                 template: PodTemplateSpec {
                     metadata: Some(ObjectMeta {
-                        labels: Some(pod_labels.clone()),
+                        labels: Some(template_labels.clone()),
                         annotations: Some(BTreeMap::from([(
                             "workspace.memeloop.dev/generation".to_owned(),
                             workspace.generation.to_string(),
@@ -407,7 +414,7 @@ impl ResourceBuilder {
                 volume_claim_templates: Some(vec![PersistentVolumeClaim {
                     metadata: ObjectMeta {
                         name: Some("workspace-data".to_owned()),
-                        labels: Some(labels.clone()),
+                        labels: Some(stable_labels),
                         ..ObjectMeta::default()
                     },
                     spec: Some(PersistentVolumeClaimSpec {

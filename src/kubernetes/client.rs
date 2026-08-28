@@ -2,7 +2,7 @@ use std::fmt::Debug;
 
 use k8s_openapi::api::{
     apps::v1::StatefulSet,
-    core::v1::{ConfigMap, Namespace, Pod, Secret, Service, ServiceAccount},
+    core::v1::{ConfigMap, Namespace, PersistentVolumeClaim, Pod, Secret, Service, ServiceAccount},
     networking::v1::{Ingress, NetworkPolicy},
     rbac::v1::ClusterRoleBinding,
 };
@@ -181,6 +181,24 @@ impl KubernetesCoordinator {
         stateful_sets
             .patch("workspace", &apply, &Patch::Apply(&desired.stateful_set))
             .await?;
+        let persistent_volume_claims =
+            Api::<PersistentVolumeClaim>::namespaced(self.client.clone(), namespace_name);
+        if let Some(existing) = persistent_volume_claims
+            .get_opt("workspace-data-workspace-0")
+            .await?
+        {
+            self.builder
+                .verify_delete_ownership(&existing.metadata, workspace_id)?;
+            persistent_volume_claims
+                .patch(
+                    "workspace-data-workspace-0",
+                    &PatchParams::default(),
+                    &Patch::Merge(&serde_json::json!({
+                        "metadata": {"labels": desired.stateful_set.metadata.labels}
+                    })),
+                )
+                .await?;
+        }
         if workspace.state == crate::workspaces::WorkspaceState::Restarting {
             let pods = Api::<Pod>::namespaced(self.client.clone(), namespace_name);
             if let Some(pod) = pods.get_opt("workspace-0").await? {

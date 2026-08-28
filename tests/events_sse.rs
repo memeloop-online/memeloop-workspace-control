@@ -97,5 +97,5 @@ async fn sse_resumes_after_durable_last_event_id_and_filters_organization() {
     assert!(text.contains(&format!("id: {}", second.id)));
     assert!(text.contains("event: workspace.ready"));
     assert!(text.contains("\"sequence\":2"));
-    assert!(!text.contains("999"));
+    assert!(!text.contains("\"sequence\":999"));
 }

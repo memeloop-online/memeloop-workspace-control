@@ -1,8 +1,8 @@
 use memeloop_workspace_control::{
     injections::{InjectionItem, InjectionKind, InjectionValue, resolve_injections},
     kubernetes::{
-        BuildError, OWNER_INSTALLATION_LABEL, OwnershipError, ResourceBuilder,
-        WorkspaceResourceSpec,
+        BuildError, ORGANIZATION_ID_LABEL, OWNER_INSTALLATION_LABEL, OWNER_USER_ID_LABEL,
+        OwnershipError, ResourceBuilder, WorkspaceResourceSpec,
     },
     quota::Resources,
     workspaces::{AccessMode, WorkspaceRuntimeProfile, WorkspaceState},
@@ -81,6 +81,30 @@ fn workspace_generation_changes_the_pod_template_for_restart() {
         restarted_template.metadata.unwrap().annotations.unwrap()["workspace.memeloop.dev/generation"],
         "8"
     );
+}
+
+#[test]
+fn observability_labels_do_not_change_statefulset_immutable_fields() {
+    let workspace = workspace(WorkspaceState::Ready);
+    let stateful_set = builder().build(&workspace).unwrap().stateful_set;
+    let spec = stateful_set.spec.unwrap();
+    let selector = spec.selector.match_labels.unwrap();
+    let pod_labels = spec.template.metadata.unwrap().labels.unwrap();
+    let volume_claim_templates = spec.volume_claim_templates.unwrap();
+    let claim_labels = volume_claim_templates[0].metadata.labels.as_ref().unwrap();
+
+    assert!(!selector.contains_key(ORGANIZATION_ID_LABEL));
+    assert!(!selector.contains_key(OWNER_USER_ID_LABEL));
+    assert_eq!(
+        pod_labels[ORGANIZATION_ID_LABEL],
+        workspace.organization_id.to_string()
+    );
+    assert_eq!(
+        pod_labels[OWNER_USER_ID_LABEL],
+        workspace.owner_id.to_string()
+    );
+    assert!(!claim_labels.contains_key(ORGANIZATION_ID_LABEL));
+    assert!(!claim_labels.contains_key(OWNER_USER_ID_LABEL));
 }
 
 #[test]
