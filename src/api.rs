@@ -191,6 +191,7 @@ pub fn router(state: Arc<AppState>) -> Router {
             get(workspaces::list).post(workspaces::create),
         )
         .route("/api/v1/workspaces/{workspace_id}", get(workspaces::get))
+        .route("/api/v1/workspace-runtimes", get(runtime::list))
         .route(
             "/api/v1/workspaces/{workspace_id}/runtime",
             get(runtime::get),
@@ -299,6 +300,7 @@ async fn system_info(State(state): State<Arc<AppState>>) -> Json<SystemInfoRespo
         workspaces::create,
         workspaces::list,
         workspaces::get,
+        runtime::list,
         runtime::get,
         workspaces::action
         ,web_shell::issue,
@@ -344,6 +346,7 @@ async fn system_info(State(state): State<Arc<AppState>>) -> Json<SystemInfoRespo
         injections::PreviewRequest,
         workspaces::WorkspaceResponse,
         runtime::WorkspaceRuntimeResponse,
+        runtime::WorkspaceRuntimeEntry,
         runtime::PodRuntime,
         runtime::PodMetric,
         runtime::PodEvent,

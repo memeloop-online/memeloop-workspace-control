@@ -89,3 +89,9 @@ autoscaling:
 
 networkPolicy:
   enabled: true
+
+monitoring:
+  serviceMonitor:
+    enabled: false
+    interval: 30s
+    labels: {}

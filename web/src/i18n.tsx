@@ -1,204 +1,65 @@
-import { createContext, useContext, useEffect, useMemo, useState } from "react";
+import i18next from "i18next";
+import { useCallback, useEffect, useMemo } from "react";
 import type { ReactNode } from "react";
+import { I18nextProvider, initReactI18next, useTranslation } from "react-i18next";
+import en from "./locales/en.json";
+import ru from "./locales/ru.json";
+import zhCN from "./locales/zh-CN.json";
 
-export type Locale = "zh-CN" | "en";
+export type Locale = "zh-CN" | "en" | "ru";
+export type MessageKey = keyof typeof zhCN;
 
-const zh = {
-  language: "English",
-  themeLight: "浅色",
-  themeDark: "深色",
-  workspaces: "工作区",
-  credentials: "凭据与文件",
-  operations: "系统与审计",
-  apiOnline: "API 在线",
-  organization: "组织",
-  systemAdmin: "系统管理员",
-  organizationMember: "组织成员",
-  logout: "退出",
-  loginTitle: "工作区，从这里开始。",
-  loginCopy: "管理 Kubernetes 工作区、SSH、Web Shell 与级联凭据。API Token 只保存在当前浏览器会话。",
-  token: "API Token",
-  tokenPlaceholder: "至少 32 字节",
-  signingIn: "验证中…",
-  signIn: "进入控制台",
-  envelopeEncryption: "信封加密",
-  auditTrail: "审计留痕",
-  noOrganization: "尚未加入组织",
-  noOrganizationAdmin: "请先创建组织，再刷新控制台。",
-  noOrganizationMember: "请联系组织管理员添加你的成员关系。",
-  viewOpenApi: "查看 OpenAPI",
-  credentialsTitle: "凭据与文件级联",
-  credentialsPreview: "预览最终来源",
-  scopeOrganization: "组织级",
-  scopeUser: "用户级",
-  scopeWorkspace: "工作区级",
-  choose: "请选择",
-  savedCredentials: "已保存凭据",
-  searchCredentials: "搜索键名、目标、类型，支持中文",
-  noCredentials: "没有匹配的凭据",
-  key: "键",
-  type: "类型",
-  encoding: "编码",
-  environmentVariable: "环境变量",
-  configFile: "普通配置文件",
-  credentialFile: "敏感凭据文件",
-  sshPublicKey: "SSH 公钥",
-  multilineUtf8: "多行 UTF-8",
-  base64Binary: "Base64 二进制",
-  fileMode: "权限（八进制）",
-  target: "目标",
-  owner: "属主",
-  group: "属组",
-  templateSelector: "模板选择",
-  labelSelector: "标签选择（JSON）",
-  templateSelectorHint: "模板 UUID 或 *",
-  valueBase64: "值（Base64）",
-  valueMultiline: "值（多行 UTF-8 / JSON / YAML / PEM）",
-  base64Hint: "Base64 编码内容",
-  multilineHint: "保留空行、缩进与末尾换行",
-  sensitiveValue: "敏感值",
-  locked: "禁止下层覆盖",
-  credentialWriteOnly: "保存后值不可读取，只能整体替换。界面与审计仅展示元数据和版本。",
-  sshTargetHelp: "SSH 公钥目标是平台管理文件名；协调时会自动改写到当前运行时用户的 .mwc 目录，并汇总到 authorized_keys。",
-  savingEncrypted: "加密保存中…",
-  saveEncrypted: "加密并替换",
-  resolvedSources: "最终解析来源",
-  fromOrganization: "来自组织",
-  fromUser: "来自用户",
-  fromWorkspace: "来自工作区",
-  workspaceCount: "工作区",
-  currentOrganization: "当前组织",
-  requestedTotal: "申请总量",
-  persistentDisk: "持久盘",
-  newWorkspace: "新建工作区",
-  collapse: "收起",
-  name: "名称",
-  template: "模板",
-  chooseTemplate: "选择受控模板",
-  runtimeProfile: "运行时配置",
-  inheritedFromTemplate: "由模板继承",
-  image: "镜像",
-  memory: "内存",
-  disk: "磁盘",
-  accessMode: "访问模式",
-  internal: "内网",
-  public: "公网",
-  injectionReferences: "凭据引用",
-  allMatching: "全部匹配项",
-  selectedReferences: "自选引用",
-  organizationAndUserCredentials: "组织级与用户级凭据",
-  noItems: "无可用项",
-  selectedReferenceHelp: "这里只显示引用元数据；凭据值不会回显。模板与标签选择器仍会在服务端过滤不匹配项。",
-  creating: "创建中…",
-  submitCreate: "提交创建",
-  noWorkspaces: "这个组织还没有工作区。",
-  sshEndpoint: "SSH 入口",
-  sshCommand: "SSH 命令",
-  hostKey: "主机密钥",
-  jumpKey: "跳板密钥",
-  webShell: "网页终端",
-  stop: "停止",
-  restart: "重启",
-  start: "启动",
-  delete: "删除",
-  copySshConfig: "复制 SSH 配置",
-  copyCodexHost: "复制 Codex SSH 主机",
-  runtimeStatus: "运行状态",
-  eventLog: "事件日志",
-  connectionDetails: "连接详情与主机密钥",
-  moreActions: "更多操作",
-  hideDetails: "收起详情",
-  noEvents: "暂无 Kubernetes 事件",
-  noRuntimeData: "暂无运行状态数据",
-  containers: "容器状态",
-  usageOfRequested: "主容器实际 / 配置上限",
-  configuredCapacity: "已配置容量",
-  storageTelemetryUnavailable: "尚无磁盘用量遥测",
-  eventCount: "次数",
-  observedAt: "时间",
-  copied: "已复制",
-  copy: "复制",
-  requested: "申请",
-  actual: "实时实际",
-  metricsUnavailable: "实时指标不可用",
-  pvcCapacity: "PVC 容量",
-  ready: "就绪",
-  notReady: "未就绪",
-  operationsTitle: "系统与审计",
-  identityQuota: "身份与额度",
-  user: "用户",
-  orgQuota: "组织额度",
-  notEnabled: "未启用",
-  editQuota: "设置额度",
-  saveQuota: "保存额度",
-  cancel: "取消",
-  noQuotaPermission: "只有系统管理员或组织管理员可以修改额度。",
-  workspaceState: "工作区状态",
-  audit: "审计",
-  noAudit: "暂无组织审计记录。",
-  enabled: "启用",
-  disabled: "停用",
-  templates: "模板",
-  createTemplate: "创建组织模板",
-  saveTemplate: "保存模板",
-  noTemplates: "暂无可用模板。",
-  scaling: "扩缩容",
-  database: "数据库",
-  replicas: "副本",
-  jobs: "任务",
-  schema: "架构版本",
-  usersRoles: "用户与角色",
-  createUser: "创建用户",
-  member: "成员",
-  chooseUser: "选择用户",
-  role: "角色",
-  saveMembership: "保存成员关系",
-  editUserQuota: "设置用户额度",
-  revokeMembership: "撤销成员关系",
-  imageAllowlist: "镜像白名单",
-  ociImage: "OCI 镜像",
-  allowImage: "允许镜像",
-  createOrganization: "创建组织",
-  templateName: "模板名称",
-  allowedOciImage: "已允许的 OCI 镜像",
-  chooseRuntime: "选择运行时",
-  cpu: "CPU",
-  gpu: "GPU",
-  webhook: "Webhook",
-  addWebhook: "添加签名订阅",
-  noWebhooks: "暂无 Webhook 订阅。",
-  requestFailed: "请求失败",
-  operationFailed: "操作失败",
-} as const;
+const supportedLocales: readonly Locale[] = ["zh-CN", "en", "ru"];
 
-const en: Record<keyof typeof zh, string> = {
-  language: "中文", themeLight: "Light", themeDark: "Dark", workspaces: "Workspaces", credentials: "Credentials & Files", operations: "Operations & Audit", apiOnline: "API online", organization: "Organization", systemAdmin: "System administrator", organizationMember: "Organization member", logout: "Log out", loginTitle: "Your workspace starts here.", loginCopy: "Manage Kubernetes workspaces, SSH, Web Shell, and cascading credentials. The API token stays in this browser session.", token: "API token", tokenPlaceholder: "At least 32 bytes", signingIn: "Verifying…", signIn: "Open console", envelopeEncryption: "Envelope encryption", auditTrail: "Audit trail", noOrganization: "No organization", noOrganizationAdmin: "Create an organization, then refresh the console.", noOrganizationMember: "Ask an organization administrator to add you.", viewOpenApi: "View OpenAPI", credentialsTitle: "Credential and file cascade", credentialsPreview: "Preview resolved sources", scopeOrganization: "Organization", scopeUser: "User", scopeWorkspace: "Workspace", choose: "Choose", savedCredentials: "Saved credentials", searchCredentials: "Search key, target, or type", noCredentials: "No matching credentials", key: "Key", type: "Type", encoding: "Encoding", environmentVariable: "Environment variable", configFile: "Configuration file", credentialFile: "Sensitive credential file", sshPublicKey: "SSH public key", multilineUtf8: "Multiline UTF-8", base64Binary: "Base64 binary", fileMode: "Mode (octal)", target: "Target", owner: "Owner", group: "Group", templateSelector: "Template selector", labelSelector: "Label selector (JSON)", templateSelectorHint: "Template UUID or *", valueBase64: "Value (Base64)", valueMultiline: "Value (multiline UTF-8 / JSON / YAML / PEM)", base64Hint: "Base64-encoded value", multilineHint: "Whitespace and trailing newline are preserved", sensitiveValue: "Sensitive", locked: "Prevent lower-scope overrides", credentialWriteOnly: "Values are write-only after saving. The UI and audit log show metadata and versions only.", sshTargetHelp: "The SSH target is a platform-managed filename. Reconciliation rewrites it into the runtime user's .mwc directory and aggregates it into authorized_keys.", savingEncrypted: "Encrypting…", saveEncrypted: "Encrypt and replace", resolvedSources: "Resolved sources", fromOrganization: "From organization", fromUser: "From user", fromWorkspace: "From workspace", workspaceCount: "Workspaces", currentOrganization: "Current organization", requestedTotal: "Requested total", persistentDisk: "Persistent disk", newWorkspace: "New workspace", collapse: "Collapse", name: "Name", template: "Template", chooseTemplate: "Choose a controlled template", runtimeProfile: "Runtime profile", inheritedFromTemplate: "Inherited from template", image: "Image", memory: "Memory", disk: "Disk", accessMode: "Access mode", internal: "Internal", public: "Public", injectionReferences: "Credential references", allMatching: "All matching", selectedReferences: "Select references", organizationAndUserCredentials: "Organization and user credentials", noItems: "No items", selectedReferenceHelp: "Only reference metadata is shown; credential values are never returned. Template and label selectors are still enforced by the server.", creating: "Creating…", submitCreate: "Create", noWorkspaces: "This organization has no workspaces.", sshEndpoint: "SSH endpoint", sshCommand: "SSH command", hostKey: "Host key", jumpKey: "Jump key", webShell: "Web Shell", stop: "Stop", restart: "Restart", start: "Start", delete: "Delete", copySshConfig: "Copy SSH config", copyCodexHost: "Copy Codex SSH host", runtimeStatus: "Runtime status", eventLog: "Event log", connectionDetails: "Connection details and host keys", moreActions: "More actions", hideDetails: "Hide details", noEvents: "No Kubernetes events", noRuntimeData: "No runtime status data", containers: "Container status", usageOfRequested: "Main container actual / configured limit", configuredCapacity: "Configured capacity", storageTelemetryUnavailable: "Storage usage telemetry is unavailable", eventCount: "Count", observedAt: "Observed", copied: "Copied", copy: "Copy", requested: "Requested", actual: "Live actual", metricsUnavailable: "Live metrics unavailable", pvcCapacity: "PVC capacity", ready: "Ready", notReady: "Not ready", operationsTitle: "Operations and audit", identityQuota: "Identity and quota", user: "User", orgQuota: "Organization quota", notEnabled: "Not enabled", editQuota: "Edit quota", saveQuota: "Save quota", cancel: "Cancel", noQuotaPermission: "Only system or organization administrators can change quota.", workspaceState: "Workspace state", audit: "Audit", noAudit: "No organization audit records.", enabled: "Enabled", disabled: "Disabled", templates: "Templates", createTemplate: "Create organization template", saveTemplate: "Save template", noTemplates: "No templates available.", scaling: "Scaling", database: "Database", replicas: "Replicas", jobs: "Jobs", schema: "Schema", usersRoles: "Users and roles", createUser: "Create user", member: "Member", chooseUser: "Choose a user", role: "Role", saveMembership: "Save membership", editUserQuota: "Edit user quota", revokeMembership: "Revoke membership", imageAllowlist: "Image allowlist", ociImage: "OCI image", allowImage: "Allow image", createOrganization: "Create organization", templateName: "Template name", allowedOciImage: "Allowed OCI image", chooseRuntime: "Choose runtime", cpu: "CPU", gpu: "GPU", webhook: "Webhook", addWebhook: "Add signed subscription", noWebhooks: "No webhook subscriptions.", requestFailed: "Request failed", operationFailed: "Operation failed",
+function normalizeLocale(value: string | null | undefined): Locale {
+  if (value && supportedLocales.includes(value as Locale)) return value as Locale;
+  const normalized = value?.toLowerCase() ?? "";
+  if (normalized.startsWith("zh")) return "zh-CN";
+  if (normalized.startsWith("ru")) return "ru";
+  return "en";
+}
+
+const initialLocale = normalizeLocale(
+  localStorage.getItem("mwc.locale") || navigator.language,
+);
+
+void i18next.use(initReactI18next).init({
+  resources: {
+    "zh-CN": { translation: zhCN },
+    en: { translation: en },
+    ru: { translation: ru },
+  },
+  lng: initialLocale,
+  fallbackLng: "en",
+  supportedLngs: supportedLocales,
+  load: "currentOnly",
+  interpolation: { escapeValue: false },
+  initAsync: false,
+});
+
+type I18nValue = {
+  locale: Locale;
+  setLocale: (locale: Locale) => void;
+  t: (key: MessageKey) => string;
 };
 
-type MessageKey = keyof typeof zh;
-type I18nValue = { locale: Locale; setLocale: (locale: Locale) => void; t: (key: MessageKey) => string };
-const I18nContext = createContext<I18nValue | null>(null);
-
 export function I18nProvider({ children }: { children: ReactNode }) {
-  const [locale, setLocale] = useState<Locale>(() => {
-    const saved = localStorage.getItem("mwc.locale");
-    if (saved === "zh-CN" || saved === "en") return saved;
-    return navigator.language.toLowerCase().startsWith("zh") ? "zh-CN" : "en";
-  });
+  return <I18nextProvider i18n={i18next}>{children}</I18nextProvider>;
+}
+
+export function useI18n(): I18nValue {
+  const { t: translate, i18n } = useTranslation();
+  const locale = normalizeLocale(i18n.resolvedLanguage || i18n.language);
   useEffect(() => {
     localStorage.setItem("mwc.locale", locale);
     document.documentElement.lang = locale;
   }, [locale]);
-  const value = useMemo<I18nValue>(() => ({
+  const setLocale = useCallback((next: Locale) => {
+    void i18n.changeLanguage(next);
+  }, [i18n]);
+  return useMemo(() => ({
     locale,
     setLocale,
-    t: (key) => (locale === "zh-CN" ? zh[key] : en[key]),
-  }), [locale]);
-  return <I18nContext.Provider value={value}>{children}</I18nContext.Provider>;
-}
-
-export function useI18n(): I18nValue {
-  const value = useContext(I18nContext);
-  if (!value) throw new Error("I18nProvider is missing");
-  return value;
+    t: (key: MessageKey) => translate(key),
+  }), [locale, setLocale, translate]);
 }

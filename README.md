@@ -49,6 +49,9 @@ export MWC_TTYD_IMAGE='tsl0922/ttyd:1.7.7'
 - `GET /api/v1/openapi.json`
 - `GET /metrics`
 
+Prometheus/Grafana 指标、Loki 标签和大规模部署的抓取成本约束见
+[可观测性说明](docs/OBSERVABILITY.md)。
+
 SQLite 模式会强制 `--replica-count 1` 并启用 WAL；PostgreSQL URL 可用于多副本模式。数据库首次迁移后会绑定不可变的安装 ID，其他安装 ID 无法复用该数据库。
 
 工作区创建采用默认拒绝的 Image Contract v1 白名单；首次创建前，系统管理员必须先通过管理界面或 `PUT /api/v1/admin/images` 明确允许标准或已验收的第三方 OCI 镜像。

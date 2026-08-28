@@ -287,6 +287,8 @@ impl JobHandler for WorkspaceReconcileHandler {
 fn workspace_spec(workspace: &Workspace) -> WorkspaceResourceSpec {
     WorkspaceResourceSpec {
         id: workspace.id,
+        organization_id: workspace.organization_id,
+        owner_id: workspace.owner_id,
         short_id: workspace.short_id.clone(),
         image: workspace.image.clone(),
         resources: workspace.resources,

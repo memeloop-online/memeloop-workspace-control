@@ -17,6 +17,7 @@ import type {
   WebhookSubscription,
   WorkspaceResponse,
   WorkspaceRuntime,
+  WorkspaceRuntimeEntry,
   WorkspaceTemplate,
 } from "./types";
 
@@ -165,6 +166,10 @@ export class ApiClient {
 
   workspaceRuntime(workspaceId: string): Promise<WorkspaceRuntime> {
     return this.request(`/api/v1/workspaces/${workspaceId}/runtime`);
+  }
+
+  workspaceRuntimes(organizationId: string): Promise<WorkspaceRuntimeEntry[]> {
+    return this.request(`/api/v1/workspace-runtimes?organization_id=${encodeURIComponent(organizationId)}`);
   }
 
   issueWebShellTicket(workspaceId: string): Promise<WebShellTicket> {

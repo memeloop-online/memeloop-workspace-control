@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 use sqlx::{Row, postgres::PgRow, sqlite::SqliteRow};
 use utoipa::ToSchema;
@@ -20,8 +22,11 @@ pub struct UserSummary {
 pub struct AuditRecord {
     pub id: Uuid,
     pub actor_user_id: Option<Uuid>,
+    pub actor_display_name: Option<String>,
     pub organization_id: Option<Uuid>,
     pub workspace_id: Option<Uuid>,
+    pub workspace_name: Option<String>,
+    pub workspace_short_id: Option<String>,
     pub action: String,
     pub metadata: serde_json::Value,
     pub created_at: i64,
@@ -32,6 +37,19 @@ pub struct JobCounts {
     pub pending: i64,
     pub running: i64,
     pub completed: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkspaceMetrics {
+    pub states: BTreeMap<String, i64>,
+    pub users: Vec<UserWorkspaceMetrics>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UserWorkspaceMetrics {
+    pub user_id: Uuid,
+    pub states: BTreeMap<String, i64>,
+    pub resources: Resources,
 }
 
 impl Database {
@@ -247,10 +265,10 @@ impl Database {
     ) -> Result<Vec<AuditRecord>, StorageError> {
         let limit = i64::from(limit.clamp(1, 1_000));
         match self {
-            Self::Sqlite { pool, installation_id } => sqlx::query("SELECT id, actor_user_id, organization_id, workspace_id, action, metadata_json, created_at FROM audit_log WHERE installation_id = ?1 AND organization_id = ?2 ORDER BY created_at DESC, id DESC LIMIT ?3")
+            Self::Sqlite { pool, installation_id } => sqlx::query("SELECT a.id, a.actor_user_id, u.display_name AS actor_display_name, a.organization_id, a.workspace_id, w.name AS workspace_name, w.short_id AS workspace_short_id, a.action, a.metadata_json, a.created_at FROM audit_log a LEFT JOIN users u ON u.installation_id = a.installation_id AND u.id = a.actor_user_id LEFT JOIN workspaces w ON w.installation_id = a.installation_id AND w.id = a.workspace_id WHERE a.installation_id = ?1 AND a.organization_id = ?2 ORDER BY a.created_at DESC, a.id DESC LIMIT ?3")
                 .bind(installation_id.as_str()).bind(organization_id.to_string()).bind(limit).fetch_all(pool).await?
                 .into_iter().map(decode_audit).collect(),
-            Self::Postgres { pool, installation_id } => sqlx::query("SELECT id, actor_user_id, organization_id, workspace_id, action, metadata_json, created_at FROM audit_log WHERE installation_id = $1 AND organization_id = $2 ORDER BY created_at DESC, id DESC LIMIT $3")
+            Self::Postgres { pool, installation_id } => sqlx::query("SELECT a.id, a.actor_user_id, u.display_name AS actor_display_name, a.organization_id, a.workspace_id, w.name AS workspace_name, w.short_id AS workspace_short_id, a.action, a.metadata_json, a.created_at FROM audit_log a LEFT JOIN users u ON u.installation_id = a.installation_id AND u.id = a.actor_user_id LEFT JOIN workspaces w ON w.installation_id = a.installation_id AND w.id = a.workspace_id WHERE a.installation_id = $1 AND a.organization_id = $2 ORDER BY a.created_at DESC, a.id DESC LIMIT $3")
                 .bind(installation_id.as_str()).bind(organization_id.to_string()).bind(limit).fetch_all(pool).await?
                 .into_iter().map(decode_audit).collect(),
         }
@@ -264,6 +282,115 @@ impl Database {
                 .bind(installation_id.as_str()).fetch_one(pool).await?),
         };
         decode_job_counts(row)
+    }
+
+    pub async fn workspace_metrics(&self) -> Result<WorkspaceMetrics, StorageError> {
+        let sql = "SELECT w.owner_id, w.state, COUNT(*) AS workspace_count, \
+            CAST(SUM(w.cpu_millis) AS BIGINT) AS cpu_millis, \
+            CAST(SUM(w.memory_mib) AS BIGINT) AS memory_mib, \
+            CAST(SUM(w.gpu_count) AS BIGINT) AS gpu_count, \
+            CAST(SUM(w.disk_gib) AS BIGINT) AS disk_gib \
+            FROM workspaces w \
+            WHERE w.installation_id = {install} AND w.state <> 'deleted' \
+            GROUP BY w.owner_id, w.state ORDER BY w.owner_id, w.state";
+        let rows = match self {
+            Self::Sqlite {
+                pool,
+                installation_id,
+            } => sqlx::query(&sql.replace("{install}", "?1"))
+                .bind(installation_id.as_str())
+                .fetch_all(pool)
+                .await?
+                .into_iter()
+                .map(decode_sqlite_workspace_metric)
+                .collect::<Result<Vec<_>, _>>()?,
+            Self::Postgres {
+                pool,
+                installation_id,
+            } => sqlx::query(&sql.replace("{install}", "$1"))
+                .bind(installation_id.as_str())
+                .fetch_all(pool)
+                .await?
+                .into_iter()
+                .map(decode_postgres_workspace_metric)
+                .collect::<Result<Vec<_>, _>>()?,
+        };
+        Ok(aggregate_workspace_metrics(rows))
+    }
+}
+
+#[derive(Debug)]
+struct WorkspaceMetricRow {
+    user_id: Uuid,
+    state: String,
+    workspace_count: i64,
+    resources: Resources,
+}
+
+fn decode_sqlite_workspace_metric(row: SqliteRow) -> Result<WorkspaceMetricRow, StorageError> {
+    decode_workspace_metric(&row)
+}
+
+fn decode_postgres_workspace_metric(row: PgRow) -> Result<WorkspaceMetricRow, StorageError> {
+    decode_workspace_metric(&row)
+}
+
+fn decode_workspace_metric<R: Row>(row: &R) -> Result<WorkspaceMetricRow, StorageError>
+where
+    for<'a> &'a str: sqlx::ColumnIndex<R>,
+    String: for<'d> sqlx::Decode<'d, R::Database> + sqlx::Type<R::Database>,
+    i64: for<'d> sqlx::Decode<'d, R::Database> + sqlx::Type<R::Database>,
+{
+    Ok(WorkspaceMetricRow {
+        user_id: Uuid::parse_str(&row.try_get::<String, _>("owner_id")?)?,
+        state: row.try_get("state")?,
+        workspace_count: row.try_get("workspace_count")?,
+        resources: Resources {
+            cpu_millis: u64::try_from(row.try_get::<i64, _>("cpu_millis")?)
+                .map_err(|_| StorageError::InvalidWorkspace)?,
+            memory_mib: u64::try_from(row.try_get::<i64, _>("memory_mib")?)
+                .map_err(|_| StorageError::InvalidWorkspace)?,
+            gpu_count: u32::try_from(row.try_get::<i64, _>("gpu_count")?)
+                .map_err(|_| StorageError::InvalidWorkspace)?,
+            disk_gib: u64::try_from(row.try_get::<i64, _>("disk_gib")?)
+                .map_err(|_| StorageError::InvalidWorkspace)?,
+        },
+    })
+}
+
+fn aggregate_workspace_metrics(rows: Vec<WorkspaceMetricRow>) -> WorkspaceMetrics {
+    let mut states = BTreeMap::new();
+    let mut users = BTreeMap::<Uuid, UserWorkspaceMetrics>::new();
+    for row in rows {
+        *states.entry(row.state.clone()).or_default() += row.workspace_count;
+        let user = users
+            .entry(row.user_id)
+            .or_insert_with(|| UserWorkspaceMetrics {
+                user_id: row.user_id,
+                states: BTreeMap::new(),
+                resources: Resources::default(),
+            });
+        *user.states.entry(row.state).or_default() += row.workspace_count;
+        user.resources.cpu_millis = user
+            .resources
+            .cpu_millis
+            .saturating_add(row.resources.cpu_millis);
+        user.resources.memory_mib = user
+            .resources
+            .memory_mib
+            .saturating_add(row.resources.memory_mib);
+        user.resources.gpu_count = user
+            .resources
+            .gpu_count
+            .saturating_add(row.resources.gpu_count);
+        user.resources.disk_gib = user
+            .resources
+            .disk_gib
+            .saturating_add(row.resources.disk_gib);
+    }
+    WorkspaceMetrics {
+        states,
+        users: users.into_values().collect(),
     }
 }
 
@@ -328,8 +455,11 @@ where
     Ok(AuditRecord {
         id: Uuid::parse_str(&row.try_get::<String, _>("id")?)?,
         actor_user_id: parse(row.try_get("actor_user_id")?)?,
+        actor_display_name: row.try_get("actor_display_name")?,
         organization_id: parse(row.try_get("organization_id")?)?,
         workspace_id: parse(row.try_get("workspace_id")?)?,
+        workspace_name: row.try_get("workspace_name")?,
+        workspace_short_id: row.try_get("workspace_short_id")?,
         action: row.try_get("action")?,
         metadata: serde_json::from_str(&row.try_get::<String, _>("metadata_json")?)?,
         created_at: row.try_get("created_at")?,

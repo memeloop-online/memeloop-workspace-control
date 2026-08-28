@@ -43,6 +43,8 @@ use runtime_profiles::RuntimeProfile;
 
 pub const OWNER_INSTALLATION_LABEL: &str = "workspace.memeloop.dev/owner-installation";
 pub const WORKSPACE_ID_LABEL: &str = "workspace.memeloop.dev/workspace-id";
+pub const ORGANIZATION_ID_LABEL: &str = "workspace.memeloop.dev/organization-id";
+pub const OWNER_USER_ID_LABEL: &str = "workspace.memeloop.dev/owner-user-id";
 const COMPONENT_LABEL: &str = "app.kubernetes.io/component";
 const MANAGED_BY_LABEL: &str = "app.kubernetes.io/managed-by";
 
@@ -65,6 +67,8 @@ pub struct ResourceBuilder {
 #[derive(Debug, Clone)]
 pub struct WorkspaceResourceSpec {
     pub id: Uuid,
+    pub organization_id: Uuid,
+    pub owner_id: Uuid,
     pub short_id: String,
     pub image: String,
     pub resources: Resources,
@@ -104,7 +108,7 @@ impl ResourceBuilder {
         let namespace_name = self
             .installation_id
             .workspace_namespace(&workspace.short_id)?;
-        let labels = self.labels(workspace.id);
+        let labels = self.workspace_labels(workspace);
         let pod_labels = pod_labels(&labels);
         let cluster_admin =
             workspace.runtime_profile == crate::workspaces::WorkspaceRuntimeProfile::Maintainance;
@@ -237,6 +241,19 @@ impl ResourceBuilder {
         ])
     }
 
+    fn workspace_labels(&self, workspace: &WorkspaceResourceSpec) -> BTreeMap<String, String> {
+        let mut labels = self.labels(workspace.id);
+        labels.insert(
+            ORGANIZATION_ID_LABEL.to_owned(),
+            workspace.organization_id.to_string(),
+        );
+        labels.insert(
+            OWNER_USER_ID_LABEL.to_owned(),
+            workspace.owner_id.to_string(),
+        );
+        labels
+    }
+
     fn stateful_set(
         &self,
         namespace: &str,
@@ -299,6 +316,17 @@ impl ResourceBuilder {
                 ..ContainerPort::default()
             }]),
             volume_mounts: Some(vec![mount("runtime-ssh", "/etc/ssh/platform", true)]),
+            resources: Some(ResourceRequirements {
+                requests: Some(BTreeMap::from([
+                    ("cpu".to_owned(), Quantity("10m".to_owned())),
+                    ("memory".to_owned(), Quantity("16Mi".to_owned())),
+                ])),
+                limits: Some(BTreeMap::from([
+                    ("cpu".to_owned(), Quantity("100m".to_owned())),
+                    ("memory".to_owned(), Quantity("128Mi".to_owned())),
+                ])),
+                ..ResourceRequirements::default()
+            }),
             ..Container::default()
         });
         let pod_spec = PodSpec {

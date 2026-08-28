@@ -209,6 +209,11 @@ async fn image_allowlist_and_template_contract_are_admitted_atomically() {
     let refs = database.workspace_injection_refs(created.id).await.unwrap();
     assert_eq!(refs.organization, Some(vec!["org-key".to_owned()]));
     assert_eq!(refs.user, Some(Vec::new()));
+    let metrics = database.workspace_metrics().await.unwrap();
+    assert_eq!(metrics.states.get("provisioning"), Some(&1));
+    assert_eq!(metrics.users.len(), 1);
+    assert_eq!(metrics.users[0].user_id, admin.user_id);
+    assert_eq!(metrics.users[0].resources, resources);
     let mut changed = command;
     changed.name = "contract-changed".to_owned();
     changed.resources.cpu_millis = 3_000;

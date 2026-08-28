@@ -27,6 +27,8 @@ export default function App() {
   const [notice, setNotice] = useState("");
   const [fatal, setFatal] = useState("");
   const api = useMemo(() => new ApiClient(token), [token]);
+  const organizationRole = principal?.memberships.find((membership) => membership.organization_id === organizationId)?.role;
+  const canManageOrganization = Boolean(principal?.system_admin || organizationRole === "organization_admin");
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -69,7 +71,9 @@ export default function App() {
 
   useEffect(() => {
     void refresh();
-    const timer = window.setInterval(() => void refresh(), 5000);
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "visible") void refresh();
+    }, 10000);
     return () => window.clearInterval(timer);
   }, [refresh]);
 
@@ -78,6 +82,10 @@ export default function App() {
     const timer = window.setTimeout(() => setNotice(""), 5000);
     return () => window.clearTimeout(timer);
   }, [notice]);
+
+  useEffect(() => {
+    if (view === "system" && !canManageOrganization) setView("workspaces");
+  }, [canManageOrganization, view]);
 
   function login(event: FormEvent) {
     event.preventDefault();
@@ -102,7 +110,7 @@ export default function App() {
         <section className="login-card">
           <div className="brand-mark large"><span>M</span></div>
           <p className="eyebrow">MEMELOOP CONTROL PLANE</p>
-          <div className="display-controls"><button type="button" onClick={() => setLocale(locale === "zh-CN" ? "en" : "zh-CN")}>{t("language")}</button><button type="button" onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>{theme === "dark" ? t("themeLight") : t("themeDark")}</button></div>
+          <div className="display-controls"><LanguagePicker locale={locale} setLocale={setLocale} /><button type="button" onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>{theme === "dark" ? t("themeLight") : t("themeDark")}</button></div>
           <h1>{t("loginTitle")}</h1>
           <p className="login-copy">{t("loginCopy")}</p>
           <form onSubmit={login}>
@@ -123,7 +131,7 @@ export default function App() {
         <nav>
           <Nav active={view === "workspaces"} onClick={() => setView("workspaces")} icon="◇">{t("workspaces")}</Nav>
           <Nav active={view === "injections"} onClick={() => setView("injections")} icon="⌁">{t("credentials")}</Nav>
-          <Nav active={view === "system"} onClick={() => setView("system")} icon="◉">{t("operations")}</Nav>
+          {canManageOrganization && <Nav active={view === "system"} onClick={() => setView("system")} icon="◉">{t("operations")}</Nav>}
         </nav>
         <div className="sidebar-foot"><span className="live-dot" />{t("apiOnline")}</div>
       </aside>
@@ -133,7 +141,7 @@ export default function App() {
           <div>
             <label className="org-picker">{t("organization")}<select value={organizationId} onChange={(event) => setOrganizationId(event.target.value)}>{organizations.map((organization) => <option key={organization.id} value={organization.id}>{organization.name}</option>)}</select></label>
           </div>
-          <div className="topbar-actions"><button className="utility-button" onClick={() => setLocale(locale === "zh-CN" ? "en" : "zh-CN")}>{t("language")}</button><button className="utility-button" onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>{theme === "dark" ? t("themeLight") : t("themeDark")}</button><div className="user-menu"><div className="avatar">{principal.display_name.slice(0, 1).toUpperCase()}</div><div><strong>{principal.display_name}</strong><small>{principal.system_admin ? t("systemAdmin") : t("organizationMember")}</small></div><button onClick={logout}>{t("logout")}</button></div></div>
+          <div className="topbar-actions"><LanguagePicker locale={locale} setLocale={setLocale} className="utility-select" /><button className="utility-button" onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>{theme === "dark" ? t("themeLight") : t("themeDark")}</button><div className="user-menu"><div className="avatar">{principal.display_name.slice(0, 1).toUpperCase()}</div><div><strong>{principal.display_name}</strong><small>{principal.system_admin ? t("systemAdmin") : organizationRole === "organization_admin" ? t("organizationAdmin") : t("organizationMember")}</small></div><button onClick={logout}>{t("logout")}</button></div></div>
         </header>
 
         {!organizationId ? <EmptyOrganization systemAdmin={principal.system_admin} /> : view === "workspaces" ? (
@@ -147,6 +155,11 @@ export default function App() {
       {notice && <div className="toast">{notice}</div>}
     </div>
   );
+}
+
+function LanguagePicker({ locale, setLocale, className }: { locale: "zh-CN" | "en" | "ru"; setLocale: (locale: "zh-CN" | "en" | "ru") => void; className?: string }) {
+  const { t } = useI18n();
+  return <label className={`language-picker ${className ?? ""}`}><span>{t("language")}</span><select value={locale} onChange={(event) => setLocale(event.target.value as "zh-CN" | "en" | "ru")}><option value="zh-CN">{t("languageChinese")}</option><option value="en">{t("languageEnglish")}</option><option value="ru">{t("languageRussian")}</option></select></label>;
 }
 
 function Nav({ active, onClick, icon, children }: { active: boolean; onClick: () => void; icon: string; children: string }) {

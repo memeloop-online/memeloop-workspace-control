@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
-import type { FormEvent } from "react";
+import type { Dispatch, FormEvent, SetStateAction } from "react";
 import type { ApiClient } from "./api";
 import { useI18n } from "./i18n";
+import type { MessageKey } from "./i18n";
 import type {
   InjectionDraft,
   InjectionKind,
@@ -10,6 +11,7 @@ import type {
   ResolvedInjection,
   StoredInjection,
   WorkspaceResponse,
+  WorkspaceTemplate,
 } from "./types";
 
 interface Props {
@@ -37,11 +39,14 @@ const EMPTY_DRAFT: InjectionDraft = {
 
 export function InjectionPanel(props: Props) {
   const { t } = useI18n();
+  const canManageOrganization = props.principal.system_admin || props.principal.memberships.some((membership) => membership.organization_id === props.organizationId && membership.role === "organization_admin");
   const [scope, setScope] = useState<InjectionScope>("user");
   const [workspaceId, setWorkspaceId] = useState(props.workspaces[0]?.workspace.id ?? "");
+  const [workspaceQuery, setWorkspaceQuery] = useState(props.workspaces[0] ? workspaceLabel(props.workspaces[0]) : "");
   const [items, setItems] = useState<StoredInjection[]>([]);
+  const [templates, setTemplates] = useState<WorkspaceTemplate[]>([]);
   const [draft, setDraft] = useState<InjectionDraft>({ ...EMPTY_DRAFT });
-  const [selectorLabels, setSelectorLabels] = useState("{}");
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [preview, setPreview] = useState<ResolvedInjection[]>([]);
   const [saving, setSaving] = useState(false);
   const [search, setSearch] = useState("");
@@ -76,10 +81,53 @@ export function InjectionPanel(props: Props) {
   }, [scopeId]);
 
   useEffect(() => {
+    let active = true;
+    props.api.templates(props.organizationId)
+      .then((value) => { if (active) setTemplates(value.filter((item) => item.enabled)); })
+      .catch((error) => props.onError(message(error)));
+    return () => { active = false; };
+  }, [props.api, props.organizationId]);
+
+  useEffect(() => {
     if (!workspaceId && props.workspaces[0]) {
       setWorkspaceId(props.workspaces[0].workspace.id);
+      setWorkspaceQuery(workspaceLabel(props.workspaces[0]));
     }
   }, [props.workspaces, workspaceId]);
+
+  function resetDraft() {
+    setSelectedKey(null);
+    setDraft({ ...EMPTY_DRAFT, value: { ...EMPTY_DRAFT.value }, labels: {} });
+  }
+
+  function changeScope(value: InjectionScope) {
+    setScope(value);
+    resetDraft();
+    setPreview([]);
+  }
+
+  function selectItem(item: StoredInjection) {
+    if (selectedKey === item.key) {
+      resetDraft();
+      return;
+    }
+    setSelectedKey(item.key);
+    setDraft({
+      ...EMPTY_DRAFT,
+      key: item.key,
+      kind: item.kind,
+      target: item.target,
+      sensitive: item.sensitive,
+      locked: item.locked,
+      version: item.version,
+      file_mode: item.file_mode,
+      owner: item.owner,
+      group: item.group,
+      template_selector: item.template_selector,
+      labels: { ...item.labels },
+      value: { encoding: "utf8", value: "" },
+    });
+  }
 
   function changeKind(kind: InjectionKind) {
     const target =
@@ -112,17 +160,11 @@ export function InjectionPanel(props: Props) {
     if (!scopeId) return;
     setSaving(true);
     try {
-      const labels = JSON.parse(selectorLabels) as unknown;
-      if (!labels || Array.isArray(labels) || typeof labels !== "object" || Object.values(labels).some((value) => typeof value !== "string")) {
-        throw new Error(t("operationFailed"));
-      }
       await props.api.replaceInjection(scope, scopeId, {
         ...draft,
-        labels: labels as Record<string, string>,
         locked: scope === "organization" && draft.locked,
       });
-      setDraft({ ...EMPTY_DRAFT, value: { ...EMPTY_DRAFT.value } });
-      setSelectorLabels("{}");
+      resetDraft();
       await load();
     } catch (error) {
       props.onError(message(error));
@@ -154,14 +196,14 @@ export function InjectionPanel(props: Props) {
         <button className="button" onClick={() => void runPreview()}>{t("credentialsPreview")}</button>
       </div>
       <div className="scope-tabs">
-        {(["organization", "user", "workspace"] as InjectionScope[]).map((value) => (
-          <button className={scope === value ? "active" : ""} onClick={() => setScope(value)} key={value}>
+        {([...(canManageOrganization ? ["organization" as const] : []), "user", "workspace"] as InjectionScope[]).map((value) => (
+          <button className={scope === value ? "active" : ""} onClick={() => changeScope(value)} key={value}>
             {value === "organization" ? t("scopeOrganization") : value === "user" ? t("scopeUser") : t("scopeWorkspace")}
           </button>
         ))}
       </div>
       {scope === "workspace" && (
-        <label className="standalone-label">{t("workspaces")}<select value={workspaceId} onChange={(event) => setWorkspaceId(event.target.value)}><option value="">{t("choose")}</option>{props.workspaces.map(({ workspace }) => <option value={workspace.id} key={workspace.id}>{workspace.name} · {workspace.short_id}</option>)}</select></label>
+        <label className="standalone-label">{t("workspaces")}<input type="search" list="credential-workspaces" value={workspaceQuery} onChange={(event) => { const value = event.target.value; setWorkspaceQuery(value); const selected = props.workspaces.find((item) => workspaceLabel(item) === value || item.workspace.id === value); setWorkspaceId(selected?.workspace.id ?? ""); }} placeholder={t("workspaceAutocomplete")} autoComplete="off" /><datalist id="credential-workspaces">{props.workspaces.map((item) => <option value={workspaceLabel(item)} key={item.workspace.id} />)}</datalist></label>
       )}
 
       <div className="injection-layout">
@@ -171,7 +213,7 @@ export function InjectionPanel(props: Props) {
           <div className="credential-scroll">
           {filteredItems.length === 0 && <div className="empty compact">{t("noCredentials")}</div>}
           {filteredItems.map((item) => (
-            <button className="injection-row" key={item.key} onClick={() => { setDraft({ ...EMPTY_DRAFT, key: item.key, kind: item.kind, target: item.target, sensitive: item.sensitive, locked: item.locked, file_mode: item.file_mode, owner: item.owner, group: item.group, template_selector: item.template_selector, labels: item.labels }); setSelectorLabels(JSON.stringify(item.labels)); }}>
+            <button className={`injection-row${selectedKey === item.key ? " selected" : ""}`} aria-pressed={selectedKey === item.key} key={item.key} onClick={() => selectItem(item)}>
               <span className="kind-icon">{kindGlyph(item.kind)}</span>
               <span><strong>{item.key}</strong><small>{item.target}</small></span>
               <span className="version">v{item.version}{item.locked ? ` · ${t("locked")}` : ""}</span>
@@ -181,24 +223,47 @@ export function InjectionPanel(props: Props) {
         </div>
 
         <form className="editor-card" onSubmit={save}>
+          <div className="editor-heading"><strong>{selectedKey ? t("editingCredential") : t("newCredential")}</strong>{selectedKey && <button type="button" className="text-button" onClick={resetDraft}>{t("cancel")}</button>}</div>
           <div className="editor-grid">
-            <label>{t("key")}<input required value={draft.key} onChange={(e) => changeKey(e.target.value)} /></label>
-            <label>{t("type")}<select value={draft.kind} onChange={(e) => changeKind(e.target.value as InjectionKind)}><option value="environment_variable">{t("environmentVariable")}</option><option value="config_file">{t("configFile")}</option><option value="secret_file">{t("credentialFile")}</option><option value="ssh_public_key">{t("sshPublicKey")}</option></select></label>
-            <label>{t("encoding")}<select value={draft.value.encoding} onChange={(e) => setDraft({ ...draft, value: { ...draft.value, encoding: e.target.value as "utf8" | "base64" } })}><option value="utf8">{t("multilineUtf8")}</option><option value="base64">{t("base64Binary")}</option></select></label>
-            {draft.kind !== "environment_variable" && <label>{t("fileMode")}<input value={draft.file_mode === null ? "" : draft.file_mode.toString(8)} onChange={(e) => setDraft({ ...draft, file_mode: e.target.value ? Number.parseInt(e.target.value, 8) : null })} placeholder="600" /></label>}
-            <label className="wide">{t("target")}<input required readOnly={draft.kind === "ssh_public_key"} value={draft.target} onChange={(e) => setDraft({ ...draft, target: e.target.value })} /></label>
+            <label><FieldTitle label={t("key")} help={t("keyHint")} /><input required readOnly={selectedKey !== null} value={draft.key} onChange={(e) => changeKey(e.target.value)} placeholder={t("keyHint")} /></label>
+            <label><FieldTitle label={t("type")} /><select value={draft.kind} onChange={(e) => changeKind(e.target.value as InjectionKind)}><option value="environment_variable">{t("environmentVariable")}</option><option value="config_file">{t("configFile")}</option><option value="secret_file">{t("credentialFile")}</option><option value="ssh_public_key">{t("sshPublicKey")}</option></select></label>
+            <label><FieldTitle label={t("encoding")} help={t("encodingHelp")} /><select value={draft.value.encoding} onChange={(e) => setDraft({ ...draft, value: { ...draft.value, encoding: e.target.value as "utf8" | "base64" } })}><option value="utf8">{t("multilineUtf8")}</option><option value="base64">{t("base64Binary")}</option></select></label>
+            {draft.kind !== "environment_variable" && <label><FieldTitle label={t("fileMode")} help={t("fileModeHelp")} /><input value={draft.file_mode === null ? "" : draft.file_mode.toString(8)} onChange={(e) => setDraft({ ...draft, file_mode: e.target.value ? Number.parseInt(e.target.value, 8) : null })} placeholder="600" /></label>}
+            <label className="wide"><FieldTitle label={t("target")} help={t("targetHelp")} /><input required readOnly={draft.kind === "ssh_public_key"} value={draft.target} onChange={(e) => setDraft({ ...draft, target: e.target.value })} placeholder={draft.kind === "environment_variable" ? "GITHUB_TOKEN" : "/workspace/.config/example.yaml"} /></label>
             {draft.kind === "ssh_public_key" && <p className="profile-note wide">{t("sshTargetHelp")}</p>}
-            {draft.kind !== "environment_variable" && <><label>{t("owner")}<input value={draft.owner ?? ""} onChange={(e) => setDraft({ ...draft, owner: e.target.value || null })} placeholder="workspace" /></label><label>{t("group")}<input value={draft.group ?? ""} onChange={(e) => setDraft({ ...draft, group: e.target.value || null })} placeholder="workspace" /></label></>}
-            <label>{t("templateSelector")}<input value={draft.template_selector ?? ""} onChange={(e) => setDraft({ ...draft, template_selector: e.target.value || null })} placeholder={t("templateSelectorHint")} /></label>
-            <label>{t("labelSelector")}<input value={selectorLabels} onChange={(e) => setSelectorLabels(e.target.value)} placeholder={'{"access_mode":"public"}'} /></label>
+            {draft.kind !== "environment_variable" && <><label><FieldTitle label={t("owner")} help={t("ownerHelp")} /><input value={draft.owner ?? ""} onChange={(e) => setDraft({ ...draft, owner: e.target.value || null })} placeholder="workspace" /></label><label><FieldTitle label={t("group")} help={t("groupHelp")} /><input value={draft.group ?? ""} onChange={(e) => setDraft({ ...draft, group: e.target.value || null })} placeholder="workspace" /></label></>}
+            <label className="wide"><FieldTitle label={t("templateSelector")} help={t("templateSelectorHelp")} /><select value={draft.template_selector ?? ""} onChange={(e) => setDraft({ ...draft, template_selector: e.target.value || null })}><option value="">{t("allTemplates")}</option>{draft.template_selector && !templates.some((template) => template.id === draft.template_selector) && <option value={draft.template_selector}>{draft.template_selector}</option>}{templates.map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}</select></label>
+            <div className="selector-editor wide">
+              <div className="selector-heading">
+                <FieldTitle label={t("labelSelector")} help={t("labelSelectorHelp")} />
+                <button type="button" className="text-button" onClick={() => addSelector(draft, setDraft)}>{t("addSelector")}</button>
+              </div>
+              {Object.entries(draft.labels).length === 0 && <p>{t("noSelector")}</p>}
+              {Object.entries(draft.labels).map(([key, value]) => (
+                <div className="selector-row" key={key}>
+                  <select aria-label={t("selectorField")} value={key} onChange={(event) => renameSelector(draft, setDraft, key, event.target.value)}>
+                    {SELECTOR_KEYS.map((option) => <option key={option.key} value={option.key}>{t(option.label)}</option>)}
+                  </select>
+                  {key === "access_mode" ? (
+                    <select aria-label={t("selectorValue")} value={value} onChange={(event) => setSelectorValue(draft, setDraft, key, event.target.value)}>
+                      <option value="internal">{t("internal")}</option>
+                      <option value="public">{t("public")}</option>
+                    </select>
+                  ) : (
+                    <input required aria-label={t("selectorValue")} value={value} onChange={(event) => setSelectorValue(draft, setDraft, key, event.target.value)} placeholder={t("selectorValue")} />
+                  )}
+                  <button type="button" className="text-button danger" onClick={() => removeSelector(draft, setDraft, key)}>{t("removeSelector")}</button>
+                </div>
+              ))}
+            </div>
             <label className="wide">{draft.value.encoding === "base64" ? t("valueBase64") : t("valueMultiline")}<textarea rows={15} spellCheck={false} value={draft.value.value} onChange={(e) => setDraft({ ...draft, value: { ...draft.value, value: e.target.value } })} placeholder={draft.value.encoding === "base64" ? t("base64Hint") : t("multilineHint")} /></label>
           </div>
           <div className="check-row">
-            <label><input type="checkbox" checked={draft.sensitive} onChange={(e) => setDraft({ ...draft, sensitive: e.target.checked })} />{t("sensitiveValue")}</label>
-            {scope === "organization" && <label><input type="checkbox" checked={draft.locked} onChange={(e) => setDraft({ ...draft, locked: e.target.checked })} />{t("locked")}</label>}
+            <label title={t("sensitiveHelp")}><input type="checkbox" checked={draft.sensitive} onChange={(e) => setDraft({ ...draft, sensitive: e.target.checked })} />{t("sensitiveValue")}<Help text={t("sensitiveHelp")} /></label>
+            {scope === "organization" && <label title={t("lockedHelp")}><input type="checkbox" checked={draft.locked} onChange={(e) => setDraft({ ...draft, locked: e.target.checked })} />{t("locked")}<Help text={t("lockedHelp")} /></label>}
           </div>
           <p className="security-note">{t("credentialWriteOnly")}</p>
-          <button className="button primary" disabled={saving || !scopeId}>{saving ? t("savingEncrypted") : t("saveEncrypted")}</button>
+          <button className="button primary" disabled={saving || !scopeId}>{saving ? t("savingEncrypted") : selectedKey ? t("replaceEncrypted") : t("createEncrypted")}</button>
         </form>
       </div>
 
@@ -209,6 +274,55 @@ export function InjectionPanel(props: Props) {
 
 function kindGlyph(kind: InjectionKind) {
   return kind === "environment_variable" ? "ENV" : kind === "ssh_public_key" ? "SSH" : kind === "secret_file" ? "SEC" : "CFG";
+}
+
+const SELECTOR_KEYS: readonly { key: string; label: MessageKey }[] = [
+  { key: "access_mode", label: "selectorAccess" },
+  { key: "template_id", label: "selectorTemplate" },
+  { key: "image", label: "selectorImage" },
+  { key: "owner_id", label: "selectorOwner" },
+  { key: "organization_id", label: "selectorOrganization" },
+  { key: "workspace_id", label: "selectorWorkspace" },
+];
+
+function addSelector(draft: InjectionDraft, update: Dispatch<SetStateAction<InjectionDraft>>) {
+  const option = SELECTOR_KEYS.find(({ key }) => !(key in draft.labels));
+  if (!option) return;
+  update({
+    ...draft,
+    labels: { ...draft.labels, [option.key]: option.key === "access_mode" ? "internal" : "" },
+  });
+}
+
+function renameSelector(draft: InjectionDraft, update: Dispatch<SetStateAction<InjectionDraft>>, previous: string, next: string) {
+  if (previous === next || next in draft.labels) return;
+  const labels = { ...draft.labels };
+  const value = labels[previous];
+  delete labels[previous];
+  labels[next] = next === "access_mode" ? "internal" : value;
+  update({ ...draft, labels });
+}
+
+function setSelectorValue(draft: InjectionDraft, update: Dispatch<SetStateAction<InjectionDraft>>, key: string, value: string) {
+  update({ ...draft, labels: { ...draft.labels, [key]: value } });
+}
+
+function removeSelector(draft: InjectionDraft, update: Dispatch<SetStateAction<InjectionDraft>>, key: string) {
+  const labels = { ...draft.labels };
+  delete labels[key];
+  update({ ...draft, labels });
+}
+
+function FieldTitle({ label, help }: { label: string; help?: string }) {
+  return <span className="field-title"><span>{label}</span>{help && <Help text={help} />}</span>;
+}
+
+function Help({ text }: { text: string }) {
+  return <span className="help-tip" title={text} aria-label={text} tabIndex={0}>?</span>;
+}
+
+function workspaceLabel(item: WorkspaceResponse) {
+  return `${item.workspace.name} · ${item.workspace.short_id}`;
 }
 
 function kindLabel(kind: InjectionKind, t: ReturnType<typeof useI18n>["t"]) {

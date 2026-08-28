@@ -31,7 +31,9 @@ mod workspace_events;
 mod workspace_injection_refs;
 mod workspace_store;
 
-pub use admin_store::{AuditRecord, JobCounts, UserSummary};
+pub use admin_store::{
+    AuditRecord, JobCounts, UserSummary, UserWorkspaceMetrics, WorkspaceMetrics,
+};
 pub use catalog_store::{CreateWorkspaceTemplate, ImagePolicy, WorkspaceTemplate};
 pub use error::StorageError;
 pub use event_store::{EventNotifier, EventRecord};

@@ -4,12 +4,13 @@ use uuid::Uuid;
 use super::{InjectionError, InjectionItem, InjectionKind, InjectionValue};
 
 pub fn validate_injection_item(item: &InjectionItem) -> Result<(), InjectionError> {
-    if item.key.is_empty()
-        || item.key.len() > 128
+    if item.key.trim() != item.key
+        || item.key.is_empty()
+        || item.key.chars().count() > 128
         || !item
             .key
             .chars()
-            .all(|character| character.is_ascii_alphanumeric() || "._-".contains(character))
+            .all(|character| character.is_alphanumeric() || " ._-".contains(character))
     {
         return Err(InjectionError::InvalidKey);
     }

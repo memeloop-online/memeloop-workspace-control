@@ -21,13 +21,17 @@ interface Props {
   runtime?: WorkspaceRuntime;
   onAction: (id: string, action: WorkspaceAction) => Promise<void>;
   onOpenShell: (id: string) => Promise<void>;
+  onRequestRuntime: (id: string) => Promise<void>;
 }
 
-export function WorkspaceCard({ item, runtime, onAction, onOpenShell }: Props) {
+export function WorkspaceCard({ item, runtime, onAction, onOpenShell, onRequestRuntime }: Props) {
   const { locale, t } = useI18n();
   const [detailView, setDetailView] = useState<DetailView | null>(null);
   const workspace = item.workspace;
-  const toggleDetail = (view: DetailView) => setDetailView((current) => current === view ? null : view);
+  const toggleDetail = (view: DetailView) => {
+    setDetailView((current) => current === view ? null : view);
+    if (view === "events" && detailView !== "events") void onRequestRuntime(workspace.id);
+  };
 
   return (
     <article className="workspace-card">
@@ -37,7 +41,7 @@ export function WorkspaceCard({ item, runtime, onAction, onOpenShell }: Props) {
       </div>
 
       <div className="workspace-meta compact">
-        <span>{runtimeProfileLabel(workspace.runtime_profile, locale)}</span>
+        <span>{runtimeProfileLabel(workspace.runtime_profile, t)}</span>
         <span>{workspace.access_mode === "public" ? t("public") : t("internal")}</span>
         <code>{item.namespace}</code>
         {workspace.resources.gpu_count === 0 && <span className="gpu-meta">0 GPU</span>}
@@ -116,7 +120,7 @@ function RuntimeStatus({ id, runtime }: { id: string; runtime: WorkspaceRuntime 
   return <section id={id} className="runtime-panel" aria-label={t("runtimeStatus")}>
     <h4>{t("containers")}</h4>
     {runtime.pods.length === 0 && runtime.metrics.length === 0 && <p>{t("noRuntimeData")}</p>}
-    <div className="pod-status-grid">{runtime.pods.map((pod) => <div key={pod.name}><code>{pod.name}</code><span>{pod.phase ?? "unknown"}</span><span className={pod.ready ? "healthy" : "unhealthy"}>{pod.ready ? t("ready") : t("notReady")}</span><small>{pod.restarts} restarts</small></div>)}</div>
+    <div className="pod-status-grid">{runtime.pods.map((pod) => <div key={pod.name}><code>{pod.name}</code><span>{pod.phase ?? "unknown"}</span><span className={pod.ready ? "healthy" : "unhealthy"}>{pod.ready ? t("ready") : t("notReady")}</span><small>{pod.restarts} {t("restarts")}</small></div>)}</div>
     {runtime.metrics.length > 0 && <div className="container-metrics">{runtime.metrics.map((metric) => <div key={`${metric.pod}-${metric.container}`}><code>{metric.container}</code><span>CPU {formatCpuMillis(parseCpuMillis(metric.cpu))}</span><span>{t("memory")} {formatMemoryMiB(parseMemoryMiB(metric.memory))}</span></div>)}</div>}
   </section>;
 }
@@ -140,11 +144,12 @@ function CopyLine({ label, value }: { label: string; value: string }) {
   return <div className="copy-line"><span>{label}</span><code>{value}</code><button onClick={() => { void navigator.clipboard.writeText(value); setCopied(true); window.setTimeout(() => setCopied(false), 1200); }}>{copied ? t("copied") : t("copy")}</button></div>;
 }
 
-function StateBadge({ state, locale }: { state: string; locale: Locale }) {
-  const labels: Record<string, [string, string]> = {
-    provisioning: ["配置中", "Provisioning"], ready: ["就绪", "Ready"], stopping: ["停止中", "Stopping"], stopped: ["已停止", "Stopped"], starting: ["启动中", "Starting"], restarting: ["重启中", "Restarting"], deleting: ["删除中", "Deleting"], deleted: ["已删除", "Deleted"], failed: ["失败", "Failed"],
-  };
-  return <span className={`state-badge ${state}`}>{labels[state]?.[locale === "zh-CN" ? 0 : 1] ?? state}</span>;
+function StateBadge({ state }: { state: string; locale: Locale }) {
+  const { t } = useI18n();
+  const labels = {
+    provisioning: "stateProvisioning", ready: "stateReady", stopping: "stateStopping", stopped: "stateStopped", starting: "stateStarting", restarting: "stateRestarting", deleting: "stateDeleting", deleted: "stateDeleted", failed: "stateFailed",
+  } as const;
+  return <span className={`state-badge ${state}`}>{state in labels ? t(labels[state as keyof typeof labels]) : state}</span>;
 }
 
 function formatTimestamp(value: string | null, locale: Locale): string {

@@ -269,6 +269,25 @@ async fn management_api_enforces_system_and_organization_boundaries() {
         .unwrap();
     assert_eq!(body_json(organizations).await, json!([]));
 
+    let audit = app
+        .clone()
+        .oneshot(
+            authenticated(
+                Request::get(format!("/api/v1/audit?organization_id={}", organization.id)),
+                ADMIN_TOKEN,
+            )
+            .body(Body::empty())
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(audit.status(), StatusCode::OK);
+    let audit: Value = body_json(audit).await;
+    assert!(audit.as_array().unwrap().iter().all(|record| {
+        record["actor_user_id"] == admin.user_id.to_string()
+            && record["actor_display_name"] == "Admin"
+    }));
+
     let scaling = app
         .oneshot(
             authenticated(Request::get("/api/v1/admin/scaling"), ADMIN_TOKEN)

@@ -99,6 +99,18 @@ jobs:
             --set jumpHost.enabled=false \
             --set image.digest=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
             | grep -q 'memeloop-workspace-control@sha256:aaaaaaaa'
+          rendered_monitoring=$(linux-amd64/helm template monitoring \
+            deploy/helm/memeloop-workspace-control \
+            --set installationId=monitoring \
+            --set secrets.encryptionSecretName=enc \
+            --set secrets.internalAuthSecretName=auth \
+            --set workspace.ttydImage=tsl0922/ttyd:1.7.7 \
+            --set jumpHost.enabled=false \
+            --set monitoring.serviceMonitor.enabled=true \
+            --set monitoring.serviceMonitor.labels.release=monitoring)
+          grep -q 'kind: ServiceMonitor' <<<"${rendered_monitoring}"
+          grep -q 'release: monitoring' <<<"${rendered_monitoring}"
+          grep -q 'path: /metrics' <<<"${rendered_monitoring}"
           if linux-amd64/helm template bad-digest deploy/helm/memeloop-workspace-control \
             --set installationId=bad-digest \
             --set secrets.encryptionSecretName=enc \

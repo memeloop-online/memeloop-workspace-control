@@ -26,5 +26,8 @@ test("only the maintainance profile is marked high risk", () => {
       profile.value === "maintainance",
     );
   }
-  assert.equal(runtimeProfileLabel("maintainance"), "Maintainance");
+  assert.equal(
+    runtimeProfileLabel("maintainance", (key) => key),
+    "profileMaintenance",
+  );
 });

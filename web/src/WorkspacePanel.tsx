@@ -45,24 +45,29 @@ export function WorkspacePanel(props: Props) {
   const [userRefs, setUserRefs] = useState<string[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [runtime, setRuntime] = useState<Record<string, WorkspaceRuntime>>({});
+  const [workspaceSearch, setWorkspaceSearch] = useState("");
   const runtimeKey = props.workspaces.map((item) => `${item.workspace.id}:${item.workspace.state}`).join(",");
 
   useEffect(() => {
     let active = true;
     const refreshRuntime = async () => {
-      const visible = props.workspaces.filter((item) => !["deleting", "deleted"].includes(item.workspace.state));
-      const results = await Promise.allSettled(visible.map(async (item) => [item.workspace.id, await props.api.workspaceRuntime(item.workspace.id)] as const));
-      if (!active) return;
-      setRuntime((current) => {
-        const next = { ...current };
-        for (const result of results) if (result.status === "fulfilled") next[result.value[0]] = result.value[1];
-        return next;
-      });
+      if (document.visibilityState !== "visible" || props.workspaces.length === 0) return;
+      try {
+        const entries = await props.api.workspaceRuntimes(props.organizationId);
+        if (!active) return;
+        setRuntime((current) => Object.fromEntries(entries.map((entry) => [
+          entry.workspace_id,
+          { ...entry.runtime, events: current[entry.workspace_id]?.events ?? [] },
+        ])));
+      } catch {
+        // Runtime observations are supplemental. The workspace lifecycle list
+        // remains usable when metrics.k8s.io or Kubernetes is temporarily down.
+      }
     };
     void refreshRuntime();
-    const timer = window.setInterval(() => void refreshRuntime(), 5000);
+    const timer = window.setInterval(() => void refreshRuntime(), 30000);
     return () => { active = false; window.clearInterval(timer); };
-  }, [props.api, runtimeKey]);
+  }, [props.api, props.organizationId, runtimeKey]);
 
   useEffect(() => {
     let active = true;
@@ -104,16 +109,28 @@ export function WorkspacePanel(props: Props) {
       ),
     [props.workspaces],
   );
+  const selectedTemplate = templates.find((template) => template.id === templateId);
+  const filteredWorkspaces = useMemo(() => {
+    const query = workspaceSearch.trim().toLocaleLowerCase();
+    if (!query) return props.workspaces;
+    return props.workspaces.filter(({ workspace }) => [
+      workspace.name,
+      workspace.short_id,
+      workspace.state,
+      workspace.runtime_profile,
+      runtimeProfileLabel(workspace.runtime_profile, t),
+    ].some((value) => value.toLocaleLowerCase().includes(query)));
+  }, [props.workspaces, t, workspaceSearch]);
 
   async function create(event: FormEvent) {
     event.preventDefault();
     if (!templateId || !runtimeProfile) {
-      props.onError(locale === "zh-CN" ? "必须选择一个受控工作区模板" : "Choose a controlled workspace template");
+      props.onError(t("chooseTemplateError"));
       return;
     }
     if (
       isHighRiskRuntimeProfile(runtimeProfile)
-      && !confirm(locale === "zh-CN" ? "该工作区将使用集群管理员运行时配置，可能拥有集群级权限。确认创建？" : "This workspace may receive cluster-level privileges. Create it?")
+      && !confirm(t("workspaceHighRiskConfirm"))
     ) return;
     const command: CreateWorkspace = {
       organization_id: props.organizationId,
@@ -189,7 +206,7 @@ export function WorkspacePanel(props: Props) {
     id: string,
     value: "start" | "stop" | "restart" | "delete",
   ) {
-    if (value === "delete" && !confirm(locale === "zh-CN" ? "确定删除这个工作区？PVC 与命名空间会被清理。" : "Delete this workspace? Its PVC and namespace will be removed.")) {
+    if (value === "delete" && !confirm(t("deleteWorkspaceConfirm"))) {
       return;
     }
     try {
@@ -212,11 +229,20 @@ export function WorkspacePanel(props: Props) {
     }
   }
 
+  async function refreshWorkspaceRuntime(workspaceId: string) {
+    try {
+      const observation = await props.api.workspaceRuntime(workspaceId);
+      setRuntime((current) => ({ ...current, [workspaceId]: observation }));
+    } catch (error) {
+      props.onError(message(error));
+    }
+  }
+
   return (
     <section className="panel-stack">
       <div className="stat-grid">
         <Stat label={t("workspaceCount")} value={String(props.workspaces.length)} hint={t("currentOrganization")} />
-        <Stat label="CPU" value={`${totals.cpu / 1000} ${locale === "zh-CN" ? "核" : "cores"}`} hint={t("requestedTotal")} />
+        <Stat label="CPU" value={`${totals.cpu / 1000} ${t("cores")}`} hint={t("requestedTotal")} />
         <Stat label={t("memory")} value={`${formatGiB(totals.memory)} GiB`} hint={t("requestedTotal")} />
         <Stat label={t("persistentDisk")} value={`${totals.disk} GiB`} hint={`${totals.gpu} GPU`} />
       </div>
@@ -234,15 +260,17 @@ export function WorkspacePanel(props: Props) {
       {showCreate && (
         <form className="create-card" onSubmit={create}>
           <label>{t("name")}<input required value={name} onChange={(e) => setName(e.target.value)} /></label>
-          <label>{t("template")}<select required value={templateId} onChange={(e) => selectTemplate(e.target.value)}><option value="">{t("chooseTemplate")}</option>{templates.map((template) => <option key={template.id} value={template.id}>{template.name} · {runtimeProfileLabel(template.runtime_profile, locale)}</option>)}</select></label>
-          <label>{t("runtimeProfile")}<input readOnly value={runtimeProfile ? runtimeProfileLabel(runtimeProfile, locale) : t("inheritedFromTemplate")} /></label>
+          <label>{t("template")}<select required value={templateId} onChange={(e) => selectTemplate(e.target.value)}><option value="">{t("chooseTemplate")}</option>{templates.map((template) => <option key={template.id} value={template.id}>{template.name} · {runtimeProfileLabel(template.runtime_profile, t)}</option>)}</select></label>
+          <label>{t("runtimeProfile")}<input readOnly value={runtimeProfile ? runtimeProfileLabel(runtimeProfile, t) : t("inheritedFromTemplate")} /></label>
           <label className="wide">{t("image")}<input required readOnly value={image} /></label>
           <label>CPU（m）<input type="number" min="100" readOnly value={cpu} /></label>
           <label>{t("memory")}（MiB）<input type="number" min="128" readOnly value={memory} /></label>
           <label>GPU<input type="number" min="0" readOnly value={gpu} /></label>
           <label>{t("disk")}（GiB）<input type="number" min="1" readOnly value={disk} /></label>
           <label>{t("accessMode")}<select disabled value={accessMode}><option value="internal">{t("internal")}</option><option value="public">{t("public")}</option></select></label>
-          {runtimeProfile && <p className={isHighRiskRuntimeProfile(runtimeProfile) ? "risk-note wide" : "profile-note wide"}>{runtimeProfileDescription(runtimeProfile, locale)}</p>}
+          {selectedTemplate && <p className="profile-note wide"><strong>{selectedTemplate.name}</strong><br />{t("templatePersistenceHelp")}<br />{selectedTemplate.resources.cpu_millis}m CPU · {selectedTemplate.resources.memory_mib} MiB · {selectedTemplate.resources.disk_gib} GiB · {selectedTemplate.resources.gpu_count} GPU</p>}
+          {runtimeProfile && <p className={isHighRiskRuntimeProfile(runtimeProfile) ? "risk-note wide" : "profile-note wide"}><strong>{t("runtimeProfile")}</strong><br />{runtimeProfileDescription(runtimeProfile, t)}<br />{t("runtimeProfileHelp")}</p>}
+          <p className="profile-note wide"><strong>{accessMode === "internal" ? t("internal") : t("public")}</strong><br />{accessMode === "internal" ? t("internalHelp") : t("publicHelp")}</p>
           <label>{t("injectionReferences")}<select value={explicitInjectionRefs ? "selected" : "all"} onChange={(e) => setReferenceMode(e.target.value === "selected")}><option value="all">{t("allMatching")}</option><option value="selected">{t("selectedReferences")}</option></select></label>
           {explicitInjectionRefs && (
             <fieldset className="injection-ref-picker wide">
@@ -264,9 +292,12 @@ export function WorkspacePanel(props: Props) {
         </form>
       )}
 
+      <label className="workspace-search">{t("searchWorkspaces")}<input type="search" value={workspaceSearch} onChange={(event) => setWorkspaceSearch(event.target.value)} placeholder={t("searchWorkspacesHint")} /></label>
+
       <div className="workspace-list" aria-busy={props.busy}>
         {props.workspaces.length === 0 && <div className="empty">{t("noWorkspaces")}</div>}
-        {props.workspaces.map((item) => <WorkspaceCard key={item.workspace.id} item={item} runtime={runtime[item.workspace.id]} onAction={action} onOpenShell={openShell} />)}
+        {props.workspaces.length > 0 && filteredWorkspaces.length === 0 && <div className="empty">{t("noMatchingWorkspaces")}</div>}
+        {filteredWorkspaces.map((item) => <WorkspaceCard key={item.workspace.id} item={item} runtime={runtime[item.workspace.id]} onAction={action} onOpenShell={openShell} onRequestRuntime={refreshWorkspaceRuntime} />)}
       </div>
     </section>
   );

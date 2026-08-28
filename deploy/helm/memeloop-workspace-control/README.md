@@ -6,7 +6,9 @@ The chart supports exactly two runtime shapes:
 - `mode=postgresql`: a Deployment plus an optional HPA. PostgreSQL is external
   and its URL comes from a Kubernetes Secret.
 
-The service exposes Prometheus text at `/metrics`. After a metrics adapter maps
+The service exposes Prometheus text at `/metrics`, including platform and per-user
+workspace/resource aggregates. Set `monitoring.serviceMonitor.enabled=true` when
+the Prometheus Operator is installed. After a metrics adapter maps
 `rate(mwc_http_requests_total)` to `mwc_http_requests_per_second` and publishes
 `mwc_jobs_pending`, PostgreSQL installations can enable `autoscaling.customMetrics` so the HPA
 uses request rate and task backlog in addition to CPU and memory.

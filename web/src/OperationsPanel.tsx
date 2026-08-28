@@ -60,7 +60,7 @@ export function OperationsPanel({ api, principal, organizationId, workspaces, on
   }
 
   async function revokeMember() {
-    if (!memberUser || !confirm(locale === "zh-CN" ? "撤销该用户的组织成员关系和新 SSH 连接权限？" : "Revoke this user's membership and new SSH access?")) return;
+    if (!memberUser || !confirm(t("revokeMemberConfirm"))) return;
     try { await api.removeMembership(organizationId, memberUser); setMemberUser(""); await refresh(); } catch (error) { onError(message(error)); }
   }
 
@@ -72,10 +72,10 @@ export function OperationsPanel({ api, principal, organizationId, workspaces, on
     if (!memberUser) return;
     try {
       const current = await api.userQuota(memberUser);
-      const cpu = prompt(locale === "zh-CN" ? "用户 CPU 总额度（millicores）" : "User CPU quota (millicores)", String(current?.cpu_millis ?? 4000));
-      const memory = prompt(locale === "zh-CN" ? "用户内存总额度（MiB）" : "User memory quota (MiB)", String(current?.memory_mib ?? 8192));
-      const gpu = prompt(locale === "zh-CN" ? "用户 GPU 总额度" : "User GPU quota", String(current?.gpu_count ?? 0));
-      const disk = prompt(locale === "zh-CN" ? "用户磁盘总额度（GiB）" : "User disk quota (GiB)", String(current?.disk_gib ?? 100));
+      const cpu = prompt(t("userCpuQuotaPrompt"), String(current?.cpu_millis ?? 4000));
+      const memory = prompt(t("userMemoryQuotaPrompt"), String(current?.memory_mib ?? 8192));
+      const gpu = prompt(t("userGpuQuotaPrompt"), String(current?.gpu_count ?? 0));
+      const disk = prompt(t("userDiskQuotaPrompt"), String(current?.disk_gib ?? 100));
       if ([cpu, memory, gpu, disk].some((value) => value === null)) return;
       await api.setUserQuota(memberUser, { cpu_millis: Number(cpu), memory_mib: Number(memory), gpu_count: Number(gpu), disk_gib: Number(disk) });
       await refresh();
@@ -85,12 +85,12 @@ export function OperationsPanel({ api, principal, organizationId, workspaces, on
   async function newTemplate(event: FormEvent) {
     event.preventDefault();
     if (!templateProfile) {
-      onError(locale === "zh-CN" ? "必须选择受控运行时配置" : "Choose a controlled runtime profile");
+      onError(t("chooseRuntimeError"));
       return;
     }
     if (
       isHighRiskRuntimeProfile(templateProfile)
-      && !confirm(locale === "zh-CN" ? "该模板将使用集群管理员运行时配置，可能拥有集群级权限。确认创建？" : "This template may grant cluster-level privileges. Create it?")
+      && !confirm(t("templateHighRiskConfirm"))
     ) return;
     setCreatingTemplate(true);
     try {
@@ -120,13 +120,13 @@ export function OperationsPanel({ api, principal, organizationId, workspaces, on
   }
 
   async function newWebhook() {
-    const url = prompt(locale === "zh-CN" ? "公开 HTTPS Webhook URL" : "Public HTTPS webhook URL"); const secret = prompt(locale === "zh-CN" ? "签名密钥（至少 32 字节）" : "Signing credential (at least 32 bytes)");
+    const url = prompt(t("webhookUrlPrompt")); const secret = prompt(t("webhookSecretPrompt"));
     if (!url || !secret) return;
     try { await api.createWebhook({ organization_id: organizationId, url, event_prefix: "workspace.", signing_secret: secret }); await refresh(); } catch (error) { onError(message(error)); }
   }
 
   async function toggleTemplate(template: WorkspaceTemplate) {
-    if (template.enabled && !confirm(locale === "zh-CN" ? `停用模板“${template.name}”？现有工作区不会被删除。` : `Disable template “${template.name}”? Existing workspaces are kept.`)) return;
+    if (template.enabled && !confirm(`${template.name}: ${t("disableTemplateConfirm")}`)) return;
     try {
       await api.setTemplateEnabled(template.id, !template.enabled);
       await refresh();
@@ -134,7 +134,7 @@ export function OperationsPanel({ api, principal, organizationId, workspaces, on
   }
 
   async function newUser() {
-    const name = prompt(locale === "zh-CN" ? "用户显示名" : "User display name"); const token = prompt(locale === "zh-CN" ? "初始 API Token（至少 32 字节，不会回显）" : "Initial API token (at least 32 bytes; write-only)");
+    const name = prompt(t("userDisplayNamePrompt")); const token = prompt(t("initialTokenPrompt"));
     if (!name || !token) return;
     try { await api.createUser(name, token); await refresh(); } catch (error) { onError(message(error)); }
   }
@@ -145,7 +145,7 @@ export function OperationsPanel({ api, principal, organizationId, workspaces, on
       <div className="system-card"><h3>{t("identityQuota")}</h3><dl><dt>{t("user")}</dt><dd>{principal.display_name}</dd><dt>{t("systemAdmin")}</dt><dd>{principal.system_admin ? t("enabled") : t("disabled")}</dd><dt>{t("orgQuota")}</dt><dd>{quota ? `${quota.cpu_millis}m / ${quota.memory_mib}Mi / ${quota.disk_gib}Gi / ${quota.gpu_count} GPU` : t("notEnabled")}</dd></dl>{editingQuota ? <div className="quota-editor"><label>CPU (m)<input type="number" min="100" value={quotaDraft.cpu_millis} onChange={(event) => setQuotaDraft({ ...quotaDraft, cpu_millis: Number(event.target.value) })} /></label><label>{t("memory")} (MiB)<input type="number" min="128" value={quotaDraft.memory_mib} onChange={(event) => setQuotaDraft({ ...quotaDraft, memory_mib: Number(event.target.value) })} /></label><label>GPU<input type="number" min="0" value={quotaDraft.gpu_count} onChange={(event) => setQuotaDraft({ ...quotaDraft, gpu_count: Number(event.target.value) })} /></label><label>{t("disk")} (GiB)<input type="number" min="1" value={quotaDraft.disk_gib} onChange={(event) => setQuotaDraft({ ...quotaDraft, disk_gib: Number(event.target.value) })} /></label><div className="quota-actions"><button className="button primary" onClick={() => void saveQuota()}>{t("saveQuota")}</button><button className="button" onClick={() => setEditingQuota(false)}>{t("cancel")}</button></div></div> : <><button className="button" disabled={!canManageQuota} title={canManageQuota ? undefined : t("noQuotaPermission")} onClick={() => setEditingQuota(true)}>{t("editQuota")}</button>{!canManageQuota && <p className="security-note">{t("noQuotaPermission")}</p>}</>}</div>
       <div className="system-card"><h3>{t("workspaceState")}</h3><div className="state-bars">{Object.entries(states).map(([state, count]) => <div key={state}><span>{state}</span><strong>{count}</strong></div>)}</div></div>
       {scaling && <div className="system-card"><h3>{t("scaling")}</h3><dl><dt>{t("database")}</dt><dd>{scaling.database_mode}</dd><dt>{t("replicas")}</dt><dd>{scaling.configured_replicas}</dd><dt>{t("jobs")}</dt><dd>{scaling.jobs.pending} pending · {scaling.jobs.running} running</dd><dt>{t("schema")}</dt><dd>v{scaling.schema_version}</dd></dl></div>}
-      <div className="system-card wide"><h3>{t("audit")}</h3>{audit.length ? <div className="state-bars">{audit.slice(0, 20).map((record) => <div key={record.id}><span>{record.action}<small> · {new Date(record.created_at * 1000).toLocaleString()}</small></span><code>{record.workspace_id?.slice(0, 8) ?? "organization"}</code></div>)}</div> : <p>{t("noAudit")}</p>}</div>
+      <div className="system-card wide"><h3>{t("audit")}</h3>{audit.length ? <div className="audit-list"><div className="audit-head"><span>{t("auditAction")}</span><span>{t("auditActor")}</span><span>{t("auditWorkspace")}</span><span>{t("auditTime")}</span></div>{audit.slice(0, 20).map((record) => <div className="audit-row" key={record.id}><code>{record.action}</code><span>{record.actor_display_name ?? (record.actor_user_id ? t("unknownActor") : t("systemActor"))}</span><span>{record.workspace_name ? `${record.workspace_name}${record.workspace_short_id ? ` · ${record.workspace_short_id}` : ""}` : record.workspace_id ? record.workspace_id.slice(0, 8) : t("organization")}</span><time dateTime={new Date(record.created_at * 1000).toISOString()}>{new Date(record.created_at * 1000).toLocaleString(locale)}</time></div>)}</div> : <p>{t("noAudit")}</p>}</div>
       {principal.system_admin && <><div className="system-card"><h3>{t("usersRoles")}</h3><button className="button" onClick={() => void newUser()}>{t("createUser")}</button><label>{t("member")}<select value={memberUser} onChange={(event) => setMemberUser(event.target.value)}><option value="">{t("chooseUser")}</option>{users.map((user) => <option key={user.id} value={user.id}>{user.display_name}</option>)}</select></label><label>{t("role")}<select value={memberRole} onChange={(event) => setMemberRole(event.target.value as Role)}><option value="member">member</option><option value="organization_admin">organization_admin</option></select></label><button className="button" disabled={!memberUser} onClick={() => void grantMember()}>{t("saveMembership")}</button><button className="button" disabled={!memberUser} onClick={() => void editUserQuota()}>{t("editUserQuota")}</button><button className="button danger" disabled={!memberUser} onClick={() => void revokeMember()}>{t("revokeMembership")}</button></div><div className="system-card"><h3>{t("imageAllowlist")} · Contract v1</h3><label>{t("ociImage")}<input value={image} onChange={(event) => setImage(event.target.value)} placeholder="registry/image@sha256:…" /></label><button className="button" disabled={!image.trim()} onClick={() => void allowImage()}>{t("allowImage")}</button><div className="state-bars">{images.map((item) => <div key={item.image}><code>{item.image}</code><strong>{item.enabled ? t("enabled") : t("disabled")}</strong></div>)}</div></div><div className="system-card"><h3>{t("createOrganization")}</h3><label>{t("name")}<input value={organizationName} onChange={(event) => setOrganizationName(event.target.value)} /></label><button className="button" disabled={!organizationName.trim()} onClick={() => void createOrganization()}>{t("createOrganization")}</button></div></>}
       <div className="system-card wide">
         <div className="card-heading">
@@ -154,6 +154,7 @@ export function OperationsPanel({ api, principal, organizationId, workspaces, on
             {showTemplateForm ? t("cancel") : t("createTemplate")}
           </button>
         </div>
+        <p>{t("templatePersistenceHelp")}</p>
         {showTemplateForm && (
           <form className="template-form" onSubmit={newTemplate}>
             <label>{t("templateName")}<input required value={templateName} onChange={(event) => setTemplateName(event.target.value)} /></label>
@@ -162,7 +163,7 @@ export function OperationsPanel({ api, principal, organizationId, workspaces, on
               {t("runtimeProfile")}
               <select required value={templateProfile} onChange={(event) => setTemplateProfile(event.target.value as RuntimeProfile | "")}>
                 <option value="">{t("chooseRuntime")}</option>
-                {RUNTIME_PROFILES.map((profile) => <option key={profile.value} value={profile.value}>{locale === "en" ? profile.labelEn : profile.label}</option>)}
+                {RUNTIME_PROFILES.map((profile) => <option key={profile.value} value={profile.value}>{t(profile.labelKey)}</option>)}
               </select>
             </label>
             <label>{t("accessMode")}<select value={templateAccessMode} onChange={(event) => setTemplateAccessMode(event.target.value as AccessMode)}><option value="internal">{t("internal")}</option><option value="public">{t("public")}</option></select></label>
@@ -170,11 +171,12 @@ export function OperationsPanel({ api, principal, organizationId, workspaces, on
             <label>{t("memory")}（MiB）<input required type="number" min="128" value={templateMemory} onChange={(event) => setTemplateMemory(Number(event.target.value))} /></label>
             <label>{t("gpu")}<input required type="number" min="0" value={templateGpu} onChange={(event) => setTemplateGpu(Number(event.target.value))} /></label>
             <label>{t("disk")}（GiB）<input required type="number" min="1" value={templateDisk} onChange={(event) => setTemplateDisk(Number(event.target.value))} /></label>
-            {templateProfile && <p className={isHighRiskRuntimeProfile(templateProfile) ? "risk-note wide" : "profile-note wide"}>{locale === "en" ? RUNTIME_PROFILES.find((profile) => profile.value === templateProfile)?.descriptionEn : RUNTIME_PROFILES.find((profile) => profile.value === templateProfile)?.description}</p>}
+            {templateProfile && <p className={isHighRiskRuntimeProfile(templateProfile) ? "risk-note wide" : "profile-note wide"}>{t(RUNTIME_PROFILES.find((profile) => profile.value === templateProfile)?.descriptionKey ?? "runtimeProfileHelp")}<br />{t("runtimeProfileHelp")}</p>}
+            <p className="profile-note wide">{templateAccessMode === "internal" ? t("internalHelp") : t("publicHelp")}</p>
             <div className="form-actions wide"><button className="button primary" disabled={creatingTemplate}>{creatingTemplate ? t("creating") : t("saveTemplate")}</button></div>
           </form>
         )}
-        {templates.length ? <div className="state-bars template-list">{templates.map((template) => <div key={template.id}><span>{template.name} · {template.access_mode} · {runtimeProfileLabel(template.runtime_profile, locale)} · {template.enabled ? t("enabled") : t("disabled")}</span><code>{template.image}</code>{principal.system_admin && <button className={template.enabled ? "button danger" : "button"} onClick={() => void toggleTemplate(template)}>{template.enabled ? t("disabled") : t("enabled")}</button>}</div>)}</div> : <p>{t("noTemplates")}</p>}
+        {templates.length ? <div className="state-bars template-list">{templates.map((template) => <div key={template.id}><span>{template.name} · {template.access_mode === "internal" ? t("internal") : t("public")} · {runtimeProfileLabel(template.runtime_profile, t)} · {template.enabled ? t("enabled") : t("disabled")}</span><code>{template.image}</code>{principal.system_admin && <button className={template.enabled ? "button danger" : "button"} onClick={() => void toggleTemplate(template)}>{template.enabled ? t("disabled") : t("enabled")}</button>}</div>)}</div> : <p>{t("noTemplates")}</p>}
       </div>
       <div className="system-card wide"><h3>{t("webhook")}</h3><button className="button" onClick={() => void newWebhook()}>{t("addWebhook")}</button>{webhooks.length ? <div className="state-bars">{webhooks.map((hook) => <div key={hook.id}><span>{hook.event_prefix}</span><code>{hook.url}</code></div>)}</div> : <p>{t("noWebhooks")}</p>}</div>
     </div>

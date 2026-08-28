@@ -260,7 +260,9 @@ fn apply_scope(
 pub enum InjectionError {
     #[error("injection key must not be empty")]
     EmptyKey,
-    #[error("injection key must use 1-128 ASCII letters, digits, dots, underscores, or hyphens")]
+    #[error(
+        "injection key must use 1-128 letters, digits, spaces, dots, underscores, or hyphens without leading or trailing spaces"
+    )]
     InvalidKey,
     #[error("injection target is invalid for its kind")]
     InvalidTarget,
@@ -348,6 +350,18 @@ mod tests {
         assert_eq!(
             result[0].item.value,
             InjectionValue::Utf8(multiline.to_owned())
+        );
+    }
+
+    #[test]
+    fn unicode_display_keys_are_valid_but_unsafe_separators_are_not() {
+        let unicode = item("Windows 游戏电脑公钥", "value", false);
+        validate_injection_item(&unicode).unwrap();
+
+        let invalid = item("folder/key", "value", false);
+        assert_eq!(
+            validate_injection_item(&invalid),
+            Err(InjectionError::InvalidKey)
         );
     }
 

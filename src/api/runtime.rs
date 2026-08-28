@@ -1,8 +1,8 @@
-use std::sync::Arc;
+use std::{collections::BTreeMap, sync::Arc};
 
 use axum::{
     Json,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::HeaderMap,
 };
 use k8s_openapi::api::core::v1::{Event, PersistentVolumeClaim, Pod};
@@ -11,11 +11,15 @@ use kube::{
     api::ListParams,
     core::{ApiResource, DynamicObject, GroupVersionKind},
 };
-use serde::Serialize;
-use utoipa::ToSchema;
+use serde::{Deserialize, Serialize};
+use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
-use crate::{auth::Permission, kubernetes::WORKSPACE_ID_LABEL, quota::Resources};
+use crate::{
+    auth::Permission,
+    kubernetes::{OWNER_INSTALLATION_LABEL, WORKSPACE_ID_LABEL},
+    quota::Resources,
+};
 
 use super::{ApiError, AppState, auth::principal};
 
@@ -30,6 +34,17 @@ pub(super) struct WorkspaceRuntimeResponse {
 }
 
 #[derive(Debug, Serialize, ToSchema)]
+pub(super) struct WorkspaceRuntimeEntry {
+    workspace_id: Uuid,
+    runtime: WorkspaceRuntimeResponse,
+}
+
+#[derive(Debug, Deserialize, IntoParams)]
+pub(super) struct WorkspaceRuntimeListQuery {
+    organization_id: Uuid,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
 pub(super) struct PodRuntime {
     name: String,
     phase: Option<String>,
@@ -37,7 +52,7 @@ pub(super) struct PodRuntime {
     restarts: i32,
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub(super) struct PodMetric {
     pod: String,
     container: String,
@@ -52,6 +67,83 @@ pub(super) struct PodEvent {
     event_type: Option<String>,
     count: Option<i32>,
     last_timestamp: Option<String>,
+}
+
+#[utoipa::path(get, path = "/api/v1/workspace-runtimes", params(WorkspaceRuntimeListQuery), responses((status = 200, body = [WorkspaceRuntimeEntry]), (status = 403, body = super::ErrorEnvelope), (status = 503, body = super::ErrorEnvelope)))]
+pub(super) async fn list(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(query): Query<WorkspaceRuntimeListQuery>,
+) -> Result<Json<Vec<WorkspaceRuntimeEntry>>, ApiError> {
+    let actor = principal(&state, &headers).await?;
+    if !actor.allows(Permission::ReadWorkspace, query.organization_id) {
+        return Err(ApiError::Forbidden);
+    }
+    let workspaces = state
+        .database
+        .list_workspaces(query.organization_id)
+        .await?;
+    let client = state
+        .kubernetes_client
+        .clone()
+        .ok_or(ApiError::KubernetesUnavailable)?;
+    let selector = format!(
+        "{OWNER_INSTALLATION_LABEL}={}",
+        state.config.installation_id
+    );
+    let pod_list = Api::<Pod>::all(client.clone())
+        .list(&ListParams::default().labels(&selector))
+        .await
+        .map_err(ApiError::Kubernetes)?;
+    let pvc_list = Api::<PersistentVolumeClaim>::all(client.clone())
+        .list(&ListParams::default().labels(&selector))
+        .await
+        .map_err(ApiError::Kubernetes)?;
+    let metric_result = pod_metrics_all(client, &selector).await;
+    let metrics_available = metric_result.is_ok();
+    let metric_map = metric_result.unwrap_or_else(|error| {
+        tracing::debug!(%error, "metrics.k8s.io is unavailable");
+        BTreeMap::new()
+    });
+    let mut pod_map = BTreeMap::<Uuid, Vec<PodRuntime>>::new();
+    for pod in &pod_list.items {
+        if let Some(workspace_id) = object_workspace_id(&pod.metadata.labels) {
+            pod_map
+                .entry(workspace_id)
+                .or_default()
+                .push(pod_runtime(pod));
+        }
+    }
+    let mut pvc_map = BTreeMap::<Uuid, String>::new();
+    for pvc in pvc_list.items {
+        if let (Some(workspace_id), Some(capacity)) = (
+            object_workspace_id(&pvc.metadata.labels),
+            pvc.status
+                .and_then(|status| status.capacity)
+                .and_then(|capacity| capacity.get("storage").map(|value| value.0.clone())),
+        ) {
+            pvc_map.insert(workspace_id, capacity);
+        }
+    }
+    Ok(Json(
+        workspaces
+            .into_iter()
+            .map(|workspace| {
+                let workspace_id = workspace.id;
+                WorkspaceRuntimeEntry {
+                    workspace_id,
+                    runtime: WorkspaceRuntimeResponse {
+                        allocated: workspace.resources,
+                        pvc_capacity: pvc_map.remove(&workspace_id),
+                        metrics_available,
+                        pods: pod_map.remove(&workspace_id).unwrap_or_default(),
+                        metrics: metric_map.get(&workspace_id).cloned().unwrap_or_default(),
+                        events: Vec::new(),
+                    },
+                }
+            })
+            .collect(),
+    ))
 }
 
 #[utoipa::path(get, path = "/api/v1/workspaces/{workspace_id}/runtime", params(("workspace_id" = Uuid, Path)), responses((status = 200, body = WorkspaceRuntimeResponse), (status = 403, body = super::ErrorEnvelope), (status = 503, body = super::ErrorEnvelope)))]
@@ -205,6 +297,57 @@ async fn pod_metrics(
         }
     }
     Ok(metrics)
+}
+
+async fn pod_metrics_all(
+    client: kube::Client,
+    selector: &str,
+) -> Result<BTreeMap<Uuid, Vec<PodMetric>>, kube::Error> {
+    let resource =
+        ApiResource::from_gvk(&GroupVersionKind::gvk("metrics.k8s.io", "v1beta1", "Pod"));
+    let list = Api::<DynamicObject>::all_with(client, &resource)
+        .list(&ListParams::default().labels(selector))
+        .await?;
+    let mut metrics = BTreeMap::<Uuid, Vec<PodMetric>>::new();
+    for pod in list.items {
+        let Some(workspace_id) = object_workspace_id(&pod.metadata.labels) else {
+            continue;
+        };
+        let pod_name = pod.metadata.name.unwrap_or_default();
+        if let Some(containers) = pod
+            .data
+            .get("containers")
+            .and_then(|value| value.as_array())
+        {
+            for container in containers {
+                metrics.entry(workspace_id).or_default().push(PodMetric {
+                    pod: pod_name.clone(),
+                    container: container
+                        .get("name")
+                        .and_then(|value| value.as_str())
+                        .unwrap_or_default()
+                        .to_owned(),
+                    cpu: container
+                        .pointer("/usage/cpu")
+                        .and_then(|value| value.as_str())
+                        .map(str::to_owned),
+                    memory: container
+                        .pointer("/usage/memory")
+                        .and_then(|value| value.as_str())
+                        .map(str::to_owned),
+                });
+            }
+        }
+    }
+    Ok(metrics)
+}
+
+fn object_workspace_id(labels: &Option<BTreeMap<String, String>>) -> Option<Uuid> {
+    labels
+        .as_ref()?
+        .get(WORKSPACE_ID_LABEL)?
+        .parse::<Uuid>()
+        .ok()
 }
 
 #[cfg(test)]

@@ -36,6 +36,8 @@ fn builder() -> ResourceBuilder {
 fn workspace(state: WorkspaceState) -> WorkspaceResourceSpec {
     WorkspaceResourceSpec {
         id: Uuid::now_v7(),
+        organization_id: Uuid::now_v7(),
+        owner_id: Uuid::now_v7(),
         short_id: "01jabc".to_owned(),
         image: "registry.example/workspace:1".to_owned(),
         resources: Resources {
@@ -315,6 +317,15 @@ fn builds_isolated_single_replica_workspace_with_standard_components() {
         resources.namespace.metadata.name.as_deref(),
         Some("ws-public-a-01jabc")
     );
+    let namespace_labels = resources.namespace.metadata.labels.as_ref().unwrap();
+    assert_eq!(
+        namespace_labels["workspace.memeloop.dev/organization-id"],
+        workspace.organization_id.to_string()
+    );
+    assert_eq!(
+        namespace_labels["workspace.memeloop.dev/owner-user-id"],
+        workspace.owner_id.to_string()
+    );
     assert_eq!(
         resources.stateful_set.spec.as_ref().unwrap().replicas,
         Some(1)
@@ -331,6 +342,12 @@ fn builds_isolated_single_replica_workspace_with_standard_components() {
         .containers;
     assert_eq!(containers[0].name, "workspace");
     assert_eq!(containers[1].name, "ttyd");
+    let ttyd_resources = containers[1].resources.as_ref().unwrap();
+    assert_eq!(ttyd_resources.requests.as_ref().unwrap()["cpu"].0, "10m");
+    assert_eq!(
+        ttyd_resources.requests.as_ref().unwrap()["memory"].0,
+        "16Mi"
+    );
     assert_eq!(
         containers[1].command.as_deref(),
         Some(["/usr/bin/ttyd".to_owned()].as_slice())

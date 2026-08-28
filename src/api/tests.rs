@@ -126,6 +126,8 @@ async fn info_and_metrics_expose_only_operational_metadata() {
     .unwrap();
     assert!(text.contains("mwc_http_requests_total"));
     assert!(text.contains("mwc_jobs{status=\"pending\"}"));
+    assert!(text.contains("# TYPE mwc_workspaces gauge"));
+    assert!(text.contains("mwc_resource_requested{resource=\"cpu\",unit=\"millicores\"} 0"));
 }
 
 #[tokio::test]

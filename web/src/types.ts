@@ -70,8 +70,11 @@ export interface WorkspaceTemplate {
 export interface AuditRecord {
   id: string;
   actor_user_id: string | null;
+  actor_display_name: string | null;
   organization_id: string | null;
   workspace_id: string | null;
+  workspace_name: string | null;
+  workspace_short_id: string | null;
   action: string;
   metadata: Record<string, unknown>;
   created_at: number;
@@ -138,6 +141,11 @@ export interface WorkspaceRuntime {
   pods: { name: string; phase: string | null; ready: boolean; restarts: number }[];
   metrics: { pod: string; container: string; cpu: string | null; memory: string | null }[];
   events: { reason: string | null; message: string | null; event_type: string | null; count: number | null; last_timestamp: string | null }[];
+}
+
+export interface WorkspaceRuntimeEntry {
+  workspace_id: string;
+  runtime: WorkspaceRuntime;
 }
 
 export interface CreateWorkspace {
