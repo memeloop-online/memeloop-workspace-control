@@ -13,6 +13,7 @@ use uuid::Uuid;
 use crate::{
     auth::Permission,
     storage::{CreateWorkspaceTemplate, IdempotencyDecision, ImagePolicy, WorkspaceTemplate},
+    templates::WorkspaceTemplateDocument,
 };
 
 use super::{
@@ -34,6 +35,11 @@ pub(super) struct PutImageRequest {
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub(super) struct SetTemplateEnabledRequest {
     enabled: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub(super) struct ReplaceTemplateRequest {
+    yaml: String,
 }
 
 #[derive(Debug, Deserialize, IntoParams)]
@@ -123,6 +129,10 @@ pub(super) async fn create_template(
     if !allowed {
         return Err(ApiError::Forbidden);
     }
+    let document = parse_template_yaml(&command.yaml)?;
+    if document.spec.cluster_access && !actor.system_admin {
+        return Err(ApiError::Forbidden);
+    }
     let key = idempotency_key(&headers)?;
     let request_hash = hash(&command)?;
     let scope = format!("{}:create-template", actor.user_id);
@@ -140,7 +150,7 @@ pub(super) async fn create_template(
             return Err(error.into());
         }
     };
-    state.database.record_audit(Some(actor.user_id), template.organization_id, None, "template.create", serde_json::json!({"template_id": template.id, "name": template.name, "image": template.image, "runtime_profile": template.runtime_profile}), now).await?;
+    state.database.record_audit(Some(actor.user_id), template.organization_id, None, "template.create", serde_json::json!({"template_id": template.id, "name": template.name, "image": template.template.image}), now).await?;
     finish(
         &state,
         &scope,
@@ -152,7 +162,61 @@ pub(super) async fn create_template(
     .await
 }
 
-#[utoipa::path(put, path = "/api/v1/templates/{template_id}", request_body = SetTemplateEnabledRequest, params(("template_id" = Uuid, Path), ("Idempotency-Key" = String, Header)), responses((status = 200, body = WorkspaceTemplate), (status = 403, body = super::ErrorEnvelope), (status = 422, body = super::ErrorEnvelope)))]
+#[utoipa::path(put, path = "/api/v1/templates/{template_id}", request_body = ReplaceTemplateRequest, params(("template_id" = Uuid, Path), ("Idempotency-Key" = String, Header)), responses((status = 200, body = WorkspaceTemplate), (status = 403, body = super::ErrorEnvelope), (status = 422, body = super::ErrorEnvelope)))]
+pub(super) async fn replace_template(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(template_id): Path<Uuid>,
+    Json(request): Json<ReplaceTemplateRequest>,
+) -> Result<Response, ApiError> {
+    let actor = principal(&state, &headers).await?;
+    let current = state.database.get_workspace_template(template_id).await?;
+    let allowed = current
+        .organization_id
+        .map_or(actor.system_admin, |organization_id| {
+            actor.allows(Permission::ManageOrganization, organization_id)
+        });
+    if !allowed {
+        return Err(ApiError::Forbidden);
+    }
+    let document = parse_template_yaml(&request.yaml)?;
+    if document.spec.cluster_access && !actor.system_admin {
+        return Err(ApiError::Forbidden);
+    }
+    let key = idempotency_key(&headers)?;
+    let request_hash = hash(&(template_id, &request))?;
+    let scope = format!("{}:replace-template", actor.user_id);
+    let now = unix_timestamp()?;
+    if let Some(response) = reserve(&state, &scope, key, &request_hash, now).await? {
+        return Ok(response);
+    }
+    let template = match state
+        .database
+        .replace_workspace_template(template_id, &request.yaml, now)
+        .await
+    {
+        Ok(template) => template,
+        Err(error) => {
+            state
+                .database
+                .abandon_idempotency(&scope, key, &request_hash)
+                .await?;
+            return Err(error.into());
+        }
+    };
+    state.database.record_audit(Some(actor.user_id), template.organization_id, None, "template.update", serde_json::json!({"template_id": template.id, "name": template.name, "image": template.template.image}), now).await?;
+    finish(
+        &state,
+        &scope,
+        key,
+        &request_hash,
+        StatusCode::OK,
+        &template,
+    )
+    .await
+}
+
+#[utoipa::path(put, path = "/api/v1/templates/{template_id}/enabled", request_body = SetTemplateEnabledRequest, params(("template_id" = Uuid, Path), ("Idempotency-Key" = String, Header)), responses((status = 200, body = WorkspaceTemplate), (status = 403, body = super::ErrorEnvelope), (status = 422, body = super::ErrorEnvelope)))]
 pub(super) async fn set_template_enabled(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -160,7 +224,16 @@ pub(super) async fn set_template_enabled(
     Json(request): Json<SetTemplateEnabledRequest>,
 ) -> Result<Response, ApiError> {
     let actor = principal(&state, &headers).await?;
-    if !actor.system_admin {
+    let current = state.database.get_workspace_template(template_id).await?;
+    let allowed = current
+        .organization_id
+        .map_or(actor.system_admin, |organization_id| {
+            actor.allows(Permission::ManageOrganization, organization_id)
+        });
+    if !allowed {
+        return Err(ApiError::Forbidden);
+    }
+    if current.template.cluster_access && !actor.system_admin {
         return Err(ApiError::Forbidden);
     }
     let key = idempotency_key(&headers)?;
@@ -244,4 +317,9 @@ async fn finish<T: Serialize>(
 
 fn enabled_by_default() -> bool {
     true
+}
+
+fn parse_template_yaml(yaml: &str) -> Result<WorkspaceTemplateDocument, ApiError> {
+    WorkspaceTemplateDocument::parse(yaml)
+        .map_err(|_| crate::storage::StorageError::InvalidTemplate.into())
 }

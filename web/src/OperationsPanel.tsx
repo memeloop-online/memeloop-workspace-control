@@ -1,9 +1,8 @@
 import { useEffect, useState } from "react";
-import type { FormEvent } from "react";
 import type { ApiClient } from "./api";
 import { useI18n } from "./i18n";
-import { RUNTIME_PROFILES, isHighRiskRuntimeProfile, runtimeProfileLabel } from "./runtimeProfiles";
-import type { AccessMode, AuditRecord, ImagePolicy, Principal, Resources, Role, RuntimeProfile, ScalingStatus, UserSummary, WebhookSubscription, WorkspaceResponse, WorkspaceTemplate } from "./types";
+import { TemplateEditor } from "./TemplateEditor";
+import type { AuditRecord, ImagePolicy, Principal, Resources, Role, ScalingStatus, UserSummary, WebhookSubscription, WorkspaceResponse, WorkspaceTemplate } from "./types";
 
 export function OperationsPanel({ api, principal, organizationId, workspaces, onError }: { api: ApiClient; principal: Principal; organizationId: string; workspaces: WorkspaceResponse[]; onError: (message: string) => void }) {
   const { locale, t } = useI18n();
@@ -18,16 +17,6 @@ export function OperationsPanel({ api, principal, organizationId, workspaces, on
   const [organizationName, setOrganizationName] = useState("");
   const [memberUser, setMemberUser] = useState("");
   const [memberRole, setMemberRole] = useState<Role>("member");
-  const [showTemplateForm, setShowTemplateForm] = useState(false);
-  const [templateName, setTemplateName] = useState("");
-  const [templateImage, setTemplateImage] = useState("");
-  const [templateProfile, setTemplateProfile] = useState<RuntimeProfile | "">("");
-  const [templateAccessMode, setTemplateAccessMode] = useState<AccessMode>("internal");
-  const [templateCpu, setTemplateCpu] = useState(2000);
-  const [templateMemory, setTemplateMemory] = useState(4096);
-  const [templateGpu, setTemplateGpu] = useState(0);
-  const [templateDisk, setTemplateDisk] = useState(50);
-  const [creatingTemplate, setCreatingTemplate] = useState(false);
   const [editingQuota, setEditingQuota] = useState(false);
   const [quotaDraft, setQuotaDraft] = useState<Resources>({ cpu_millis: 4000, memory_mib: 8192, gpu_count: 0, disk_gib: 100 });
   const canManageQuota = principal.system_admin || principal.memberships.some((membership) => membership.organization_id === organizationId && membership.role === "organization_admin");
@@ -82,55 +71,10 @@ export function OperationsPanel({ api, principal, organizationId, workspaces, on
     } catch (error) { onError(message(error)); }
   }
 
-  async function newTemplate(event: FormEvent) {
-    event.preventDefault();
-    if (!templateProfile) {
-      onError(t("chooseRuntimeError"));
-      return;
-    }
-    if (
-      isHighRiskRuntimeProfile(templateProfile)
-      && !confirm(t("templateHighRiskConfirm"))
-    ) return;
-    setCreatingTemplate(true);
-    try {
-      await api.createTemplate({
-        organization_id: organizationId,
-        name: templateName.trim(),
-        image: templateImage.trim(),
-        runtime_profile: templateProfile,
-        access_mode: templateAccessMode,
-        resources: {
-          cpu_millis: templateCpu,
-          memory_mib: templateMemory,
-          gpu_count: templateGpu,
-          disk_gib: templateDisk,
-        },
-      });
-      setTemplateName("");
-      setTemplateImage("");
-      setTemplateProfile("");
-      setShowTemplateForm(false);
-      await refresh();
-    } catch (error) {
-      onError(message(error));
-    } finally {
-      setCreatingTemplate(false);
-    }
-  }
-
   async function newWebhook() {
     const url = prompt(t("webhookUrlPrompt")); const secret = prompt(t("webhookSecretPrompt"));
     if (!url || !secret) return;
     try { await api.createWebhook({ organization_id: organizationId, url, event_prefix: "workspace.", signing_secret: secret }); await refresh(); } catch (error) { onError(message(error)); }
-  }
-
-  async function toggleTemplate(template: WorkspaceTemplate) {
-    if (template.enabled && !confirm(`${template.name}: ${t("disableTemplateConfirm")}`)) return;
-    try {
-      await api.setTemplateEnabled(template.id, !template.enabled);
-      await refresh();
-    } catch (error) { onError(message(error)); }
   }
 
   async function newUser() {
@@ -147,37 +91,7 @@ export function OperationsPanel({ api, principal, organizationId, workspaces, on
       {scaling && <div className="system-card"><h3>{t("scaling")}</h3><dl><dt>{t("database")}</dt><dd>{scaling.database_mode}</dd><dt>{t("replicas")}</dt><dd>{scaling.configured_replicas}</dd><dt>{t("jobs")}</dt><dd>{scaling.jobs.pending} pending · {scaling.jobs.running} running</dd><dt>{t("schema")}</dt><dd>v{scaling.schema_version}</dd></dl></div>}
       <div className="system-card wide"><h3>{t("audit")}</h3>{audit.length ? <div className="audit-list"><div className="audit-head"><span>{t("auditAction")}</span><span>{t("auditActor")}</span><span>{t("auditWorkspace")}</span><span>{t("auditTime")}</span></div>{audit.slice(0, 20).map((record) => <div className="audit-row" key={record.id}><code>{record.action}</code><span>{record.actor_display_name ?? (record.actor_user_id ? t("unknownActor") : t("systemActor"))}</span><span>{record.workspace_name ? `${record.workspace_name}${record.workspace_short_id ? ` · ${record.workspace_short_id}` : ""}` : record.workspace_id ? record.workspace_id.slice(0, 8) : t("organization")}</span><time dateTime={new Date(record.created_at * 1000).toISOString()}>{new Date(record.created_at * 1000).toLocaleString(locale)}</time></div>)}</div> : <p>{t("noAudit")}</p>}</div>
       {principal.system_admin && <><div className="system-card"><h3>{t("usersRoles")}</h3><button className="button" onClick={() => void newUser()}>{t("createUser")}</button><label>{t("member")}<select value={memberUser} onChange={(event) => setMemberUser(event.target.value)}><option value="">{t("chooseUser")}</option>{users.map((user) => <option key={user.id} value={user.id}>{user.display_name}</option>)}</select></label><label>{t("role")}<select value={memberRole} onChange={(event) => setMemberRole(event.target.value as Role)}><option value="member">member</option><option value="organization_admin">organization_admin</option></select></label><button className="button" disabled={!memberUser} onClick={() => void grantMember()}>{t("saveMembership")}</button><button className="button" disabled={!memberUser} onClick={() => void editUserQuota()}>{t("editUserQuota")}</button><button className="button danger" disabled={!memberUser} onClick={() => void revokeMember()}>{t("revokeMembership")}</button></div><div className="system-card"><h3>{t("imageAllowlist")} · Contract v1</h3><label>{t("ociImage")}<input value={image} onChange={(event) => setImage(event.target.value)} placeholder="registry/image@sha256:…" /></label><button className="button" disabled={!image.trim()} onClick={() => void allowImage()}>{t("allowImage")}</button><div className="state-bars">{images.map((item) => <div key={item.image}><code>{item.image}</code><strong>{item.enabled ? t("enabled") : t("disabled")}</strong></div>)}</div></div><div className="system-card"><h3>{t("createOrganization")}</h3><label>{t("name")}<input value={organizationName} onChange={(event) => setOrganizationName(event.target.value)} /></label><button className="button" disabled={!organizationName.trim()} onClick={() => void createOrganization()}>{t("createOrganization")}</button></div></>}
-      <div className="system-card wide">
-        <div className="card-heading">
-          <h3>{t("templates")}</h3>
-          <button className="button" onClick={() => setShowTemplateForm((current) => !current)}>
-            {showTemplateForm ? t("cancel") : t("createTemplate")}
-          </button>
-        </div>
-        <p>{t("templatePersistenceHelp")}</p>
-        {showTemplateForm && (
-          <form className="template-form" onSubmit={newTemplate}>
-            <label>{t("templateName")}<input required value={templateName} onChange={(event) => setTemplateName(event.target.value)} /></label>
-            <label className="wide">{t("allowedOciImage")}<input required value={templateImage} onChange={(event) => setTemplateImage(event.target.value)} placeholder="registry/image@sha256:…" /></label>
-            <label>
-              {t("runtimeProfile")}
-              <select required value={templateProfile} onChange={(event) => setTemplateProfile(event.target.value as RuntimeProfile | "")}>
-                <option value="">{t("chooseRuntime")}</option>
-                {RUNTIME_PROFILES.map((profile) => <option key={profile.value} value={profile.value}>{t(profile.labelKey)}</option>)}
-              </select>
-            </label>
-            <label>{t("accessMode")}<select value={templateAccessMode} onChange={(event) => setTemplateAccessMode(event.target.value as AccessMode)}><option value="internal">{t("internal")}</option><option value="public">{t("public")}</option></select></label>
-            <label>{t("cpu")}（m）<input required type="number" min="100" value={templateCpu} onChange={(event) => setTemplateCpu(Number(event.target.value))} /></label>
-            <label>{t("memory")}（MiB）<input required type="number" min="128" value={templateMemory} onChange={(event) => setTemplateMemory(Number(event.target.value))} /></label>
-            <label>{t("gpu")}<input required type="number" min="0" value={templateGpu} onChange={(event) => setTemplateGpu(Number(event.target.value))} /></label>
-            <label>{t("disk")}（GiB）<input required type="number" min="1" value={templateDisk} onChange={(event) => setTemplateDisk(Number(event.target.value))} /></label>
-            {templateProfile && <p className={isHighRiskRuntimeProfile(templateProfile) ? "risk-note wide" : "profile-note wide"}>{t(RUNTIME_PROFILES.find((profile) => profile.value === templateProfile)?.descriptionKey ?? "runtimeProfileHelp")}<br />{t("runtimeProfileHelp")}</p>}
-            <p className="profile-note wide">{templateAccessMode === "internal" ? t("internalHelp") : t("publicHelp")}</p>
-            <div className="form-actions wide"><button className="button primary" disabled={creatingTemplate}>{creatingTemplate ? t("creating") : t("saveTemplate")}</button></div>
-          </form>
-        )}
-        {templates.length ? <div className="state-bars template-list">{templates.map((template) => <div key={template.id}><span>{template.name} · {template.access_mode === "internal" ? t("internal") : t("public")} · {runtimeProfileLabel(template.runtime_profile, t)} · {template.enabled ? t("enabled") : t("disabled")}</span><code>{template.image}</code>{principal.system_admin && <button className={template.enabled ? "button danger" : "button"} onClick={() => void toggleTemplate(template)}>{template.enabled ? t("disabled") : t("enabled")}</button>}</div>)}</div> : <p>{t("noTemplates")}</p>}
-      </div>
+      <div className="system-card wide template-system-card"><TemplateEditor api={api} organizationId={organizationId} templates={templates} canGrantClusterAccess={principal.system_admin} onRefresh={refresh} onError={onError} /></div>
       <div className="system-card wide"><h3>{t("webhook")}</h3><button className="button" onClick={() => void newWebhook()}>{t("addWebhook")}</button>{webhooks.length ? <div className="state-bars">{webhooks.map((hook) => <div key={hook.id}><span>{hook.event_prefix}</span><code>{hook.url}</code></div>)}</div> : <p>{t("noWebhooks")}</p>}</div>
     </div>
   </section>;

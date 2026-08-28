@@ -121,6 +121,10 @@ prepare() {
 
 install_compat_openssh() {
     if [ ! -x /usr/sbin/sshd ] || ! command -v jq >/dev/null 2>&1; then
+        if ! command -v apt-get >/dev/null 2>&1; then
+            echo "workspace image must provide sshd and jq, or an apt-compatible package manager" >&2
+            exit 69
+        fi
         export DEBIAN_FRONTEND=noninteractive
         apt-get update
         apt-get install -y --no-install-recommends jq openssh-server
@@ -133,9 +137,11 @@ case "${1:-serve}" in
     prepare-layout) prepare_layout ;;
     prepare) prepare ;;
     serve)
+        install_compat_openssh
         prepare
         exec /usr/sbin/sshd -D -e -f /etc/workspace-platform/sshd_config
         ;;
+    # Kept as a command alias so an already-created Pod template can roll forward safely.
     compat-serve)
         install_compat_openssh
         prepare

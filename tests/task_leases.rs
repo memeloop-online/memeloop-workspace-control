@@ -207,13 +207,13 @@ async fn migrations_are_versioned_and_idempotent() {
         .await
         .unwrap();
     database.migrate().await.unwrap();
-    assert_eq!(database.schema_version().await.unwrap(), 9);
+    assert_eq!(database.schema_version().await.unwrap(), 10);
     database.migrate().await.unwrap();
-    assert_eq!(database.schema_version().await.unwrap(), 9);
+    assert_eq!(database.schema_version().await.unwrap(), 10);
 }
 
 #[tokio::test]
-async fn schema_nine_canonicalizes_legacy_runtime_profile_names() {
+async fn schema_ten_backfills_yaml_for_a_legacy_template_row() {
     let database = Database::connect("sqlite::memory:", "profile-migration".parse().unwrap())
         .await
         .unwrap();
@@ -227,25 +227,23 @@ async fn schema_nine_canonicalizes_legacy_runtime_profile_names() {
         .execute(pool)
         .await
         .unwrap();
-    sqlx::query("DELETE FROM schema_migrations WHERE version = 9")
-        .execute(pool)
-        .await
-        .unwrap();
-    sqlx::query("INSERT INTO schema_migrations (version, applied_at) VALUES (8, 1)")
-        .execute(pool)
-        .await
-        .unwrap();
-
     database.migrate().await.unwrap();
 
-    let profile: String =
-        sqlx::query_scalar("SELECT runtime_profile FROM workspace_templates WHERE id = ?1")
-            .bind(template_id)
-            .fetch_one(pool)
-            .await
-            .unwrap();
-    assert_eq!(profile, "rust_dev");
-    assert_eq!(database.schema_version().await.unwrap(), 9);
+    let template = database
+        .get_workspace_template(Uuid::parse_str(&template_id).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(template.name, "Legacy Rust");
+    assert_eq!(template.template.workspace_user, "rust-dev");
+    assert_eq!(template.template.workspace_home, "/home/rust-dev");
+    assert!(
+        template
+            .yaml
+            .contains("apiVersion: workspace.memeloop.dev/v1")
+    );
+    assert!(!template.yaml.contains("runtimeProfile"));
+    assert!(!template.yaml.contains("runtime_profile"));
+    assert_eq!(database.schema_version().await.unwrap(), 10);
 }
 
 #[tokio::test]

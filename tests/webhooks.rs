@@ -3,7 +3,11 @@ use std::time::Duration;
 use memeloop_workspace_control::{
     crypto::EnvelopeCipher,
     quota::Resources,
-    storage::{CreateOrganization, CreateWebhookSubscription, CreateWorkspace, Database},
+    storage::{
+        CreateOrganization, CreateWebhookSubscription, CreateWorkspace, CreateWorkspaceTemplate,
+        Database,
+    },
+    templates::{WorkspaceTemplateDocument, WorkspaceTemplateSpec},
     workspaces::{AccessMode, WorkspaceAction},
 };
 use uuid::Uuid;
@@ -54,23 +58,40 @@ async fn webhook_secret_is_encrypted_and_workspace_events_enqueue_durable_delive
             .contains(signing_secret)
     );
 
+    let template = database
+        .create_workspace_template(
+            CreateWorkspaceTemplate {
+                organization_id: Some(organization.id),
+                yaml: WorkspaceTemplateDocument::new(
+                    "Webhook workspace",
+                    WorkspaceTemplateSpec::standard(
+                        "registry.example/workspace:1",
+                        AccessMode::Internal,
+                        Resources {
+                            cpu_millis: 1_000,
+                            memory_mib: 2_048,
+                            gpu_count: 0,
+                            disk_gib: 20,
+                        },
+                    ),
+                )
+                .to_yaml()
+                .unwrap(),
+            },
+            3,
+        )
+        .await
+        .unwrap();
+
     let workspace = database
         .create_workspace(
             CreateWorkspace {
                 organization_id: organization.id,
                 owner_id: admin.user_id,
                 name: "delivery-source".to_owned(),
-                template_id: None,
+                template_id: template.id,
                 organization_injection_refs: None,
                 user_injection_refs: None,
-                image: "registry.example/workspace:1".to_owned(),
-                access_mode: AccessMode::Internal,
-                resources: Resources {
-                    cpu_millis: 1_000,
-                    memory_mib: 2_048,
-                    gpu_count: 0,
-                    disk_gib: 20,
-                },
             },
             admin.user_id,
             4,

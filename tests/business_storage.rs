@@ -7,9 +7,11 @@ use memeloop_workspace_control::{
         CreateOrganization, CreateWorkspace, CreateWorkspaceTemplate, Database,
         IdempotencyDecision, InjectionScopeRef, StorageError,
     },
-    workspaces::{AccessMode, WorkspaceAction, WorkspaceRuntimeProfile, WorkspaceState},
+    templates::{WorkspaceTemplateDocument, WorkspaceTemplateSpec},
+    workspaces::{AccessMode, WorkspaceAction, WorkspaceState},
 };
 use std::collections::BTreeMap;
+use uuid::Uuid;
 
 const ADMIN_TOKEN: &str = "admin-token-0000000000000000000000000000";
 
@@ -23,6 +25,34 @@ async fn database() -> Database {
         .await
         .unwrap();
     database
+}
+
+async fn create_template(
+    database: &Database,
+    organization_id: Uuid,
+    name: &str,
+    image: &str,
+    access_mode: AccessMode,
+    resources: Resources,
+    now: i64,
+) -> Uuid {
+    let yaml = WorkspaceTemplateDocument::new(
+        name,
+        WorkspaceTemplateSpec::standard(image, access_mode, resources),
+    )
+    .to_yaml()
+    .unwrap();
+    database
+        .create_workspace_template(
+            CreateWorkspaceTemplate {
+                organization_id: Some(organization_id),
+                yaml,
+            },
+            now,
+        )
+        .await
+        .unwrap()
+        .id
 }
 
 #[tokio::test]
@@ -45,23 +75,30 @@ async fn unconfigured_image_allowlist_defaults_to_deny() {
         )
         .await
         .unwrap();
+    let template_id = create_template(
+        &database,
+        organization.id,
+        "Unconfigured image",
+        "registry.example/workspace:unconfigured",
+        AccessMode::Internal,
+        Resources {
+            cpu_millis: 1_000,
+            memory_mib: 2_048,
+            gpu_count: 0,
+            disk_gib: 20,
+        },
+        101,
+    )
+    .await;
     let result = database
         .create_workspace(
             CreateWorkspace {
                 organization_id: organization.id,
                 owner_id: admin.user_id,
                 name: "must-be-rejected".to_owned(),
-                template_id: None,
+                template_id,
                 organization_injection_refs: None,
                 user_injection_refs: None,
-                image: "registry.example/workspace:unconfigured".to_owned(),
-                access_mode: AccessMode::Internal,
-                resources: Resources {
-                    cpu_millis: 1_000,
-                    memory_mib: 2_048,
-                    gpu_count: 0,
-                    disk_gib: 20,
-                },
             },
             admin.user_id,
             102,
@@ -89,23 +126,30 @@ async fn inline_injection_failure_rolls_back_workspace_and_first_job() {
         .unwrap();
     let cipher =
         EnvelopeCipher::from_base64(&EnvelopeCipher::generate_base64_key().unwrap()).unwrap();
+    let template_id = create_template(
+        &database,
+        organization.id,
+        "Atomic inline",
+        "registry.example/workspace:1",
+        AccessMode::Internal,
+        Resources {
+            cpu_millis: 1_000,
+            memory_mib: 2_048,
+            gpu_count: 0,
+            disk_gib: 20,
+        },
+        101,
+    )
+    .await;
     let result = database
         .create_workspace_with_inline_injections(
             CreateWorkspace {
                 organization_id: organization.id,
                 owner_id: admin.user_id,
                 name: "must-roll-back".to_owned(),
-                template_id: None,
+                template_id,
                 organization_injection_refs: None,
                 user_injection_refs: None,
-                image: "registry.example/workspace:1".to_owned(),
-                access_mode: AccessMode::Internal,
-                resources: Resources {
-                    cpu_millis: 1_000,
-                    memory_mib: 2_048,
-                    gpu_count: 0,
-                    disk_gib: 20,
-                },
             },
             &cipher,
             &[InjectionItem {
@@ -168,15 +212,17 @@ async fn image_allowlist_and_template_contract_are_admitted_atomically() {
         gpu_count: 0,
         disk_gib: 50,
     };
+    let mut template_spec = WorkspaceTemplateSpec::standard(image, AccessMode::Internal, resources);
+    template_spec.workspace_user = "rust-dev".to_owned();
+    template_spec.workspace_home = "/home/rust-dev".to_owned();
+    template_spec.preserve_home_root = true;
     let template = database
         .create_workspace_template(
             CreateWorkspaceTemplate {
                 organization_id: Some(organization.id),
-                name: "Standard".to_owned(),
-                runtime_profile: WorkspaceRuntimeProfile::RustDev,
-                image: image.to_owned(),
-                access_mode: AccessMode::Internal,
-                resources,
+                yaml: WorkspaceTemplateDocument::new("Rust", template_spec.clone())
+                    .to_yaml()
+                    .unwrap(),
             },
             103,
         )
@@ -186,25 +232,18 @@ async fn image_allowlist_and_template_contract_are_admitted_atomically() {
         organization_id: organization.id,
         owner_id: admin.user_id,
         name: "contract-ok".to_owned(),
-        template_id: Some(template.id),
+        template_id: template.id,
         organization_injection_refs: Some(vec!["org-key".to_owned()]),
         user_injection_refs: Some(Vec::new()),
-        image: image.to_owned(),
-        access_mode: AccessMode::Internal,
-        resources,
     };
     let created = database
         .create_workspace(command.clone(), admin.user_id, 104)
         .await
         .unwrap();
-    assert_eq!(created.runtime_profile, WorkspaceRuntimeProfile::RustDev);
+    assert_eq!(created.template, template_spec);
     assert_eq!(
-        database
-            .get_workspace(created.id)
-            .await
-            .unwrap()
-            .runtime_profile,
-        WorkspaceRuntimeProfile::RustDev
+        database.get_workspace(created.id).await.unwrap().template,
+        template_spec
     );
     let refs = database.workspace_injection_refs(created.id).await.unwrap();
     assert_eq!(refs.organization, Some(vec!["org-key".to_owned()]));
@@ -214,23 +253,49 @@ async fn image_allowlist_and_template_contract_are_admitted_atomically() {
     assert_eq!(metrics.users.len(), 1);
     assert_eq!(metrics.users[0].user_id, admin.user_id);
     assert_eq!(metrics.users[0].resources, resources);
-    let mut changed = command;
-    changed.name = "contract-changed".to_owned();
-    changed.resources.cpu_millis = 3_000;
+    let mut changed_template_spec = template_spec.clone();
+    changed_template_spec.resources.cpu_millis = 3_000;
+    changed_template_spec.pod_requests.cpu_millis = 3_000;
+    database
+        .replace_workspace_template(
+            template.id,
+            &WorkspaceTemplateDocument::new("Rust expanded", changed_template_spec)
+                .to_yaml()
+                .unwrap(),
+            105,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        database.get_workspace(created.id).await.unwrap().template,
+        template_spec
+    );
+    let mut missing_template = command;
+    missing_template.name = "contract-changed".to_owned();
+    missing_template.template_id = Uuid::now_v7();
     assert!(matches!(
-        database.create_workspace(changed, admin.user_id, 105).await,
+        database
+            .create_workspace(missing_template, admin.user_id, 105)
+            .await,
         Err(StorageError::TemplateNotFound)
     ));
+    let unapproved_template = create_template(
+        &database,
+        organization.id,
+        "Unapproved",
+        "registry.example/unapproved:latest",
+        AccessMode::Internal,
+        resources,
+        105,
+    )
+    .await;
     let not_allowed = CreateWorkspace {
         organization_id: organization.id,
         owner_id: admin.user_id,
         name: "image-rejected".to_owned(),
-        template_id: None,
+        template_id: unapproved_template,
         organization_injection_refs: None,
         user_injection_refs: None,
-        image: "registry.example/unapproved:latest".to_owned(),
-        access_mode: AccessMode::Internal,
-        resources,
     };
     assert!(matches!(
         database
@@ -314,28 +379,50 @@ async fn workspace_creation_enforces_quota_and_enqueues_lifecycle_actions() {
         .await
         .unwrap();
 
-    let command = |name: &str, cpu_millis| CreateWorkspace {
-        organization_id: organization.id,
-        owner_id: admin.user_id,
-        name: name.to_owned(),
-        template_id: None,
-        organization_injection_refs: None,
-        user_injection_refs: None,
-        image: "registry.example/workspace:1".to_owned(),
-        access_mode: AccessMode::Internal,
-        resources: Resources {
-            cpu_millis,
+    let first_template = create_template(
+        &database,
+        organization.id,
+        "First",
+        "registry.example/workspace:1",
+        AccessMode::Internal,
+        Resources {
+            cpu_millis: 600,
             memory_mib: 512,
             gpu_count: 0,
             disk_gib: 5,
         },
+        102,
+    )
+    .await;
+    let second_template = create_template(
+        &database,
+        organization.id,
+        "Second",
+        "registry.example/workspace:1",
+        AccessMode::Internal,
+        Resources {
+            cpu_millis: 200,
+            memory_mib: 512,
+            gpu_count: 0,
+            disk_gib: 5,
+        },
+        102,
+    )
+    .await;
+    let command = |name: &str, template_id| CreateWorkspace {
+        organization_id: organization.id,
+        owner_id: admin.user_id,
+        name: name.to_owned(),
+        template_id,
+        organization_injection_refs: None,
+        user_injection_refs: None,
     };
     let workspace = database
-        .create_workspace(command("first", 600), admin.user_id, 103)
+        .create_workspace(command("first", first_template), admin.user_id, 103)
         .await
         .unwrap();
     assert_eq!(workspace.state, WorkspaceState::Provisioning);
-    assert_eq!(workspace.runtime_profile, WorkspaceRuntimeProfile::Standard);
+    assert_eq!(workspace.template.resources.cpu_millis, 600);
     let created_events = database
         .list_events(organization.id, None, 100)
         .await
@@ -346,7 +433,7 @@ async fn workspace_creation_enforces_quota_and_enqueues_lifecycle_actions() {
     assert_eq!(created_events[0].payload["state"], "provisioning");
     assert!(matches!(
         database
-            .create_workspace(command("second", 200), admin.user_id, 104)
+            .create_workspace(command("second", second_template), admin.user_id, 104)
             .await,
         Err(StorageError::Quota(_))
     ));
@@ -452,23 +539,30 @@ async fn confirmed_deletion_scrubs_sensitive_workspace_state_and_keeps_a_tombsto
         )
         .await
         .unwrap();
+    let template_id = create_template(
+        &database,
+        organization.id,
+        "Deletion",
+        "registry.example/workspace:1",
+        AccessMode::Internal,
+        Resources {
+            cpu_millis: 1_000,
+            memory_mib: 2_048,
+            gpu_count: 0,
+            disk_gib: 20,
+        },
+        101,
+    )
+    .await;
     let workspace = database
         .create_workspace(
             CreateWorkspace {
                 organization_id: organization.id,
                 owner_id: admin.user_id,
                 name: "sensitive-name".to_owned(),
-                template_id: None,
+                template_id,
                 organization_injection_refs: None,
                 user_injection_refs: None,
-                image: "registry.example/workspace:1".to_owned(),
-                access_mode: AccessMode::Internal,
-                resources: Resources {
-                    cpu_millis: 1_000,
-                    memory_mib: 2_048,
-                    gpu_count: 0,
-                    disk_gib: 20,
-                },
             },
             admin.user_id,
             102,
@@ -589,23 +683,30 @@ async fn user_injection_change_reconciles_every_workspace_the_user_can_access() 
         .upsert_membership(organization.id, member.user_id, Role::Member, 103)
         .await
         .unwrap();
+    let template_id = create_template(
+        &database,
+        organization.id,
+        "Shared",
+        "registry.example/workspace:1",
+        AccessMode::Public,
+        Resources {
+            cpu_millis: 500,
+            memory_mib: 512,
+            gpu_count: 0,
+            disk_gib: 5,
+        },
+        103,
+    )
+    .await;
     database
         .create_workspace(
             CreateWorkspace {
                 organization_id: organization.id,
                 owner_id: admin.user_id,
                 name: "shared".to_owned(),
-                template_id: None,
+                template_id,
                 organization_injection_refs: None,
                 user_injection_refs: None,
-                image: "registry.example/workspace:1".to_owned(),
-                access_mode: AccessMode::Public,
-                resources: Resources {
-                    cpu_millis: 500,
-                    memory_mib: 512,
-                    gpu_count: 0,
-                    disk_gib: 5,
-                },
             },
             admin.user_id,
             104,

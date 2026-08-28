@@ -144,6 +144,11 @@ impl Database {
                         sqlx::query(migration).execute(&mut *transaction).await?;
                     }
                 }
+                if version < 10 {
+                    for migration in schema::TEMPLATE_YAML_MIGRATIONS {
+                        sqlx::query(migration).execute(&mut *transaction).await?;
+                    }
+                }
                 if version < schema::SCHEMA_VERSION {
                     sqlx::query(
                         "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, ?2)",
@@ -182,6 +187,11 @@ impl Database {
                         sqlx::query(migration).execute(&mut *transaction).await?;
                     }
                 }
+                if version < 10 {
+                    for migration in schema::TEMPLATE_YAML_MIGRATIONS {
+                        sqlx::query(migration).execute(&mut *transaction).await?;
+                    }
+                }
                 if version < schema::SCHEMA_VERSION {
                     sqlx::query(
                         "INSERT INTO schema_migrations (version, applied_at) VALUES ($1, $2)",
@@ -194,6 +204,7 @@ impl Database {
                 transaction.commit().await?;
             }
         }
+        self.backfill_template_yaml().await?;
         self.ensure_installation_identity().await
     }
 

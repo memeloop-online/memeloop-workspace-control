@@ -184,6 +184,10 @@ pub fn router(state: Arc<AppState>) -> Router {
         )
         .route(
             "/api/v1/templates/{template_id}",
+            axum::routing::put(catalog::replace_template),
+        )
+        .route(
+            "/api/v1/templates/{template_id}/enabled",
             axum::routing::put(catalog::set_template_enabled),
         )
         .route(
@@ -296,6 +300,7 @@ async fn system_info(State(state): State<Arc<AppState>>) -> Json<SystemInfoRespo
         catalog::put_image,
         catalog::list_templates,
         catalog::create_template,
+        catalog::replace_template,
         catalog::set_template_enabled,
         workspaces::create,
         workspaces::list,
@@ -330,7 +335,9 @@ async fn system_info(State(state): State<Arc<AppState>>) -> Json<SystemInfoRespo
         crate::workspaces::Workspace,
         crate::workspaces::WorkspaceState,
         crate::workspaces::AccessMode,
-        crate::workspaces::WorkspaceRuntimeProfile,
+        crate::templates::WorkspaceTemplateDocument,
+        crate::templates::WorkspaceTemplateSpec,
+        crate::templates::PodResourceRequest,
         crate::quota::Resources,
         crate::injections::InjectionItem,
         crate::injections::InjectionValue,
@@ -355,6 +362,8 @@ async fn system_info(State(state): State<Arc<AppState>>) -> Json<SystemInfoRespo
         admin::MembershipRequest,
         admin::ScalingResponse,
         catalog::PutImageRequest,
+        catalog::ReplaceTemplateRequest,
+        catalog::SetTemplateEnabledRequest,
         ErrorEnvelope,
         ErrorBody
     )),

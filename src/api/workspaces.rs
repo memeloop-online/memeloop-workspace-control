@@ -96,6 +96,20 @@ pub(super) async fn create(
     {
         return Err(ApiError::Forbidden);
     }
+    let template = state
+        .database
+        .get_workspace_template(command.template_id)
+        .await?;
+    if !template.enabled
+        || template
+            .organization_id
+            .is_some_and(|id| id != command.organization_id)
+    {
+        return Err(crate::storage::StorageError::TemplateNotFound.into());
+    }
+    if template.template.cluster_access && !actor.system_admin {
+        return Err(ApiError::Forbidden);
+    }
     let key = idempotency_key(&headers)?;
     let request_hash = hash(&serde_json::json!({
         "request": &request,

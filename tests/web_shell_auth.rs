@@ -9,7 +9,8 @@ use memeloop_workspace_control::{
     api::{AppState, internal_router, router},
     config::{AppConfig, InstallationId},
     quota::Resources,
-    storage::{CreateOrganization, CreateWorkspace, Database},
+    storage::{CreateOrganization, CreateWorkspace, CreateWorkspaceTemplate, Database},
+    templates::{WorkspaceTemplateDocument, WorkspaceTemplateSpec},
     workspaces::{AccessMode, WorkspaceAction},
 };
 use serde_json::Value;
@@ -43,23 +44,39 @@ async fn web_shell_ticket_is_ready_only_scoped_and_consumed_once() {
         )
         .await
         .unwrap();
+    let template = database
+        .create_workspace_template(
+            CreateWorkspaceTemplate {
+                organization_id: Some(organization.id),
+                yaml: WorkspaceTemplateDocument::new(
+                    "Web shell",
+                    WorkspaceTemplateSpec::standard(
+                        "registry.example/workspace:1",
+                        AccessMode::Public,
+                        Resources {
+                            cpu_millis: 500,
+                            memory_mib: 512,
+                            gpu_count: 0,
+                            disk_gib: 5,
+                        },
+                    ),
+                )
+                .to_yaml()
+                .unwrap(),
+            },
+            101,
+        )
+        .await
+        .unwrap();
     let workspace = database
         .create_workspace(
             CreateWorkspace {
                 organization_id: organization.id,
                 owner_id: user.user_id,
                 name: "shell".to_owned(),
-                template_id: None,
+                template_id: template.id,
                 organization_injection_refs: None,
                 user_injection_refs: None,
-                image: "registry.example/workspace:1".to_owned(),
-                access_mode: AccessMode::Public,
-                resources: Resources {
-                    cpu_millis: 500,
-                    memory_mib: 512,
-                    gpu_count: 0,
-                    disk_gib: 5,
-                },
             },
             user.user_id,
             102,

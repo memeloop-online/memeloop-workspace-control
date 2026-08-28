@@ -52,13 +52,26 @@ pub(super) async fn validate_inline_injections(
             },
         )
         .await?;
+    let template = state
+        .database
+        .get_workspace_template(command.template_id)
+        .await?;
+    if !template.enabled
+        || template
+            .organization_id
+            .is_some_and(|id| id != command.organization_id)
+    {
+        return Err(ApiError::from(
+            crate::storage::StorageError::TemplateNotFound,
+        ));
+    }
     let selection = InjectionSelection {
         workspace_id: None,
         organization_id: command.organization_id,
         owner_id: command.owner_id,
-        template_id: command.template_id,
-        image: &command.image,
-        access_mode: command.access_mode,
+        template_id: Some(command.template_id),
+        image: &template.template.image,
+        access_mode: template.template.access_mode,
     };
     let organization = select_injections(&organization, selection);
     let user = select_injections(&user, selection);

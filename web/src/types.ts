@@ -10,11 +10,6 @@ export type WorkspaceState =
   | "deleted"
   | "failed";
 export type AccessMode = "internal" | "public";
-export type RuntimeProfile =
-  | "standard"
-  | "rust_dev"
-  | "node_dev"
-  | "maintainance";
 export type InjectionScope = "organization" | "user" | "workspace";
 export type InjectionKind =
   | "environment_variable"
@@ -61,10 +56,27 @@ export interface WorkspaceTemplate {
   organization_id: string | null;
   name: string;
   image: string;
-  runtime_profile: RuntimeProfile;
   access_mode: AccessMode;
   resources: Resources;
+  pod_requests: PodResourceRequest;
+  ephemeral_storage_limit_mib: number | null;
+  workspace_user: string;
+  workspace_home: string;
+  preserve_home_root: boolean;
+  buildkit: boolean;
+  cluster_access: boolean;
+  required_node_names: string[];
+  preferred_node_names: string[];
+  node_selector: Record<string, string>;
+  environment: Record<string, string>;
+  yaml: string;
   enabled: boolean;
+}
+
+export interface PodResourceRequest {
+  cpu_millis: number;
+  memory_mib: number;
+  ephemeral_storage_mib: number | null;
 }
 
 export interface AuditRecord {
@@ -112,8 +124,18 @@ export interface Workspace {
   name: string;
   template_id: string | null;
   image: string;
-  runtime_profile: RuntimeProfile;
   access_mode: AccessMode;
+  pod_requests: PodResourceRequest;
+  ephemeral_storage_limit_mib: number | null;
+  workspace_user: string;
+  workspace_home: string;
+  preserve_home_root: boolean;
+  buildkit: boolean;
+  cluster_access: boolean;
+  required_node_names: string[];
+  preferred_node_names: string[];
+  node_selector: Record<string, string>;
+  environment: Record<string, string>;
   state: WorkspaceState;
   resources: Resources;
   generation: number;
@@ -152,13 +174,9 @@ export interface CreateWorkspace {
   organization_id: string;
   owner_id: string;
   name: string;
-  template_id: string | null;
+  template_id: string;
   organization_injection_refs: string[] | null;
   user_injection_refs: string[] | null;
-  image: string;
-  runtime_profile: RuntimeProfile;
-  access_mode: AccessMode;
-  resources: Resources;
 }
 
 export interface StoredInjection {

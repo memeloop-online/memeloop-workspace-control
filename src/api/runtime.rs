@@ -133,7 +133,7 @@ pub(super) async fn list(
                 WorkspaceRuntimeEntry {
                     workspace_id,
                     runtime: WorkspaceRuntimeResponse {
-                        allocated: workspace.resources,
+                        allocated: workspace.template.resources,
                         pvc_capacity: pvc_map.remove(&workspace_id),
                         metrics_available,
                         pods: pod_map.remove(&workspace_id).unwrap_or_default(),
@@ -198,7 +198,7 @@ pub(super) async fn get(
         }
     };
     Ok(Json(WorkspaceRuntimeResponse {
-        allocated: workspace.resources,
+        allocated: workspace.template.resources,
         pvc_capacity,
         metrics_available,
         pods,

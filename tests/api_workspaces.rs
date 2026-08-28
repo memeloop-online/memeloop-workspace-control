@@ -12,8 +12,9 @@ use memeloop_workspace_control::{
     crypto::EnvelopeCipher,
     injections::InjectionScope,
     quota::Resources,
-    storage::{Database, InjectionScopeRef},
-    workspaces::WorkspaceAction,
+    storage::{CreateWorkspaceTemplate, Database, InjectionScopeRef},
+    templates::{WorkspaceTemplateDocument, WorkspaceTemplateSpec},
+    workspaces::{AccessMode, WorkspaceAction},
 };
 use serde_json::{Value, json};
 use tower::ServiceExt;
@@ -149,20 +150,36 @@ async fn authenticated_workspace_api_enforces_rbac_and_exact_idempotent_replay()
         )
         .await
         .unwrap();
+    let template = database
+        .create_workspace_template(
+            CreateWorkspaceTemplate {
+                organization_id: Some(organization_id),
+                yaml: WorkspaceTemplateDocument::new(
+                    "API template",
+                    WorkspaceTemplateSpec::standard(
+                        "registry.example/workspace:1",
+                        AccessMode::Internal,
+                        Resources {
+                            cpu_millis: 1_000,
+                            memory_mib: 2_048,
+                            gpu_count: 0,
+                            disk_gib: 20,
+                        },
+                    ),
+                )
+                .to_yaml()
+                .unwrap(),
+            },
+            2,
+        )
+        .await
+        .unwrap();
 
     let workspace_request = json!({
         "organization_id": organization_id,
         "owner_id": admin_id,
         "name": "primary",
-        "template_id": null,
-        "image": "registry.example/workspace:1",
-        "access_mode": "internal",
-        "resources": {
-            "cpu_millis": 1000,
-            "memory_mib": 2048,
-            "gpu_count": 0,
-            "disk_gib": 20
-        },
+        "template_id": template.id,
         "inline_workspace_injections": [{
             "key": "multiline-config",
             "kind": "config_file",
@@ -289,10 +306,7 @@ async fn authenticated_workspace_api_enforces_rbac_and_exact_idempotent_replay()
                 "organization_id": organization_id,
                 "owner_id": admin_id,
                 "name": "different",
-                "template_id": null,
-                "image": "registry.example/workspace:1",
-                "access_mode": "internal",
-                "resources": {"cpu_millis": 1, "memory_mib": 1, "gpu_count": 0, "disk_gib": 1}
+                "template_id": template.id
             })),
         ))
         .await

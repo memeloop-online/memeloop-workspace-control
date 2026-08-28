@@ -5,7 +5,8 @@ use memeloop_workspace_control::{
         OwnershipError, ResourceBuilder, WorkspaceResourceSpec,
     },
     quota::Resources,
-    workspaces::{AccessMode, WorkspaceRuntimeProfile, WorkspaceState},
+    templates::WorkspaceTemplateSpec,
+    workspaces::{AccessMode, WorkspaceState},
 };
 use std::collections::BTreeMap;
 use uuid::Uuid;
@@ -39,18 +40,55 @@ fn workspace(state: WorkspaceState) -> WorkspaceResourceSpec {
         organization_id: Uuid::now_v7(),
         owner_id: Uuid::now_v7(),
         short_id: "01jabc".to_owned(),
-        image: "registry.example/workspace:1".to_owned(),
-        resources: Resources {
-            cpu_millis: 2_000,
-            memory_mib: 4_096,
-            gpu_count: 0,
-            disk_gib: 50,
-        },
-        access_mode: AccessMode::Public,
+        template: WorkspaceTemplateSpec::standard(
+            "registry.example/workspace:1",
+            AccessMode::Public,
+            Resources {
+                cpu_millis: 2_000,
+                memory_mib: 4_096,
+                gpu_count: 0,
+                disk_gib: 50,
+            },
+        ),
         state,
         generation: 1,
-        runtime_profile: WorkspaceRuntimeProfile::Standard,
     }
+}
+
+fn node_template(image: &str, resources: Resources) -> WorkspaceTemplateSpec {
+    let mut template = WorkspaceTemplateSpec::standard(image, AccessMode::Public, resources);
+    template.workspace_user = "node-dev".to_owned();
+    template.workspace_home = "/home/node-dev".to_owned();
+    template.preserve_home_root = true;
+    template.buildkit = true;
+    template.pod_requests.cpu_millis = 1_000;
+    template.pod_requests.memory_mib = 1_024;
+    template.pod_requests.ephemeral_storage_mib = Some(256);
+    template.ephemeral_storage_limit_mib = Some(1_024);
+    template.required_node_names = vec!["westlake".to_owned(), "haixia".to_owned()];
+    template.environment.extend([
+        ("HOME".to_owned(), "/home/node-dev".to_owned()),
+        (
+            "PATH".to_owned(),
+            "/usr/local/bin:/usr/local/sbin:/home/node-dev/.local/bin:/home/node-dev/.local/share/pnpm:/usr/sbin:/usr/bin:/sbin:/bin".to_owned(),
+        ),
+        (
+            "BUILDKIT_HOST".to_owned(),
+            "unix:///home/node-dev/.cache/buildkit/runtime/buildkit/buildkitd.sock".to_owned(),
+        ),
+    ]);
+    template
+}
+
+fn rust_template(image: &str, resources: Resources) -> WorkspaceTemplateSpec {
+    let mut template = WorkspaceTemplateSpec::standard(image, AccessMode::Public, resources);
+    template.workspace_user = "rust-dev".to_owned();
+    template.workspace_home = "/home/rust-dev".to_owned();
+    template.preserve_home_root = true;
+    template.buildkit = true;
+    template.pod_requests.cpu_millis = 2_000;
+    template.pod_requests.memory_mib = 4_096;
+    template
 }
 
 #[test]
@@ -110,7 +148,7 @@ fn observability_labels_do_not_change_statefulset_immutable_fields() {
 #[test]
 fn internal_workspace_allows_cluster_ssh_without_a_public_jump_host() {
     let mut workspace = workspace(WorkspaceState::Ready);
-    workspace.access_mode = AccessMode::Internal;
+    workspace.template.access_mode = AccessMode::Internal;
     let mut internal_builder = builder();
     internal_builder.web_shell_domain = None;
     let resources = internal_builder.build(&workspace).unwrap();
@@ -161,7 +199,7 @@ fn web_shell_allows_configured_host_network_gateway_sources() {
 #[test]
 fn configured_tailnet_access_adds_an_ssh_only_automatic_node_port() {
     let mut workspace = workspace(WorkspaceState::Ready);
-    workspace.access_mode = AccessMode::Internal;
+    workspace.template.access_mode = AccessMode::Internal;
     let mut tailnet_builder = builder();
     tailnet_builder.internal_ssh_node_port_enabled = true;
     let resources = tailnet_builder.build(&workspace).unwrap();
@@ -219,9 +257,15 @@ fn tailnet_node_port_is_not_created_for_public_workspaces() {
 }
 
 #[test]
-fn only_maintainance_profile_receives_a_owned_cluster_admin_identity() {
+fn only_templates_requesting_cluster_access_receive_an_owned_cluster_admin_identity() {
     let mut workspace = workspace(WorkspaceState::Ready);
-    workspace.runtime_profile = WorkspaceRuntimeProfile::Maintainance;
+    workspace.template.cluster_access = true;
+    workspace.template.workspace_user = "cluster-admin".to_owned();
+    workspace.template.workspace_home = "/home/cluster-admin".to_owned();
+    workspace.template.environment.insert(
+        "KUBECONFIG".to_owned(),
+        "/home/cluster-admin/.mwc/kubeconfig".to_owned(),
+    );
     let workspace_id = workspace.id;
     let resources = builder().build(&workspace).unwrap();
 
@@ -288,24 +332,54 @@ fn only_maintainance_profile_receives_a_owned_cluster_admin_identity() {
 }
 
 #[test]
-fn non_admin_profiles_never_receive_a_service_account_token() {
-    for profile in [
-        WorkspaceRuntimeProfile::Standard,
-        WorkspaceRuntimeProfile::RustDev,
-        WorkspaceRuntimeProfile::NodeDev,
+fn templates_without_cluster_access_never_receive_a_service_account_token() {
+    for (name, template) in [
+        (
+            "standard",
+            WorkspaceTemplateSpec::standard(
+                "registry.example/workspace:1",
+                AccessMode::Public,
+                Resources {
+                    cpu_millis: 2_000,
+                    memory_mib: 4_096,
+                    gpu_count: 0,
+                    disk_gib: 50,
+                },
+            ),
+        ),
+        (
+            "rust",
+            rust_template(
+                "registry.example/workspace:1",
+                Resources {
+                    cpu_millis: 6_000,
+                    memory_mib: 8_192,
+                    gpu_count: 0,
+                    disk_gib: 50,
+                },
+            ),
+        ),
+        (
+            "node",
+            node_template(
+                "registry.example/workspace:1",
+                Resources {
+                    cpu_millis: 6_000,
+                    memory_mib: 4_096,
+                    gpu_count: 0,
+                    disk_gib: 50,
+                },
+            ),
+        ),
     ] {
         let mut workspace = workspace(WorkspaceState::Ready);
-        workspace.runtime_profile = profile;
+        workspace.template = template;
         let resources = builder().build(&workspace).unwrap();
-        assert!(resources.service_account.is_none(), "{profile:?}");
-        assert!(resources.cluster_role_binding.is_none(), "{profile:?}");
+        assert!(resources.service_account.is_none(), "{name}");
+        assert!(resources.cluster_role_binding.is_none(), "{name}");
         let pod = resources.stateful_set.spec.unwrap().template.spec.unwrap();
-        assert_eq!(pod.service_account_name, None, "{profile:?}");
-        assert_eq!(
-            pod.automount_service_account_token,
-            Some(false),
-            "{profile:?}"
-        );
+        assert_eq!(pod.service_account_name, None, "{name}");
+        assert_eq!(pod.automount_service_account_token, Some(false), "{name}");
         let workspace_container = pod
             .containers
             .iter()
@@ -467,7 +541,7 @@ fn builds_isolated_single_replica_workspace_with_standard_components() {
 fn gpu_workspaces_request_the_standard_extended_resource() {
     let builder = builder();
     let mut workspace = workspace(WorkspaceState::Ready);
-    workspace.resources.gpu_count = 2;
+    workspace.template.resources.gpu_count = 2;
 
     let resources = builder
         .build(&workspace)
@@ -490,13 +564,17 @@ fn gpu_workspaces_request_the_standard_extended_resource() {
 }
 
 #[test]
-fn node_profile_reuses_the_existing_image_with_platform_bootstrap() {
+fn node_template_reuses_the_existing_image_with_platform_bootstrap() {
     let mut workspace = workspace(WorkspaceState::Ready);
-    workspace.runtime_profile = WorkspaceRuntimeProfile::NodeDev;
-    workspace.image = "harbor.k3s.onetwo.website/library/node-dev:fixed@sha256:abc".to_owned();
-    workspace.resources.cpu_millis = 6_000;
-    workspace.resources.memory_mib = 4_096;
-    workspace.resources.disk_gib = 30;
+    workspace.template = node_template(
+        "harbor.k3s.onetwo.website/library/node-dev:fixed@sha256:abc",
+        Resources {
+            cpu_millis: 6_000,
+            memory_mib: 4_096,
+            gpu_count: 0,
+            disk_gib: 30,
+        },
+    );
 
     let resources = builder().build(&workspace).unwrap();
     let pod = resources
@@ -513,15 +591,15 @@ fn node_profile_reuses_the_existing_image_with_platform_bootstrap() {
         .iter()
         .find(|container| container.name == "workspace")
         .unwrap();
-    assert_eq!(dev.image.as_deref(), Some(workspace.image.as_str()));
+    assert_eq!(
+        dev.image.as_deref(),
+        Some(workspace.template.image.as_str())
+    );
     assert_eq!(
         dev.command.as_deref(),
         Some(["/etc/workspace-platform/mwc-workspace-bootstrap".to_owned()].as_slice())
     );
-    assert_eq!(
-        dev.args.as_deref(),
-        Some(["compat-serve".to_owned()].as_slice())
-    );
+    assert_eq!(dev.args.as_deref(), Some(["serve".to_owned()].as_slice()));
     let readiness = dev.readiness_probe.as_ref().unwrap();
     assert_eq!(
         readiness.tcp_socket.as_ref().unwrap().port,
@@ -533,9 +611,9 @@ fn node_profile_reuses_the_existing_image_with_platform_bootstrap() {
         })
     );
     let quantities = dev.resources.as_ref().unwrap();
-    assert_eq!(quantities.requests.as_ref().unwrap()["cpu"].0, "1");
-    assert_eq!(quantities.requests.as_ref().unwrap()["memory"].0, "1Gi");
-    assert_eq!(quantities.limits.as_ref().unwrap()["cpu"].0, "6");
+    assert_eq!(quantities.requests.as_ref().unwrap()["cpu"].0, "1000m");
+    assert_eq!(quantities.requests.as_ref().unwrap()["memory"].0, "1024Mi");
+    assert_eq!(quantities.limits.as_ref().unwrap()["cpu"].0, "6000m");
     assert_eq!(quantities.limits.as_ref().unwrap()["memory"].0, "4096Mi");
     assert!(pod.containers.iter().any(|container| {
         container.name == "buildkitd"
@@ -604,9 +682,17 @@ fn node_profile_reuses_the_existing_image_with_platform_bootstrap() {
 }
 
 #[test]
-fn rust_profile_uses_the_single_canonical_rust_home() {
+fn rust_template_uses_the_single_canonical_rust_home() {
     let mut workspace = workspace(WorkspaceState::Ready);
-    workspace.runtime_profile = WorkspaceRuntimeProfile::RustDev;
+    workspace.template = rust_template(
+        "registry.example/workspace:1",
+        Resources {
+            cpu_millis: 6_000,
+            memory_mib: 8_192,
+            gpu_count: 0,
+            disk_gib: 50,
+        },
+    );
     let resources = builder().build(&workspace).unwrap();
     let mounts = resources
         .stateful_set

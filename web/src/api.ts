@@ -118,14 +118,20 @@ export class ApiClient {
     return this.request(`/api/v1/templates?organization_id=${organizationId}`);
   }
 
-  createTemplate(input: Omit<WorkspaceTemplate, "id" | "enabled">): Promise<WorkspaceTemplate> {
+  createTemplate(input: { organization_id: string | null; yaml: string }): Promise<WorkspaceTemplate> {
     return this.request("/api/v1/templates", {
       method: "POST", body: JSON.stringify(input), idempotent: true,
     });
   }
 
-  setTemplateEnabled(templateId: string, enabled: boolean): Promise<WorkspaceTemplate> {
+  replaceTemplate(templateId: string, yaml: string): Promise<WorkspaceTemplate> {
     return this.request(`/api/v1/templates/${templateId}`, {
+      method: "PUT", body: JSON.stringify({ yaml }), idempotent: true,
+    });
+  }
+
+  setTemplateEnabled(templateId: string, enabled: boolean): Promise<WorkspaceTemplate> {
+    return this.request(`/api/v1/templates/${templateId}/enabled`, {
       method: "PUT", body: JSON.stringify({ enabled }), idempotent: true,
     });
   }

@@ -2,13 +2,10 @@ import { useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
 import type { ApiClient } from "./api";
 import { useI18n } from "./i18n";
-import { isHighRiskRuntimeProfile, runtimeProfileDescription, runtimeProfileLabel } from "./runtimeProfiles";
 import { WorkspaceCard } from "./WorkspaceCard";
 import type {
-  AccessMode,
   CreateWorkspace,
   Principal,
-  RuntimeProfile,
   StoredInjection,
   WorkspaceResponse,
   WorkspaceRuntime,
@@ -31,13 +28,6 @@ export function WorkspacePanel(props: Props) {
   const [templates, setTemplates] = useState<WorkspaceTemplate[]>([]);
   const [templateId, setTemplateId] = useState("");
   const [name, setName] = useState("");
-  const [image, setImage] = useState("");
-  const [runtimeProfile, setRuntimeProfile] = useState<RuntimeProfile | "">("");
-  const [accessMode, setAccessMode] = useState<AccessMode>("internal");
-  const [cpu, setCpu] = useState(1000);
-  const [memory, setMemory] = useState(2048);
-  const [gpu, setGpu] = useState(0);
-  const [disk, setDisk] = useState(20);
   const [organizationInjections, setOrganizationInjections] = useState<StoredInjection[]>([]);
   const [userInjections, setUserInjections] = useState<StoredInjection[]>([]);
   const [explicitInjectionRefs, setExplicitInjectionRefs] = useState(false);
@@ -117,49 +107,35 @@ export function WorkspacePanel(props: Props) {
       workspace.name,
       workspace.short_id,
       workspace.state,
-      workspace.runtime_profile,
-      runtimeProfileLabel(workspace.runtime_profile, t),
+      workspace.image,
+      workspace.workspace_user,
     ].some((value) => value.toLocaleLowerCase().includes(query)));
-  }, [props.workspaces, t, workspaceSearch]);
+  }, [props.workspaces, workspaceSearch]);
 
   async function create(event: FormEvent) {
     event.preventDefault();
-    if (!templateId || !runtimeProfile) {
+    if (!templateId) {
       props.onError(t("chooseTemplateError"));
       return;
     }
-    if (
-      isHighRiskRuntimeProfile(runtimeProfile)
-      && !confirm(t("workspaceHighRiskConfirm"))
-    ) return;
+    if (selectedTemplate?.cluster_access && !confirm(t("workspaceHighRiskConfirm"))) return;
     const command: CreateWorkspace = {
       organization_id: props.organizationId,
       owner_id: props.principal.user_id,
       name,
-      template_id: templateId || null,
+      template_id: templateId,
       organization_injection_refs: explicitInjectionRefs
         ? organizationInjections
             .filter((item) => item.locked || organizationRefs.includes(item.key))
             .map((item) => item.key)
         : null,
       user_injection_refs: explicitInjectionRefs ? userRefs : null,
-      image,
-      runtime_profile: runtimeProfile,
-      access_mode: accessMode,
-      resources: {
-        cpu_millis: cpu,
-        memory_mib: memory,
-        gpu_count: gpu,
-        disk_gib: disk,
-      },
     };
     setSubmitting(true);
     try {
       await props.api.createWorkspace(command);
       setName("");
       setTemplateId("");
-      setRuntimeProfile("");
-      setImage("");
       setShowCreate(false);
       await props.onRefresh();
     } catch (error) {
@@ -183,23 +159,6 @@ export function WorkspacePanel(props: Props) {
     update: (value: string[]) => void,
   ) {
     update(selected.includes(key) ? selected.filter((value) => value !== key) : [...selected, key]);
-  }
-
-  function selectTemplate(id: string) {
-    setTemplateId(id);
-    const template = templates.find((item) => item.id === id);
-    if (!template) {
-      setImage("");
-      setRuntimeProfile("");
-      return;
-    }
-    setImage(template.image);
-    setRuntimeProfile(template.runtime_profile);
-    setAccessMode(template.access_mode);
-    setCpu(template.resources.cpu_millis);
-    setMemory(template.resources.memory_mib);
-    setGpu(template.resources.gpu_count);
-    setDisk(template.resources.disk_gib);
   }
 
   async function action(
@@ -260,17 +219,8 @@ export function WorkspacePanel(props: Props) {
       {showCreate && (
         <form className="create-card" onSubmit={create}>
           <label>{t("name")}<input required value={name} onChange={(e) => setName(e.target.value)} /></label>
-          <label>{t("template")}<select required value={templateId} onChange={(e) => selectTemplate(e.target.value)}><option value="">{t("chooseTemplate")}</option>{templates.map((template) => <option key={template.id} value={template.id}>{template.name} · {runtimeProfileLabel(template.runtime_profile, t)}</option>)}</select></label>
-          <label>{t("runtimeProfile")}<input readOnly value={runtimeProfile ? runtimeProfileLabel(runtimeProfile, t) : t("inheritedFromTemplate")} /></label>
-          <label className="wide">{t("image")}<input required readOnly value={image} /></label>
-          <label>CPU（m）<input type="number" min="100" readOnly value={cpu} /></label>
-          <label>{t("memory")}（MiB）<input type="number" min="128" readOnly value={memory} /></label>
-          <label>GPU<input type="number" min="0" readOnly value={gpu} /></label>
-          <label>{t("disk")}（GiB）<input type="number" min="1" readOnly value={disk} /></label>
-          <label>{t("accessMode")}<select disabled value={accessMode}><option value="internal">{t("internal")}</option><option value="public">{t("public")}</option></select></label>
-          {selectedTemplate && <p className="profile-note wide"><strong>{selectedTemplate.name}</strong><br />{t("templatePersistenceHelp")}<br />{selectedTemplate.resources.cpu_millis}m CPU · {selectedTemplate.resources.memory_mib} MiB · {selectedTemplate.resources.disk_gib} GiB · {selectedTemplate.resources.gpu_count} GPU</p>}
-          {runtimeProfile && <p className={isHighRiskRuntimeProfile(runtimeProfile) ? "risk-note wide" : "profile-note wide"}><strong>{t("runtimeProfile")}</strong><br />{runtimeProfileDescription(runtimeProfile, t)}<br />{t("runtimeProfileHelp")}</p>}
-          <p className="profile-note wide"><strong>{accessMode === "internal" ? t("internal") : t("public")}</strong><br />{accessMode === "internal" ? t("internalHelp") : t("publicHelp")}</p>
+          <label><FieldTitle label={t("template")} help={t("templatePersistenceHelp")} /><select required value={templateId} onChange={(e) => setTemplateId(e.target.value)}><option value="">{t("chooseTemplate")}</option>{templates.map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}</select></label>
+          {selectedTemplate && <dl className="template-summary wide"><div><dt>{t("image")}</dt><dd><code>{selectedTemplate.image}</code></dd></div><div><dt><FieldTitle label={t("accessMode")} help={selectedTemplate.access_mode === "internal" ? t("internalHelp") : t("publicHelp")} /></dt><dd>{selectedTemplate.access_mode === "internal" ? t("internal") : t("public")}</dd></div><div><dt>{t("resources")}</dt><dd>{selectedTemplate.resources.cpu_millis}m CPU · {selectedTemplate.resources.memory_mib} MiB · {selectedTemplate.resources.disk_gib} GiB · {selectedTemplate.resources.gpu_count} GPU</dd></div><div><dt>{t("workspaceUser")}</dt><dd><code>{selectedTemplate.workspace_user} · {selectedTemplate.workspace_home}</code></dd></div></dl>}
           <label>{t("injectionReferences")}<select value={explicitInjectionRefs ? "selected" : "all"} onChange={(e) => setReferenceMode(e.target.value === "selected")}><option value="all">{t("allMatching")}</option><option value="selected">{t("selectedReferences")}</option></select></label>
           {explicitInjectionRefs && (
             <fieldset className="injection-ref-picker wide">
@@ -313,4 +263,8 @@ function formatGiB(mib: number) {
 
 function message(error: unknown) {
   return error instanceof Error ? error.message : "操作失败";
+}
+
+function FieldTitle({ label, help }: { label: string; help: string }) {
+  return <span className="field-title"><span>{label}</span><span className="help-tip" title={help} aria-label={help} tabIndex={0}>?</span></span>;
 }

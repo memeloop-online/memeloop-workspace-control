@@ -1,6 +1,5 @@
 import { useMemo, useState } from "react";
 import { useI18n } from "./i18n";
-import { runtimeProfileLabel } from "./runtimeProfiles";
 import type { Locale } from "./i18n";
 import type { WorkspaceResponse, WorkspaceRuntime } from "./types";
 import {
@@ -41,7 +40,7 @@ export function WorkspaceCard({ item, runtime, onAction, onOpenShell, onRequestR
       </div>
 
       <div className="workspace-meta compact">
-        <span>{runtimeProfileLabel(workspace.runtime_profile, t)}</span>
+        <span>{workspace.workspace_user}</span>
         <span>{workspace.access_mode === "public" ? t("public") : t("internal")}</span>
         <code>{item.namespace}</code>
         {workspace.resources.gpu_count === 0 && <span className="gpu-meta">0 GPU</span>}

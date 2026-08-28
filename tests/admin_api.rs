@@ -8,7 +8,10 @@ use http_body_util::BodyExt;
 use memeloop_workspace_control::{
     api::{AppState, router},
     config::{AppConfig, InstallationId},
+    quota::Resources,
     storage::{CreateOrganization, Database},
+    templates::{WorkspaceTemplateDocument, WorkspaceTemplateSpec},
+    workspaces::AccessMode,
 };
 use serde_json::{Value, json};
 use tower::ServiceExt;
@@ -129,7 +132,7 @@ async fn management_api_enforces_system_and_organization_boundaries() {
             )
             .header("content-type", "application/json")
             .header("idempotency-key", "grant-created-user")
-            .body(Body::from(json!({"role":"member"}).to_string()))
+            .body(Body::from(json!({"role":"organization_admin"}).to_string()))
             .unwrap(),
         )
         .await
@@ -183,6 +186,19 @@ async fn management_api_enforces_system_and_organization_boundaries() {
     assert_eq!(image_policy.status(), StatusCode::OK);
     assert_eq!(body_json(image_policy).await["contract_version"], 1);
 
+    let template_spec = WorkspaceTemplateSpec::standard(
+        image,
+        AccessMode::Internal,
+        Resources {
+            cpu_millis: 2_000,
+            memory_mib: 4_096,
+            gpu_count: 0,
+            disk_gib: 50,
+        },
+    );
+    let template_yaml = WorkspaceTemplateDocument::new("Standard", template_spec.clone())
+        .to_yaml()
+        .unwrap();
     let template = app
         .clone()
         .oneshot(
@@ -192,10 +208,7 @@ async fn management_api_enforces_system_and_organization_boundaries() {
                 .body(Body::from(
                     json!({
                         "organization_id": organization.id,
-                        "name": "Standard",
-                        "image": image,
-                        "access_mode": "internal",
-                        "resources": {"cpu_millis":2000,"memory_mib":4096,"gpu_count":0,"disk_gib":50}
+                        "yaml": template_yaml.clone()
                     })
                     .to_string(),
                 ))
@@ -224,11 +237,51 @@ async fn management_api_enforces_system_and_organization_boundaries() {
     assert_eq!(templates.status(), StatusCode::OK);
     assert_eq!(body_json(templates).await[0]["name"], "Standard");
 
-    let disabled = app
+    let organization_admin_update = app
         .clone()
         .oneshot(
             authenticated(
                 Request::put(format!("/api/v1/templates/{template_id}")),
+                CREATED_TOKEN,
+            )
+            .header("content-type", "application/json")
+            .header("idempotency-key", "organization-admin-template-update")
+            .body(Body::from(json!({"yaml": template_yaml}).to_string()))
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(organization_admin_update.status(), StatusCode::OK);
+
+    let mut privileged_spec = template_spec;
+    privileged_spec.cluster_access = true;
+    let privileged_yaml = WorkspaceTemplateDocument::new("Standard", privileged_spec)
+        .to_yaml()
+        .unwrap();
+    let forbidden_privilege_escalation = app
+        .clone()
+        .oneshot(
+            authenticated(
+                Request::put(format!("/api/v1/templates/{template_id}")),
+                CREATED_TOKEN,
+            )
+            .header("content-type", "application/json")
+            .header("idempotency-key", "organization-admin-cluster-access")
+            .body(Body::from(json!({"yaml": privileged_yaml}).to_string()))
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        forbidden_privilege_escalation.status(),
+        StatusCode::FORBIDDEN
+    );
+
+    let disabled = app
+        .clone()
+        .oneshot(
+            authenticated(
+                Request::put(format!("/api/v1/templates/{template_id}/enabled")),
                 ADMIN_TOKEN,
             )
             .header("content-type", "application/json")
@@ -284,8 +337,10 @@ async fn management_api_enforces_system_and_organization_boundaries() {
     assert_eq!(audit.status(), StatusCode::OK);
     let audit: Value = body_json(audit).await;
     assert!(audit.as_array().unwrap().iter().all(|record| {
-        record["actor_user_id"] == admin.user_id.to_string()
-            && record["actor_display_name"] == "Admin"
+        (record["actor_user_id"] == admin.user_id.to_string()
+            && record["actor_display_name"] == "Admin")
+            || (record["actor_user_id"] == created_user_id
+                && record["actor_display_name"] == "Created User")
     }));
 
     let scaling = app
@@ -300,7 +355,7 @@ async fn management_api_enforces_system_and_organization_boundaries() {
     let scaling: Value = body_json(scaling).await;
     assert_eq!(scaling["database_mode"], "sqlite");
     assert_eq!(scaling["configured_replicas"], 1);
-    assert_eq!(scaling["schema_version"], 9);
+    assert_eq!(scaling["schema_version"], 10);
 }
 
 fn authenticated(

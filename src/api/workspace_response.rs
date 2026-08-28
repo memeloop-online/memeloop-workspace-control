@@ -39,7 +39,7 @@ pub(super) async fn workspace_response(
         .map_err(|_| ApiError::BadRequest("workspace namespace is invalid"))?;
     let connectable = workspace.state == WorkspaceState::Ready;
     let cluster_host = format!("workspace.{namespace}.svc.cluster.local");
-    let internal_endpoint = if workspace.access_mode == AccessMode::Internal {
+    let internal_endpoint = if workspace.template.access_mode == AccessMode::Internal {
         if let Some(host) = state.config.internal_ssh_host.as_ref() {
             if connectable {
                 let client = state
@@ -59,10 +59,10 @@ pub(super) async fn workspace_response(
     } else {
         Some((cluster_host.clone(), 2222))
     };
-    let login_user = workspace.runtime_profile.login_user();
+    let login_user = workspace.template.workspace_user.as_str();
     let (ssh_command, ssh_config) = if connectable {
         match (
-            workspace.access_mode,
+            workspace.template.access_mode,
             state.config.ssh_public_host.as_deref(),
         ) {
             (AccessMode::Public, Some(jump_host)) => {
@@ -111,7 +111,7 @@ pub(super) async fn workspace_response(
     } else {
         None
     };
-    let jump_host_key = (connectable && workspace.access_mode == AccessMode::Public)
+    let jump_host_key = (connectable && workspace.template.access_mode == AccessMode::Public)
         .then(|| state.jump_host_public_key.clone())
         .flatten();
     Ok(WorkspaceResponse {
@@ -152,8 +152,8 @@ async fn injection_sources(
         organization_id: workspace.organization_id,
         owner_id: workspace.owner_id,
         template_id: workspace.template_id,
-        image: &workspace.image,
-        access_mode: workspace.access_mode,
+        image: &workspace.template.image,
+        access_mode: workspace.template.access_mode,
     };
     let refs = state
         .database

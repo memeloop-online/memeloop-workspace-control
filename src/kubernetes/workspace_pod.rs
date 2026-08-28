@@ -11,85 +11,47 @@ use k8s_openapi::{
     apimachinery::pkg::{api::resource::Quantity, util::intstr::IntOrString},
 };
 
-use crate::{quota::Resources, workspaces::WorkspaceRuntimeProfile};
+use crate::templates::WorkspaceTemplateSpec;
 
 use super::resource_helpers::{mount, workspace_mounts};
 
 pub(super) const BUILDKIT_IMAGE: &str = "harbor.k3s.onetwo.website/docker-io/moby/buildkit:v0.32.2-rootless@sha256:504731e577c20559c00f968f33219f30115e70be29ab96728d1d06e963fc494b";
 const BOOTSTRAP: &str = "/etc/workspace-platform/mwc-workspace-bootstrap";
-const NO_PROXY_NODE: &str = "localhost,127.0.0.1,::1,.svc,.cluster.local,10.42.0.0/16,10.43.0.0/16,100.64.0.0/10,.k3s.onetwo.website,npmmirror.com";
-const NO_PROXY_RUST: &str = "localhost,127.0.0.1,::1,.svc,.cluster.local,10.42.0.0/16,10.43.0.0/16,100.64.0.0/10,.k3s.onetwo.website,rsproxy.cn,npmmirror.com";
-
 #[derive(Clone, Copy)]
-pub(super) struct RuntimeProfile {
-    pub login_user: &'static str,
-    pub home: &'static str,
-    kind: WorkspaceRuntimeProfile,
-    ssh_mode: SshMode,
+pub(super) struct WorkspacePod<'a> {
+    pub login_user: &'a str,
+    pub home: &'a str,
+    template: &'a WorkspaceTemplateSpec,
 }
 
-#[derive(Clone, Copy)]
-enum SshMode {
-    Native,
-    AptCompat,
-}
-
-impl RuntimeProfile {
-    pub fn for_workspace(kind: WorkspaceRuntimeProfile) -> Self {
-        match kind {
-            WorkspaceRuntimeProfile::Standard => Self {
-                login_user: "workspace",
-                home: "/workspace",
-                kind,
-                ssh_mode: SshMode::Native,
-            },
-            WorkspaceRuntimeProfile::RustDev => Self {
-                login_user: "rust-dev",
-                home: "/home/rust-dev",
-                kind,
-                ssh_mode: SshMode::Native,
-            },
-            WorkspaceRuntimeProfile::NodeDev => Self {
-                login_user: "node-dev",
-                home: "/home/node-dev",
-                kind,
-                ssh_mode: SshMode::AptCompat,
-            },
-            WorkspaceRuntimeProfile::Maintainance => Self {
-                login_user: "cluster-admin",
-                home: "/home/cluster-admin",
-                kind,
-                ssh_mode: SshMode::AptCompat,
-            },
+impl<'a> WorkspacePod<'a> {
+    pub fn from_template(template: &'a WorkspaceTemplateSpec) -> Self {
+        Self {
+            login_user: &template.workspace_user,
+            home: &template.workspace_home,
+            template,
         }
     }
 
-    pub fn resource_requests(&self, resources: Resources) -> BTreeMap<String, Quantity> {
-        let (cpu, memory, ephemeral) = match self.kind {
-            WorkspaceRuntimeProfile::Standard => (
-                format!("{}m", resources.cpu_millis),
-                format!("{}Mi", resources.memory_mib),
-                None,
-            ),
-            WorkspaceRuntimeProfile::NodeDev => ("1".to_owned(), "1Gi".to_owned(), Some("256Mi")),
-            WorkspaceRuntimeProfile::RustDev => ("2".to_owned(), "4Gi".to_owned(), Some("256Mi")),
-            WorkspaceRuntimeProfile::Maintainance => (
-                "100m".to_owned(),
-                format!("{}Mi", resources.memory_mib),
-                None,
-            ),
-        };
-        quantities(cpu, memory, ephemeral)
+    pub fn resource_requests(&self) -> BTreeMap<String, Quantity> {
+        quantities(
+            format!("{}m", self.template.pod_requests.cpu_millis),
+            format!("{}Mi", self.template.pod_requests.memory_mib),
+            self.template
+                .pod_requests
+                .ephemeral_storage_mib
+                .map(|value| format!("{value}Mi")),
+        )
     }
 
     pub fn ssh_strict_modes(self) -> &'static str {
-        if matches!(self.kind, WorkspaceRuntimeProfile::Standard) {
-            "yes"
-        } else {
+        if self.template.preserve_home_root {
             // Migrated Coder PVC roots are intentionally root:1000/2775. The platform owns the
             // generated authorized_keys file and keeps it 0600, so retaining the legacy root
             // metadata requires disabling only sshd's parent-directory ownership check.
             "no"
+        } else {
+            "yes"
         }
     }
 
@@ -110,14 +72,14 @@ impl RuntimeProfile {
         }
     }
 
-    pub fn resource_limits(&self, resources: Resources) -> BTreeMap<String, Quantity> {
-        let (cpu, ephemeral) = match self.kind {
-            WorkspaceRuntimeProfile::Standard => (format!("{}m", resources.cpu_millis), None),
-            WorkspaceRuntimeProfile::NodeDev => ("6".to_owned(), Some("1Gi")),
-            WorkspaceRuntimeProfile::RustDev => ("10".to_owned(), Some("1Gi")),
-            WorkspaceRuntimeProfile::Maintainance => ("1".to_owned(), None),
-        };
-        quantities(cpu, format!("{}Mi", resources.memory_mib), ephemeral)
+    pub fn resource_limits(&self) -> BTreeMap<String, Quantity> {
+        quantities(
+            format!("{}m", self.template.resources.cpu_millis),
+            format!("{}Mi", self.template.resources.memory_mib),
+            self.template
+                .ephemeral_storage_limit_mib
+                .map(|value| format!("{value}Mi")),
+        )
     }
 
     pub fn workspace_init_container(&self, image: &str) -> Container {
@@ -125,12 +87,9 @@ impl RuntimeProfile {
             name: "workspace-bootstrap".to_owned(),
             image: Some(image.to_owned()),
             command: Some(vec![BOOTSTRAP.to_owned()]),
-            args: Some(vec![match self.ssh_mode {
-                SshMode::Native => "prepare".to_owned(),
-                // Compatibility images do not all contain jq. The main container installs
-                // stock OpenSSH+jq before doing the full injection materialization.
-                SshMode::AptCompat => "prepare-layout".to_owned(),
-            }]),
+            // The main container performs dependency detection and complete materialization. The
+            // init container only creates PVC-backed layout and never assumes image packages.
+            args: Some(vec!["prepare-layout".to_owned()]),
             env: Some(self.platform_env()),
             volume_mounts: Some(workspace_mounts(self.home, self.secondary_home())),
             security_context: Some(root_security_context(false)),
@@ -145,10 +104,7 @@ impl RuntimeProfile {
             name: "workspace".to_owned(),
             image: Some(image.to_owned()),
             command: Some(vec![BOOTSTRAP.to_owned()]),
-            args: Some(vec![match self.ssh_mode {
-                SshMode::Native => "serve".to_owned(),
-                SshMode::AptCompat => "compat-serve".to_owned(),
-            }]),
+            args: Some(vec!["serve".to_owned()]),
             ports: Some(vec![ContainerPort {
                 container_port: 2222,
                 name: Some("ssh".to_owned()),
@@ -171,10 +127,7 @@ impl RuntimeProfile {
             env: Some(env),
             env_from: Some(injection_env_from()),
             volume_mounts: Some(self.development_mounts()),
-            security_context: Some(root_security_context(matches!(
-                self.ssh_mode,
-                SshMode::Native
-            ))),
+            security_context: Some(root_security_context(false)),
             ..Container::default()
         }
     }
@@ -227,8 +180,8 @@ impl RuntimeProfile {
                 ..probe
             }),
             resources: Some(ResourceRequirements {
-                requests: Some(quantities("250m", "512Mi", Some("128Mi"))),
-                limits: Some(quantities("4", "4Gi", Some("512Mi"))),
+                requests: Some(quantities("250m", "512Mi", Some("128Mi".to_owned()))),
+                limits: Some(quantities("4", "4Gi", Some("512Mi".to_owned()))),
                 ..ResourceRequirements::default()
             }),
             volume_mounts: Some(vec![
@@ -256,77 +209,57 @@ impl RuntimeProfile {
     }
 
     pub fn affinity(&self) -> Option<Affinity> {
-        match self.kind {
-            WorkspaceRuntimeProfile::NodeDev | WorkspaceRuntimeProfile::RustDev => Some(Affinity {
-                node_affinity: Some(NodeAffinity {
-                    required_during_scheduling_ignored_during_execution: Some(NodeSelector {
-                        node_selector_terms: vec![NodeSelectorTerm {
-                            match_expressions: Some(vec![NodeSelectorRequirement {
-                                key: "kubernetes.io/hostname".to_owned(),
-                                operator: "In".to_owned(),
-                                values: Some(vec!["westlake".to_owned(), "haixia".to_owned()]),
-                            }]),
-                            ..NodeSelectorTerm::default()
-                        }],
-                    }),
-                    ..NodeAffinity::default()
-                }),
-                ..Affinity::default()
-            }),
-            WorkspaceRuntimeProfile::Maintainance => Some(Affinity {
-                node_affinity: Some(NodeAffinity {
-                    preferred_during_scheduling_ignored_during_execution: Some(vec![
-                        PreferredSchedulingTerm {
-                            weight: 100,
-                            preference: NodeSelectorTerm {
-                                match_expressions: Some(vec![NodeSelectorRequirement {
-                                    key: "kubernetes.io/hostname".to_owned(),
-                                    operator: "In".to_owned(),
-                                    values: Some(vec!["westlake".to_owned()]),
-                                }]),
-                                ..NodeSelectorTerm::default()
-                            },
-                        },
-                    ]),
-                    ..NodeAffinity::default()
-                }),
-                ..Affinity::default()
-            }),
-            WorkspaceRuntimeProfile::Standard => None,
+        if self.template.required_node_names.is_empty()
+            && self.template.preferred_node_names.is_empty()
+        {
+            return None;
         }
-    }
-
-    pub fn node_selector(&self) -> Option<BTreeMap<String, String>> {
-        matches!(self.kind, WorkspaceRuntimeProfile::Maintainance)
-            .then(|| BTreeMap::from([("k3s-worker-ready".to_owned(), "true".to_owned())]))
-    }
-
-    pub fn pod_security_context(&self) -> Option<PodSecurityContext> {
-        (!matches!(self.kind, WorkspaceRuntimeProfile::Standard)).then(|| PodSecurityContext {
-            fs_group: Some(1000),
-            fs_group_change_policy: Some("OnRootMismatch".to_owned()),
-            seccomp_profile: Some(SeccompProfile {
-                type_: "RuntimeDefault".to_owned(),
-                ..SeccompProfile::default()
+        let required = (!self.template.required_node_names.is_empty()).then(|| NodeSelector {
+            node_selector_terms: vec![hostname_term(&self.template.required_node_names)],
+        });
+        let preferred = (!self.template.preferred_node_names.is_empty()).then(|| {
+            vec![PreferredSchedulingTerm {
+                weight: 100,
+                preference: hostname_term(&self.template.preferred_node_names),
+            }]
+        });
+        Some(Affinity {
+            node_affinity: Some(NodeAffinity {
+                required_during_scheduling_ignored_during_execution: required,
+                preferred_during_scheduling_ignored_during_execution: preferred,
             }),
-            ..PodSecurityContext::default()
+            ..Affinity::default()
         })
     }
 
+    pub fn node_selector(&self) -> Option<BTreeMap<String, String>> {
+        (!self.template.node_selector.is_empty()).then(|| self.template.node_selector.clone())
+    }
+
+    pub fn pod_security_context(&self) -> Option<PodSecurityContext> {
+        (self.template.preserve_home_root || self.template.buildkit || self.template.cluster_access)
+            .then(|| PodSecurityContext {
+                fs_group: Some(1000),
+                fs_group_change_policy: Some("OnRootMismatch".to_owned()),
+                seccomp_profile: Some(SeccompProfile {
+                    type_: "RuntimeDefault".to_owned(),
+                    ..SeccompProfile::default()
+                }),
+                ..PodSecurityContext::default()
+            })
+    }
+
     pub fn image_pull_secrets(&self) -> Option<Vec<LocalObjectReference>> {
-        // The current Harbor library images are public. This is deliberately a profile method
-        // so private runtime profiles can opt into a copied pull Secret later.
+        // The current Harbor library images are public. A future template field can name a
+        // namespaced pull Secret without changing image identity semantics.
         None
     }
 
     fn has_buildkit(&self) -> bool {
-        matches!(
-            self.kind,
-            WorkspaceRuntimeProfile::NodeDev | WorkspaceRuntimeProfile::RustDev
-        )
+        self.template.buildkit
     }
 
-    fn secondary_home(&self) -> Option<&'static str> {
+    fn secondary_home(&self) -> Option<&str> {
         None
     }
 
@@ -336,7 +269,7 @@ impl RuntimeProfile {
             env("MWC_WORKSPACE_HOME", self.home),
             env(
                 "MWC_IN_CLUSTER_KUBECONFIG",
-                if matches!(self.kind, WorkspaceRuntimeProfile::Maintainance) {
+                if self.template.cluster_access {
                     "true"
                 } else {
                     "false"
@@ -344,33 +277,21 @@ impl RuntimeProfile {
             ),
             env(
                 "MWC_PRESERVE_HOME_ROOT",
-                if matches!(self.kind, WorkspaceRuntimeProfile::Standard) {
-                    "false"
-                } else {
+                if self.template.preserve_home_root {
                     "true"
+                } else {
+                    "false"
                 },
             ),
         ]
     }
 
     fn development_env(&self) -> Vec<EnvVar> {
-        match self.kind {
-            WorkspaceRuntimeProfile::Standard => Vec::new(),
-            WorkspaceRuntimeProfile::Maintainance => vec![
-                env("HOME", self.home),
-                env("KUBECONFIG", "/home/cluster-admin/.mwc/kubeconfig"),
-                env(
-                    "PATH",
-                    "/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin:/home/cluster-admin/.local/bin:/home/cluster-admin/.local/share/pnpm",
-                ),
-            ],
-            WorkspaceRuntimeProfile::NodeDev => {
-                development_env(self.home, NO_PROXY_NODE, false, false)
-            }
-            WorkspaceRuntimeProfile::RustDev => {
-                development_env(self.home, NO_PROXY_RUST, true, true)
-            }
-        }
+        self.template
+            .environment
+            .iter()
+            .map(|(name, value)| env(name, value))
+            .collect()
     }
 
     fn development_mounts(&self) -> Vec<VolumeMount> {
@@ -383,65 +304,15 @@ impl RuntimeProfile {
     }
 }
 
-fn development_env(home: &str, no_proxy: &str, rust: bool, rust_proxy: bool) -> Vec<EnvVar> {
-    let temporary_directory = if rust {
-        "/tmp".to_owned()
-    } else {
-        format!("{home}/.tmp/dev")
-    };
-    let mut values = vec![
-        env("HOME", home),
-        env("NO_PROXY", no_proxy),
-        env("no_proxy", no_proxy),
-        env("TMPDIR", &temporary_directory),
-        env("TMP", &temporary_directory),
-        env("TEMP", &temporary_directory),
-        env("XDG_CACHE_HOME", &format!("{home}/.cache")),
-        env("XDG_CONFIG_HOME", &format!("{home}/.config")),
-        env("XDG_DATA_HOME", &format!("{home}/.local/share")),
-        env("XDG_STATE_HOME", &format!("{home}/.local/state")),
-        env(
-            "PLAYWRIGHT_BROWSERS_PATH",
-            &format!("{home}/.cache/ms-playwright"),
-        ),
-        env("DOCKER_CONFIG", &format!("{home}/.config/docker")),
-        env("NPM_CONFIG_CACHE", &format!("{home}/.cache/npm")),
-        env("PNPM_HOME", &format!("{home}/.local/share/pnpm")),
-        env("YARN_CACHE_FOLDER", &format!("{home}/.cache/yarn")),
-        env(
-            "BUILDKIT_HOST",
-            &format!("unix://{home}/.cache/buildkit/runtime/buildkit/buildkitd.sock"),
-        ),
-    ];
-    if rust {
-        values.extend([
-            env("CARGO_HOME", &format!("{home}/.cargo")),
-            env("CARGO_TARGET_DIR", &format!("{home}/.cache/cargo-target")),
-            env("CARGO_HTTP_MULTIPLEXING", "false"),
-            env("CARGO_REGISTRIES_CRATES_IO_PROTOCOL", "sparse"),
-            env(
-                "PATH",
-                &format!(
-                    "/usr/local/bin:/usr/local/sbin:/usr/local/cargo/bin:{home}/.local/bin:{home}/.local/share/pnpm:{home}/.cargo/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-                ),
-            ),
-        ]);
-        if rust_proxy {
-            values.extend([
-                env("RUSTUP_HOME", "/usr/local/rustup"),
-                env("RUSTUP_DIST_SERVER", "https://rsproxy.cn"),
-                env("RUSTUP_UPDATE_ROOT", "https://rsproxy.cn/rustup"),
-            ]);
-        }
-    } else {
-        values.push(env(
-            "PATH",
-            &format!(
-                "/usr/local/bin:/usr/local/sbin:{home}/.local/bin:{home}/.local/share/pnpm:/usr/sbin:/usr/bin:/sbin:/bin"
-            ),
-        ));
+fn hostname_term(values: &[String]) -> NodeSelectorTerm {
+    NodeSelectorTerm {
+        match_expressions: Some(vec![NodeSelectorRequirement {
+            key: "kubernetes.io/hostname".to_owned(),
+            operator: "In".to_owned(),
+            values: Some(values.to_vec()),
+        }]),
+        ..NodeSelectorTerm::default()
     }
-    values
 }
 
 fn injection_env_from() -> Vec<EnvFromSource> {
@@ -466,17 +337,14 @@ fn injection_env_from() -> Vec<EnvFromSource> {
 fn quantities(
     cpu: impl Into<String>,
     memory: impl Into<String>,
-    ephemeral: Option<&str>,
+    ephemeral: Option<String>,
 ) -> BTreeMap<String, Quantity> {
     let mut values = BTreeMap::from([
         ("cpu".to_owned(), Quantity(cpu.into())),
         ("memory".to_owned(), Quantity(memory.into())),
     ]);
     if let Some(ephemeral) = ephemeral {
-        values.insert(
-            "ephemeral-storage".to_owned(),
-            Quantity(ephemeral.to_owned()),
-        );
+        values.insert("ephemeral-storage".to_owned(), Quantity(ephemeral));
     }
     values
 }

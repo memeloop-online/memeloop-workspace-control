@@ -270,8 +270,8 @@ pub(super) async fn preview(
             organization_id: target.organization_id,
             owner_id: target.owner_id,
             template_id: target.template_id,
-            image: &target.image,
-            access_mode: target.access_mode,
+            image: &target.template.image,
+            access_mode: target.template.access_mode,
         };
         let refs = state.database.workspace_injection_refs(target.id).await?;
         let organization = filter_injection_refs(

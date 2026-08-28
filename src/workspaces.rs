@@ -3,7 +3,7 @@ use thiserror::Error;
 use utoipa::ToSchema;
 use uuid::Uuid;
 
-use crate::quota::Resources;
+use crate::templates::WorkspaceTemplateSpec;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
@@ -39,24 +39,6 @@ pub enum AccessMode {
     Public,
 }
 
-/// A platform-owned runtime contract for a workspace image.
-///
-/// Profiles are deliberately an enum instead of an arbitrary pod fragment: a template may select
-/// one of the runtime shapes implemented by the control plane, and every workspace stores a
-/// snapshot of that selection.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum WorkspaceRuntimeProfile {
-    #[default]
-    Standard,
-    #[serde(alias = "coder_rust_dev", alias = "coder_token_center_rust_dev")]
-    RustDev,
-    #[serde(alias = "coder_node_dev")]
-    NodeDev,
-    #[serde(alias = "coder_cluster_admin")]
-    Maintainance,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct Workspace {
     pub id: Uuid,
@@ -65,11 +47,9 @@ pub struct Workspace {
     pub owner_id: Uuid,
     pub name: String,
     pub template_id: Option<Uuid>,
-    pub runtime_profile: WorkspaceRuntimeProfile,
-    pub image: String,
-    pub access_mode: AccessMode,
+    #[serde(flatten)]
+    pub template: WorkspaceTemplateSpec,
     pub state: WorkspaceState,
-    pub resources: Resources,
     pub generation: u64,
     pub created_at: i64,
     pub updated_at: i64,
@@ -190,52 +170,6 @@ impl AccessMode {
     }
 }
 
-impl WorkspaceRuntimeProfile {
-    pub const ALL: [Self; 4] = [
-        Self::Standard,
-        Self::RustDev,
-        Self::NodeDev,
-        Self::Maintainance,
-    ];
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Standard => "standard",
-            Self::RustDev => "rust_dev",
-            Self::NodeDev => "node_dev",
-            Self::Maintainance => "maintainance",
-        }
-    }
-
-    pub fn from_database(value: &str) -> Option<Self> {
-        match value {
-            "standard" => Some(Self::Standard),
-            "rust_dev" | "coder_rust_dev" | "coder_token_center_rust_dev" => Some(Self::RustDev),
-            "node_dev" | "coder_node_dev" => Some(Self::NodeDev),
-            "maintainance" | "coder_cluster_admin" => Some(Self::Maintainance),
-            _ => None,
-        }
-    }
-
-    pub fn login_user(self) -> &'static str {
-        match self {
-            Self::Standard => "workspace",
-            Self::RustDev => "rust-dev",
-            Self::NodeDev => "node-dev",
-            Self::Maintainance => "cluster-admin",
-        }
-    }
-
-    pub fn home(self) -> &'static str {
-        match self {
-            Self::Standard => "/workspace",
-            Self::RustDev => "/home/rust-dev",
-            Self::NodeDev => "/home/node-dev",
-            Self::Maintainance => "/home/cluster-admin",
-        }
-    }
-}
-
 #[derive(Debug, Error, PartialEq, Eq)]
 #[error("workspace action {action:?} is invalid while state is {state:?}")]
 pub struct TransitionError {
@@ -293,26 +227,5 @@ mod tests {
             deleting.transition(WorkspaceAction::MarkDeleted).unwrap(),
             WorkspaceState::Deleted
         );
-    }
-
-    #[test]
-    fn runtime_profiles_use_stable_snake_case_names() {
-        for profile in WorkspaceRuntimeProfile::ALL {
-            let encoded = serde_json::to_string(&profile).unwrap();
-            assert_eq!(encoded, format!("\"{}\"", profile.as_str()));
-            assert_eq!(
-                serde_json::from_str::<WorkspaceRuntimeProfile>(&encoded).unwrap(),
-                profile
-            );
-            assert_eq!(
-                WorkspaceRuntimeProfile::from_database(profile.as_str()),
-                Some(profile)
-            );
-        }
-        assert_eq!(
-            WorkspaceRuntimeProfile::default(),
-            WorkspaceRuntimeProfile::Standard
-        );
-        assert!(WorkspaceRuntimeProfile::from_database("arbitrary_pod_spec").is_none());
     }
 }

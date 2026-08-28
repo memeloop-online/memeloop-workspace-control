@@ -12,7 +12,10 @@ use memeloop_workspace_control::{
     crypto::EnvelopeCipher,
     injections::{InjectionItem, InjectionKind, InjectionScope, InjectionValue},
     quota::Resources,
-    storage::{CreateOrganization, CreateWorkspace, Database, InjectionScopeRef},
+    storage::{
+        CreateOrganization, CreateWorkspace, CreateWorkspaceTemplate, Database, InjectionScopeRef,
+    },
+    templates::{WorkspaceTemplateDocument, WorkspaceTemplateSpec},
     workspaces::{AccessMode, WorkspaceAction},
 };
 use tower::ServiceExt;
@@ -45,23 +48,39 @@ async fn authorized_keys_command_returns_only_restricted_workspace_target() {
         )
         .await
         .unwrap();
+    let template = database
+        .create_workspace_template(
+            CreateWorkspaceTemplate {
+                organization_id: Some(organization.id),
+                yaml: WorkspaceTemplateDocument::new(
+                    "Public SSH",
+                    WorkspaceTemplateSpec::standard(
+                        "registry.example/workspace:1",
+                        AccessMode::Public,
+                        Resources {
+                            cpu_millis: 500,
+                            memory_mib: 512,
+                            gpu_count: 0,
+                            disk_gib: 5,
+                        },
+                    ),
+                )
+                .to_yaml()
+                .unwrap(),
+            },
+            101,
+        )
+        .await
+        .unwrap();
     let workspace = database
         .create_workspace(
             CreateWorkspace {
                 organization_id: organization.id,
                 owner_id: user.user_id,
                 name: "ssh".to_owned(),
-                template_id: None,
+                template_id: template.id,
                 organization_injection_refs: None,
                 user_injection_refs: None,
-                image: "registry.example/workspace:1".to_owned(),
-                access_mode: AccessMode::Public,
-                resources: Resources {
-                    cpu_millis: 500,
-                    memory_mib: 512,
-                    gpu_count: 0,
-                    disk_gib: 5,
-                },
             },
             user.user_id,
             102,

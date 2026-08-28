@@ -20,7 +20,7 @@ use k8s_openapi::{
 use thiserror::Error;
 use uuid::Uuid;
 
-use crate::{config::InstallationId, quota::Resources, workspaces::WorkspaceState};
+use crate::{config::InstallationId, templates::WorkspaceTemplateSpec, workspaces::WorkspaceState};
 
 mod client;
 mod higress;
@@ -28,7 +28,7 @@ mod materialization;
 mod network_policy;
 mod ownership;
 mod resource_helpers;
-mod runtime_profiles;
+mod workspace_pod;
 
 pub use client::{DeleteProgress, KubernetesCoordinator, ReconcileError, workspace_ssh_node_port};
 pub use materialization::{InjectionMaterialization, MaterializationError};
@@ -39,7 +39,7 @@ use resource_helpers::{
     cluster_admin_binding, cluster_admin_service_account, internal_ssh_service, mount, pod_labels,
     service, workspace_config,
 };
-use runtime_profiles::RuntimeProfile;
+use workspace_pod::WorkspacePod;
 
 pub const OWNER_INSTALLATION_LABEL: &str = "workspace.memeloop.dev/owner-installation";
 pub const WORKSPACE_ID_LABEL: &str = "workspace.memeloop.dev/workspace-id";
@@ -70,12 +70,9 @@ pub struct WorkspaceResourceSpec {
     pub organization_id: Uuid,
     pub owner_id: Uuid,
     pub short_id: String,
-    pub image: String,
-    pub resources: Resources,
-    pub access_mode: crate::workspaces::AccessMode,
+    pub template: WorkspaceTemplateSpec,
     pub state: WorkspaceState,
     pub generation: u64,
-    pub runtime_profile: crate::workspaces::WorkspaceRuntimeProfile,
 }
 
 #[derive(Debug)]
@@ -101,7 +98,7 @@ impl ResourceBuilder {
         ) {
             return Err(BuildError::WorkspaceBeingDeleted);
         }
-        if workspace.image.trim().is_empty() {
+        if workspace.template.image.trim().is_empty() {
             return Err(BuildError::EmptyImage);
         }
 
@@ -115,8 +112,7 @@ impl ResourceBuilder {
         // observability labels to existing workspaces without replacing storage.
         let selector_labels = pod_labels(&stable_labels);
         let pod_labels = pod_labels(&labels);
-        let cluster_admin =
-            workspace.runtime_profile == crate::workspaces::WorkspaceRuntimeProfile::Maintainance;
+        let cluster_access = workspace.template.cluster_access;
         let cluster_admin_binding_name = self.cluster_admin_binding_name(&workspace.short_id);
         let replicas = match workspace.state {
             WorkspaceState::Stopping | WorkspaceState::Stopped | WorkspaceState::Failed => 0,
@@ -142,15 +138,19 @@ impl ResourceBuilder {
                 &namespace_name,
                 &labels,
                 &selector_labels,
-                workspace.access_mode,
+                workspace.template.access_mode,
                 self.internal_ssh_node_port_enabled,
             ),
-            service_account: cluster_admin_service_account(&namespace_name, &labels, cluster_admin),
+            service_account: cluster_admin_service_account(
+                &namespace_name,
+                &labels,
+                cluster_access,
+            ),
             cluster_role_binding: cluster_admin_binding(
                 &cluster_admin_binding_name,
                 &namespace_name,
                 &labels,
-                cluster_admin,
+                cluster_access,
             ),
             stateful_set: self.stateful_set(
                 &namespace_name,
@@ -168,14 +168,14 @@ impl ResourceBuilder {
                 &self.higress_source_cidrs,
                 &self.jump_host_namespace,
                 &self.jump_host_pod_labels,
-                workspace.access_mode,
+                workspace.template.access_mode,
                 self.internal_ssh_node_port_enabled,
             ),
             injections,
             workspace_config: workspace_config(
                 &namespace_name,
                 &labels,
-                RuntimeProfile::for_workspace(workspace.runtime_profile),
+                WorkspacePod::from_template(&workspace.template),
             ),
             ssh_identity: resource_helpers::ssh_identity(&namespace_name, &labels, None),
             web_shell_ingress: self.web_shell_domain.as_ref().map(|domain| {
@@ -269,13 +269,12 @@ impl ResourceBuilder {
     ) -> StatefulSet {
         let stable_labels = self.labels(workspace.id);
         let selector_labels = pod_labels(&stable_labels);
-        let profile = RuntimeProfile::for_workspace(workspace.runtime_profile);
-        let cluster_admin =
-            workspace.runtime_profile == crate::workspaces::WorkspaceRuntimeProfile::Maintainance;
-        let mut requests = profile.resource_requests(workspace.resources);
-        let mut limits = profile.resource_limits(workspace.resources);
-        if workspace.resources.gpu_count > 0 {
-            let quantity = Quantity(workspace.resources.gpu_count.to_string());
+        let pod = WorkspacePod::from_template(&workspace.template);
+        let cluster_access = workspace.template.cluster_access;
+        let mut requests = pod.resource_requests();
+        let mut limits = pod.resource_limits();
+        if workspace.template.resources.gpu_count > 0 {
+            let quantity = Quantity(workspace.template.resources.gpu_count.to_string());
             requests.insert("nvidia.com/gpu".to_owned(), quantity.clone());
             limits.insert("nvidia.com/gpu".to_owned(), quantity);
         }
@@ -284,13 +283,13 @@ impl ResourceBuilder {
             limits: Some(limits),
             ..ResourceRequirements::default()
         };
-        let mut init_containers = vec![profile.workspace_init_container(&workspace.image)];
-        if let Some(buildkit_init) = profile.buildkit_init_container() {
+        let mut init_containers = vec![pod.workspace_init_container(&workspace.template.image)];
+        if let Some(buildkit_init) = pod.buildkit_init_container() {
             init_containers.push(buildkit_init);
         }
         let mut containers =
-            vec![profile.workspace_container(&workspace.image, workspace_resources)];
-        if let Some(buildkit) = profile.buildkit_container() {
+            vec![pod.workspace_container(&workspace.template.image, workspace_resources)];
+        if let Some(buildkit) = pod.buildkit_container() {
             containers.push(buildkit);
         }
         containers.push(Container {
@@ -314,7 +313,7 @@ impl ResourceBuilder {
                 "BatchMode=yes".to_owned(),
                 "-i".to_owned(),
                 "/etc/ssh/platform/ttyd_client_key".to_owned(),
-                format!("{}@127.0.0.1", profile.login_user),
+                format!("{}@127.0.0.1", pod.login_user),
             ]),
             ports: Some(vec![ContainerPort {
                 container_port: 7681,
@@ -337,17 +336,17 @@ impl ResourceBuilder {
             ..Container::default()
         });
         let pod_spec = PodSpec {
-            automount_service_account_token: Some(cluster_admin),
-            service_account_name: cluster_admin.then(|| "workspace-admin".to_owned()),
+            automount_service_account_token: Some(cluster_access),
+            service_account_name: cluster_access.then(|| "workspace-admin".to_owned()),
             init_containers: Some(init_containers),
             containers,
-            affinity: profile.affinity(),
-            node_selector: profile.node_selector(),
-            security_context: profile.pod_security_context(),
+            affinity: pod.affinity(),
+            node_selector: pod.node_selector(),
+            security_context: pod.pod_security_context(),
             // Harbor's current library images are pullable without credentials. Keep this
             // explicit so a future private-image resolver can add a namespaced pull Secret
-            // without changing any runtime-profile semantics.
-            image_pull_secrets: profile.image_pull_secrets(),
+            // without changing template identity semantics.
+            image_pull_secrets: pod.image_pull_secrets(),
             volumes: Some(vec![
                 Volume {
                     name: "ssh-identity".to_owned(),
@@ -423,7 +422,7 @@ impl ResourceBuilder {
                         resources: Some(VolumeResourceRequirements {
                             requests: Some(BTreeMap::from([(
                                 "storage".to_owned(),
-                                Quantity(format!("{}Gi", workspace.resources.disk_gib)),
+                                Quantity(format!("{}Gi", workspace.template.resources.disk_gib)),
                             )])),
                             ..VolumeResourceRequirements::default()
                         }),

@@ -156,8 +156,8 @@ impl WorkspaceReconcileHandler {
             organization_id: workspace.organization_id,
             owner_id: workspace.owner_id,
             template_id: workspace.template_id,
-            image: &workspace.image,
-            access_mode: workspace.access_mode,
+            image: &workspace.template.image,
+            access_mode: workspace.template.access_mode,
         };
         let refs = self
             .database
@@ -177,7 +177,7 @@ impl WorkspaceReconcileHandler {
         let workspace_items = select_injections(&workspace_items, selection);
         let mut resolved =
             resolve_injections(&organization, &user, &workspace_items).map_err(job_error)?;
-        normalize_resolved_ssh_items(&mut resolved, workspace.runtime_profile);
+        normalize_resolved_ssh_items(&mut resolved, &workspace.template);
 
         for candidate in self
             .database
@@ -207,7 +207,7 @@ impl WorkspaceReconcileHandler {
                 item.key = format!("mwc-access-{}-{index}", candidate.user_id);
                 normalize_ssh_target(
                     &mut item,
-                    workspace.runtime_profile,
+                    &workspace.template,
                     &format!("access-{}-{index}", candidate.user_id),
                 );
                 item.locked = false;
@@ -236,15 +236,15 @@ impl WorkspaceReconcileHandler {
 
 fn normalize_resolved_ssh_items(
     resolved: &mut [crate::injections::ResolvedInjection],
-    profile: crate::workspaces::WorkspaceRuntimeProfile,
+    template: &crate::templates::WorkspaceTemplateSpec,
 ) {
-    let login_user = profile.login_user();
+    let login_user = template.workspace_user.as_str();
     for item in resolved
         .iter_mut()
         .filter(|item| item.item.kind == crate::injections::InjectionKind::SshPublicKey)
     {
         let name = format!("injected-{}", item.item.key);
-        normalize_ssh_target(&mut item.item, profile, &name);
+        normalize_ssh_target(&mut item.item, template, &name);
         item.item.sensitive = false;
         item.item.file_mode = Some(0o600);
         item.item.owner = Some(login_user.to_owned());
@@ -254,11 +254,11 @@ fn normalize_resolved_ssh_items(
 
 fn normalize_ssh_target(
     item: &mut crate::injections::InjectionItem,
-    profile: crate::workspaces::WorkspaceRuntimeProfile,
+    template: &crate::templates::WorkspaceTemplateSpec,
     name: &str,
 ) {
-    let login_user = profile.login_user();
-    item.target = format!("{}/.mwc/{name}.pub", profile.home());
+    let login_user = template.workspace_user.as_str();
+    item.target = format!("{}/.mwc/{name}.pub", template.workspace_home);
     item.file_mode = Some(0o600);
     item.owner = Some(login_user.to_owned());
     item.group = Some(login_user.to_owned());
@@ -290,12 +290,9 @@ fn workspace_spec(workspace: &Workspace) -> WorkspaceResourceSpec {
         organization_id: workspace.organization_id,
         owner_id: workspace.owner_id,
         short_id: workspace.short_id.clone(),
-        image: workspace.image.clone(),
-        resources: workspace.resources,
-        access_mode: workspace.access_mode,
+        template: workspace.template.clone(),
         state: workspace.state,
         generation: workspace.generation,
-        runtime_profile: workspace.runtime_profile,
     }
 }
 
@@ -319,7 +316,9 @@ mod tests {
         injections::{
             InjectionItem, InjectionKind, InjectionScope, InjectionValue, ResolvedInjection,
         },
-        workspaces::WorkspaceRuntimeProfile,
+        quota::Resources,
+        templates::WorkspaceTemplateSpec,
+        workspaces::AccessMode,
     };
 
     use super::normalize_resolved_ssh_items;
@@ -344,7 +343,19 @@ mod tests {
             },
         }];
 
-        normalize_resolved_ssh_items(&mut resolved, WorkspaceRuntimeProfile::NodeDev);
+        let template = WorkspaceTemplateSpec::from_legacy(
+            "node_dev",
+            "registry.example/node:latest",
+            AccessMode::Internal,
+            Resources {
+                cpu_millis: 6_000,
+                memory_mib: 4_096,
+                gpu_count: 0,
+                disk_gib: 60,
+            },
+        )
+        .unwrap();
+        normalize_resolved_ssh_items(&mut resolved, &template);
 
         let item = &resolved[0].item;
         assert_eq!(item.target, "/home/node-dev/.mwc/injected-personal-key.pub");

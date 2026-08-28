@@ -49,7 +49,9 @@ pub(super) async fn authorized_key(
         .filter(|value| !value.is_empty())
         .ok_or(ApiError::Unauthorized)?;
     let workspace = state.database.get_workspace_by_short_id(short_id).await?;
-    if workspace.state != WorkspaceState::Ready || workspace.access_mode != AccessMode::Public {
+    if workspace.state != WorkspaceState::Ready
+        || workspace.template.access_mode != AccessMode::Public
+    {
         return Err(ApiError::Unauthorized);
     }
     let cipher = state

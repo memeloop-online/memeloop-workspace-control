@@ -3,6 +3,12 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 
+use crate::{
+    quota::Resources,
+    templates::{WorkspaceTemplateDocument, WorkspaceTemplateSpec},
+    workspaces::AccessMode,
+};
+
 use super::{Database, StorageError};
 
 const SNAPSHOT_FORMAT_VERSION: u32 = 1;
@@ -96,7 +102,7 @@ impl Database {
             if rows.is_empty() {
                 continue;
             }
-            let rows = normalize_snapshot_rows(table, rows, snapshot.schema_version);
+            let rows = normalize_snapshot_rows(table, rows, snapshot.schema_version)?;
             let json = serde_json::to_string(&rows)?;
             let sql = format!(
                 "INSERT INTO {table} SELECT * FROM json_populate_recordset(NULL::{table}, $1::json)"
@@ -115,9 +121,9 @@ fn normalize_snapshot_rows(
     table: &str,
     rows: &[serde_json::Value],
     schema_version: i64,
-) -> Vec<serde_json::Value> {
+) -> Result<Vec<serde_json::Value>, StorageError> {
     if !matches!(table, "workspace_templates" | "workspaces") {
-        return rows.to_vec();
+        return Ok(rows.to_vec());
     }
     rows.iter()
         .cloned()
@@ -137,8 +143,57 @@ fn normalize_snapshot_rows(
                         *profile = serde_json::Value::String(canonical.to_owned());
                     }
                 }
+                let yaml_key = if table == "workspace_templates" {
+                    "template_yaml"
+                } else {
+                    "template_snapshot_yaml"
+                };
+                if schema_version < 10
+                    || object
+                        .get(yaml_key)
+                        .and_then(|value| value.as_str())
+                        .is_none_or(str::is_empty)
+                {
+                    let access = object
+                        .get("access_mode")
+                        .and_then(|value| value.as_str())
+                        .and_then(AccessMode::from_database)
+                        .ok_or(StorageError::InvalidTemplate)?;
+                    let unsigned = |key: &str| {
+                        object
+                            .get(key)
+                            .and_then(|value| value.as_u64())
+                            .ok_or(StorageError::InvalidTemplate)
+                    };
+                    let resources = Resources {
+                        cpu_millis: unsigned("cpu_millis")?,
+                        memory_mib: unsigned("memory_mib")?,
+                        gpu_count: u32::try_from(unsigned("gpu_count")?)
+                            .map_err(|_| StorageError::InvalidTemplate)?,
+                        disk_gib: unsigned("disk_gib")?,
+                    };
+                    let profile = object
+                        .get("runtime_profile")
+                        .and_then(|value| value.as_str())
+                        .ok_or(StorageError::InvalidTemplate)?;
+                    let image = object
+                        .get("image")
+                        .and_then(|value| value.as_str())
+                        .ok_or(StorageError::InvalidTemplate)?;
+                    let name = object
+                        .get("name")
+                        .and_then(|value| value.as_str())
+                        .ok_or(StorageError::InvalidTemplate)?;
+                    let spec =
+                        WorkspaceTemplateSpec::from_legacy(profile, image, access, resources)
+                            .map_err(|_| StorageError::InvalidTemplate)?;
+                    let yaml = WorkspaceTemplateDocument::new(name, spec)
+                        .to_yaml()
+                        .map_err(|_| StorageError::InvalidTemplate)?;
+                    object.insert(yaml_key.to_owned(), serde_json::Value::String(yaml));
+                }
             }
-            row
+            Ok(row)
         })
         .collect()
 }
@@ -189,11 +244,11 @@ const EXPORT_QUERIES: &[(&str, &str)] = &[
     ),
     (
         "workspace_templates",
-        "SELECT json_object('id', id, 'installation_id', installation_id, 'organization_id', organization_id, 'name', name, 'image', image, 'access_mode', access_mode, 'cpu_millis', cpu_millis, 'memory_mib', memory_mib, 'gpu_count', gpu_count, 'disk_gib', disk_gib, 'enabled', enabled, 'created_at', created_at, 'updated_at', updated_at, 'runtime_profile', runtime_profile) item FROM workspace_templates WHERE installation_id = ?1 ORDER BY id",
+        "SELECT json_object('id', id, 'installation_id', installation_id, 'organization_id', organization_id, 'name', name, 'image', image, 'access_mode', access_mode, 'cpu_millis', cpu_millis, 'memory_mib', memory_mib, 'gpu_count', gpu_count, 'disk_gib', disk_gib, 'enabled', enabled, 'created_at', created_at, 'updated_at', updated_at, 'runtime_profile', runtime_profile, 'template_yaml', template_yaml) item FROM workspace_templates WHERE installation_id = ?1 ORDER BY id",
     ),
     (
         "workspaces",
-        "SELECT json_object('id', id, 'installation_id', installation_id, 'short_id', short_id, 'organization_id', organization_id, 'owner_id', owner_id, 'name', name, 'template_id', template_id, 'image', image, 'access_mode', access_mode, 'state', state, 'cpu_millis', cpu_millis, 'memory_mib', memory_mib, 'gpu_count', gpu_count, 'disk_gib', disk_gib, 'generation', generation, 'created_at', created_at, 'updated_at', updated_at, 'deleted_at', deleted_at, 'runtime_profile', runtime_profile) item FROM workspaces WHERE installation_id = ?1 ORDER BY id",
+        "SELECT json_object('id', id, 'installation_id', installation_id, 'short_id', short_id, 'organization_id', organization_id, 'owner_id', owner_id, 'name', name, 'template_id', template_id, 'image', image, 'access_mode', access_mode, 'state', state, 'cpu_millis', cpu_millis, 'memory_mib', memory_mib, 'gpu_count', gpu_count, 'disk_gib', disk_gib, 'generation', generation, 'created_at', created_at, 'updated_at', updated_at, 'deleted_at', deleted_at, 'runtime_profile', runtime_profile, 'template_snapshot_yaml', template_snapshot_yaml) item FROM workspaces WHERE installation_id = ?1 ORDER BY id",
     ),
     (
         "workspace_injection_refs",
@@ -234,11 +289,26 @@ mod tests {
     use super::normalize_snapshot_rows;
 
     #[test]
-    fn old_catalog_rows_are_upgraded_to_standard_runtime_profile() {
+    fn old_catalog_rows_receive_template_yaml() {
         for table in ["workspace_templates", "workspaces"] {
-            let rows = vec![serde_json::json!({"id": "legacy"})];
-            let normalized = normalize_snapshot_rows(table, &rows, 7);
+            let rows = vec![serde_json::json!({
+                "id": "legacy", "name": "Legacy", "image": "registry.example/dev:latest",
+                "access_mode": "internal", "cpu_millis": 1000, "memory_mib": 2048,
+                "gpu_count": 0, "disk_gib": 20
+            })];
+            let normalized = normalize_snapshot_rows(table, &rows, 7).unwrap();
             assert_eq!(normalized[0]["runtime_profile"], "standard");
+            let yaml_key = if table == "workspace_templates" {
+                "template_yaml"
+            } else {
+                "template_snapshot_yaml"
+            };
+            assert!(
+                normalized[0][yaml_key]
+                    .as_str()
+                    .unwrap()
+                    .contains("WorkspaceTemplate")
+            );
             assert!(rows[0].get("runtime_profile").is_none());
         }
     }

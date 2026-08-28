@@ -20,7 +20,7 @@ pub(super) async fn admit_sqlite(
         let usage = sqlx::query("SELECT COALESCE(SUM(cpu_millis), 0) cpu_millis, COALESCE(SUM(memory_mib), 0) memory_mib, COALESCE(SUM(gpu_count), 0) gpu_count, COALESCE(SUM(disk_gib), 0) disk_gib FROM workspaces WHERE installation_id = ?1 AND organization_id = ?2 AND state <> 'deleted'")
             .bind(installation_id).bind(workspace.organization_id.to_string())
             .fetch_one(&mut *connection).await?;
-        admit_rows(&quota, &usage, workspace.resources)?;
+        admit_rows(&quota, &usage, workspace.template.resources)?;
     }
     let quota = sqlx::query("SELECT cpu_millis, memory_mib, gpu_count, disk_gib FROM user_quotas WHERE installation_id = ?1 AND user_id = ?2")
         .bind(installation_id).bind(workspace.owner_id.to_string())
@@ -29,7 +29,7 @@ pub(super) async fn admit_sqlite(
     let usage = sqlx::query("SELECT COALESCE(SUM(cpu_millis), 0) cpu_millis, COALESCE(SUM(memory_mib), 0) memory_mib, COALESCE(SUM(gpu_count), 0) gpu_count, COALESCE(SUM(disk_gib), 0) disk_gib FROM workspaces WHERE installation_id = ?1 AND owner_id = ?2 AND state <> 'deleted'")
         .bind(installation_id).bind(workspace.owner_id.to_string())
         .fetch_one(&mut *connection).await?;
-    admit_rows(&quota, &usage, workspace.resources)
+    admit_rows(&quota, &usage, workspace.template.resources)
 }
 
 pub(super) async fn admit_postgres(
@@ -45,7 +45,7 @@ pub(super) async fn admit_postgres(
         let usage = sqlx::query("SELECT CAST(COALESCE(SUM(cpu_millis), 0) AS BIGINT) cpu_millis, CAST(COALESCE(SUM(memory_mib), 0) AS BIGINT) memory_mib, CAST(COALESCE(SUM(gpu_count), 0) AS BIGINT) gpu_count, CAST(COALESCE(SUM(disk_gib), 0) AS BIGINT) disk_gib FROM workspaces WHERE installation_id = $1 AND organization_id = $2 AND state <> 'deleted'")
             .bind(installation_id).bind(workspace.organization_id.to_string())
             .fetch_one(&mut *connection).await?;
-        admit_rows(&quota, &usage, workspace.resources)?;
+        admit_rows(&quota, &usage, workspace.template.resources)?;
     }
     let quota = sqlx::query("SELECT cpu_millis, memory_mib, gpu_count, disk_gib FROM user_quotas WHERE installation_id = $1 AND user_id = $2 FOR UPDATE")
         .bind(installation_id).bind(workspace.owner_id.to_string())
@@ -54,7 +54,7 @@ pub(super) async fn admit_postgres(
     let usage = sqlx::query("SELECT CAST(COALESCE(SUM(cpu_millis), 0) AS BIGINT) cpu_millis, CAST(COALESCE(SUM(memory_mib), 0) AS BIGINT) memory_mib, CAST(COALESCE(SUM(gpu_count), 0) AS BIGINT) gpu_count, CAST(COALESCE(SUM(disk_gib), 0) AS BIGINT) disk_gib FROM workspaces WHERE installation_id = $1 AND owner_id = $2 AND state <> 'deleted'")
         .bind(installation_id).bind(workspace.owner_id.to_string())
         .fetch_one(&mut *connection).await?;
-    admit_rows(&quota, &usage, workspace.resources)
+    admit_rows(&quota, &usage, workspace.template.resources)
 }
 
 fn admit_rows<Q: Row, U: Row>(quota: &Q, usage: &U, request: Resources) -> Result<(), StorageError>
