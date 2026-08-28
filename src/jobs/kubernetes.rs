@@ -243,10 +243,12 @@ fn normalize_resolved_ssh_items(
         .iter_mut()
         .filter(|item| item.item.kind == crate::injections::InjectionKind::SshPublicKey)
     {
+        let name = format!("injected-{}", item.item.key);
+        normalize_ssh_target(&mut item.item, profile, &name);
         item.item.sensitive = false;
-        item.item.file_mode.get_or_insert(0o600);
-        item.item.owner.get_or_insert_with(|| login_user.to_owned());
-        item.item.group.get_or_insert_with(|| login_user.to_owned());
+        item.item.file_mode = Some(0o600);
+        item.item.owner = Some(login_user.to_owned());
+        item.item.group = Some(login_user.to_owned());
     }
 }
 
@@ -321,7 +323,7 @@ mod tests {
     use super::normalize_resolved_ssh_items;
 
     #[test]
-    fn ssh_materialization_preserves_the_requested_target_and_defaults_runtime_ownership() {
+    fn ssh_materialization_uses_the_runtime_home_and_ownership() {
         let mut resolved = vec![ResolvedInjection {
             source: InjectionScope::User,
             item: InjectionItem {
@@ -343,7 +345,7 @@ mod tests {
         normalize_resolved_ssh_items(&mut resolved, WorkspaceRuntimeProfile::NodeDev);
 
         let item = &resolved[0].item;
-        assert_eq!(item.target, "/wrong/location");
+        assert_eq!(item.target, "/home/node-dev/.mwc/injected-personal-key.pub");
         assert_eq!(item.file_mode, Some(0o600));
         assert_eq!(item.owner.as_deref(), Some("node-dev"));
         assert_eq!(item.group.as_deref(), Some("node-dev"));

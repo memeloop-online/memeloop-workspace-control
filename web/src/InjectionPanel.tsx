@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
 import type { ApiClient } from "./api";
+import { useI18n } from "./i18n";
 import type {
   InjectionDraft,
   InjectionKind,
@@ -35,13 +36,22 @@ const EMPTY_DRAFT: InjectionDraft = {
 };
 
 export function InjectionPanel(props: Props) {
-  const [scope, setScope] = useState<InjectionScope>("organization");
+  const { t } = useI18n();
+  const [scope, setScope] = useState<InjectionScope>("user");
   const [workspaceId, setWorkspaceId] = useState(props.workspaces[0]?.workspace.id ?? "");
   const [items, setItems] = useState<StoredInjection[]>([]);
   const [draft, setDraft] = useState<InjectionDraft>({ ...EMPTY_DRAFT });
   const [selectorLabels, setSelectorLabels] = useState("{}");
   const [preview, setPreview] = useState<ResolvedInjection[]>([]);
   const [saving, setSaving] = useState(false);
+  const [search, setSearch] = useState("");
+
+  const filteredItems = useMemo(() => {
+    const query = search.trim().toLocaleLowerCase();
+    if (!query) return items;
+    return items.filter((item) => [item.key, item.target, item.kind, kindLabel(item.kind, t)]
+      .some((value) => value.toLocaleLowerCase().includes(query)));
+  }, [items, search, t]);
 
   const scopeId = useMemo(() => {
     if (scope === "organization") return props.organizationId;
@@ -76,7 +86,7 @@ export function InjectionPanel(props: Props) {
       kind === "environment_variable"
         ? "EXAMPLE_VARIABLE"
         : kind === "ssh_public_key"
-          ? "/workspace/.mwc/injected-key.pub"
+          ? sshTarget(draft.key)
           : kind === "secret_file"
             ? "/run/secrets/example"
             : "/workspace/config.yaml";
@@ -89,6 +99,14 @@ export function InjectionPanel(props: Props) {
     }));
   }
 
+  function changeKey(key: string) {
+    setDraft((current) => ({
+      ...current,
+      key,
+      target: current.kind === "ssh_public_key" ? sshTarget(key) : current.target,
+    }));
+  }
+
   async function save(event: FormEvent) {
     event.preventDefault();
     if (!scopeId) return;
@@ -96,7 +114,7 @@ export function InjectionPanel(props: Props) {
     try {
       const labels = JSON.parse(selectorLabels) as unknown;
       if (!labels || Array.isArray(labels) || typeof labels !== "object" || Object.values(labels).some((value) => typeof value !== "string")) {
-        throw new Error("标签选择必须是字符串键值组成的 JSON 对象");
+        throw new Error(t("operationFailed"));
       }
       await props.api.replaceInjection(scope, scopeId, {
         ...draft,
@@ -132,55 +150,59 @@ export function InjectionPanel(props: Props) {
   return (
     <section className="panel-stack">
       <div className="section-heading">
-        <div><p className="eyebrow">INJECTIONS</p><h2>Secret 与文件级联</h2></div>
-        <button className="button" onClick={() => void runPreview()}>预览最终来源</button>
+        <div><p className="eyebrow">CREDENTIALS</p><h2>{t("credentialsTitle")}</h2></div>
+        <button className="button" onClick={() => void runPreview()}>{t("credentialsPreview")}</button>
       </div>
       <div className="scope-tabs">
         {(["organization", "user", "workspace"] as InjectionScope[]).map((value) => (
           <button className={scope === value ? "active" : ""} onClick={() => setScope(value)} key={value}>
-            {value === "organization" ? "组织级" : value === "user" ? "用户级" : "工作区级"}
+            {value === "organization" ? t("scopeOrganization") : value === "user" ? t("scopeUser") : t("scopeWorkspace")}
           </button>
         ))}
       </div>
       {scope === "workspace" && (
-        <label className="standalone-label">工作区<select value={workspaceId} onChange={(event) => setWorkspaceId(event.target.value)}><option value="">请选择</option>{props.workspaces.map(({ workspace }) => <option value={workspace.id} key={workspace.id}>{workspace.name} · {workspace.short_id}</option>)}</select></label>
+        <label className="standalone-label">{t("workspaces")}<select value={workspaceId} onChange={(event) => setWorkspaceId(event.target.value)}><option value="">{t("choose")}</option>{props.workspaces.map(({ workspace }) => <option value={workspace.id} key={workspace.id}>{workspace.name} · {workspace.short_id}</option>)}</select></label>
       )}
 
       <div className="injection-layout">
         <div className="injection-list">
-          <h3>已保存条目</h3>
-          {items.length === 0 && <div className="empty compact">没有条目</div>}
-          {items.map((item) => (
+          <h3>{t("savedCredentials")}</h3>
+          <input className="credential-search" type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder={t("searchCredentials")} aria-label={t("searchCredentials")} />
+          <div className="credential-scroll">
+          {filteredItems.length === 0 && <div className="empty compact">{t("noCredentials")}</div>}
+          {filteredItems.map((item) => (
             <button className="injection-row" key={item.key} onClick={() => { setDraft({ ...EMPTY_DRAFT, key: item.key, kind: item.kind, target: item.target, sensitive: item.sensitive, locked: item.locked, file_mode: item.file_mode, owner: item.owner, group: item.group, template_selector: item.template_selector, labels: item.labels }); setSelectorLabels(JSON.stringify(item.labels)); }}>
               <span className="kind-icon">{kindGlyph(item.kind)}</span>
               <span><strong>{item.key}</strong><small>{item.target}</small></span>
-              <span className="version">v{item.version}{item.locked ? " · 锁定" : ""}</span>
+              <span className="version">v{item.version}{item.locked ? ` · ${t("locked")}` : ""}</span>
             </button>
           ))}
+          </div>
         </div>
 
         <form className="editor-card" onSubmit={save}>
           <div className="editor-grid">
-            <label>键<input required value={draft.key} onChange={(e) => setDraft({ ...draft, key: e.target.value })} /></label>
-            <label>类型<select value={draft.kind} onChange={(e) => changeKind(e.target.value as InjectionKind)}><option value="environment_variable">环境变量</option><option value="config_file">普通配置文件</option><option value="secret_file">敏感文件</option><option value="ssh_public_key">SSH 公钥</option></select></label>
-            <label>编码<select value={draft.value.encoding} onChange={(e) => setDraft({ ...draft, value: { ...draft.value, encoding: e.target.value as "utf8" | "base64" } })}><option value="utf8">多行 UTF-8</option><option value="base64">Base64 二进制</option></select></label>
-            {draft.kind !== "environment_variable" && <label>权限（八进制）<input value={draft.file_mode === null ? "" : draft.file_mode.toString(8)} onChange={(e) => setDraft({ ...draft, file_mode: e.target.value ? Number.parseInt(e.target.value, 8) : null })} placeholder="600" /></label>}
-            <label className="wide">目标<input required value={draft.target} onChange={(e) => setDraft({ ...draft, target: e.target.value })} /></label>
-            {draft.kind !== "environment_variable" && <><label>属主<input value={draft.owner ?? ""} onChange={(e) => setDraft({ ...draft, owner: e.target.value || null })} placeholder="workspace" /></label><label>属组<input value={draft.group ?? ""} onChange={(e) => setDraft({ ...draft, group: e.target.value || null })} placeholder="workspace" /></label></>}
-            <label>模板选择<input value={draft.template_selector ?? ""} onChange={(e) => setDraft({ ...draft, template_selector: e.target.value || null })} placeholder="模板 UUID 或 *" /></label>
-            <label>标签选择（JSON）<input value={selectorLabels} onChange={(e) => setSelectorLabels(e.target.value)} placeholder={'{"access_mode":"public"}'} /></label>
-            <label className="wide">{draft.value.encoding === "base64" ? "值（Base64）" : "值（多行 UTF-8 / JSON / YAML / PEM）"}<textarea rows={15} spellCheck={false} value={draft.value.value} onChange={(e) => setDraft({ ...draft, value: { ...draft.value, value: e.target.value } })} placeholder={draft.value.encoding === "base64" ? "Base64 编码内容" : "保留空行、缩进与末尾换行"} /></label>
+            <label>{t("key")}<input required value={draft.key} onChange={(e) => changeKey(e.target.value)} /></label>
+            <label>{t("type")}<select value={draft.kind} onChange={(e) => changeKind(e.target.value as InjectionKind)}><option value="environment_variable">{t("environmentVariable")}</option><option value="config_file">{t("configFile")}</option><option value="secret_file">{t("credentialFile")}</option><option value="ssh_public_key">{t("sshPublicKey")}</option></select></label>
+            <label>{t("encoding")}<select value={draft.value.encoding} onChange={(e) => setDraft({ ...draft, value: { ...draft.value, encoding: e.target.value as "utf8" | "base64" } })}><option value="utf8">{t("multilineUtf8")}</option><option value="base64">{t("base64Binary")}</option></select></label>
+            {draft.kind !== "environment_variable" && <label>{t("fileMode")}<input value={draft.file_mode === null ? "" : draft.file_mode.toString(8)} onChange={(e) => setDraft({ ...draft, file_mode: e.target.value ? Number.parseInt(e.target.value, 8) : null })} placeholder="600" /></label>}
+            <label className="wide">{t("target")}<input required readOnly={draft.kind === "ssh_public_key"} value={draft.target} onChange={(e) => setDraft({ ...draft, target: e.target.value })} /></label>
+            {draft.kind === "ssh_public_key" && <p className="profile-note wide">{t("sshTargetHelp")}</p>}
+            {draft.kind !== "environment_variable" && <><label>{t("owner")}<input value={draft.owner ?? ""} onChange={(e) => setDraft({ ...draft, owner: e.target.value || null })} placeholder="workspace" /></label><label>{t("group")}<input value={draft.group ?? ""} onChange={(e) => setDraft({ ...draft, group: e.target.value || null })} placeholder="workspace" /></label></>}
+            <label>{t("templateSelector")}<input value={draft.template_selector ?? ""} onChange={(e) => setDraft({ ...draft, template_selector: e.target.value || null })} placeholder={t("templateSelectorHint")} /></label>
+            <label>{t("labelSelector")}<input value={selectorLabels} onChange={(e) => setSelectorLabels(e.target.value)} placeholder={'{"access_mode":"public"}'} /></label>
+            <label className="wide">{draft.value.encoding === "base64" ? t("valueBase64") : t("valueMultiline")}<textarea rows={15} spellCheck={false} value={draft.value.value} onChange={(e) => setDraft({ ...draft, value: { ...draft.value, value: e.target.value } })} placeholder={draft.value.encoding === "base64" ? t("base64Hint") : t("multilineHint")} /></label>
           </div>
           <div className="check-row">
-            <label><input type="checkbox" checked={draft.sensitive} onChange={(e) => setDraft({ ...draft, sensitive: e.target.checked })} />敏感值</label>
-            {scope === "organization" && <label><input type="checkbox" checked={draft.locked} onChange={(e) => setDraft({ ...draft, locked: e.target.checked })} />禁止下层覆盖</label>}
+            <label><input type="checkbox" checked={draft.sensitive} onChange={(e) => setDraft({ ...draft, sensitive: e.target.checked })} />{t("sensitiveValue")}</label>
+            {scope === "organization" && <label><input type="checkbox" checked={draft.locked} onChange={(e) => setDraft({ ...draft, locked: e.target.checked })} />{t("locked")}</label>}
           </div>
-          <p className="security-note">保存后值不可读取，只能整体替换。界面与审计仅展示元数据和版本。</p>
-          <button className="button primary" disabled={saving || !scopeId}>{saving ? "加密保存中…" : "加密并替换"}</button>
+          <p className="security-note">{t("credentialWriteOnly")}</p>
+          <button className="button primary" disabled={saving || !scopeId}>{saving ? t("savingEncrypted") : t("saveEncrypted")}</button>
         </form>
       </div>
 
-      {preview.length > 0 && <div className="preview-card"><h3>最终解析来源</h3><div className="preview-grid">{preview.map((item) => <div key={item.key}><strong>{item.key}</strong><span>{sourceLabel(item.source)}</span><small>{item.target}{item.locked ? " · locked" : ""}</small></div>)}</div></div>}
+      {preview.length > 0 && <div className="preview-card"><h3>{t("resolvedSources")}</h3><div className="preview-grid">{preview.map((item) => <div key={item.key}><strong>{item.key}</strong><span>{item.source === "organization" ? t("fromOrganization") : item.source === "user" ? t("fromUser") : t("fromWorkspace")}</span><small>{item.target}{item.locked ? ` · ${t("locked")}` : ""}</small></div>)}</div></div>}
     </section>
   );
 }
@@ -189,8 +211,13 @@ function kindGlyph(kind: InjectionKind) {
   return kind === "environment_variable" ? "ENV" : kind === "ssh_public_key" ? "SSH" : kind === "secret_file" ? "SEC" : "CFG";
 }
 
-function sourceLabel(scope: InjectionScope) {
-  return scope === "organization" ? "来自组织" : scope === "user" ? "来自用户" : "来自工作区";
+function kindLabel(kind: InjectionKind, t: ReturnType<typeof useI18n>["t"]) {
+  return kind === "environment_variable" ? t("environmentVariable") : kind === "ssh_public_key" ? t("sshPublicKey") : kind === "secret_file" ? t("credentialFile") : t("configFile");
+}
+
+function sshTarget(key: string) {
+  const safe = key.trim().replace(/[^A-Za-z0-9._-]+/g, "-") || "injected-key";
+  return `/workspace/.mwc/${safe}.pub`;
 }
 
 function message(error: unknown) {

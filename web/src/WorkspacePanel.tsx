@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
 import type { ApiClient } from "./api";
-import { isHighRiskRuntimeProfile, runtimeProfileLabel, runtimeProfileOption } from "./runtimeProfiles";
+import { useI18n } from "./i18n";
+import { isHighRiskRuntimeProfile, runtimeProfileDescription, runtimeProfileLabel } from "./runtimeProfiles";
 import type {
   AccessMode,
   CreateWorkspace,
@@ -24,6 +25,7 @@ interface Props {
 }
 
 export function WorkspacePanel(props: Props) {
+  const { locale, t } = useI18n();
   const [showCreate, setShowCreate] = useState(false);
   const [templates, setTemplates] = useState<WorkspaceTemplate[]>([]);
   const [templateId, setTemplateId] = useState("");
@@ -42,6 +44,24 @@ export function WorkspacePanel(props: Props) {
   const [userRefs, setUserRefs] = useState<string[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [runtime, setRuntime] = useState<Record<string, WorkspaceRuntime>>({});
+  const runtimeKey = props.workspaces.map((item) => `${item.workspace.id}:${item.workspace.state}`).join(",");
+
+  useEffect(() => {
+    let active = true;
+    const refreshRuntime = async () => {
+      const visible = props.workspaces.filter((item) => !["deleting", "deleted"].includes(item.workspace.state));
+      const results = await Promise.allSettled(visible.map(async (item) => [item.workspace.id, await props.api.workspaceRuntime(item.workspace.id)] as const));
+      if (!active) return;
+      setRuntime((current) => {
+        const next = { ...current };
+        for (const result of results) if (result.status === "fulfilled") next[result.value[0]] = result.value[1];
+        return next;
+      });
+    };
+    void refreshRuntime();
+    const timer = window.setInterval(() => void refreshRuntime(), 5000);
+    return () => { active = false; window.clearInterval(timer); };
+  }, [props.api, runtimeKey]);
 
   useEffect(() => {
     let active = true;
@@ -87,12 +107,12 @@ export function WorkspacePanel(props: Props) {
   async function create(event: FormEvent) {
     event.preventDefault();
     if (!templateId || !runtimeProfile) {
-      props.onError("必须选择一个受控工作区模板");
+      props.onError(locale === "zh-CN" ? "必须选择一个受控工作区模板" : "Choose a controlled workspace template");
       return;
     }
     if (
       isHighRiskRuntimeProfile(runtimeProfile)
-      && !confirm("该工作区将使用集群管理员运行时配置，可能拥有集群级权限。确认创建？")
+      && !confirm(locale === "zh-CN" ? "该工作区将使用集群管理员运行时配置，可能拥有集群级权限。确认创建？" : "This workspace may receive cluster-level privileges. Create it?")
     ) return;
     const command: CreateWorkspace = {
       organization_id: props.organizationId,
@@ -168,7 +188,7 @@ export function WorkspacePanel(props: Props) {
     id: string,
     value: "start" | "stop" | "restart" | "delete",
   ) {
-    if (value === "delete" && !confirm("确定删除这个工作区？PVC 与命名空间会被清理。")) {
+    if (value === "delete" && !confirm(locale === "zh-CN" ? "确定删除这个工作区？PVC 与命名空间会被清理。" : "Delete this workspace? Its PVC and namespace will be removed.")) {
       return;
     }
     try {
@@ -198,57 +218,57 @@ export function WorkspacePanel(props: Props) {
   return (
     <section className="panel-stack">
       <div className="stat-grid">
-        <Stat label="工作区" value={String(props.workspaces.length)} hint="当前组织" />
-        <Stat label="CPU" value={`${totals.cpu / 1000} 核`} hint="申请总量" />
-        <Stat label="内存" value={`${formatGiB(totals.memory)} GiB`} hint="申请总量" />
-        <Stat label="持久盘" value={`${totals.disk} GiB`} hint={`${totals.gpu} GPU`} />
+        <Stat label={t("workspaceCount")} value={String(props.workspaces.length)} hint={t("currentOrganization")} />
+        <Stat label="CPU" value={`${totals.cpu / 1000} ${locale === "zh-CN" ? "核" : "cores"}`} hint={t("requestedTotal")} />
+        <Stat label={t("memory")} value={`${formatGiB(totals.memory)} GiB`} hint={t("requestedTotal")} />
+        <Stat label={t("persistentDisk")} value={`${totals.disk} GiB`} hint={`${totals.gpu} GPU`} />
       </div>
 
       <div className="section-heading">
         <div>
           <p className="eyebrow">WORKSPACES</p>
-          <h2>工作区</h2>
+          <h2>{t("workspaces")}</h2>
         </div>
         <button className="button primary" onClick={() => setShowCreate((value) => !value)}>
-          {showCreate ? "收起" : "新建工作区"}
+          {showCreate ? t("collapse") : t("newWorkspace")}
         </button>
       </div>
 
       {showCreate && (
         <form className="create-card" onSubmit={create}>
-          <label>名称<input required value={name} onChange={(e) => setName(e.target.value)} /></label>
-          <label>模板<select required value={templateId} onChange={(e) => selectTemplate(e.target.value)}><option value="">选择受控模板</option>{templates.map((template) => <option key={template.id} value={template.id}>{template.name} · {runtimeProfileLabel(template.runtime_profile)}</option>)}</select></label>
-          <label>运行时配置<input readOnly value={runtimeProfile ? runtimeProfileLabel(runtimeProfile) : "由模板继承"} /></label>
-          <label className="wide">镜像<input required readOnly value={image} /></label>
+          <label>{t("name")}<input required value={name} onChange={(e) => setName(e.target.value)} /></label>
+          <label>{t("template")}<select required value={templateId} onChange={(e) => selectTemplate(e.target.value)}><option value="">{t("chooseTemplate")}</option>{templates.map((template) => <option key={template.id} value={template.id}>{template.name} · {runtimeProfileLabel(template.runtime_profile, locale)}</option>)}</select></label>
+          <label>{t("runtimeProfile")}<input readOnly value={runtimeProfile ? runtimeProfileLabel(runtimeProfile, locale) : t("inheritedFromTemplate")} /></label>
+          <label className="wide">{t("image")}<input required readOnly value={image} /></label>
           <label>CPU（m）<input type="number" min="100" readOnly value={cpu} /></label>
-          <label>内存（MiB）<input type="number" min="128" readOnly value={memory} /></label>
+          <label>{t("memory")}（MiB）<input type="number" min="128" readOnly value={memory} /></label>
           <label>GPU<input type="number" min="0" readOnly value={gpu} /></label>
-          <label>磁盘（GiB）<input type="number" min="1" readOnly value={disk} /></label>
-          <label>访问模式<select disabled value={accessMode}><option value="internal">内网</option><option value="public">公网</option></select></label>
-          {runtimeProfile && <p className={isHighRiskRuntimeProfile(runtimeProfile) ? "risk-note wide" : "profile-note wide"}>{runtimeProfileOption(runtimeProfile).description}{isHighRiskRuntimeProfile(runtimeProfile) ? " 创建时还会要求二次确认。" : ""}</p>}
-          <label>注入引用<select value={explicitInjectionRefs ? "selected" : "all"} onChange={(e) => setReferenceMode(e.target.value === "selected")}><option value="all">全部匹配项</option><option value="selected">自选引用</option></select></label>
+          <label>{t("disk")}（GiB）<input type="number" min="1" readOnly value={disk} /></label>
+          <label>{t("accessMode")}<select disabled value={accessMode}><option value="internal">{t("internal")}</option><option value="public">{t("public")}</option></select></label>
+          {runtimeProfile && <p className={isHighRiskRuntimeProfile(runtimeProfile) ? "risk-note wide" : "profile-note wide"}>{runtimeProfileDescription(runtimeProfile, locale)}</p>}
+          <label>{t("injectionReferences")}<select value={explicitInjectionRefs ? "selected" : "all"} onChange={(e) => setReferenceMode(e.target.value === "selected")}><option value="all">{t("allMatching")}</option><option value="selected">{t("selectedReferences")}</option></select></label>
           {explicitInjectionRefs && (
             <fieldset className="injection-ref-picker wide">
-              <legend>组织级与用户级注入</legend>
+              <legend>{t("organizationAndUserCredentials")}</legend>
               <div>
-                <strong>组织级</strong>
-                {organizationInjections.length === 0 && <small>无可用项</small>}
-                {organizationInjections.map((item) => <label key={item.key}><input type="checkbox" checked={item.locked || organizationRefs.includes(item.key)} disabled={item.locked} onChange={() => toggleReference(item.key, organizationRefs, setOrganizationRefs)} /><span>{item.key}{item.locked ? "（锁定，强制注入）" : ""}</span></label>)}
+                <strong>{t("scopeOrganization")}</strong>
+                {organizationInjections.length === 0 && <small>{t("noItems")}</small>}
+                {organizationInjections.map((item) => <label key={item.key}><input type="checkbox" checked={item.locked || organizationRefs.includes(item.key)} disabled={item.locked} onChange={() => toggleReference(item.key, organizationRefs, setOrganizationRefs)} /><span>{item.key}{item.locked ? ` · ${t("locked")}` : ""}</span></label>)}
               </div>
               <div>
-                <strong>用户级</strong>
-                {userInjections.length === 0 && <small>无可用项</small>}
+                <strong>{t("scopeUser")}</strong>
+                {userInjections.length === 0 && <small>{t("noItems")}</small>}
                 {userInjections.map((item) => <label key={item.key}><input type="checkbox" checked={userRefs.includes(item.key)} onChange={() => toggleReference(item.key, userRefs, setUserRefs)} /><span>{item.key}</span></label>)}
               </div>
-              <p>这里只显示引用元数据；Secret 值不会回显。模板与标签选择器仍会在服务端过滤不匹配项。</p>
+              <p>{t("selectedReferenceHelp")}</p>
             </fieldset>
           )}
-          <div className="form-actions"><button className="button primary" disabled={submitting || !templateId}>{submitting ? "创建中…" : "提交创建"}</button></div>
+          <div className="form-actions"><button className="button primary" disabled={submitting || !templateId}>{submitting ? t("creating") : t("submitCreate")}</button></div>
         </form>
       )}
 
       <div className="workspace-list" aria-busy={props.busy}>
-        {props.workspaces.length === 0 && <div className="empty">这个组织还没有工作区。</div>}
+        {props.workspaces.length === 0 && <div className="empty">{t("noWorkspaces")}</div>}
         {props.workspaces.map((item) => (
           <article className="workspace-card" key={item.workspace.id}>
             <div className="workspace-main">
@@ -256,23 +276,25 @@ export function WorkspacePanel(props: Props) {
               <StateBadge state={item.workspace.state} />
             </div>
             <div className="workspace-meta">
-              <span>{item.workspace.resources.cpu_millis}m CPU</span>
+              <span>{t("requested")} {item.workspace.resources.cpu_millis}m CPU</span>
               <span>{item.workspace.resources.memory_mib} MiB</span>
               <span>{item.workspace.resources.disk_gib} GiB</span>
-              <span>{item.workspace.access_mode === "public" ? "公网" : "内网"}</span>
-              <span>{runtimeProfileLabel(item.workspace.runtime_profile)}</span>
+              <span>{item.workspace.access_mode === "public" ? t("public") : t("internal")}</span>
+              <span>{runtimeProfileLabel(item.workspace.runtime_profile, locale)}</span>
             </div>
             <p className="namespace">{item.namespace}</p>
-            {item.ssh_host && item.ssh_port && <p className="namespace">SSH endpoint: <code>{item.ssh_host}:{item.ssh_port}</code></p>}
-            {item.ssh_command && <CopyLine label="SSH" value={item.ssh_command} />}
-            {item.workspace_host_key && <CopyLine label="Host key" value={`${item.workspace_host_key.fingerprint} ${item.workspace_host_key.public_key}`} />}
-            {item.jump_host_key && <CopyLine label="Jump key" value={`${item.jump_host_key.fingerprint} ${item.jump_host_key.public_key}`} />}
+            {runtime[item.workspace.id] && <LiveResourceSummary runtime={runtime[item.workspace.id]} />}
+            {item.ssh_host && item.ssh_port && <p className="namespace">{t("sshEndpoint")}: <code>{item.ssh_host}:{item.ssh_port}</code></p>}
+            {item.ssh_command && <CopyLine label={t("sshCommand")} value={item.ssh_command} />}
+            {item.ssh_config && <CopyLine label={t("copyCodexHost")} value={`mwc-${item.workspace.short_id}`} />}
+            {item.workspace_host_key && <CopyLine label={t("hostKey")} value={`${item.workspace_host_key.fingerprint} ${item.workspace_host_key.public_key}`} />}
+            {item.jump_host_key && <CopyLine label={t("jumpKey")} value={`${item.jump_host_key.fingerprint} ${item.jump_host_key.public_key}`} />}
             <div className="workspace-actions">
-              {item.workspace.state === "ready" && <><button onClick={() => void openShell(item.workspace.id)}>Web Shell</button><button onClick={() => void action(item.workspace.id, "stop")}>停止</button><button onClick={() => void action(item.workspace.id, "restart")}>重启</button></>}
-              {(item.workspace.state === "stopped" || item.workspace.state === "failed") && <button onClick={() => void action(item.workspace.id, "start")}>启动</button>}
-              {!(["deleting", "deleted"] as string[]).includes(item.workspace.state) && <button className="danger" onClick={() => void action(item.workspace.id, "delete")}>删除</button>}
-              {item.ssh_config && <button onClick={() => void navigator.clipboard.writeText(item.ssh_config!)}>复制 SSH config</button>}
-              <button onClick={() => void loadRuntime(item.workspace.id)}>运行状态</button>
+              {item.workspace.state === "ready" && <><button onClick={() => void openShell(item.workspace.id)}>{t("webShell")}</button><button onClick={() => void action(item.workspace.id, "stop")}>{t("stop")}</button><button onClick={() => void action(item.workspace.id, "restart")}>{t("restart")}</button></>}
+              {(item.workspace.state === "stopped" || item.workspace.state === "failed") && <button onClick={() => void action(item.workspace.id, "start")}>{t("start")}</button>}
+              {!(["deleting", "deleted"] as string[]).includes(item.workspace.state) && <button className="danger" onClick={() => void action(item.workspace.id, "delete")}>{t("delete")}</button>}
+              {item.ssh_config && <button onClick={() => void navigator.clipboard.writeText(item.ssh_config!)}>{t("copySshConfig")}</button>}
+              <button onClick={() => void loadRuntime(item.workspace.id)}>{t("runtimeStatus")}</button>
             </div>
             {runtime[item.workspace.id] && <RuntimeDetails runtime={runtime[item.workspace.id]} />}
           </article>
@@ -283,7 +305,15 @@ export function WorkspacePanel(props: Props) {
 }
 
 function RuntimeDetails({ runtime }: { runtime: WorkspaceRuntime }) {
-  return <div className="runtime-details"><div className="trust-row"><span>PVC {runtime.pvc_capacity ?? "未知"}</span><span>{runtime.allocated.gpu_count} GPU</span><span>{runtime.metrics_available ? "实时指标" : "metrics-server 不可用"}</span></div>{runtime.pods.map((pod) => <p key={pod.name}><code>{pod.name}</code> · {pod.phase ?? "unknown"} · {pod.ready ? "Ready" : "Not Ready"} · {pod.restarts} restarts</p>)}{runtime.metrics.map((metric) => <p key={`${metric.pod}-${metric.container}`}><code>{metric.container}</code> · CPU {metric.cpu ?? "—"} · 内存 {metric.memory ?? "—"}</p>)}{runtime.events.slice(0, 8).map((event, index) => <p key={`${event.last_timestamp}-${index}`}><strong>{event.reason ?? event.event_type ?? "Event"}</strong> {event.message}</p>)}</div>;
+  const { t } = useI18n();
+  return <div className="runtime-details"><div className="trust-row"><span>{t("pvcCapacity")} {runtime.pvc_capacity ?? "—"}</span><span>{runtime.allocated.gpu_count} GPU</span><span>{runtime.metrics_available ? t("actual") : t("metricsUnavailable")}</span></div>{runtime.pods.map((pod) => <p key={pod.name}><code>{pod.name}</code> · {pod.phase ?? "unknown"} · {pod.ready ? t("ready") : t("notReady")} · {pod.restarts} restarts</p>)}{runtime.metrics.map((metric) => <p key={`${metric.pod}-${metric.container}`}><code>{metric.container}</code> · CPU {metric.cpu ?? "—"} · {t("memory")} {metric.memory ?? "—"}</p>)}{runtime.events.slice(0, 8).map((event, index) => <p key={`${event.last_timestamp}-${index}`}><strong>{event.reason ?? event.event_type ?? "Event"}</strong> {event.message}</p>)}</div>;
+}
+
+function LiveResourceSummary({ runtime }: { runtime: WorkspaceRuntime }) {
+  const { t } = useI18n();
+  const cpu = runtime.metrics.map((metric) => metric.cpu).filter(Boolean).join(" + ") || "—";
+  const memory = runtime.metrics.map((metric) => metric.memory).filter(Boolean).join(" + ") || "—";
+  return <div className="live-resources"><strong>{t("actual")}</strong><span>CPU {cpu}</span><span>{t("memory")} {memory}</span><span>{t("pvcCapacity")} {runtime.pvc_capacity ?? "—"}</span><span>{runtime.allocated.gpu_count} GPU</span></div>;
 }
 
 function Stat({ label, value, hint }: { label: string; value: string; hint: string }) {
@@ -295,8 +325,9 @@ function StateBadge({ state }: { state: string }) {
 }
 
 function CopyLine({ label, value }: { label: string; value: string }) {
+  const { t } = useI18n();
   const [copied, setCopied] = useState(false);
-  return <div className="copy-line"><span>{label}</span><code>{value}</code><button onClick={() => { void navigator.clipboard.writeText(value); setCopied(true); setTimeout(() => setCopied(false), 1200); }}>{copied ? "已复制" : "复制"}</button></div>;
+  return <div className="copy-line"><span>{label}</span><code>{value}</code><button onClick={() => { void navigator.clipboard.writeText(value); setCopied(true); setTimeout(() => setCopied(false), 1200); }}>{copied ? t("copied") : t("copy")}</button></div>;
 }
 
 function formatGiB(mib: number) {
