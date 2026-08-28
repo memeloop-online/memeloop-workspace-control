@@ -3,6 +3,7 @@ import type { FormEvent } from "react";
 import type { ApiClient } from "./api";
 import { useI18n } from "./i18n";
 import { isHighRiskRuntimeProfile, runtimeProfileDescription, runtimeProfileLabel } from "./runtimeProfiles";
+import { WorkspaceCard } from "./WorkspaceCard";
 import type {
   AccessMode,
   CreateWorkspace,
@@ -211,10 +212,6 @@ export function WorkspacePanel(props: Props) {
     }
   }
 
-  async function loadRuntime(workspaceId: string) {
-    try { const value = await props.api.workspaceRuntime(workspaceId); setRuntime((current) => ({ ...current, [workspaceId]: value })); } catch (error) { props.onError(message(error)); }
-  }
-
   return (
     <section className="panel-stack">
       <div className="stat-grid">
@@ -269,65 +266,14 @@ export function WorkspacePanel(props: Props) {
 
       <div className="workspace-list" aria-busy={props.busy}>
         {props.workspaces.length === 0 && <div className="empty">{t("noWorkspaces")}</div>}
-        {props.workspaces.map((item) => (
-          <article className="workspace-card" key={item.workspace.id}>
-            <div className="workspace-main">
-              <div className="workspace-title"><span className={`status-dot ${item.workspace.state}`} /><div><h3>{item.workspace.name}</h3><code>{item.workspace.short_id}</code></div></div>
-              <StateBadge state={item.workspace.state} />
-            </div>
-            <div className="workspace-meta">
-              <span>{t("requested")} {item.workspace.resources.cpu_millis}m CPU</span>
-              <span>{item.workspace.resources.memory_mib} MiB</span>
-              <span>{item.workspace.resources.disk_gib} GiB</span>
-              <span>{item.workspace.access_mode === "public" ? t("public") : t("internal")}</span>
-              <span>{runtimeProfileLabel(item.workspace.runtime_profile, locale)}</span>
-            </div>
-            <p className="namespace">{item.namespace}</p>
-            {runtime[item.workspace.id] && <LiveResourceSummary runtime={runtime[item.workspace.id]} />}
-            {item.ssh_host && item.ssh_port && <p className="namespace">{t("sshEndpoint")}: <code>{item.ssh_host}:{item.ssh_port}</code></p>}
-            {item.ssh_command && <CopyLine label={t("sshCommand")} value={item.ssh_command} />}
-            {item.ssh_config && <CopyLine label={t("copyCodexHost")} value={`mwc-${item.workspace.short_id}`} />}
-            {item.workspace_host_key && <CopyLine label={t("hostKey")} value={`${item.workspace_host_key.fingerprint} ${item.workspace_host_key.public_key}`} />}
-            {item.jump_host_key && <CopyLine label={t("jumpKey")} value={`${item.jump_host_key.fingerprint} ${item.jump_host_key.public_key}`} />}
-            <div className="workspace-actions">
-              {item.workspace.state === "ready" && <><button onClick={() => void openShell(item.workspace.id)}>{t("webShell")}</button><button onClick={() => void action(item.workspace.id, "stop")}>{t("stop")}</button><button onClick={() => void action(item.workspace.id, "restart")}>{t("restart")}</button></>}
-              {(item.workspace.state === "stopped" || item.workspace.state === "failed") && <button onClick={() => void action(item.workspace.id, "start")}>{t("start")}</button>}
-              {!(["deleting", "deleted"] as string[]).includes(item.workspace.state) && <button className="danger" onClick={() => void action(item.workspace.id, "delete")}>{t("delete")}</button>}
-              {item.ssh_config && <button onClick={() => void navigator.clipboard.writeText(item.ssh_config!)}>{t("copySshConfig")}</button>}
-              <button onClick={() => void loadRuntime(item.workspace.id)}>{t("runtimeStatus")}</button>
-            </div>
-            {runtime[item.workspace.id] && <RuntimeDetails runtime={runtime[item.workspace.id]} />}
-          </article>
-        ))}
+        {props.workspaces.map((item) => <WorkspaceCard key={item.workspace.id} item={item} runtime={runtime[item.workspace.id]} onAction={action} onOpenShell={openShell} />)}
       </div>
     </section>
   );
 }
 
-function RuntimeDetails({ runtime }: { runtime: WorkspaceRuntime }) {
-  const { t } = useI18n();
-  return <div className="runtime-details"><div className="trust-row"><span>{t("pvcCapacity")} {runtime.pvc_capacity ?? "—"}</span><span>{runtime.allocated.gpu_count} GPU</span><span>{runtime.metrics_available ? t("actual") : t("metricsUnavailable")}</span></div>{runtime.pods.map((pod) => <p key={pod.name}><code>{pod.name}</code> · {pod.phase ?? "unknown"} · {pod.ready ? t("ready") : t("notReady")} · {pod.restarts} restarts</p>)}{runtime.metrics.map((metric) => <p key={`${metric.pod}-${metric.container}`}><code>{metric.container}</code> · CPU {metric.cpu ?? "—"} · {t("memory")} {metric.memory ?? "—"}</p>)}{runtime.events.slice(0, 8).map((event, index) => <p key={`${event.last_timestamp}-${index}`}><strong>{event.reason ?? event.event_type ?? "Event"}</strong> {event.message}</p>)}</div>;
-}
-
-function LiveResourceSummary({ runtime }: { runtime: WorkspaceRuntime }) {
-  const { t } = useI18n();
-  const cpu = runtime.metrics.map((metric) => metric.cpu).filter(Boolean).join(" + ") || "—";
-  const memory = runtime.metrics.map((metric) => metric.memory).filter(Boolean).join(" + ") || "—";
-  return <div className="live-resources"><strong>{t("actual")}</strong><span>CPU {cpu}</span><span>{t("memory")} {memory}</span><span>{t("pvcCapacity")} {runtime.pvc_capacity ?? "—"}</span><span>{runtime.allocated.gpu_count} GPU</span></div>;
-}
-
 function Stat({ label, value, hint }: { label: string; value: string; hint: string }) {
   return <div className="stat-card"><span>{label}</span><strong>{value}</strong><small>{hint}</small></div>;
-}
-
-function StateBadge({ state }: { state: string }) {
-  return <span className={`state-badge ${state}`}>{state}</span>;
-}
-
-function CopyLine({ label, value }: { label: string; value: string }) {
-  const { t } = useI18n();
-  const [copied, setCopied] = useState(false);
-  return <div className="copy-line"><span>{label}</span><code>{value}</code><button onClick={() => { void navigator.clipboard.writeText(value); setCopied(true); setTimeout(() => setCopied(false), 1200); }}>{copied ? t("copied") : t("copy")}</button></div>;
 }
 
 function formatGiB(mib: number) {

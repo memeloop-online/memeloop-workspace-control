@@ -272,14 +272,14 @@ impl ResourceBuilder {
         containers.push(Container {
             name: "ttyd".to_owned(),
             image: Some(self.ttyd_image.clone()),
-            command: Some(vec!["ttyd".to_owned()]),
+            command: Some(vec!["/usr/bin/ttyd".to_owned()]),
             args: Some(vec![
                 "--port".to_owned(),
                 "7681".to_owned(),
                 "--writable".to_owned(),
                 "--base-path".to_owned(),
                 format!("/shell/{}", workspace.short_id),
-                "ssh".to_owned(),
+                "/usr/bin/ssh".to_owned(),
                 "-p".to_owned(),
                 "2222".to_owned(),
                 "-o".to_owned(),

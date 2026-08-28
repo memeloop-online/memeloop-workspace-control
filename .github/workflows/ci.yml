@@ -184,6 +184,10 @@ jobs:
             context: images/ssh-jump
             dockerfile: images/ssh-jump/Dockerfile
             description: Restricted standard OpenSSH jump host
+          - suffix: -ttyd
+            context: images/ttyd-ssh
+            dockerfile: images/ttyd-ssh/Dockerfile
+            description: Stock ttyd with the standard OpenSSH client
     env:
       IMAGE_NAME: ghcr.io/${{ github.repository }}${{ matrix.suffix }}
     steps:
@@ -236,6 +240,17 @@ jobs:
               /usr/local/bin/mwc-workspace-bootstrap prepare
               test "$(stat -c %a /workspace)" = 750
               test "$(stat -c %U:%G /workspace)" = workspace:workspace
+            '
+      - name: Verify ttyd can launch the stock OpenSSH client
+        if: matrix.suffix == '-ttyd'
+        env:
+          PUBLISHED_DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          docker run --rm --entrypoint /bin/sh \
+            "${IMAGE_NAME}@${PUBLISHED_DIGEST}" -ec '
+              test -x /usr/bin/ttyd
+              test -x /usr/bin/ssh
+              /usr/bin/ssh -V
             '
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:

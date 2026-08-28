@@ -333,14 +333,14 @@ fn builds_isolated_single_replica_workspace_with_standard_components() {
     assert_eq!(containers[1].name, "ttyd");
     assert_eq!(
         containers[1].command.as_deref(),
-        Some(["ttyd".to_owned()].as_slice())
+        Some(["/usr/bin/ttyd".to_owned()].as_slice())
     );
     assert!(
         containers[1]
             .args
             .as_ref()
             .unwrap()
-            .contains(&"ssh".to_owned())
+            .contains(&"/usr/bin/ssh".to_owned())
     );
     let ttyd_args = containers[1].args.as_ref().unwrap();
     let base_path_index = ttyd_args

@@ -89,7 +89,7 @@ pub(super) async fn get(
         .into_iter()
         .map(pod_event)
         .collect::<Vec<_>>();
-    events.truncate(50);
+    newest_events(&mut events, 50);
     let pvc_capacity = Api::<PersistentVolumeClaim>::namespaced(client.clone(), &namespace)
         .get_opt("workspace-data-workspace-0")
         .await
@@ -133,13 +133,37 @@ fn pod_runtime(pod: &Pod) -> PodRuntime {
 }
 
 fn pod_event(event: Event) -> PodEvent {
+    let observed_at = event
+        .series
+        .as_ref()
+        .and_then(|series| series.last_observed_time.as_ref())
+        .map(|time| time.0.to_string())
+        .or_else(|| event.event_time.as_ref().map(|time| time.0.to_string()))
+        .or_else(|| event.last_timestamp.as_ref().map(|time| time.0.to_string()))
+        .or_else(|| {
+            event
+                .metadata
+                .creation_timestamp
+                .as_ref()
+                .map(|time| time.0.to_string())
+        });
+    let count = event
+        .series
+        .as_ref()
+        .and_then(|series| series.count)
+        .or(event.count);
     PodEvent {
         reason: event.reason,
         message: event.message,
         event_type: event.type_,
-        count: event.count,
-        last_timestamp: event.last_timestamp.map(|time| time.0.to_string()),
+        count,
+        last_timestamp: observed_at,
     }
+}
+
+fn newest_events(events: &mut Vec<PodEvent>, limit: usize) {
+    events.sort_by(|left, right| right.last_timestamp.cmp(&left.last_timestamp));
+    events.truncate(limit);
 }
 
 async fn pod_metrics(
@@ -181,4 +205,65 @@ async fn pod_metrics(
         }
     }
     Ok(metrics)
+}
+
+#[cfg(test)]
+mod tests {
+    use k8s_openapi::{
+        api::core::v1::{Event, EventSeries},
+        apimachinery::pkg::apis::meta::v1::{MicroTime, Time},
+        jiff::Timestamp,
+    };
+
+    use super::{PodEvent, newest_events, pod_event};
+
+    fn timestamp(value: &str) -> Timestamp {
+        value.parse().expect("valid test timestamp")
+    }
+
+    #[test]
+    fn event_prefers_series_time_and_count() {
+        let event = Event {
+            count: Some(2),
+            event_time: Some(MicroTime(timestamp("2026-08-28T09:00:00Z"))),
+            last_timestamp: Some(Time(timestamp("2026-08-28T08:00:00Z"))),
+            series: Some(EventSeries {
+                count: Some(7),
+                last_observed_time: Some(MicroTime(timestamp("2026-08-28T10:00:00Z"))),
+            }),
+            ..Event::default()
+        };
+        let event = pod_event(event);
+        assert_eq!(event.count, Some(7));
+        assert_eq!(
+            event.last_timestamp.as_deref(),
+            Some("2026-08-28T10:00:00Z")
+        );
+    }
+
+    #[test]
+    fn events_are_sorted_before_the_limit_is_applied() {
+        let mut events = vec![
+            pod_event_at("2026-08-28T08:00:00Z"),
+            pod_event_at("2026-08-28T10:00:00Z"),
+            pod_event_at("2026-08-28T09:00:00Z"),
+        ];
+        newest_events(&mut events, 2);
+        assert_eq!(events.len(), 2);
+        assert_eq!(
+            events[0].last_timestamp.as_deref(),
+            Some("2026-08-28T10:00:00Z")
+        );
+        assert_eq!(
+            events[1].last_timestamp.as_deref(),
+            Some("2026-08-28T09:00:00Z")
+        );
+    }
+
+    fn pod_event_at(value: &str) -> PodEvent {
+        pod_event(Event {
+            event_time: Some(MicroTime(timestamp(value))),
+            ..Event::default()
+        })
+    }
 }
