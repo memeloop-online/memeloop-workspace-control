@@ -8,20 +8,23 @@ use sqlx::{
 };
 
 mod admin_store;
-mod catalog_store;
 mod error;
 mod event_store;
 mod idempotency;
 mod identity;
+mod image_policy_store;
 mod injection_reconcile;
 mod injection_store;
 mod installation_identity;
 mod job_store;
 mod job_types;
 mod leases;
+mod metrics_store;
 mod schema;
 mod ssh_access;
 mod ssh_identity;
+mod template_migration;
+mod template_store;
 mod transfer;
 mod web_shell;
 mod webhook_store;
@@ -31,18 +34,18 @@ mod workspace_events;
 mod workspace_injection_refs;
 mod workspace_store;
 
-pub use admin_store::{
-    AuditRecord, JobCounts, UserSummary, UserWorkspaceMetrics, WorkspaceMetrics,
-};
-pub use catalog_store::{CreateWorkspaceTemplate, ImagePolicy, WorkspaceTemplate};
+pub use admin_store::{AuditRecord, UserSummary};
 pub use error::StorageError;
 pub use event_store::{EventNotifier, EventRecord};
 pub use idempotency::{IdempotencyDecision, IdempotencyReplay};
 pub use identity::{CreateOrganization, Membership, Organization, Principal};
+pub use image_policy_store::ImagePolicy;
 pub use injection_store::{InjectionScopeRef, StoredInjectionSummary};
 pub use job_types::{ClaimedJob, NewJob};
+pub use metrics_store::{JobCounts, UserWorkspaceMetrics, WorkspaceMetrics};
 pub use ssh_access::SshAccessCandidate;
 pub use ssh_identity::{WorkspaceSshIdentity, WorkspaceSshPublicIdentity};
+pub use template_store::{CreateWorkspaceTemplate, WorkspaceTemplate};
 pub use transfer::DatabaseSnapshot;
 pub use web_shell::{IssuedWebShellTicket, WebShellIdentity};
 pub use webhook_store::{CreateWebhookSubscription, WebhookDelivery, WebhookSubscriptionSummary};
@@ -124,87 +127,13 @@ impl Database {
     pub async fn migrate(&self) -> Result<(), StorageError> {
         let applied_at = unix_timestamp()?;
         match self {
-            Self::Sqlite { pool, .. } => {
-                let mut transaction = pool.begin().await?;
-                sqlx::query(schema::MIGRATION_TABLE)
-                    .execute(&mut *transaction)
-                    .await?;
-                let version = sqlx::query_scalar::<_, i64>(
-                    "SELECT COALESCE(MAX(version), 0) FROM schema_migrations",
-                )
-                .fetch_one(&mut *transaction)
-                .await?;
-                if version < 8 {
-                    for migration in schema::MIGRATIONS {
-                        sqlx::query(migration).execute(&mut *transaction).await?;
-                    }
-                }
-                if version < 9 {
-                    for migration in schema::PROFILE_RENAME_MIGRATIONS {
-                        sqlx::query(migration).execute(&mut *transaction).await?;
-                    }
-                }
-                if version < 10 {
-                    for migration in schema::TEMPLATE_YAML_MIGRATIONS {
-                        sqlx::query(migration).execute(&mut *transaction).await?;
-                    }
-                }
-                if version < schema::SCHEMA_VERSION {
-                    sqlx::query(
-                        "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, ?2)",
-                    )
-                    .bind(schema::SCHEMA_VERSION)
-                    .bind(applied_at)
-                    .execute(&mut *transaction)
-                    .await?;
-                }
-                transaction.commit().await?;
-            }
+            Self::Sqlite { pool, .. } => migrate_sqlite(pool, applied_at).await?,
             Self::Postgres {
                 pool,
                 installation_id,
-            } => {
-                let mut transaction = pool.begin().await?;
-                sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
-                    .bind(format!("mwc:migrate:{installation_id}"))
-                    .execute(&mut *transaction)
-                    .await?;
-                sqlx::query(schema::MIGRATION_TABLE)
-                    .execute(&mut *transaction)
-                    .await?;
-                let version = sqlx::query_scalar::<_, i64>(
-                    "SELECT COALESCE(MAX(version), 0) FROM schema_migrations",
-                )
-                .fetch_one(&mut *transaction)
-                .await?;
-                if version < 8 {
-                    for migration in schema::MIGRATIONS {
-                        sqlx::query(migration).execute(&mut *transaction).await?;
-                    }
-                }
-                if version < 9 {
-                    for migration in schema::PROFILE_RENAME_MIGRATIONS {
-                        sqlx::query(migration).execute(&mut *transaction).await?;
-                    }
-                }
-                if version < 10 {
-                    for migration in schema::TEMPLATE_YAML_MIGRATIONS {
-                        sqlx::query(migration).execute(&mut *transaction).await?;
-                    }
-                }
-                if version < schema::SCHEMA_VERSION {
-                    sqlx::query(
-                        "INSERT INTO schema_migrations (version, applied_at) VALUES ($1, $2)",
-                    )
-                    .bind(schema::SCHEMA_VERSION)
-                    .bind(applied_at)
-                    .execute(&mut *transaction)
-                    .await?;
-                }
-                transaction.commit().await?;
-            }
+            } => migrate_postgres(pool, installation_id, applied_at).await?,
         }
-        self.backfill_template_yaml().await?;
+        template_migration::backfill(self).await?;
         self.ensure_installation_identity().await
     }
 
@@ -223,6 +152,84 @@ impl Database {
         };
         Ok(version)
     }
+}
+
+async fn migrate_sqlite(pool: &SqlitePool, applied_at: i64) -> Result<(), StorageError> {
+    let mut transaction = pool.begin().await?;
+    sqlx::query(schema::MIGRATION_TABLE)
+        .execute(&mut *transaction)
+        .await?;
+    let version =
+        sqlx::query_scalar::<_, i64>("SELECT COALESCE(MAX(version), 0) FROM schema_migrations")
+            .fetch_one(&mut *transaction)
+            .await?;
+    if version < 8 {
+        for migration in schema::MIGRATIONS {
+            sqlx::query(migration).execute(&mut *transaction).await?;
+        }
+    }
+    if version < 9 {
+        for migration in schema::PROFILE_RENAME_MIGRATIONS {
+            sqlx::query(migration).execute(&mut *transaction).await?;
+        }
+    }
+    if version < 10 {
+        for migration in schema::TEMPLATE_YAML_MIGRATIONS {
+            sqlx::query(migration).execute(&mut *transaction).await?;
+        }
+    }
+    if version < schema::SCHEMA_VERSION {
+        sqlx::query("INSERT INTO schema_migrations (version, applied_at) VALUES (?1, ?2)")
+            .bind(schema::SCHEMA_VERSION)
+            .bind(applied_at)
+            .execute(&mut *transaction)
+            .await?;
+    }
+    transaction.commit().await?;
+    Ok(())
+}
+
+async fn migrate_postgres(
+    pool: &PgPool,
+    installation_id: &InstallationId,
+    applied_at: i64,
+) -> Result<(), StorageError> {
+    let mut transaction = pool.begin().await?;
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+        .bind(format!("mwc:migrate:{installation_id}"))
+        .execute(&mut *transaction)
+        .await?;
+    sqlx::query(schema::MIGRATION_TABLE)
+        .execute(&mut *transaction)
+        .await?;
+    let version =
+        sqlx::query_scalar::<_, i64>("SELECT COALESCE(MAX(version), 0) FROM schema_migrations")
+            .fetch_one(&mut *transaction)
+            .await?;
+    if version < 8 {
+        for migration in schema::MIGRATIONS {
+            sqlx::query(migration).execute(&mut *transaction).await?;
+        }
+    }
+    if version < 9 {
+        for migration in schema::PROFILE_RENAME_MIGRATIONS {
+            sqlx::query(migration).execute(&mut *transaction).await?;
+        }
+    }
+    if version < 10 {
+        for migration in schema::TEMPLATE_YAML_MIGRATIONS {
+            sqlx::query(migration).execute(&mut *transaction).await?;
+        }
+    }
+    if version < schema::SCHEMA_VERSION {
+        sqlx::query("INSERT INTO schema_migrations (version, applied_at) VALUES ($1, $2)")
+            .bind(schema::SCHEMA_VERSION)
+            .bind(applied_at)
+            .execute(&mut *transaction)
+            .await?;
+    }
+    transaction.commit().await?;
+    Ok(())
 }
 
 fn unix_timestamp() -> Result<i64, StorageError> {

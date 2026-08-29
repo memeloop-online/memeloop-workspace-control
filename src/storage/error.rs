@@ -48,6 +48,8 @@ pub enum StorageError {
     TemplateNotFound,
     #[error("workspace template is invalid")]
     InvalidTemplate,
+    #[error("cluster-access templates require a system administrator")]
+    PrivilegedTemplateForbidden,
     #[error(transparent)]
     Quota(#[from] crate::quota::QuotaError),
     #[error(transparent)]

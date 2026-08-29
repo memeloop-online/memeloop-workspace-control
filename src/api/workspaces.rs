@@ -88,28 +88,7 @@ pub(super) async fn create(
     }
     let command = request.workspace.clone();
     let actor = principal(&state, &headers).await?;
-    if !actor.allows(Permission::CreateWorkspace, command.organization_id) {
-        return Err(ApiError::Forbidden);
-    }
-    if command.owner_id != actor.user_id
-        && !actor.allows(Permission::ManageMembers, command.organization_id)
-    {
-        return Err(ApiError::Forbidden);
-    }
-    let template = state
-        .database
-        .get_workspace_template(command.template_id)
-        .await?;
-    if !template.enabled
-        || template
-            .organization_id
-            .is_some_and(|id| id != command.organization_id)
-    {
-        return Err(crate::storage::StorageError::TemplateNotFound.into());
-    }
-    if template.template.cluster_access && !actor.system_admin {
-        return Err(ApiError::Forbidden);
-    }
+    authorize_creation(&state, &actor, &command).await?;
     let key = idempotency_key(&headers)?;
     let request_hash = hash(&serde_json::json!({
         "request": &request,
@@ -148,7 +127,7 @@ pub(super) async fn create(
     let creation = if request.inline_workspace_injections.is_empty() {
         state
             .database
-            .create_workspace(command, actor.user_id, now)
+            .create_workspace(command, actor.system_admin, actor.user_id, now)
             .await
     } else {
         let cipher = state
@@ -161,6 +140,7 @@ pub(super) async fn create(
                 command,
                 cipher,
                 &request.inline_workspace_injections,
+                actor.system_admin,
                 actor.user_id,
                 now,
             )
@@ -189,6 +169,36 @@ pub(super) async fn create(
         workspace,
     )
     .await
+}
+
+async fn authorize_creation(
+    state: &AppState,
+    actor: &crate::storage::Principal,
+    command: &CreateWorkspace,
+) -> Result<(), ApiError> {
+    if !actor.allows(Permission::CreateWorkspace, command.organization_id) {
+        return Err(ApiError::Forbidden);
+    }
+    if command.owner_id != actor.user_id
+        && !actor.allows(Permission::ManageMembers, command.organization_id)
+    {
+        return Err(ApiError::Forbidden);
+    }
+    let template = state
+        .database
+        .get_workspace_template(command.template_id)
+        .await?;
+    if !template.enabled
+        || template
+            .organization_id
+            .is_some_and(|id| id != command.organization_id)
+    {
+        return Err(crate::storage::StorageError::TemplateNotFound.into());
+    }
+    if template.template.cluster_access && !actor.system_admin {
+        return Err(ApiError::Forbidden);
+    }
+    Ok(())
 }
 
 #[utoipa::path(
@@ -303,7 +313,7 @@ pub(super) async fn action(
     }
     let workspace = match state
         .database
-        .transition_workspace(workspace_id, action, actor.user_id, now)
+        .request_workspace_action(workspace_id, action, actor.user_id, now)
         .await
     {
         Ok(workspace) => workspace,

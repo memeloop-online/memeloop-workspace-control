@@ -1,7 +1,7 @@
 use sqlx::{PgConnection, SqliteConnection};
 use uuid::Uuid;
 
-use crate::workspaces::{Workspace, WorkspaceAction};
+use crate::workspaces::Workspace;
 
 use super::StorageError;
 
@@ -9,7 +9,7 @@ pub(super) async fn insert_sqlite(
     connection: &mut SqliteConnection,
     installation_id: &str,
     workspace: &Workspace,
-    action: Option<WorkspaceAction>,
+    action: Option<&str>,
     now: i64,
 ) -> Result<(), StorageError> {
     let event_id = Uuid::now_v7();
@@ -39,7 +39,7 @@ pub(super) async fn insert_postgres(
     connection: &mut PgConnection,
     installation_id: &str,
     workspace: &Workspace,
-    action: Option<WorkspaceAction>,
+    action: Option<&str>,
     now: i64,
 ) -> Result<(), StorageError> {
     let event_id = Uuid::now_v7();
@@ -69,13 +69,13 @@ pub(super) async fn insert_postgres(
     Ok(())
 }
 
-fn payload(workspace: &Workspace, action: Option<WorkspaceAction>) -> serde_json::Value {
+fn payload(workspace: &Workspace, action: Option<&str>) -> serde_json::Value {
     let mut payload = serde_json::json!({
         "state": workspace.state.as_str(),
         "generation": workspace.generation,
     });
     if let Some(action) = action {
-        payload["action"] = action.as_str().into();
+        payload["action"] = action.into();
     }
     payload
 }

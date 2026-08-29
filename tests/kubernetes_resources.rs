@@ -2,11 +2,11 @@ use memeloop_workspace_control::{
     injections::{InjectionItem, InjectionKind, InjectionValue, resolve_injections},
     kubernetes::{
         BuildError, ORGANIZATION_ID_LABEL, OWNER_INSTALLATION_LABEL, OWNER_USER_ID_LABEL,
-        OwnershipError, ResourceBuilder, WorkspaceResourceSpec,
+        OwnershipError, ResourceBuilder,
     },
     quota::Resources,
     templates::WorkspaceTemplateSpec,
-    workspaces::{AccessMode, WorkspaceState},
+    workspaces::{AccessMode, Workspace, WorkspaceState},
 };
 use std::collections::BTreeMap;
 use uuid::Uuid;
@@ -34,12 +34,14 @@ fn builder() -> ResourceBuilder {
     }
 }
 
-fn workspace(state: WorkspaceState) -> WorkspaceResourceSpec {
-    WorkspaceResourceSpec {
+fn workspace(state: WorkspaceState) -> Workspace {
+    Workspace {
         id: Uuid::now_v7(),
+        short_id: "01jabc".to_owned(),
         organization_id: Uuid::now_v7(),
         owner_id: Uuid::now_v7(),
-        short_id: "01jabc".to_owned(),
+        name: "test-workspace".to_owned(),
+        template_id: Some(Uuid::now_v7()),
         template: WorkspaceTemplateSpec::standard(
             "registry.example/workspace:1",
             AccessMode::Public,
@@ -52,6 +54,8 @@ fn workspace(state: WorkspaceState) -> WorkspaceResourceSpec {
         ),
         state,
         generation: 1,
+        created_at: 1,
+        updated_at: 1,
     }
 }
 
@@ -59,7 +63,7 @@ fn node_template(image: &str, resources: Resources) -> WorkspaceTemplateSpec {
     let mut template = WorkspaceTemplateSpec::standard(image, AccessMode::Public, resources);
     template.workspace_user = "node-dev".to_owned();
     template.workspace_home = "/home/node-dev".to_owned();
-    template.preserve_home_root = true;
+    template.preserve_home_ownership = true;
     template.buildkit = true;
     template.pod_requests.cpu_millis = 1_000;
     template.pod_requests.memory_mib = 1_024;
@@ -84,7 +88,7 @@ fn rust_template(image: &str, resources: Resources) -> WorkspaceTemplateSpec {
     let mut template = WorkspaceTemplateSpec::standard(image, AccessMode::Public, resources);
     template.workspace_user = "rust-dev".to_owned();
     template.workspace_home = "/home/rust-dev".to_owned();
-    template.preserve_home_root = true;
+    template.preserve_home_ownership = true;
     template.buildkit = true;
     template.pod_requests.cpu_millis = 2_000;
     template.pod_requests.memory_mib = 4_096;

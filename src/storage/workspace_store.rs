@@ -31,10 +31,11 @@ impl Database {
     pub async fn create_workspace(
         &self,
         command: CreateWorkspace,
+        allow_cluster_access: bool,
         actor_user_id: Uuid,
         now: i64,
     ) -> Result<Workspace, StorageError> {
-        self.create_workspace_inner(command, None, actor_user_id, now)
+        self.create_workspace_inner(command, None, allow_cluster_access, actor_user_id, now)
             .await
     }
 
@@ -43,17 +44,25 @@ impl Database {
         command: CreateWorkspace,
         cipher: &EnvelopeCipher,
         inline: &[InjectionItem],
+        allow_cluster_access: bool,
         actor_user_id: Uuid,
         now: i64,
     ) -> Result<Workspace, StorageError> {
-        self.create_workspace_inner(command, Some((cipher, inline)), actor_user_id, now)
-            .await
+        self.create_workspace_inner(
+            command,
+            Some((cipher, inline)),
+            allow_cluster_access,
+            actor_user_id,
+            now,
+        )
+        .await
     }
 
     async fn create_workspace_inner(
         &self,
         command: CreateWorkspace,
         inline: Option<(&EnvelopeCipher, &[InjectionItem])>,
+        allow_cluster_access: bool,
         actor_user_id: Uuid,
         now: i64,
     ) -> Result<Workspace, StorageError> {
@@ -65,22 +74,22 @@ impl Database {
             user: command.user_injection_refs.clone(),
         };
         injection_refs.validate()?;
+        let creation = WorkspaceCreation {
+            command: &command,
+            injection_refs: &injection_refs,
+            inline,
+            allow_cluster_access,
+            actor_user_id,
+            now,
+        };
         match self {
             Self::Sqlite {
                 pool,
                 installation_id,
             } => {
                 let mut transaction = pool.begin().await?;
-                let workspace = create_sqlite(
-                    &mut transaction,
-                    installation_id.as_str(),
-                    &command,
-                    actor_user_id,
-                    &injection_refs,
-                    inline,
-                    now,
-                )
-                .await?;
+                let workspace =
+                    create_sqlite(&mut transaction, installation_id.as_str(), &creation).await?;
                 transaction.commit().await?;
                 Ok(workspace)
             }
@@ -89,16 +98,8 @@ impl Database {
                 installation_id,
             } => {
                 let mut transaction = pool.begin().await?;
-                let workspace = create_postgres(
-                    &mut transaction,
-                    installation_id.as_str(),
-                    &command,
-                    actor_user_id,
-                    &injection_refs,
-                    inline,
-                    now,
-                )
-                .await?;
+                let workspace =
+                    create_postgres(&mut transaction, installation_id.as_str(), &creation).await?;
                 transaction.commit().await?;
                 Ok(workspace)
             }
@@ -172,9 +173,18 @@ impl Database {
     }
 }
 
+struct WorkspaceCreation<'a> {
+    command: &'a CreateWorkspace,
+    injection_refs: &'a WorkspaceInjectionRefs,
+    inline: Option<(&'a EnvelopeCipher, &'a [InjectionItem])>,
+    allow_cluster_access: bool,
+    actor_user_id: Uuid,
+    now: i64,
+}
+
 fn build_workspace(
     command: &CreateWorkspace,
-    snapshot: super::catalog_store::ResolvedTemplateSnapshot,
+    snapshot: super::template_store::ResolvedTemplateSnapshot,
     now: i64,
 ) -> Workspace {
     let id = Uuid::now_v7();
@@ -196,68 +206,78 @@ fn build_workspace(
 async fn create_sqlite(
     connection: &mut SqliteConnection,
     installation_id: &str,
-    command: &CreateWorkspace,
-    actor_user_id: Uuid,
-    injection_refs: &WorkspaceInjectionRefs,
-    inline: Option<(&EnvelopeCipher, &[InjectionItem])>,
-    now: i64,
+    creation: &WorkspaceCreation<'_>,
 ) -> Result<Workspace, StorageError> {
-    let snapshot = super::catalog_store::resolve_template_sqlite(
+    let command = creation.command;
+    let snapshot = super::template_store::resolve_template_sqlite(
         connection,
         installation_id,
         command.template_id,
         command.organization_id,
+        creation.allow_cluster_access,
     )
     .await?;
     let yaml = snapshot.yaml.clone();
-    let workspace = build_workspace(command, snapshot, now);
+    let workspace = build_workspace(command, snapshot, creation.now);
     super::workspace_admission::admit_sqlite(connection, installation_id, &workspace).await?;
-    insert_sqlite(connection, installation_id, &workspace, &yaml, now).await?;
+    insert_sqlite(connection, installation_id, &workspace, &yaml, creation.now).await?;
     insert_injections_sqlite(
         connection,
         installation_id,
         &workspace,
-        actor_user_id,
-        injection_refs,
-        inline,
-        now,
+        creation.actor_user_id,
+        creation.injection_refs,
+        creation.inline,
+        creation.now,
     )
     .await?;
-    enqueue_and_audit_sqlite(connection, installation_id, &workspace, actor_user_id, now).await?;
+    enqueue_and_audit_sqlite(
+        connection,
+        installation_id,
+        &workspace,
+        creation.actor_user_id,
+        creation.now,
+    )
+    .await?;
     Ok(workspace)
 }
 
 async fn create_postgres(
     connection: &mut PgConnection,
     installation_id: &str,
-    command: &CreateWorkspace,
-    actor_user_id: Uuid,
-    injection_refs: &WorkspaceInjectionRefs,
-    inline: Option<(&EnvelopeCipher, &[InjectionItem])>,
-    now: i64,
+    creation: &WorkspaceCreation<'_>,
 ) -> Result<Workspace, StorageError> {
-    let snapshot = super::catalog_store::resolve_template_postgres(
+    let command = creation.command;
+    let snapshot = super::template_store::resolve_template_postgres(
         connection,
         installation_id,
         command.template_id,
         command.organization_id,
+        creation.allow_cluster_access,
     )
     .await?;
     let yaml = snapshot.yaml.clone();
-    let workspace = build_workspace(command, snapshot, now);
+    let workspace = build_workspace(command, snapshot, creation.now);
     super::workspace_admission::admit_postgres(connection, installation_id, &workspace).await?;
-    insert_postgres(connection, installation_id, &workspace, &yaml, now).await?;
+    insert_postgres(connection, installation_id, &workspace, &yaml, creation.now).await?;
     insert_injections_postgres(
         connection,
         installation_id,
         &workspace,
-        actor_user_id,
-        injection_refs,
-        inline,
-        now,
+        creation.actor_user_id,
+        creation.injection_refs,
+        creation.inline,
+        creation.now,
     )
     .await?;
-    enqueue_and_audit_postgres(connection, installation_id, &workspace, actor_user_id, now).await?;
+    enqueue_and_audit_postgres(
+        connection,
+        installation_id,
+        &workspace,
+        creation.actor_user_id,
+        creation.now,
+    )
+    .await?;
     Ok(workspace)
 }
 

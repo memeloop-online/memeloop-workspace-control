@@ -26,10 +26,18 @@ pub enum WorkspaceAction {
     Stop,
     Restart,
     Delete,
-    MarkReady,
-    MarkStopped,
-    MarkDeleted,
-    MarkFailed,
+}
+
+/// A state reported by the workspace reconciler after observing Kubernetes.
+///
+/// This is deliberately separate from [`WorkspaceAction`]: actions express user
+/// intent and enqueue reconciliation, while observations only record its result.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkspaceObservation {
+    Ready,
+    Stopped,
+    Deleted,
+    Failed,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
@@ -56,7 +64,7 @@ pub struct Workspace {
 }
 
 impl WorkspaceState {
-    pub fn transition(self, action: WorkspaceAction) -> Result<Self, TransitionError> {
+    pub fn request(self, action: WorkspaceAction) -> Result<Self, TransitionError> {
         use WorkspaceAction as Action;
         use WorkspaceState as State;
 
@@ -74,11 +82,26 @@ impl WorkspaceState {
                 | State::Failed,
                 Action::Delete,
             ) => State::Deleting,
-            (State::Provisioning | State::Starting | State::Restarting, Action::MarkReady) => {
+            _ => {
+                return Err(TransitionError {
+                    state: self,
+                    operation: action.as_str(),
+                });
+            }
+        };
+        Ok(next)
+    }
+
+    pub fn observe(self, observation: WorkspaceObservation) -> Result<Self, TransitionError> {
+        use WorkspaceObservation as Observation;
+        use WorkspaceState as State;
+
+        let next = match (self, observation) {
+            (State::Provisioning | State::Starting | State::Restarting, Observation::Ready) => {
                 State::Ready
             }
-            (State::Stopping, Action::MarkStopped) => State::Stopped,
-            (State::Deleting, Action::MarkDeleted) => State::Deleted,
+            (State::Stopping, Observation::Stopped) => State::Stopped,
+            (State::Deleting, Observation::Deleted) => State::Deleted,
             (
                 State::Provisioning
                 | State::Ready
@@ -86,12 +109,12 @@ impl WorkspaceState {
                 | State::Stopping
                 | State::Restarting
                 | State::Deleting,
-                Action::MarkFailed,
+                Observation::Failed,
             ) => State::Failed,
             _ => {
                 return Err(TransitionError {
                     state: self,
-                    action,
+                    operation: observation.as_str(),
                 });
             }
         };
@@ -135,10 +158,6 @@ impl WorkspaceAction {
             Self::Stop => "stop",
             Self::Restart => "restart",
             Self::Delete => "delete",
-            Self::MarkReady => "mark_ready",
-            Self::MarkStopped => "mark_stopped",
-            Self::MarkDeleted => "mark_deleted",
-            Self::MarkFailed => "mark_failed",
         }
     }
 
@@ -149,6 +168,17 @@ impl WorkspaceAction {
             "restart" => Some(Self::Restart),
             "delete" => Some(Self::Delete),
             _ => None,
+        }
+    }
+}
+
+impl WorkspaceObservation {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Ready => "mark_ready",
+            Self::Stopped => "mark_stopped",
+            Self::Deleted => "mark_deleted",
+            Self::Failed => "mark_failed",
         }
     }
 }
@@ -171,10 +201,10 @@ impl AccessMode {
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
-#[error("workspace action {action:?} is invalid while state is {state:?}")]
+#[error("workspace operation {operation} is invalid while state is {state:?}")]
 pub struct TransitionError {
     pub state: WorkspaceState,
-    pub action: WorkspaceAction,
+    pub operation: &'static str,
 }
 
 #[cfg(test)]
@@ -184,18 +214,18 @@ mod tests {
     #[test]
     fn supports_stop_and_restart_lifecycle() {
         let stopped = WorkspaceState::Ready
-            .transition(WorkspaceAction::Stop)
+            .request(WorkspaceAction::Stop)
             .unwrap()
-            .transition(WorkspaceAction::MarkStopped)
+            .observe(WorkspaceObservation::Stopped)
             .unwrap();
         assert_eq!(stopped, WorkspaceState::Stopped);
         assert_eq!(
-            stopped.transition(WorkspaceAction::Start).unwrap(),
+            stopped.request(WorkspaceAction::Start).unwrap(),
             WorkspaceState::Starting
         );
         assert_eq!(
             WorkspaceState::Ready
-                .transition(WorkspaceAction::Restart)
+                .request(WorkspaceAction::Restart)
                 .unwrap(),
             WorkspaceState::Restarting
         );
@@ -208,23 +238,27 @@ mod tests {
             WorkspaceAction::Stop,
             WorkspaceAction::Restart,
             WorkspaceAction::Delete,
-            WorkspaceAction::MarkReady,
-            WorkspaceAction::MarkStopped,
-            WorkspaceAction::MarkDeleted,
-            WorkspaceAction::MarkFailed,
         ] {
-            assert!(WorkspaceState::Deleted.transition(action).is_err());
+            assert!(WorkspaceState::Deleted.request(action).is_err());
+        }
+        for observation in [
+            WorkspaceObservation::Ready,
+            WorkspaceObservation::Stopped,
+            WorkspaceObservation::Deleted,
+            WorkspaceObservation::Failed,
+        ] {
+            assert!(WorkspaceState::Deleted.observe(observation).is_err());
         }
     }
 
     #[test]
     fn deletion_requires_cleanup_confirmation() {
         let deleting = WorkspaceState::Ready
-            .transition(WorkspaceAction::Delete)
+            .request(WorkspaceAction::Delete)
             .unwrap();
         assert_eq!(deleting, WorkspaceState::Deleting);
         assert_eq!(
-            deleting.transition(WorkspaceAction::MarkDeleted).unwrap(),
+            deleting.observe(WorkspaceObservation::Deleted).unwrap(),
             WorkspaceState::Deleted
         );
     }

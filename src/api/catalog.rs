@@ -140,7 +140,11 @@ pub(super) async fn create_template(
     if let Some(response) = reserve(&state, &scope, key, &request_hash, now).await? {
         return Ok(response);
     }
-    let template = match state.database.create_workspace_template(command, now).await {
+    let template = match state
+        .database
+        .create_workspace_template(command, actor.system_admin, now)
+        .await
+    {
         Ok(template) => template,
         Err(error) => {
             state
@@ -192,7 +196,7 @@ pub(super) async fn replace_template(
     }
     let template = match state
         .database
-        .replace_workspace_template(template_id, &request.yaml, now)
+        .replace_workspace_template(template_id, &request.yaml, actor.system_admin, now)
         .await
     {
         Ok(template) => template,
@@ -245,7 +249,7 @@ pub(super) async fn set_template_enabled(
     }
     let template = match state
         .database
-        .set_workspace_template_enabled(template_id, request.enabled, now)
+        .set_workspace_template_enabled(template_id, request.enabled, actor.system_admin, now)
         .await
     {
         Ok(template) => template,

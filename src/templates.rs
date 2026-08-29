@@ -1,15 +1,13 @@
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 use utoipa::ToSchema;
 
 use crate::{quota::Resources, workspaces::AccessMode};
 
 pub const TEMPLATE_API_VERSION: &str = "workspace.memeloop.dev/v1";
 pub const TEMPLATE_KIND: &str = "WorkspaceTemplate";
-
-const NO_PROXY_NODE: &str = "localhost,127.0.0.1,::1,.svc,.cluster.local,10.42.0.0/16,10.43.0.0/16,100.64.0.0/10,.k3s.onetwo.website,npmmirror.com";
-const NO_PROXY_RUST: &str = "localhost,127.0.0.1,::1,.svc,.cluster.local,10.42.0.0/16,10.43.0.0/16,100.64.0.0/10,.k3s.onetwo.website,rsproxy.cn,npmmirror.com";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -41,8 +39,8 @@ pub struct WorkspaceTemplateSpec {
     pub ephemeral_storage_limit_mib: Option<u64>,
     pub workspace_user: String,
     pub workspace_home: String,
-    #[serde(default)]
-    pub preserve_home_root: bool,
+    #[serde(default, alias = "preserve_home_root")]
+    pub preserve_home_ownership: bool,
     #[serde(default)]
     pub buildkit: bool,
     #[serde(default)]
@@ -109,8 +107,13 @@ impl WorkspaceTemplateSpec {
             || self.image != self.image.trim()
             || self.image.len() > 512
             || self.image.chars().any(char::is_whitespace)
-            || !self.resources.valid_workspace_request()
-            || self.pod_requests.cpu_millis == 0
+        {
+            return Err(TemplateError::Image);
+        }
+        if !self.resources.valid_workspace_request() {
+            return Err(TemplateError::Resources);
+        }
+        if self.pod_requests.cpu_millis == 0
             || self.pod_requests.memory_mib == 0
             || self.pod_requests.cpu_millis > self.resources.cpu_millis
             || self.pod_requests.memory_mib > self.resources.memory_mib
@@ -119,10 +122,13 @@ impl WorkspaceTemplateSpec {
                 .ephemeral_storage_mib
                 .zip(self.ephemeral_storage_limit_mib)
                 .is_some_and(|(request, limit)| request > limit)
-            || !valid_workspace_user(&self.workspace_user)
+        {
+            return Err(TemplateError::PodResources);
+        }
+        if !valid_workspace_user(&self.workspace_user)
             || !valid_workspace_home(&self.workspace_home)
         {
-            return Err(TemplateError::Spec);
+            return Err(TemplateError::WorkspaceIdentity);
         }
         if self
             .required_node_names
@@ -133,12 +139,15 @@ impl WorkspaceTemplateSpec {
                 .node_selector
                 .iter()
                 .any(|(key, value)| !valid_selector_part(key) || !valid_selector_part(value))
-            || self
-                .environment
-                .iter()
-                .any(|(key, value)| !valid_env_name(key) || !valid_environment_value(value))
         {
-            return Err(TemplateError::Spec);
+            return Err(TemplateError::Scheduling);
+        }
+        if self
+            .environment
+            .iter()
+            .any(|(key, value)| !valid_env_name(key) || !valid_environment_value(value))
+        {
+            return Err(TemplateError::Environment);
         }
         Ok(())
     }
@@ -160,7 +169,7 @@ impl WorkspaceTemplateSpec {
             ephemeral_storage_limit_mib: None,
             workspace_user: "workspace".to_owned(),
             workspace_home: "/workspace".to_owned(),
-            preserve_home_root: false,
+            preserve_home_ownership: false,
             buildkit: false,
             cluster_access: false,
             required_node_names: Vec::new(),
@@ -169,142 +178,6 @@ impl WorkspaceTemplateSpec {
             environment: BTreeMap::new(),
         }
     }
-
-    /// Converts the pre-v10 database discriminator exactly once during migration.
-    pub(crate) fn from_legacy(
-        legacy_value: &str,
-        image: impl Into<String>,
-        access_mode: AccessMode,
-        resources: Resources,
-    ) -> Result<Self, TemplateError> {
-        let mut spec = Self::standard(image, access_mode, resources);
-        match legacy_value {
-            "standard" => {}
-            "node_dev" | "coder_node_dev" => {
-                spec.workspace_user = "node-dev".to_owned();
-                spec.workspace_home = "/home/node-dev".to_owned();
-                spec.preserve_home_root = true;
-                spec.buildkit = true;
-                spec.pod_requests = PodResourceRequest {
-                    cpu_millis: 1_000.min(resources.cpu_millis),
-                    memory_mib: 1_024.min(resources.memory_mib),
-                    ephemeral_storage_mib: Some(256),
-                };
-                spec.ephemeral_storage_limit_mib = Some(1_024);
-                spec.required_node_names = vec!["westlake".to_owned(), "haixia".to_owned()];
-                spec.environment =
-                    development_environment(&spec.workspace_home, NO_PROXY_NODE, false);
-            }
-            "rust_dev" | "coder_rust_dev" | "coder_token_center_rust_dev" => {
-                spec.workspace_user = "rust-dev".to_owned();
-                spec.workspace_home = "/home/rust-dev".to_owned();
-                spec.preserve_home_root = true;
-                spec.buildkit = true;
-                spec.pod_requests = PodResourceRequest {
-                    cpu_millis: 2_000.min(resources.cpu_millis),
-                    memory_mib: 4_096.min(resources.memory_mib),
-                    ephemeral_storage_mib: Some(256),
-                };
-                spec.ephemeral_storage_limit_mib = Some(1_024);
-                spec.required_node_names = vec!["westlake".to_owned(), "haixia".to_owned()];
-                spec.environment =
-                    development_environment(&spec.workspace_home, NO_PROXY_RUST, true);
-                spec.environment
-                    .insert("RUSTUP_HOME".to_owned(), "/usr/local/rustup".to_owned());
-                spec.environment.insert(
-                    "RUSTUP_DIST_SERVER".to_owned(),
-                    "https://rsproxy.cn".to_owned(),
-                );
-                spec.environment.insert(
-                    "RUSTUP_UPDATE_ROOT".to_owned(),
-                    "https://rsproxy.cn/rustup".to_owned(),
-                );
-            }
-            "maintainance" | "coder_cluster_admin" => {
-                // Existing Coder PVCs were created for this image user and home path. The
-                // template name/permission is "maintainance"; retaining the filesystem identity
-                // during the v9 migration prevents an unsafe home-directory/PVC remount.
-                spec.workspace_user = "cluster-admin".to_owned();
-                spec.workspace_home = "/home/cluster-admin".to_owned();
-                spec.preserve_home_root = true;
-                spec.cluster_access = true;
-                spec.pod_requests.cpu_millis = 100.min(resources.cpu_millis);
-                spec.preferred_node_names = vec!["westlake".to_owned()];
-                spec.node_selector
-                    .insert("k3s-worker-ready".to_owned(), "true".to_owned());
-                spec.environment
-                    .insert("HOME".to_owned(), spec.workspace_home.clone());
-                spec.environment.insert(
-                    "KUBECONFIG".to_owned(),
-                    format!("{}/.mwc/kubeconfig", spec.workspace_home),
-                );
-                spec.environment.insert("PATH".to_owned(), format!("/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin:{}/.local/bin:{}/.local/share/pnpm", spec.workspace_home, spec.workspace_home));
-            }
-            _ => return Err(TemplateError::Legacy),
-        }
-        spec.validate()?;
-        Ok(spec)
-    }
-}
-
-fn development_environment(home: &str, no_proxy: &str, rust: bool) -> BTreeMap<String, String> {
-    let temporary_directory = if rust {
-        "/tmp".to_owned()
-    } else {
-        format!("{home}/.tmp/dev")
-    };
-    let mut values = BTreeMap::from([
-        ("HOME".to_owned(), home.to_owned()),
-        ("NO_PROXY".to_owned(), no_proxy.to_owned()),
-        ("no_proxy".to_owned(), no_proxy.to_owned()),
-        ("TMPDIR".to_owned(), temporary_directory.clone()),
-        ("TMP".to_owned(), temporary_directory.clone()),
-        ("TEMP".to_owned(), temporary_directory),
-        ("XDG_CACHE_HOME".to_owned(), format!("{home}/.cache")),
-        ("XDG_CONFIG_HOME".to_owned(), format!("{home}/.config")),
-        ("XDG_DATA_HOME".to_owned(), format!("{home}/.local/share")),
-        ("XDG_STATE_HOME".to_owned(), format!("{home}/.local/state")),
-        (
-            "PLAYWRIGHT_BROWSERS_PATH".to_owned(),
-            format!("{home}/.cache/ms-playwright"),
-        ),
-        ("DOCKER_CONFIG".to_owned(), format!("{home}/.config/docker")),
-        ("NPM_CONFIG_CACHE".to_owned(), format!("{home}/.cache/npm")),
-        ("PNPM_HOME".to_owned(), format!("{home}/.local/share/pnpm")),
-        (
-            "YARN_CACHE_FOLDER".to_owned(),
-            format!("{home}/.cache/yarn"),
-        ),
-        (
-            "BUILDKIT_HOST".to_owned(),
-            format!("unix://{home}/.cache/buildkit/runtime/buildkit/buildkitd.sock"),
-        ),
-    ]);
-    let path = if rust {
-        format!(
-            "/usr/local/bin:/usr/local/sbin:/usr/local/cargo/bin:{home}/.local/bin:{home}/.local/share/pnpm:{home}/.cargo/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-        )
-    } else {
-        format!(
-            "/usr/local/bin:/usr/local/sbin:{home}/.local/bin:{home}/.local/share/pnpm:/usr/sbin:/usr/bin:/sbin:/bin"
-        )
-    };
-    values.insert("PATH".to_owned(), path);
-    if rust {
-        values.extend([
-            ("CARGO_HOME".to_owned(), format!("{home}/.cargo")),
-            (
-                "CARGO_TARGET_DIR".to_owned(),
-                format!("{home}/.cache/cargo-target"),
-            ),
-            ("CARGO_HTTP_MULTIPLEXING".to_owned(), "false".to_owned()),
-            (
-                "CARGO_REGISTRIES_CRATES_IO_PROTOCOL".to_owned(),
-                "sparse".to_owned(),
-            ),
-        ]);
-    }
-    values
 }
 
 fn valid_env_name(value: &str) -> bool {
@@ -345,19 +218,29 @@ fn valid_selector_part(value: &str) -> bool {
 }
 
 fn valid_environment_value(value: &str) -> bool {
-    value.len() <= 4_096
-        && !value
-            .chars()
-            .any(|character| character.is_control() || character.is_whitespace())
+    value.len() <= 4_096 && !value.chars().any(char::is_control)
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum TemplateError {
+    #[error("template YAML is invalid")]
     Yaml,
+    #[error("template apiVersion or kind is unsupported")]
     Header,
+    #[error("template name is invalid")]
     Name,
-    Spec,
-    Legacy,
+    #[error("template image reference is invalid")]
+    Image,
+    #[error("workspace resource limits are invalid")]
+    Resources,
+    #[error("Pod requests exceed workspace resource limits")]
+    PodResources,
+    #[error("workspace user or home path is invalid")]
+    WorkspaceIdentity,
+    #[error("template scheduling constraints are invalid")]
+    Scheduling,
+    #[error("template environment is invalid")]
+    Environment,
 }
 
 #[cfg(test)]
@@ -366,27 +249,32 @@ mod tests {
 
     #[test]
     fn yaml_round_trip_contains_only_explicit_template_fields() {
-        let document = WorkspaceTemplateDocument::new(
-            "Node.js 开发",
-            WorkspaceTemplateSpec::from_legacy(
-                "node_dev",
-                "registry.example/node@sha256:test",
-                AccessMode::Internal,
-                Resources {
-                    cpu_millis: 6_000,
-                    memory_mib: 4_096,
-                    gpu_count: 0,
-                    disk_gib: 60,
-                },
-            )
-            .unwrap(),
+        let mut spec = WorkspaceTemplateSpec::standard(
+            "registry.example/node@sha256:test",
+            AccessMode::Internal,
+            Resources {
+                cpu_millis: 6_000,
+                memory_mib: 4_096,
+                gpu_count: 0,
+                disk_gib: 60,
+            },
         );
+        spec.workspace_user = "node-dev".to_owned();
+        spec.workspace_home = "/home/node-dev".to_owned();
+        let document = WorkspaceTemplateDocument::new("Node.js 开发", spec);
         let yaml = document.to_yaml().unwrap();
         assert!(!yaml.contains("runtimeProfile"));
         assert!(!yaml.contains("runtime_profile"));
         assert!(yaml.contains("access_mode: internal"));
         assert!(yaml.contains("workspace_user: node-dev"));
+        assert!(yaml.contains("preserve_home_ownership: false"));
+        assert!(!yaml.contains("preserve_home_root"));
         assert_eq!(WorkspaceTemplateDocument::parse(&yaml).unwrap(), document);
+        let legacy_yaml = yaml.replace("preserve_home_ownership", "preserve_home_root");
+        assert_eq!(
+            WorkspaceTemplateDocument::parse(&legacy_yaml).unwrap(),
+            document
+        );
         let json = serde_json::to_value(&document.spec).unwrap();
         assert_eq!(json["access_mode"], "internal");
         assert_eq!(json["workspace_user"], "node-dev");
@@ -406,7 +294,7 @@ mod tests {
             },
         );
         spec.pod_requests.cpu_millis = 1_001;
-        assert_eq!(spec.validate(), Err(TemplateError::Spec));
+        assert_eq!(spec.validate(), Err(TemplateError::PodResources));
     }
 
     #[test]
@@ -423,7 +311,7 @@ mod tests {
             resources,
         );
         spec.workspace_user = "workspace\nPermitRootLogin yes".to_owned();
-        assert_eq!(spec.validate(), Err(TemplateError::Spec));
+        assert_eq!(spec.validate(), Err(TemplateError::WorkspaceIdentity));
 
         let mut spec = WorkspaceTemplateSpec::standard(
             "registry.example/dev:latest",
@@ -434,6 +322,23 @@ mod tests {
             "HOME".to_owned(),
             "/workspace\nPermitRootLogin=yes".to_owned(),
         );
-        assert_eq!(spec.validate(), Err(TemplateError::Spec));
+        assert_eq!(spec.validate(), Err(TemplateError::Environment));
+    }
+
+    #[test]
+    fn allows_spaces_in_environment_values() {
+        let mut spec = WorkspaceTemplateSpec::standard(
+            "registry.example/dev:latest",
+            AccessMode::Internal,
+            Resources {
+                cpu_millis: 1_000,
+                memory_mib: 1_024,
+                gpu_count: 0,
+                disk_gib: 20,
+            },
+        );
+        spec.environment
+            .insert("TOOL_FLAGS".to_owned(), "--color always".to_owned());
+        assert_eq!(spec.validate(), Ok(()));
     }
 }

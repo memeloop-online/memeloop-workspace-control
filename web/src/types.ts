@@ -62,7 +62,7 @@ export interface WorkspaceTemplate {
   ephemeral_storage_limit_mib: number | null;
   workspace_user: string;
   workspace_home: string;
-  preserve_home_root: boolean;
+  preserve_home_ownership: boolean;
   buildkit: boolean;
   cluster_access: boolean;
   required_node_names: string[];
@@ -129,7 +129,7 @@ export interface Workspace {
   ephemeral_storage_limit_mib: number | null;
   workspace_user: string;
   workspace_home: string;
-  preserve_home_root: boolean;
+  preserve_home_ownership: boolean;
   buildkit: boolean;
   cluster_access: boolean;
   required_node_names: string[];

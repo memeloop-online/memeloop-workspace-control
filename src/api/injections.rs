@@ -190,32 +190,7 @@ pub(super) async fn preview(
         .as_ref()
         .ok_or(ApiError::EncryptionUnavailable)?;
 
-    let target = if let Some(workspace_id) = request.workspace_id {
-        if request.organization_injection_refs.is_some() || request.user_injection_refs.is_some() {
-            return Err(ApiError::BadRequest(
-                "an existing workspace preview uses its persisted injection references",
-            ));
-        }
-        let workspace = state.database.get_workspace(workspace_id).await?;
-        if !actor.allows(Permission::ReadWorkspace, workspace.organization_id) {
-            return Err(ApiError::Forbidden);
-        }
-        if request
-            .organization_id
-            .is_some_and(|organization_id| organization_id != workspace.organization_id)
-            || request.user_id != workspace.owner_id
-        {
-            return Err(ApiError::BadRequest(
-                "workspace preview organization_id and user_id must match the target workspace",
-            ));
-        }
-        Some(workspace)
-    } else {
-        if request.user_id != actor.user_id && !actor.system_admin {
-            return Err(ApiError::Forbidden);
-        }
-        None
-    };
+    let target = preview_target(&state, &actor, &request).await?;
 
     let organization_id = target
         .as_ref()
@@ -305,6 +280,38 @@ pub(super) async fn preview(
     Ok(Json(
         resolved.into_iter().map(|item| item.summary()).collect(),
     ))
+}
+
+async fn preview_target(
+    state: &AppState,
+    actor: &Principal,
+    request: &PreviewRequest,
+) -> Result<Option<crate::workspaces::Workspace>, ApiError> {
+    let Some(workspace_id) = request.workspace_id else {
+        if request.user_id != actor.user_id && !actor.system_admin {
+            return Err(ApiError::Forbidden);
+        }
+        return Ok(None);
+    };
+    if request.organization_injection_refs.is_some() || request.user_injection_refs.is_some() {
+        return Err(ApiError::BadRequest(
+            "an existing workspace preview uses its persisted injection references",
+        ));
+    }
+    let workspace = state.database.get_workspace(workspace_id).await?;
+    if !actor.allows(Permission::ReadWorkspace, workspace.organization_id) {
+        return Err(ApiError::Forbidden);
+    }
+    if request
+        .organization_id
+        .is_some_and(|organization_id| organization_id != workspace.organization_id)
+        || request.user_id != workspace.owner_id
+    {
+        return Err(ApiError::BadRequest(
+            "workspace preview organization_id and user_id must match the target workspace",
+        ));
+    }
+    Ok(Some(workspace))
 }
 
 fn parse_scope(scope: &str, scope_id: Uuid) -> Result<InjectionScopeRef, ApiError> {

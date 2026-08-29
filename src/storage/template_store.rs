@@ -3,26 +3,12 @@ use sqlx::{PgConnection, Row, SqliteConnection, postgres::PgRow, sqlite::SqliteR
 use utoipa::ToSchema;
 use uuid::Uuid;
 
-use crate::{
-    quota::Resources,
-    templates::{WorkspaceTemplateDocument, WorkspaceTemplateSpec},
-    workspaces::AccessMode,
-};
+use crate::templates::{WorkspaceTemplateDocument, WorkspaceTemplateSpec};
 
-use super::{Database, StorageError};
+use super::{Database, StorageError, image_policy_store::validate_image};
 
-pub const IMAGE_CONTRACT_VERSION: u16 = 1;
 const TEMPLATE_COLUMNS: &str =
     "id, organization_id, template_yaml, enabled, created_at, updated_at";
-
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
-pub struct ImagePolicy {
-    pub image: String,
-    pub contract_version: u16,
-    pub enabled: bool,
-    pub created_at: i64,
-    pub updated_at: i64,
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct WorkspaceTemplate {
@@ -54,6 +40,7 @@ pub(super) async fn resolve_template_sqlite(
     installation_id: &str,
     template_id: Uuid,
     organization_id: Uuid,
+    allow_cluster_access: bool,
 ) -> Result<ResolvedTemplateSnapshot, StorageError> {
     let yaml: Option<String> = sqlx::query_scalar(
         "SELECT template_yaml FROM workspace_templates WHERE installation_id = ?1 AND id = ?2 \
@@ -64,7 +51,7 @@ pub(super) async fn resolve_template_sqlite(
     .bind(organization_id.to_string())
     .fetch_optional(&mut *connection)
     .await?;
-    decode_snapshot(yaml)
+    decode_snapshot(yaml, allow_cluster_access)
 }
 
 pub(super) async fn resolve_template_postgres(
@@ -72,6 +59,7 @@ pub(super) async fn resolve_template_postgres(
     installation_id: &str,
     template_id: Uuid,
     organization_id: Uuid,
+    allow_cluster_access: bool,
 ) -> Result<ResolvedTemplateSnapshot, StorageError> {
     let yaml: Option<String> = sqlx::query_scalar(
         "SELECT template_yaml FROM workspace_templates WHERE installation_id = $1 AND id = $2 \
@@ -82,85 +70,23 @@ pub(super) async fn resolve_template_postgres(
     .bind(organization_id.to_string())
     .fetch_optional(&mut *connection)
     .await?;
-    decode_snapshot(yaml)
+    decode_snapshot(yaml, allow_cluster_access)
 }
 
-fn decode_snapshot(yaml: Option<String>) -> Result<ResolvedTemplateSnapshot, StorageError> {
+fn decode_snapshot(
+    yaml: Option<String>,
+    allow_cluster_access: bool,
+) -> Result<ResolvedTemplateSnapshot, StorageError> {
     let yaml = yaml.ok_or(StorageError::TemplateNotFound)?;
     let document = parse_document(&yaml)?;
+    ensure_cluster_access(&document.spec, allow_cluster_access)?;
     Ok(ResolvedTemplateSnapshot {
         yaml,
         spec: document.spec,
     })
 }
 
-pub(super) async fn admit_sqlite(
-    connection: &mut SqliteConnection,
-    installation_id: &str,
-    workspace: &crate::workspaces::Workspace,
-) -> Result<(), StorageError> {
-    let allowed: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM image_policies WHERE installation_id = ?1 AND image = ?2 AND enabled = 1 AND contract_version = ?3")
-        .bind(installation_id).bind(&workspace.template.image).bind(i64::from(IMAGE_CONTRACT_VERSION)).fetch_one(&mut *connection).await?;
-    (allowed == 1)
-        .then_some(())
-        .ok_or(StorageError::ImageNotAllowed)
-}
-
-pub(super) async fn admit_postgres(
-    connection: &mut PgConnection,
-    installation_id: &str,
-    workspace: &crate::workspaces::Workspace,
-) -> Result<(), StorageError> {
-    let allowed: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM image_policies WHERE installation_id = $1 AND image = $2 AND enabled = 1 AND contract_version = $3")
-        .bind(installation_id).bind(&workspace.template.image).bind(i64::from(IMAGE_CONTRACT_VERSION)).fetch_one(&mut *connection).await?;
-    (allowed == 1)
-        .then_some(())
-        .ok_or(StorageError::ImageNotAllowed)
-}
-
 impl Database {
-    pub async fn list_image_policies(&self) -> Result<Vec<ImagePolicy>, StorageError> {
-        match self {
-            Self::Sqlite { pool, installation_id } => sqlx::query("SELECT image, contract_version, enabled, created_at, updated_at FROM image_policies WHERE installation_id = ?1 ORDER BY image")
-                .bind(installation_id.as_str()).fetch_all(pool).await?.into_iter().map(decode_image).collect(),
-            Self::Postgres { pool, installation_id } => sqlx::query("SELECT image, contract_version, enabled, created_at, updated_at FROM image_policies WHERE installation_id = $1 ORDER BY image")
-                .bind(installation_id.as_str()).fetch_all(pool).await?.into_iter().map(decode_image).collect(),
-        }
-    }
-
-    pub async fn upsert_image_policy(
-        &self,
-        image: &str,
-        enabled: bool,
-        now: i64,
-    ) -> Result<ImagePolicy, StorageError> {
-        validate_image(image)?;
-        let image = image.trim();
-        match self {
-            Self::Sqlite {
-                pool,
-                installation_id,
-            } => {
-                sqlx::query("INSERT INTO image_policies (installation_id, image, contract_version, enabled, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?5) ON CONFLICT (installation_id, image) DO UPDATE SET contract_version = excluded.contract_version, enabled = excluded.enabled, updated_at = excluded.updated_at")
-                .bind(installation_id.as_str()).bind(image).bind(i64::from(IMAGE_CONTRACT_VERSION)).bind(i64::from(enabled)).bind(now).execute(pool).await?;
-            }
-            Self::Postgres {
-                pool,
-                installation_id,
-            } => {
-                sqlx::query("INSERT INTO image_policies (installation_id, image, contract_version, enabled, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $5) ON CONFLICT (installation_id, image) DO UPDATE SET contract_version = excluded.contract_version, enabled = excluded.enabled, updated_at = excluded.updated_at")
-                .bind(installation_id.as_str()).bind(image).bind(i64::from(IMAGE_CONTRACT_VERSION)).bind(i64::from(enabled)).bind(now).execute(pool).await?;
-            }
-        };
-        Ok(ImagePolicy {
-            image: image.to_owned(),
-            contract_version: IMAGE_CONTRACT_VERSION,
-            enabled,
-            created_at: now,
-            updated_at: now,
-        })
-    }
-
     pub async fn list_workspace_templates(
         &self,
         organization_id: Option<Uuid>,
@@ -190,10 +116,12 @@ impl Database {
     pub async fn create_workspace_template(
         &self,
         command: CreateWorkspaceTemplate,
+        allow_cluster_access: bool,
         now: i64,
     ) -> Result<WorkspaceTemplate, StorageError> {
         let yaml = normalize_yaml(&command.yaml)?;
         let document = parse_document(&yaml)?;
+        ensure_cluster_access(&document.spec, allow_cluster_access)?;
         validate_image(&document.spec.image)?;
         let template = WorkspaceTemplate {
             id: Uuid::now_v7(),
@@ -222,10 +150,12 @@ impl Database {
         &self,
         template_id: Uuid,
         yaml: &str,
+        allow_cluster_access: bool,
         now: i64,
     ) -> Result<WorkspaceTemplate, StorageError> {
         let yaml = normalize_yaml(yaml)?;
         let document = parse_document(&yaml)?;
+        ensure_cluster_access(&document.spec, allow_cluster_access)?;
         validate_image(&document.spec.image)?;
         let row = match self {
             Self::Sqlite {
@@ -262,48 +192,50 @@ impl Database {
         &self,
         template_id: Uuid,
         enabled: bool,
+        allow_cluster_access: bool,
         now: i64,
     ) -> Result<WorkspaceTemplate, StorageError> {
-        let row = match self {
-            Self::Sqlite { pool, installation_id } => sqlx::query(&format!("UPDATE workspace_templates SET enabled = ?1, updated_at = ?2 WHERE installation_id = ?3 AND id = ?4 RETURNING {TEMPLATE_COLUMNS}"))
-                .bind(i64::from(enabled)).bind(now).bind(installation_id.as_str()).bind(template_id.to_string()).fetch_optional(pool).await?.map(TemplateDatabaseRow::Sqlite),
-            Self::Postgres { pool, installation_id } => sqlx::query(&format!("UPDATE workspace_templates SET enabled = $1, updated_at = $2 WHERE installation_id = $3 AND id = $4 RETURNING {TEMPLATE_COLUMNS}"))
-                .bind(i64::from(enabled)).bind(now).bind(installation_id.as_str()).bind(template_id.to_string()).fetch_optional(pool).await?.map(TemplateDatabaseRow::Postgres),
-        };
-        decode_optional_template(row)
-    }
-
-    pub(super) async fn backfill_template_yaml(&self) -> Result<(), StorageError> {
         match self {
             Self::Sqlite {
                 pool,
                 installation_id,
             } => {
-                for row in sqlx::query("SELECT id, name, runtime_profile, image, access_mode, cpu_millis, memory_mib, gpu_count, disk_gib FROM workspace_templates WHERE installation_id = ?1 AND template_yaml = ''").bind(installation_id.as_str()).fetch_all(pool).await? {
-                    let (id, yaml) = legacy_yaml(&row)?;
-                    sqlx::query("UPDATE workspace_templates SET template_yaml = ?1 WHERE installation_id = ?2 AND id = ?3 AND template_yaml = ''").bind(yaml).bind(installation_id.as_str()).bind(id).execute(pool).await?;
-                }
-                for row in sqlx::query("SELECT id, name, runtime_profile, image, access_mode, cpu_millis, memory_mib, gpu_count, disk_gib FROM workspaces WHERE installation_id = ?1 AND template_snapshot_yaml = ''").bind(installation_id.as_str()).fetch_all(pool).await? {
-                    let (id, yaml) = legacy_yaml(&row)?;
-                    sqlx::query("UPDATE workspaces SET template_snapshot_yaml = ?1 WHERE installation_id = ?2 AND id = ?3 AND template_snapshot_yaml = ''").bind(yaml).bind(installation_id.as_str()).bind(id).execute(pool).await?;
-                }
+                let mut transaction = pool.begin().await?;
+                let current = sqlx::query(&format!("SELECT {TEMPLATE_COLUMNS} FROM workspace_templates WHERE installation_id = ?1 AND id = ?2"))
+                    .bind(installation_id.as_str()).bind(template_id.to_string()).fetch_optional(&mut *transaction).await?.map(TemplateDatabaseRow::Sqlite);
+                ensure_template_access(current, allow_cluster_access)?;
+                let row = sqlx::query(&format!("UPDATE workspace_templates SET enabled = ?1, updated_at = ?2 WHERE installation_id = ?3 AND id = ?4 RETURNING {TEMPLATE_COLUMNS}"))
+                    .bind(i64::from(enabled)).bind(now).bind(installation_id.as_str()).bind(template_id.to_string()).fetch_optional(&mut *transaction).await?.map(TemplateDatabaseRow::Sqlite);
+                transaction.commit().await?;
+                decode_optional_template(row)
             }
             Self::Postgres {
                 pool,
                 installation_id,
             } => {
-                for row in sqlx::query("SELECT id, name, runtime_profile, image, access_mode, cpu_millis, memory_mib, gpu_count, disk_gib FROM workspace_templates WHERE installation_id = $1 AND template_yaml = ''").bind(installation_id.as_str()).fetch_all(pool).await? {
-                    let (id, yaml) = legacy_yaml(&row)?;
-                    sqlx::query("UPDATE workspace_templates SET template_yaml = $1 WHERE installation_id = $2 AND id = $3 AND template_yaml = ''").bind(yaml).bind(installation_id.as_str()).bind(id).execute(pool).await?;
-                }
-                for row in sqlx::query("SELECT id, name, runtime_profile, image, access_mode, cpu_millis, memory_mib, gpu_count, disk_gib FROM workspaces WHERE installation_id = $1 AND template_snapshot_yaml = ''").bind(installation_id.as_str()).fetch_all(pool).await? {
-                    let (id, yaml) = legacy_yaml(&row)?;
-                    sqlx::query("UPDATE workspaces SET template_snapshot_yaml = $1 WHERE installation_id = $2 AND id = $3 AND template_snapshot_yaml = ''").bind(yaml).bind(installation_id.as_str()).bind(id).execute(pool).await?;
-                }
+                let mut transaction = pool.begin().await?;
+                let current = sqlx::query(&format!("SELECT {TEMPLATE_COLUMNS} FROM workspace_templates WHERE installation_id = $1 AND id = $2 FOR UPDATE"))
+                    .bind(installation_id.as_str()).bind(template_id.to_string()).fetch_optional(&mut *transaction).await?.map(TemplateDatabaseRow::Postgres);
+                ensure_template_access(current, allow_cluster_access)?;
+                let row = sqlx::query(&format!("UPDATE workspace_templates SET enabled = $1, updated_at = $2 WHERE installation_id = $3 AND id = $4 RETURNING {TEMPLATE_COLUMNS}"))
+                    .bind(i64::from(enabled)).bind(now).bind(installation_id.as_str()).bind(template_id.to_string()).fetch_optional(&mut *transaction).await?.map(TemplateDatabaseRow::Postgres);
+                transaction.commit().await?;
+                decode_optional_template(row)
             }
         }
-        Ok(())
     }
+}
+
+fn ensure_template_access(
+    row: Option<TemplateDatabaseRow>,
+    allow_cluster_access: bool,
+) -> Result<(), StorageError> {
+    let template = match row {
+        Some(TemplateDatabaseRow::Sqlite(row)) => decode_template(row),
+        Some(TemplateDatabaseRow::Postgres(row)) => decode_template(row),
+        None => return Err(StorageError::TemplateNotFound),
+    }?;
+    ensure_cluster_access(&template.template, allow_cluster_access)
 }
 
 async fn insert_template_sqlite(
@@ -367,36 +299,6 @@ fn normalize_yaml(yaml: &str) -> Result<String, StorageError> {
     })
 }
 
-fn legacy_yaml<R: Row>(row: &R) -> Result<(String, String), StorageError>
-where
-    for<'a> &'a str: sqlx::ColumnIndex<R>,
-    String: for<'d> sqlx::Decode<'d, R::Database> + sqlx::Type<R::Database>,
-    i64: for<'d> sqlx::Decode<'d, R::Database> + sqlx::Type<R::Database>,
-{
-    let access = row.try_get::<String, _>("access_mode")?;
-    let resources = Resources {
-        cpu_millis: as_u64(row.try_get("cpu_millis")?)?,
-        memory_mib: as_u64(row.try_get("memory_mib")?)?,
-        gpu_count: u32::try_from(row.try_get::<i64, _>("gpu_count")?)
-            .map_err(|_| StorageError::InvalidTemplate)?,
-        disk_gib: as_u64(row.try_get("disk_gib")?)?,
-    };
-    let spec = WorkspaceTemplateSpec::from_legacy(
-        &row.try_get::<String, _>("runtime_profile")?,
-        row.try_get::<String, _>("image")?,
-        AccessMode::from_database(&access).ok_or(StorageError::UnknownAccessMode(access))?,
-        resources,
-    )
-    .map_err(|_| StorageError::InvalidTemplate)?;
-    let document = WorkspaceTemplateDocument::new(row.try_get::<String, _>("name")?, spec);
-    Ok((
-        row.try_get("id")?,
-        document
-            .to_yaml()
-            .map_err(|_| StorageError::InvalidTemplate)?,
-    ))
-}
-
 fn decode_optional_template(
     row: Option<TemplateDatabaseRow>,
 ) -> Result<WorkspaceTemplate, StorageError> {
@@ -433,33 +335,16 @@ where
     })
 }
 
-fn validate_image(image: &str) -> Result<(), StorageError> {
-    let image = image.trim();
-    if image.is_empty() || image.len() > 512 || image.chars().any(char::is_whitespace) {
-        return Err(StorageError::InvalidTemplate);
+fn ensure_cluster_access(
+    spec: &WorkspaceTemplateSpec,
+    allow_cluster_access: bool,
+) -> Result<(), StorageError> {
+    if spec.cluster_access && !allow_cluster_access {
+        return Err(StorageError::PrivilegedTemplateForbidden);
     }
     Ok(())
 }
 
-fn decode_image<R: Row>(row: R) -> Result<ImagePolicy, StorageError>
-where
-    for<'a> &'a str: sqlx::ColumnIndex<R>,
-    String: for<'d> sqlx::Decode<'d, R::Database> + sqlx::Type<R::Database>,
-    i64: for<'d> sqlx::Decode<'d, R::Database> + sqlx::Type<R::Database>,
-{
-    Ok(ImagePolicy {
-        image: row.try_get("image")?,
-        contract_version: u16::try_from(row.try_get::<i64, _>("contract_version")?)
-            .map_err(|_| StorageError::InvalidTemplate)?,
-        enabled: row.try_get::<i64, _>("enabled")? != 0,
-        created_at: row.try_get("created_at")?,
-        updated_at: row.try_get("updated_at")?,
-    })
-}
-
 fn as_i64(value: u64) -> Result<i64, StorageError> {
     i64::try_from(value).map_err(|_| StorageError::InvalidTemplate)
-}
-fn as_u64(value: i64) -> Result<u64, StorageError> {
-    u64::try_from(value).map_err(|_| StorageError::InvalidTemplate)
 }

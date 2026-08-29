@@ -8,7 +8,7 @@ use memeloop_workspace_control::{
         IdempotencyDecision, InjectionScopeRef, StorageError,
     },
     templates::{WorkspaceTemplateDocument, WorkspaceTemplateSpec},
-    workspaces::{AccessMode, WorkspaceAction, WorkspaceState},
+    workspaces::{AccessMode, WorkspaceAction, WorkspaceObservation, WorkspaceState},
 };
 use std::collections::BTreeMap;
 use uuid::Uuid;
@@ -48,6 +48,7 @@ async fn create_template(
                 organization_id: Some(organization_id),
                 yaml,
             },
+            true,
             now,
         )
         .await
@@ -100,6 +101,7 @@ async fn unconfigured_image_allowlist_defaults_to_deny() {
                 organization_injection_refs: None,
                 user_injection_refs: None,
             },
+            true,
             admin.user_id,
             102,
         )
@@ -166,6 +168,7 @@ async fn inline_injection_failure_rolls_back_workspace_and_first_job() {
                 template_selector: None,
                 labels: BTreeMap::new(),
             }],
+            true,
             admin.user_id,
             102,
         )
@@ -215,7 +218,24 @@ async fn image_allowlist_and_template_contract_are_admitted_atomically() {
     let mut template_spec = WorkspaceTemplateSpec::standard(image, AccessMode::Internal, resources);
     template_spec.workspace_user = "rust-dev".to_owned();
     template_spec.workspace_home = "/home/rust-dev".to_owned();
-    template_spec.preserve_home_root = true;
+    template_spec.preserve_home_ownership = true;
+    let mut privileged_spec = template_spec.clone();
+    privileged_spec.cluster_access = true;
+    assert!(matches!(
+        database
+            .create_workspace_template(
+                CreateWorkspaceTemplate {
+                    organization_id: Some(organization.id),
+                    yaml: WorkspaceTemplateDocument::new("Privileged", privileged_spec)
+                        .to_yaml()
+                        .unwrap(),
+                },
+                false,
+                103,
+            )
+            .await,
+        Err(StorageError::PrivilegedTemplateForbidden)
+    ));
     let template = database
         .create_workspace_template(
             CreateWorkspaceTemplate {
@@ -224,6 +244,7 @@ async fn image_allowlist_and_template_contract_are_admitted_atomically() {
                     .to_yaml()
                     .unwrap(),
             },
+            true,
             103,
         )
         .await
@@ -237,7 +258,7 @@ async fn image_allowlist_and_template_contract_are_admitted_atomically() {
         user_injection_refs: Some(Vec::new()),
     };
     let created = database
-        .create_workspace(command.clone(), admin.user_id, 104)
+        .create_workspace(command.clone(), true, admin.user_id, 104)
         .await
         .unwrap();
     assert_eq!(created.template, template_spec);
@@ -262,6 +283,7 @@ async fn image_allowlist_and_template_contract_are_admitted_atomically() {
             &WorkspaceTemplateDocument::new("Rust expanded", changed_template_spec)
                 .to_yaml()
                 .unwrap(),
+            true,
             105,
         )
         .await
@@ -275,7 +297,7 @@ async fn image_allowlist_and_template_contract_are_admitted_atomically() {
     missing_template.template_id = Uuid::now_v7();
     assert!(matches!(
         database
-            .create_workspace(missing_template, admin.user_id, 105)
+            .create_workspace(missing_template, true, admin.user_id, 105)
             .await,
         Err(StorageError::TemplateNotFound)
     ));
@@ -299,7 +321,7 @@ async fn image_allowlist_and_template_contract_are_admitted_atomically() {
     };
     assert!(matches!(
         database
-            .create_workspace(not_allowed, admin.user_id, 106)
+            .create_workspace(not_allowed, true, admin.user_id, 106)
             .await,
         Err(StorageError::ImageNotAllowed)
     ));
@@ -418,7 +440,7 @@ async fn workspace_creation_enforces_quota_and_enqueues_lifecycle_actions() {
         user_injection_refs: None,
     };
     let workspace = database
-        .create_workspace(command("first", first_template), admin.user_id, 103)
+        .create_workspace(command("first", first_template), true, admin.user_id, 103)
         .await
         .unwrap();
     assert_eq!(workspace.state, WorkspaceState::Provisioning);
@@ -433,7 +455,7 @@ async fn workspace_creation_enforces_quota_and_enqueues_lifecycle_actions() {
     assert_eq!(created_events[0].payload["state"], "provisioning");
     assert!(matches!(
         database
-            .create_workspace(command("second", second_template), admin.user_id, 104)
+            .create_workspace(command("second", second_template), true, admin.user_id, 104)
             .await,
         Err(StorageError::Quota(_))
     ));
@@ -447,12 +469,17 @@ async fn workspace_creation_enforces_quota_and_enqueues_lifecycle_actions() {
     );
 
     let ready = database
-        .transition_workspace(workspace.id, WorkspaceAction::MarkReady, admin.user_id, 105)
+        .record_workspace_observation(
+            workspace.id,
+            WorkspaceObservation::Ready,
+            admin.user_id,
+            105,
+        )
         .await
         .unwrap();
     assert_eq!(ready.state, WorkspaceState::Ready);
     let stopping = database
-        .transition_workspace(workspace.id, WorkspaceAction::Stop, admin.user_id, 106)
+        .request_workspace_action(workspace.id, WorkspaceAction::Stop, admin.user_id, 106)
         .await
         .unwrap();
     assert_eq!(stopping.state, WorkspaceState::Stopping);
@@ -564,6 +591,7 @@ async fn confirmed_deletion_scrubs_sensitive_workspace_state_and_keeps_a_tombsto
                 organization_injection_refs: None,
                 user_injection_refs: None,
             },
+            true,
             admin.user_id,
             102,
         )
@@ -601,7 +629,12 @@ async fn confirmed_deletion_scrubs_sensitive_workspace_state_and_keeps_a_tombsto
         .await
         .unwrap();
     database
-        .transition_workspace(workspace.id, WorkspaceAction::MarkReady, admin.user_id, 105)
+        .record_workspace_observation(
+            workspace.id,
+            WorkspaceObservation::Ready,
+            admin.user_id,
+            105,
+        )
         .await
         .unwrap();
     let ticket = database
@@ -609,13 +642,13 @@ async fn confirmed_deletion_scrubs_sensitive_workspace_state_and_keeps_a_tombsto
         .await
         .unwrap();
     database
-        .transition_workspace(workspace.id, WorkspaceAction::Delete, admin.user_id, 107)
+        .request_workspace_action(workspace.id, WorkspaceAction::Delete, admin.user_id, 107)
         .await
         .unwrap();
     database
-        .transition_workspace(
+        .record_workspace_observation(
             workspace.id,
-            WorkspaceAction::MarkDeleted,
+            WorkspaceObservation::Deleted,
             admin.user_id,
             108,
         )
@@ -708,6 +741,7 @@ async fn user_injection_change_reconciles_every_workspace_the_user_can_access() 
                 organization_injection_refs: None,
                 user_injection_refs: None,
             },
+            true,
             admin.user_id,
             104,
         )

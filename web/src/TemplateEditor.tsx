@@ -140,7 +140,7 @@ export function TemplateEditor({ api, organizationId, templates, canGrantCluster
           <NumberField label={`${t("disk")} (GiB)`} value={draft.disk} min={1} update={(disk) => change({ ...draft, disk })} />
           <label><Field label={`${t("ephemeralRequest")} (MiB)`} help={t("ephemeralHelp")} /><input type="number" min="1" value={draft.requestEphemeral} onChange={(event) => change({ ...draft, requestEphemeral: event.target.value })} /></label>
           <label><Field label={`${t("ephemeralLimit")} (MiB)`} help={t("ephemeralHelp")} /><input type="number" min="1" value={draft.limitEphemeral} onChange={(event) => change({ ...draft, limitEphemeral: event.target.value })} /></label>
-          <Check label={t("preserveHomeRoot")} help={t("preserveHomeRootHelp")} checked={draft.preserveHome} update={(preserveHome) => change({ ...draft, preserveHome })} />
+          <Check label={t("preserveHomeOwnership")} help={t("preserveHomeOwnershipHelp")} checked={draft.preserveHome} update={(preserveHome) => change({ ...draft, preserveHome })} />
           <Check label="BuildKit" help={t("buildkitHelp")} checked={draft.buildkit} update={(buildkit) => change({ ...draft, buildkit })} />
           <Check label={t("maintenanceAccess")} help={t("maintenanceAccessHelp")} checked={draft.clusterAccess} disabled={!canGrantClusterAccess} update={(clusterAccess) => change({ ...draft, clusterAccess })} />
           <label className="wide"><Field label={t("requiredNodes")} help={t("nodeListHelp")} /><input value={draft.requiredNodes} onChange={(event) => change({ ...draft, requiredNodes: event.target.value })} placeholder="westlake, haixia" /></label>
@@ -162,7 +162,7 @@ function toYaml(draft: Draft): string {
     pod_requests: { cpu_millis: draft.requestCpu, memory_mib: draft.requestMemory },
     workspace_user: draft.user,
     workspace_home: draft.home,
-    preserve_home_root: draft.preserveHome,
+    preserve_home_ownership: draft.preserveHome,
     buildkit: draft.buildkit,
     cluster_access: draft.clusterAccess,
   };
@@ -184,7 +184,7 @@ function fromYaml(yaml: string): Draft {
     cpu: Number(spec.resources?.cpu_millis ?? 0), memory: Number(spec.resources?.memory_mib ?? 0), gpu: Number(spec.resources?.gpu_count ?? 0), disk: Number(spec.resources?.disk_gib ?? 0),
     requestCpu: Number(spec.pod_requests?.cpu_millis ?? 0), requestMemory: Number(spec.pod_requests?.memory_mib ?? 0),
     requestEphemeral: nullableNumber(spec.pod_requests?.ephemeral_storage_mib), limitEphemeral: nullableNumber(spec.ephemeral_storage_limit_mib),
-    user: String(spec.workspace_user ?? ""), home: String(spec.workspace_home ?? ""), preserveHome: Boolean(spec.preserve_home_root),
+    user: String(spec.workspace_user ?? ""), home: String(spec.workspace_home ?? ""), preserveHome: Boolean(spec.preserve_home_ownership ?? spec.preserve_home_root),
     buildkit: Boolean(spec.buildkit), clusterAccess: Boolean(spec.cluster_access),
     requiredNodes: (spec.required_node_names ?? []).join(", "), preferredNodes: (spec.preferred_node_names ?? []).join(", "),
     nodeSelector: formatPairs(spec.node_selector), environment: formatPairs(spec.environment),

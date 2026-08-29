@@ -1,7 +1,7 @@
 use sqlx::{PgConnection, SqliteConnection};
 use uuid::Uuid;
 
-use crate::workspaces::{Workspace, WorkspaceAction};
+use crate::workspaces::{Workspace, WorkspaceAction, WorkspaceObservation, WorkspaceState};
 
 use super::{
     Database, StorageError,
@@ -9,10 +9,42 @@ use super::{
 };
 
 impl Database {
-    pub async fn transition_workspace(
+    pub async fn request_workspace_action(
         &self,
         workspace_id: Uuid,
         action: WorkspaceAction,
+        actor_user_id: Uuid,
+        now: i64,
+    ) -> Result<Workspace, StorageError> {
+        self.transition_workspace(
+            workspace_id,
+            StoredTransition::Action(action),
+            actor_user_id,
+            now,
+        )
+        .await
+    }
+
+    pub async fn record_workspace_observation(
+        &self,
+        workspace_id: Uuid,
+        observation: WorkspaceObservation,
+        actor_user_id: Uuid,
+        now: i64,
+    ) -> Result<Workspace, StorageError> {
+        self.transition_workspace(
+            workspace_id,
+            StoredTransition::Observation(observation),
+            actor_user_id,
+            now,
+        )
+        .await
+    }
+
+    async fn transition_workspace(
+        &self,
+        workspace_id: Uuid,
+        transition: StoredTransition,
         actor_user_id: Uuid,
         now: i64,
     ) -> Result<Workspace, StorageError> {
@@ -35,7 +67,7 @@ impl Database {
                     &mut transaction,
                     installation_id.as_str(),
                     &mut workspace,
-                    action,
+                    transition,
                     actor_user_id,
                     now,
                 )
@@ -61,7 +93,7 @@ impl Database {
                     &mut transaction,
                     installation_id.as_str(),
                     &mut workspace,
-                    action,
+                    transition,
                     actor_user_id,
                     now,
                 )
@@ -73,17 +105,47 @@ impl Database {
     }
 }
 
+#[derive(Clone, Copy)]
+enum StoredTransition {
+    Action(WorkspaceAction),
+    Observation(WorkspaceObservation),
+}
+
+impl StoredTransition {
+    fn next_state(self, state: WorkspaceState) -> Result<WorkspaceState, StorageError> {
+        match self {
+            Self::Action(action) => Ok(state.request(action)?),
+            Self::Observation(observation) => Ok(state.observe(observation)?),
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Action(action) => action.as_str(),
+            Self::Observation(observation) => observation.as_str(),
+        }
+    }
+
+    fn enqueues_reconcile(self) -> bool {
+        matches!(self, Self::Action(_))
+    }
+
+    fn confirms_deletion(self) -> bool {
+        matches!(self, Self::Observation(WorkspaceObservation::Deleted))
+    }
+}
+
 async fn apply_sqlite(
     connection: &mut SqliteConnection,
     installation_id: &str,
     workspace: &mut Workspace,
-    action: WorkspaceAction,
+    transition: StoredTransition,
     actor: Uuid,
     now: i64,
 ) -> Result<(), StorageError> {
     let prior_state = workspace.state;
-    workspace.state = prior_state.transition(action)?;
-    if action.requires_reconcile() {
+    workspace.state = transition.next_state(prior_state)?;
+    if transition.enqueues_reconcile() {
         workspace.generation = workspace
             .generation
             .checked_add(1)
@@ -97,8 +159,16 @@ async fn apply_sqlite(
     if affected != 1 {
         return Err(StorageError::WorkspaceNotFound);
     }
-    job_and_audit_sqlite(connection, installation_id, workspace, action, actor, now).await?;
-    if action == WorkspaceAction::MarkDeleted {
+    job_and_audit_sqlite(
+        connection,
+        installation_id,
+        workspace,
+        transition,
+        actor,
+        now,
+    )
+    .await?;
+    if transition.confirms_deletion() {
         scrub_deleted_sqlite(connection, installation_id, workspace, now).await?;
     }
     Ok(())
@@ -108,13 +178,13 @@ async fn apply_postgres(
     connection: &mut PgConnection,
     installation_id: &str,
     workspace: &mut Workspace,
-    action: WorkspaceAction,
+    transition: StoredTransition,
     actor: Uuid,
     now: i64,
 ) -> Result<(), StorageError> {
     let prior_state = workspace.state;
-    workspace.state = prior_state.transition(action)?;
-    if action.requires_reconcile() {
+    workspace.state = transition.next_state(prior_state)?;
+    if transition.enqueues_reconcile() {
         workspace.generation = workspace
             .generation
             .checked_add(1)
@@ -128,8 +198,16 @@ async fn apply_postgres(
     if affected != 1 {
         return Err(StorageError::WorkspaceNotFound);
     }
-    job_and_audit_postgres(connection, installation_id, workspace, action, actor, now).await?;
-    if action == WorkspaceAction::MarkDeleted {
+    job_and_audit_postgres(
+        connection,
+        installation_id,
+        workspace,
+        transition,
+        actor,
+        now,
+    )
+    .await?;
+    if transition.confirms_deletion() {
         scrub_deleted_postgres(connection, installation_id, workspace, now).await?;
     }
     Ok(())
@@ -201,25 +279,25 @@ async fn job_and_audit_sqlite(
     connection: &mut SqliteConnection,
     installation_id: &str,
     workspace: &Workspace,
-    action: WorkspaceAction,
+    transition: StoredTransition,
     actor: Uuid,
     now: i64,
 ) -> Result<(), StorageError> {
-    if action.requires_reconcile() {
+    if transition.enqueues_reconcile() {
         sqlx::query("INSERT INTO jobs (id, installation_id, kind, workspace_id, payload_json, status, available_at, lease_owner, lease_expires_at, attempts, created_at, updated_at) VALUES (?1, ?2, 'reconcile_workspace', ?3, ?4, 'pending', ?5, NULL, NULL, 0, ?5, ?5)")
             .bind(Uuid::now_v7().to_string()).bind(installation_id).bind(workspace.id.to_string())
-            .bind(serde_json::json!({"generation": workspace.generation, "action": action.as_str()}).to_string())
+            .bind(serde_json::json!({"generation": workspace.generation, "action": transition.as_str()}).to_string())
             .bind(now).execute(&mut *connection).await?;
     }
     sqlx::query("INSERT INTO audit_log (id, installation_id, actor_user_id, organization_id, workspace_id, action, metadata_json, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, '{}', ?7)")
         .bind(Uuid::now_v7().to_string()).bind(installation_id).bind(actor.to_string())
         .bind(workspace.organization_id.to_string()).bind(workspace.id.to_string())
-        .bind(format!("workspace.{}", action.as_str())).bind(now).execute(&mut *connection).await?;
+        .bind(format!("workspace.{}", transition.as_str())).bind(now).execute(&mut *connection).await?;
     super::workspace_events::insert_sqlite(
         connection,
         installation_id,
         workspace,
-        Some(action),
+        Some(transition.as_str()),
         now,
     )
     .await?;
@@ -230,42 +308,29 @@ async fn job_and_audit_postgres(
     connection: &mut PgConnection,
     installation_id: &str,
     workspace: &Workspace,
-    action: WorkspaceAction,
+    transition: StoredTransition,
     actor: Uuid,
     now: i64,
 ) -> Result<(), StorageError> {
-    if action.requires_reconcile() {
+    if transition.enqueues_reconcile() {
         sqlx::query("INSERT INTO jobs (id, installation_id, kind, workspace_id, payload_json, status, available_at, lease_owner, lease_expires_at, attempts, created_at, updated_at) VALUES ($1, $2, 'reconcile_workspace', $3, $4, 'pending', $5, NULL, NULL, 0, $5, $5)")
             .bind(Uuid::now_v7().to_string()).bind(installation_id).bind(workspace.id.to_string())
-            .bind(serde_json::json!({"generation": workspace.generation, "action": action.as_str()}).to_string())
+            .bind(serde_json::json!({"generation": workspace.generation, "action": transition.as_str()}).to_string())
             .bind(now).execute(&mut *connection).await?;
     }
     sqlx::query("INSERT INTO audit_log (id, installation_id, actor_user_id, organization_id, workspace_id, action, metadata_json, created_at) VALUES ($1, $2, $3, $4, $5, $6, '{}', $7)")
         .bind(Uuid::now_v7().to_string()).bind(installation_id).bind(actor.to_string())
         .bind(workspace.organization_id.to_string()).bind(workspace.id.to_string())
-        .bind(format!("workspace.{}", action.as_str())).bind(now).execute(&mut *connection).await?;
+        .bind(format!("workspace.{}", transition.as_str())).bind(now).execute(&mut *connection).await?;
     super::workspace_events::insert_postgres(
         connection,
         installation_id,
         workspace,
-        Some(action),
+        Some(transition.as_str()),
         now,
     )
     .await?;
     Ok(())
-}
-
-trait ReconcileAction {
-    fn requires_reconcile(self) -> bool;
-}
-
-impl ReconcileAction for WorkspaceAction {
-    fn requires_reconcile(self) -> bool {
-        matches!(
-            self,
-            Self::Start | Self::Stop | Self::Restart | Self::Delete
-        )
-    }
 }
 
 fn as_i64(value: u64) -> Result<i64, StorageError> {

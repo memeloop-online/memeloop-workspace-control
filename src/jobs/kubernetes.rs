@@ -5,9 +5,9 @@ use crate::{
         select_injections,
     },
     jobs::{JobHandler, JobHandlerError},
-    kubernetes::{DeleteProgress, KubernetesCoordinator, ResourceBuilder, WorkspaceResourceSpec},
+    kubernetes::{DeleteProgress, KubernetesCoordinator, ResourceBuilder},
     storage::{ClaimedJob, Database, InjectionScopeRef},
-    workspaces::{Workspace, WorkspaceAction, WorkspaceState},
+    workspaces::{Workspace, WorkspaceObservation, WorkspaceState},
 };
 
 pub struct WorkspaceReconcileHandler {
@@ -55,7 +55,7 @@ impl WorkspaceReconcileHandler {
             .materialize_ssh_identity(workspace.id, &workspace.short_id, &identity)
             .map_err(job_error)?;
         self.coordinator
-            .reconcile_with_injections(&workspace_spec(workspace), materialization, ssh_identity)
+            .reconcile_with_injections(workspace, materialization, ssh_identity)
             .await
             .map_err(job_error)?;
 
@@ -73,7 +73,7 @@ impl WorkspaceReconcileHandler {
                         "workspace StatefulSet is not ready yet".to_owned(),
                     ));
                 }
-                self.transition(workspace, WorkspaceAction::MarkReady)
+                self.record_observation(workspace, WorkspaceObservation::Ready)
                     .await?;
             }
             WorkspaceState::Stopping => {
@@ -87,7 +87,7 @@ impl WorkspaceReconcileHandler {
                         "workspace StatefulSet has not scaled to zero yet".to_owned(),
                     ));
                 }
-                self.transition(workspace, WorkspaceAction::MarkStopped)
+                self.record_observation(workspace, WorkspaceObservation::Stopped)
                     .await?;
             }
             WorkspaceState::Ready | WorkspaceState::Stopped | WorkspaceState::Failed => {}
@@ -104,7 +104,7 @@ impl WorkspaceReconcileHandler {
             .map_err(job_error)?
         {
             DeleteProgress::Gone => {
-                self.transition(workspace, WorkspaceAction::MarkDeleted)
+                self.record_observation(workspace, WorkspaceObservation::Deleted)
                     .await?;
                 Ok(())
             }
@@ -178,7 +178,17 @@ impl WorkspaceReconcileHandler {
         let mut resolved =
             resolve_injections(&organization, &user, &workspace_items).map_err(job_error)?;
         normalize_resolved_ssh_items(&mut resolved, &workspace.template);
+        self.append_shared_ssh_keys(workspace, selection, &mut resolved)
+            .await?;
+        Ok(resolved)
+    }
 
+    async fn append_shared_ssh_keys(
+        &self,
+        workspace: &Workspace,
+        selection: InjectionSelection<'_>,
+        resolved: &mut Vec<crate::injections::ResolvedInjection>,
+    ) -> Result<(), JobHandlerError> {
         for candidate in self
             .database
             .ssh_access_candidates(workspace.organization_id)
@@ -218,16 +228,21 @@ impl WorkspaceReconcileHandler {
                 });
             }
         }
-        Ok(resolved)
+        Ok(())
     }
 
-    async fn transition(
+    async fn record_observation(
         &self,
         workspace: &Workspace,
-        action: WorkspaceAction,
+        observation: WorkspaceObservation,
     ) -> Result<(), JobHandlerError> {
         self.database
-            .transition_workspace(workspace.id, action, workspace.owner_id, unix_timestamp()?)
+            .record_workspace_observation(
+                workspace.id,
+                observation,
+                workspace.owner_id,
+                unix_timestamp()?,
+            )
             .await
             .map_err(job_error)?;
         Ok(())
@@ -284,18 +299,6 @@ impl JobHandler for WorkspaceReconcileHandler {
     }
 }
 
-fn workspace_spec(workspace: &Workspace) -> WorkspaceResourceSpec {
-    WorkspaceResourceSpec {
-        id: workspace.id,
-        organization_id: workspace.organization_id,
-        owner_id: workspace.owner_id,
-        short_id: workspace.short_id.clone(),
-        template: workspace.template.clone(),
-        state: workspace.state,
-        generation: workspace.generation,
-    }
-}
-
 fn job_error(error: impl std::fmt::Display) -> JobHandlerError {
     JobHandlerError(error.to_string())
 }
@@ -343,8 +346,7 @@ mod tests {
             },
         }];
 
-        let template = WorkspaceTemplateSpec::from_legacy(
-            "node_dev",
+        let mut template = WorkspaceTemplateSpec::standard(
             "registry.example/node:latest",
             AccessMode::Internal,
             Resources {
@@ -353,8 +355,9 @@ mod tests {
                 gpu_count: 0,
                 disk_gib: 60,
             },
-        )
-        .unwrap();
+        );
+        template.workspace_user = "node-dev".to_owned();
+        template.workspace_home = "/home/node-dev".to_owned();
         normalize_resolved_ssh_items(&mut resolved, &template);
 
         let item = &resolved[0].item;

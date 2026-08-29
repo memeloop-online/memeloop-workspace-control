@@ -3,11 +3,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 
-use crate::{
-    quota::Resources,
-    templates::{WorkspaceTemplateDocument, WorkspaceTemplateSpec},
-    workspaces::AccessMode,
-};
+use crate::{quota::Resources, templates::WorkspaceTemplateDocument, workspaces::AccessMode};
 
 use super::{Database, StorageError};
 
@@ -185,8 +181,7 @@ fn normalize_snapshot_rows(
                         .and_then(|value| value.as_str())
                         .ok_or(StorageError::InvalidTemplate)?;
                     let spec =
-                        WorkspaceTemplateSpec::from_legacy(profile, image, access, resources)
-                            .map_err(|_| StorageError::InvalidTemplate)?;
+                        super::template_migration::from_legacy(profile, image, access, resources)?;
                     let yaml = WorkspaceTemplateDocument::new(name, spec)
                         .to_yaml()
                         .map_err(|_| StorageError::InvalidTemplate)?;

@@ -11,7 +11,7 @@ use memeloop_workspace_control::{
     quota::Resources,
     storage::{CreateOrganization, CreateWorkspace, CreateWorkspaceTemplate, Database},
     templates::{WorkspaceTemplateDocument, WorkspaceTemplateSpec},
-    workspaces::{AccessMode, WorkspaceAction},
+    workspaces::{AccessMode, WorkspaceObservation},
 };
 use serde_json::Value;
 use tower::ServiceExt;
@@ -64,6 +64,7 @@ async fn web_shell_ticket_is_ready_only_scoped_and_consumed_once() {
                 .to_yaml()
                 .unwrap(),
             },
+            false,
             101,
         )
         .await
@@ -78,13 +79,14 @@ async fn web_shell_ticket_is_ready_only_scoped_and_consumed_once() {
                 organization_injection_refs: None,
                 user_injection_refs: None,
             },
+            false,
             user.user_id,
             102,
         )
         .await
         .unwrap();
     database
-        .transition_workspace(workspace.id, WorkspaceAction::MarkReady, user.user_id, 103)
+        .record_workspace_observation(workspace.id, WorkspaceObservation::Ready, user.user_id, 103)
         .await
         .unwrap();
 

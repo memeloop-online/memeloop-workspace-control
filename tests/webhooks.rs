@@ -8,7 +8,7 @@ use memeloop_workspace_control::{
         Database,
     },
     templates::{WorkspaceTemplateDocument, WorkspaceTemplateSpec},
-    workspaces::{AccessMode, WorkspaceAction},
+    workspaces::{AccessMode, WorkspaceObservation},
 };
 use uuid::Uuid;
 
@@ -78,6 +78,7 @@ async fn webhook_secret_is_encrypted_and_workspace_events_enqueue_durable_delive
                 .to_yaml()
                 .unwrap(),
             },
+            true,
             3,
         )
         .await
@@ -93,13 +94,14 @@ async fn webhook_secret_is_encrypted_and_workspace_events_enqueue_durable_delive
                 organization_injection_refs: None,
                 user_injection_refs: None,
             },
+            true,
             admin.user_id,
             4,
         )
         .await
         .unwrap();
     database
-        .transition_workspace(workspace.id, WorkspaceAction::MarkReady, admin.user_id, 5)
+        .record_workspace_observation(workspace.id, WorkspaceObservation::Ready, admin.user_id, 5)
         .await
         .unwrap();
     assert!(database.job_counts().await.unwrap().pending >= 2);

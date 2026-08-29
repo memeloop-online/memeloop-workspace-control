@@ -14,7 +14,7 @@ use memeloop_workspace_control::{
     quota::Resources,
     storage::{CreateWorkspaceTemplate, Database, InjectionScopeRef},
     templates::{WorkspaceTemplateDocument, WorkspaceTemplateSpec},
-    workspaces::{AccessMode, WorkspaceAction},
+    workspaces::{AccessMode, WorkspaceObservation},
 };
 use serde_json::{Value, json};
 use tower::ServiceExt;
@@ -170,6 +170,7 @@ async fn authenticated_workspace_api_enforces_rbac_and_exact_idempotent_replay()
                 .to_yaml()
                 .unwrap(),
             },
+            true,
             2,
         )
         .await
@@ -327,7 +328,7 @@ async fn authenticated_workspace_api_enforces_rbac_and_exact_idempotent_replay()
     assert_eq!(outsider.status(), StatusCode::FORBIDDEN);
 
     database
-        .transition_workspace(workspace_id, WorkspaceAction::MarkReady, admin_id, 3)
+        .record_workspace_observation(workspace_id, WorkspaceObservation::Ready, admin_id, 3)
         .await
         .unwrap();
     let stop = app

@@ -12,7 +12,7 @@ pub(super) async fn admit_sqlite(
     installation_id: &str,
     workspace: &Workspace,
 ) -> Result<(), StorageError> {
-    super::catalog_store::admit_sqlite(connection, installation_id, workspace).await?;
+    super::image_policy_store::admit_sqlite(connection, installation_id, workspace).await?;
     let quota = sqlx::query("SELECT cpu_millis, memory_mib, gpu_count, disk_gib FROM organization_quotas WHERE installation_id = ?1 AND organization_id = ?2")
         .bind(installation_id).bind(workspace.organization_id.to_string())
         .fetch_optional(&mut *connection).await?;
@@ -37,7 +37,7 @@ pub(super) async fn admit_postgres(
     installation_id: &str,
     workspace: &Workspace,
 ) -> Result<(), StorageError> {
-    super::catalog_store::admit_postgres(connection, installation_id, workspace).await?;
+    super::image_policy_store::admit_postgres(connection, installation_id, workspace).await?;
     let quota = sqlx::query("SELECT cpu_millis, memory_mib, gpu_count, disk_gib FROM organization_quotas WHERE installation_id = $1 AND organization_id = $2 FOR UPDATE")
         .bind(installation_id).bind(workspace.organization_id.to_string())
         .fetch_optional(&mut *connection).await?;

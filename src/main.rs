@@ -4,6 +4,7 @@ use clap::Parser;
 use memeloop_workspace_control::{
     admin::{Cli, Command, execute_admin, execute_database},
     api::{AppState, internal_router, router},
+    config::AppConfig,
     crypto::EnvelopeCipher,
     jobs::{ControlPlaneJobHandler, JobWorker, WebhookDeliveryHandler, WorkspaceReconcileHandler},
     kubernetes::{KubernetesCoordinator, ResourceBuilder},
@@ -32,95 +33,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-async fn serve(
-    config: memeloop_workspace_control::config::AppConfig,
-    database: Database,
-) -> Result<(), Box<dyn std::error::Error>> {
+async fn serve(config: AppConfig, database: Database) -> Result<(), Box<dyn std::error::Error>> {
     let listener = TcpListener::bind(config.listen_address).await?;
     let address = listener.local_addr()?;
     let installation_id = config.installation_id.clone();
-    let cipher = match std::env::var("MWC_ENCRYPTION_KEY") {
-        Ok(encoded_key) => Some(EnvelopeCipher::from_base64(&encoded_key)?),
-        Err(std::env::VarError::NotPresent) => None,
-        Err(error) => return Err(error.into()),
-    };
+    let cipher = load_cipher()?;
     let kubernetes_enabled = env_bool("MWC_KUBERNETES_ENABLED", false)?;
-    let kubernetes_client = if kubernetes_enabled {
-        Some(kube::Client::try_default().await?)
-    } else {
-        None
-    };
-    let workspace_handler = if kubernetes_enabled {
-        let workspace_cipher = cipher.clone().ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "MWC_ENCRYPTION_KEY is required when Kubernetes coordination is enabled",
-            )
-        })?;
-        let client = kubernetes_client.clone().expect("client initialized above");
-        let builder = resource_builder(&config)?;
-        let coordinator = KubernetesCoordinator::new(client, builder.clone());
-        Some(WorkspaceReconcileHandler::new(
-            database.clone(),
-            workspace_cipher,
-            builder,
-            coordinator,
-        ))
-    } else {
-        None
-    };
-    let worker = if let Some(worker_cipher) = cipher.clone() {
-        let webhook_handler = WebhookDeliveryHandler::new(database.clone(), worker_cipher)?;
-        let handler = Arc::new(ControlPlaneJobHandler::new(
-            workspace_handler,
-            webhook_handler,
-        ));
-        Some(JobWorker::new(
-            database.clone(),
-            handler,
-            config.instance_id.clone(),
-        ))
-    } else {
-        None
-    };
-    let mut state = match cipher {
-        Some(cipher) => AppState::with_cipher(config.clone(), database, cipher),
-        None => AppState::new(config.clone(), database),
-    };
-    if let Some(client) = kubernetes_client {
-        state.set_kubernetes_client(client);
-    }
-    if let Ok(public_key) = std::env::var("MWC_SSH_JUMP_HOST_PUBLIC_KEY") {
-        state.set_jump_host_public_key(&public_key)?;
-    }
-    match std::env::var("MWC_INTERNAL_AUTH_TOKEN") {
-        Ok(token) if token.len() >= 32 => state.set_internal_auth_token(&token),
-        Ok(_) => {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "MWC_INTERNAL_AUTH_TOKEN must contain at least 32 bytes",
-            )
-            .into());
-        }
-        Err(std::env::VarError::NotPresent) if kubernetes_enabled => {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "MWC_INTERNAL_AUTH_TOKEN is required when Kubernetes coordination is enabled",
-            )
-            .into());
-        }
-        Err(std::env::VarError::NotPresent) => {}
-        Err(error) => return Err(error.into()),
-    }
-    let internal_listen_address: Option<std::net::SocketAddr> =
-        match std::env::var("MWC_INTERNAL_LISTEN_ADDRESS") {
-            Ok(value) => Some(value.parse()?),
-            Err(std::env::VarError::NotPresent) if kubernetes_enabled => {
-                Some("0.0.0.0:8081".parse()?)
-            }
-            Err(std::env::VarError::NotPresent) => None,
-            Err(error) => return Err(error.into()),
-        };
+    let (kubernetes_client, workspace_handler) =
+        kubernetes_runtime(&config, &database, &cipher, kubernetes_enabled).await?;
+    let worker = job_worker(&config, &database, &cipher, workspace_handler)?;
+    let state = app_state(
+        &config,
+        database,
+        cipher,
+        kubernetes_client,
+        kubernetes_enabled,
+    )?;
+    let internal_listen_address = internal_listener_address(kubernetes_enabled)?;
     let internal_state = internal_listen_address.map(|_| {
         let mut internal_state = state.clone();
         internal_state.trust_internal_network();
@@ -166,6 +95,118 @@ async fn serve(
     }
     server_result?;
     Ok(())
+}
+
+fn load_cipher() -> Result<Option<EnvelopeCipher>, Box<dyn std::error::Error>> {
+    match std::env::var("MWC_ENCRYPTION_KEY") {
+        Ok(encoded_key) => Ok(Some(EnvelopeCipher::from_base64(&encoded_key)?)),
+        Err(std::env::VarError::NotPresent) => Ok(None),
+        Err(error) => Err(error.into()),
+    }
+}
+
+async fn kubernetes_runtime(
+    config: &AppConfig,
+    database: &Database,
+    cipher: &Option<EnvelopeCipher>,
+    enabled: bool,
+) -> Result<(Option<kube::Client>, Option<WorkspaceReconcileHandler>), Box<dyn std::error::Error>> {
+    if !enabled {
+        return Ok((None, None));
+    }
+    let workspace_cipher = cipher.clone().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "MWC_ENCRYPTION_KEY is required when Kubernetes coordination is enabled",
+        )
+    })?;
+    let client = kube::Client::try_default().await?;
+    let builder = resource_builder(config)?;
+    let coordinator = KubernetesCoordinator::new(client.clone(), builder.clone());
+    let handler =
+        WorkspaceReconcileHandler::new(database.clone(), workspace_cipher, builder, coordinator);
+    Ok((Some(client), Some(handler)))
+}
+
+fn job_worker(
+    config: &AppConfig,
+    database: &Database,
+    cipher: &Option<EnvelopeCipher>,
+    workspace_handler: Option<WorkspaceReconcileHandler>,
+) -> Result<Option<JobWorker<ControlPlaneJobHandler>>, Box<dyn std::error::Error>> {
+    let Some(worker_cipher) = cipher.clone() else {
+        return Ok(None);
+    };
+    let webhook_handler = WebhookDeliveryHandler::new(database.clone(), worker_cipher)?;
+    let handler = Arc::new(ControlPlaneJobHandler::new(
+        workspace_handler,
+        webhook_handler,
+    ));
+    Ok(Some(JobWorker::new(
+        database.clone(),
+        handler,
+        config.instance_id.clone(),
+    )))
+}
+
+fn app_state(
+    config: &AppConfig,
+    database: Database,
+    cipher: Option<EnvelopeCipher>,
+    kubernetes_client: Option<kube::Client>,
+    kubernetes_enabled: bool,
+) -> Result<AppState, Box<dyn std::error::Error>> {
+    let mut state = match cipher {
+        Some(cipher) => AppState::with_cipher(config.clone(), database, cipher),
+        None => AppState::new(config.clone(), database),
+    };
+    if let Some(client) = kubernetes_client {
+        state.set_kubernetes_client(client);
+    }
+    if let Ok(public_key) = std::env::var("MWC_SSH_JUMP_HOST_PUBLIC_KEY") {
+        state.set_jump_host_public_key(&public_key)?;
+    }
+    configure_internal_auth(&mut state, kubernetes_enabled)?;
+    Ok(state)
+}
+
+fn configure_internal_auth(
+    state: &mut AppState,
+    kubernetes_enabled: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    match std::env::var("MWC_INTERNAL_AUTH_TOKEN") {
+        Ok(token) if token.len() >= 32 => state.set_internal_auth_token(&token),
+        Ok(_) => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "MWC_INTERNAL_AUTH_TOKEN must contain at least 32 bytes",
+            )
+            .into());
+        }
+        Err(std::env::VarError::NotPresent) if kubernetes_enabled => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "MWC_INTERNAL_AUTH_TOKEN is required when Kubernetes coordination is enabled",
+            )
+            .into());
+        }
+        Err(std::env::VarError::NotPresent) => {}
+        Err(error) => return Err(error.into()),
+    }
+    Ok(())
+}
+
+fn internal_listener_address(
+    kubernetes_enabled: bool,
+) -> Result<Option<std::net::SocketAddr>, Box<dyn std::error::Error>> {
+    match std::env::var("MWC_INTERNAL_LISTEN_ADDRESS") {
+        Ok(value) => Ok(Some(value.parse()?)),
+        Err(std::env::VarError::NotPresent) if kubernetes_enabled => {
+            Ok(Some("0.0.0.0:8081".parse()?))
+        }
+        Err(std::env::VarError::NotPresent) => Ok(None),
+        Err(error) => Err(error.into()),
+    }
 }
 
 async fn wait_for_shutdown(mut shutdown: tokio::sync::watch::Receiver<bool>) {

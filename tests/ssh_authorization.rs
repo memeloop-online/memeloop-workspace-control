@@ -16,7 +16,7 @@ use memeloop_workspace_control::{
         CreateOrganization, CreateWorkspace, CreateWorkspaceTemplate, Database, InjectionScopeRef,
     },
     templates::{WorkspaceTemplateDocument, WorkspaceTemplateSpec},
-    workspaces::{AccessMode, WorkspaceAction},
+    workspaces::{AccessMode, WorkspaceObservation},
 };
 use tower::ServiceExt;
 
@@ -68,6 +68,7 @@ async fn authorized_keys_command_returns_only_restricted_workspace_target() {
                 .to_yaml()
                 .unwrap(),
             },
+            false,
             101,
         )
         .await
@@ -82,13 +83,14 @@ async fn authorized_keys_command_returns_only_restricted_workspace_target() {
                 organization_injection_refs: None,
                 user_injection_refs: None,
             },
+            false,
             user.user_id,
             102,
         )
         .await
         .unwrap();
     database
-        .transition_workspace(workspace.id, WorkspaceAction::MarkReady, user.user_id, 103)
+        .record_workspace_observation(workspace.id, WorkspaceObservation::Ready, user.user_id, 103)
         .await
         .unwrap();
     let cipher = EnvelopeCipher::from_base64(&STANDARD.encode([9_u8; 32])).unwrap();
