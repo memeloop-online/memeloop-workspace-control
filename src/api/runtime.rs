@@ -1,4 +1,8 @@
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::BTreeMap,
+    sync::Arc,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use axum::{
     Json,
@@ -23,10 +27,16 @@ use crate::{
 
 use super::{ApiError, AppState, auth::principal};
 
+mod storage_metrics;
+
+use storage_metrics::fetch as fetch_storage_metrics;
+pub(super) use storage_metrics::{StorageTelemetry, StorageTelemetryStatus};
+
 #[derive(Debug, Serialize, ToSchema)]
 pub(super) struct WorkspaceRuntimeResponse {
     allocated: Resources,
     pvc_capacity: Option<String>,
+    storage: StorageTelemetry,
     metrics_available: bool,
     pods: Vec<PodRuntime>,
     metrics: Vec<PodMetric>,
@@ -105,6 +115,12 @@ pub(super) async fn list(
         tracing::debug!(%error, "metrics.k8s.io is unavailable");
         BTreeMap::new()
     });
+    let storage_metrics = fetch_storage_metrics(
+        state.config.prometheus_url.as_ref(),
+        &state.config.installation_id,
+    )
+    .await;
+    let observed_now = unix_timestamp();
     let mut pod_map = BTreeMap::<Uuid, Vec<PodRuntime>>::new();
     for pod in &pod_list.items {
         if let Some(workspace_id) = object_workspace_id(&pod.metadata.labels) {
@@ -130,11 +146,17 @@ pub(super) async fn list(
             .into_iter()
             .map(|workspace| {
                 let workspace_id = workspace.id;
+                let namespace = state
+                    .config
+                    .installation_id
+                    .workspace_namespace(&workspace.short_id)
+                    .unwrap_or_default();
                 WorkspaceRuntimeEntry {
                     workspace_id,
                     runtime: WorkspaceRuntimeResponse {
                         allocated: workspace.template.resources,
                         pvc_capacity: pvc_map.remove(&workspace_id),
+                        storage: storage_metrics.telemetry(&namespace, observed_now),
                         metrics_available,
                         pods: pod_map.remove(&workspace_id).unwrap_or_default(),
                         metrics: metric_map.get(&workspace_id).cloned().unwrap_or_default(),
@@ -197,14 +219,27 @@ pub(super) async fn get(
             (false, Vec::new())
         }
     };
+    let storage = fetch_storage_metrics(
+        state.config.prometheus_url.as_ref(),
+        &state.config.installation_id,
+    )
+    .await
+    .telemetry(&namespace, unix_timestamp());
     Ok(Json(WorkspaceRuntimeResponse {
         allocated: workspace.template.resources,
         pvc_capacity,
+        storage,
         metrics_available,
         pods,
         metrics,
         events,
     }))
+}
+
+fn unix_timestamp() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_secs() as i64)
 }
 
 fn pod_runtime(pod: &Pod) -> PodRuntime {

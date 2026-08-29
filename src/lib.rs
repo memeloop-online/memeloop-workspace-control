@@ -7,6 +7,7 @@ pub mod events;
 pub mod injections;
 pub mod jobs;
 pub mod kubernetes;
+pub mod plugins;
 pub mod quota;
 pub mod storage;
 pub mod templates;

@@ -358,6 +358,13 @@ fn enabled_by_default() -> bool {
 }
 
 fn parse_template_yaml(yaml: &str) -> Result<WorkspaceTemplateDocument, ApiError> {
-    WorkspaceTemplateDocument::parse(yaml)
-        .map_err(|_| crate::storage::StorageError::InvalidTemplate.into())
+    let document = WorkspaceTemplateDocument::parse(yaml)
+        .map_err(|_| crate::storage::StorageError::InvalidTemplate)?;
+    document.validate_authoring().map_err(|error| match error {
+        crate::templates::TemplateError::ReadOnlyEnvironment => ApiError::BadRequest(
+            "template spec.environment is read-only compatibility data; use environment-variable injections",
+        ),
+        _ => crate::storage::StorageError::InvalidTemplate.into(),
+    })?;
+    Ok(document)
 }

@@ -47,7 +47,10 @@ pub fn validate_injection_item(item: &InjectionItem) -> Result<(), InjectionErro
         return Err(InjectionError::InvalidLabelSelector);
     }
     match item.kind {
-        InjectionKind::EnvironmentVariable => validate_environment_target(&item.target)?,
+        InjectionKind::EnvironmentVariable => {
+            validate_environment_target(&item.target)?;
+            validate_environment_value(&item.value)?;
+        }
         InjectionKind::SecretFile | InjectionKind::ConfigFile => {
             validate_file_target(&item.target)?
         }
@@ -76,6 +79,24 @@ fn validate_environment_target(target: &str) -> Result<(), InjectionError> {
         || !chars.all(|character| character == '_' || character.is_ascii_alphanumeric())
     {
         return Err(InjectionError::InvalidTarget);
+    }
+    Ok(())
+}
+
+fn validate_environment_value(value: &InjectionValue) -> Result<(), InjectionError> {
+    let decoded;
+    let bytes = match value {
+        InjectionValue::Utf8(value) => value.as_bytes(),
+        InjectionValue::Base64(value) => {
+            decoded = STANDARD
+                .decode(value)
+                .map_err(|_| InjectionError::InvalidBase64)?;
+            decoded.as_slice()
+        }
+    };
+    let value = std::str::from_utf8(bytes).map_err(|_| InjectionError::InvalidEnvironmentValue)?;
+    if value.chars().any(char::is_control) {
+        return Err(InjectionError::InvalidEnvironmentValue);
     }
     Ok(())
 }

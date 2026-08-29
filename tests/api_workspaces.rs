@@ -50,6 +50,8 @@ async fn test_app() -> (Router, Database, Uuid) {
         ssh_public_host: None,
         internal_ssh_host: None,
         web_shell_public_origin: None,
+        prometheus_url: None,
+        plugin_dir: None,
     };
     (
         router(Arc::new(AppState::with_cipher(
@@ -331,6 +333,33 @@ async fn authenticated_workspace_api_enforces_rbac_and_exact_idempotent_replay()
         .record_workspace_observation(workspace_id, WorkspaceObservation::Ready, admin_id, 3)
         .await
         .unwrap();
+    let ready = app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            &format!("/api/v1/workspaces/{workspace_id}"),
+            Some(ADMIN_TOKEN),
+            None,
+            None,
+        ))
+        .await
+        .unwrap();
+    let (ready_status, ready_body) = body(ready).await;
+    assert_eq!(ready_status, StatusCode::OK);
+    let ready: Value = serde_json::from_slice(&ready_body).unwrap();
+    let alias = format!("mwc-{}", ready["workspace"]["short_id"].as_str().unwrap());
+    assert_eq!(ready["ssh_connection"]["display_name"], "primary");
+    assert_eq!(ready["ssh_connection"]["alias"], alias);
+    assert_eq!(ready["ssh_connection"]["port"], 2_222);
+    assert_eq!(ready["ssh_connection"]["user"], "workspace");
+    assert_eq!(ready["ssh_connection"]["app"]["hostname"], alias);
+    assert_eq!(
+        ready["ssh_connection"]["app"]["port_strategy"],
+        "ssh_config"
+    );
+    assert!(ready["ssh_connection"]["app"]["ssh_port"].is_null());
+    assert_eq!(ready["ssh_command"], ready["ssh_connection"]["command"]);
+    assert_eq!(ready["ssh_config"], ready["ssh_connection"]["config"]);
     let stop = app
         .oneshot(request(
             Method::POST,

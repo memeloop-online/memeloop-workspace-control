@@ -13,7 +13,8 @@ use uuid::Uuid;
 use crate::{
     auth::Permission,
     injections::{InjectionItem, ResolvedInjectionSummary},
-    storage::{CreateWorkspace, IdempotencyDecision},
+    plugins::{WorkspaceCreateContext, WorkspaceCreatePlan},
+    storage::{CreateWorkspace, IdempotencyDecision, WorkspaceTemplate},
     workspaces::{Workspace, WorkspaceAction},
 };
 
@@ -45,6 +46,7 @@ pub(super) struct CreateWorkspaceQuery {
 pub(super) struct WorkspaceResponse {
     pub workspace: Workspace,
     pub namespace: String,
+    pub ssh_connection: Option<WorkspaceSshConnection>,
     pub ssh_host: Option<String>,
     pub ssh_port: Option<u16>,
     pub ssh_command: Option<String>,
@@ -53,6 +55,32 @@ pub(super) struct WorkspaceResponse {
     pub injection_sources: Vec<ResolvedInjectionSummary>,
     pub workspace_host_key: Option<crate::storage::WorkspaceSshPublicIdentity>,
     pub jump_host_key: Option<crate::storage::WorkspaceSshPublicIdentity>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub(super) struct WorkspaceSshConnection {
+    pub display_name: String,
+    pub alias: String,
+    pub hostname: String,
+    pub port: u16,
+    pub user: String,
+    pub command: String,
+    pub config: String,
+    pub app: WorkspaceAppSshConnection,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub(super) struct WorkspaceAppSshConnection {
+    pub display_name: String,
+    pub hostname: String,
+    pub ssh_port: Option<u16>,
+    pub port_strategy: SshPortStrategy,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum SshPortStrategy {
+    SshConfig,
 }
 
 #[derive(Debug, Deserialize, IntoParams)]
@@ -88,7 +116,7 @@ pub(super) async fn create(
     }
     let command = request.workspace.clone();
     let actor = principal(&state, &headers).await?;
-    authorize_creation(&state, &actor, &command).await?;
+    let template = authorize_creation(&state, &actor, &command).await?;
     let key = idempotency_key(&headers)?;
     let request_hash = hash(&serde_json::json!({
         "request": &request,
@@ -114,48 +142,17 @@ pub(super) async fn create(
         IdempotencyDecision::Reserved => {}
     }
 
-    if let Err(error) =
-        validate_inline_injections(&state, &command, &request.inline_workspace_injections).await
-    {
-        state
-            .database
-            .abandon_idempotency(&scope, key, &request_hash)
-            .await?;
-        return Err(error);
-    }
-
-    let creation = if request.inline_workspace_injections.is_empty() {
-        state
-            .database
-            .create_workspace(command, actor.system_admin, actor.user_id, now)
-            .await
-    } else {
-        let cipher = state
-            .cipher
-            .as_ref()
-            .ok_or(ApiError::EncryptionUnavailable)?;
-        state
-            .database
-            .create_workspace_with_inline_injections(
-                command,
-                cipher,
-                &request.inline_workspace_injections,
-                actor.system_admin,
-                actor.user_id,
-                now,
-            )
-            .await
-    };
-    let mut workspace = match creation {
-        Ok(workspace) => workspace,
-        Err(error) => {
-            state
-                .database
-                .abandon_idempotency(&scope, key, &request_hash)
-                .await?;
-            return Err(error.into());
-        }
-    };
+    let mut workspace =
+        match create_admitted_workspace(&state, &actor, &request, &template, now).await {
+            Ok(workspace) => workspace,
+            Err(error) => {
+                state
+                    .database
+                    .abandon_idempotency(&scope, key, &request_hash)
+                    .await?;
+                return Err(error);
+            }
+        };
     if query.wait_until.as_deref() == Some("ready") {
         workspace =
             wait_until_ready(&state, workspace, query.timeout.unwrap_or(30).clamp(1, 120)).await?;
@@ -171,11 +168,63 @@ pub(super) async fn create(
     .await
 }
 
+async fn create_admitted_workspace(
+    state: &AppState,
+    actor: &crate::storage::Principal,
+    request: &CreateWorkspaceRequest,
+    template: &WorkspaceTemplate,
+    now: i64,
+) -> Result<Workspace, ApiError> {
+    let command = &request.workspace;
+    validate_inline_injections(
+        state,
+        command,
+        template,
+        &request.inline_workspace_injections,
+    )
+    .await?;
+    state
+        .plugins
+        .admit_workspace_create(
+            WorkspaceCreateContext {
+                installation_id: state.config.installation_id.to_string(),
+                actor_user_id: actor.user_id,
+                organization_id: command.organization_id,
+                owner_id: command.owner_id,
+                template_id: command.template_id,
+            },
+            WorkspaceCreatePlan::from_template(&command.name, &template.template),
+        )
+        .await?;
+    let inline = if request.inline_workspace_injections.is_empty() {
+        None
+    } else {
+        Some((
+            state
+                .cipher
+                .as_ref()
+                .ok_or(ApiError::EncryptionUnavailable)?,
+            request.inline_workspace_injections.as_slice(),
+        ))
+    };
+    Ok(state
+        .database
+        .create_workspace_with_admitted_template(
+            command.clone(),
+            inline,
+            &template.yaml,
+            actor.system_admin,
+            actor.user_id,
+            now,
+        )
+        .await?)
+}
+
 async fn authorize_creation(
     state: &AppState,
     actor: &crate::storage::Principal,
     command: &CreateWorkspace,
-) -> Result<(), ApiError> {
+) -> Result<WorkspaceTemplate, ApiError> {
     if !actor.allows(Permission::CreateWorkspace, command.organization_id) {
         return Err(ApiError::Forbidden);
     }
@@ -198,7 +247,7 @@ async fn authorize_creation(
     if template.template.cluster_access && !actor.system_admin {
         return Err(ApiError::Forbidden);
     }
-    Ok(())
+    Ok(template)
 }
 
 #[utoipa::path(

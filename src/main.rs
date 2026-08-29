@@ -8,6 +8,7 @@ use memeloop_workspace_control::{
     crypto::EnvelopeCipher,
     jobs::{ControlPlaneJobHandler, JobWorker, WebhookDeliveryHandler, WorkspaceReconcileHandler},
     kubernetes::{KubernetesCoordinator, ResourceBuilder},
+    plugins::PluginRuntime,
     storage::Database,
 };
 use tokio::net::TcpListener;
@@ -38,6 +39,7 @@ async fn serve(config: AppConfig, database: Database) -> Result<(), Box<dyn std:
     let address = listener.local_addr()?;
     let installation_id = config.installation_id.clone();
     let cipher = load_cipher()?;
+    let plugins = PluginRuntime::load(config.plugin_dir.as_deref(), database.clone())?;
     let kubernetes_enabled = env_bool("MWC_KUBERNETES_ENABLED", false)?;
     let (kubernetes_client, workspace_handler) =
         kubernetes_runtime(&config, &database, &cipher, kubernetes_enabled).await?;
@@ -48,6 +50,7 @@ async fn serve(config: AppConfig, database: Database) -> Result<(), Box<dyn std:
         cipher,
         kubernetes_client,
         kubernetes_enabled,
+        plugins,
     )?;
     let internal_listen_address = internal_listener_address(kubernetes_enabled)?;
     let internal_state = internal_listen_address.map(|_| {
@@ -155,6 +158,7 @@ fn app_state(
     cipher: Option<EnvelopeCipher>,
     kubernetes_client: Option<kube::Client>,
     kubernetes_enabled: bool,
+    plugins: PluginRuntime,
 ) -> Result<AppState, Box<dyn std::error::Error>> {
     let mut state = match cipher {
         Some(cipher) => AppState::with_cipher(config.clone(), database, cipher),
@@ -163,6 +167,7 @@ fn app_state(
     if let Some(client) = kubernetes_client {
         state.set_kubernetes_client(client);
     }
+    state.set_plugin_runtime(plugins);
     if let Ok(public_key) = std::env::var("MWC_SSH_JUMP_HOST_PUBLIC_KEY") {
         state.set_jump_host_public_key(&public_key)?;
     }

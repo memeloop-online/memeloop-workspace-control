@@ -15,6 +15,13 @@ use crate::templates::WorkspaceTemplateSpec;
 use super::{buildkit, resource_helpers::workspace_mounts};
 
 const BOOTSTRAP: &str = "/etc/workspace-platform/mwc-workspace-bootstrap";
+const INTERNAL_PLATFORM_ENVIRONMENT: [&str; 5] = [
+    "MWC_WORKSPACE_USER",
+    "MWC_WORKSPACE_HOME",
+    "MWC_IN_CLUSTER_KUBECONFIG",
+    "MWC_PRESERVE_HOME_ROOT",
+    "MWC_BUILDKIT_ENABLED",
+];
 #[derive(Clone, Copy)]
 pub(super) struct WorkspacePod<'a> {
     pub login_user: &'a str,
@@ -54,14 +61,15 @@ impl<'a> WorkspacePod<'a> {
     }
 
     pub fn ssh_set_env(self) -> String {
-        let assignments = self
-            .development_env()
+        let mut environment = self.template.environment.clone();
+        for variable in self.session_platform_env() {
+            if let Some(value) = variable.value {
+                environment.insert(variable.name, value);
+            }
+        }
+        let assignments = environment
             .into_iter()
-            .filter_map(|variable| {
-                variable
-                    .value
-                    .map(|value| format!("{}={value}", variable.name))
-            })
+            .map(|(name, value)| sshd_argument(&name, &value))
             .collect::<Vec<_>>();
         if assignments.is_empty() {
             String::new()
@@ -196,7 +204,7 @@ impl<'a> WorkspacePod<'a> {
     }
 
     fn platform_env(&self) -> Vec<EnvVar> {
-        vec![
+        let mut environment = vec![
             env("MWC_WORKSPACE_USER", self.login_user),
             env("MWC_WORKSPACE_HOME", self.home),
             env(
@@ -215,15 +223,50 @@ impl<'a> WorkspacePod<'a> {
                     "false"
                 },
             ),
-        ]
+            env(
+                "MWC_BUILDKIT_ENABLED",
+                if self.template.buildkit {
+                    "true"
+                } else {
+                    "false"
+                },
+            ),
+        ];
+        environment.extend(self.session_platform_env());
+        environment
     }
 
     fn development_env(&self) -> Vec<EnvVar> {
         self.template
             .environment
             .iter()
+            .filter(|(name, _)| !self.is_platform_environment(name))
             .map(|(name, value)| env(name, value))
             .collect()
+    }
+
+    fn session_platform_env(self) -> Vec<EnvVar> {
+        let mut environment = vec![env("HOME", self.home)];
+        if self.template.cluster_access {
+            environment.push(env("KUBECONFIG", &format!("{}/.mwc/kubeconfig", self.home)));
+        }
+        if self.template.buildkit {
+            environment.push(env(
+                "BUILDKIT_HOST",
+                &format!(
+                    "unix://{}/.cache/buildkit/runtime/buildkit/buildkitd.sock",
+                    self.home
+                ),
+            ));
+        }
+        environment
+    }
+
+    fn is_platform_environment(self, name: &str) -> bool {
+        INTERNAL_PLATFORM_ENVIRONMENT.contains(&name)
+            || name == "HOME"
+            || self.template.cluster_access && name == "KUBECONFIG"
+            || self.template.buildkit && name == "BUILDKIT_HOST"
     }
 
     fn development_mounts(&self) -> Vec<VolumeMount> {
@@ -234,6 +277,23 @@ impl<'a> WorkspacePod<'a> {
         }
         mounts
     }
+}
+
+pub(super) fn suppress_legacy_environment(
+    template: &WorkspaceTemplateSpec,
+    container: &mut Container,
+    injected_targets: &std::collections::BTreeSet<String>,
+) {
+    let Some(environment) = container.env.as_mut() else {
+        return;
+    };
+    let pod = WorkspacePod::from_template(template);
+    environment.retain(|variable| {
+        if pod.is_platform_environment(&variable.name) {
+            return true;
+        }
+        !injected_targets.contains(&variable.name)
+    });
 }
 
 fn hostname_term(values: &[String]) -> NodeSelectorTerm {
@@ -289,6 +349,11 @@ fn env(name: &str, value: &str) -> EnvVar {
     }
 }
 
+fn sshd_argument(name: &str, value: &str) -> String {
+    let escaped = value.replace('\\', "\\\\").replace('"', "\\\"");
+    format!("\"{name}={escaped}\"")
+}
+
 fn sub_path_mount(name: &str, path: &str, sub_path: &str) -> VolumeMount {
     VolumeMount {
         name: name.to_owned(),
@@ -316,5 +381,93 @@ fn root_security_context(read_only_root: bool) -> SecurityContext {
             ..SeccompProfile::default()
         }),
         ..SecurityContext::default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+
+    use super::*;
+    use crate::{quota::Resources, workspaces::AccessMode};
+
+    fn template() -> WorkspaceTemplateSpec {
+        let mut template = WorkspaceTemplateSpec::standard(
+            "registry.example/workspace:1",
+            AccessMode::Internal,
+            Resources {
+                cpu_millis: 1_000,
+                memory_mib: 1_024,
+                gpu_count: 0,
+                disk_gib: 10,
+            },
+        );
+        template
+            .environment
+            .insert("HOME".to_owned(), "/legacy home".to_owned());
+        template.environment.insert(
+            "MWC_WORKSPACE_HOME".to_owned(),
+            "/must-not-shadow-platform".to_owned(),
+        );
+        template
+            .environment
+            .insert("LEGACY_TOKEN".to_owned(), "legacy".to_owned());
+        template
+    }
+
+    #[test]
+    fn injected_targets_remove_only_legacy_template_environment() {
+        let template = template();
+        let pod = WorkspacePod::from_template(&template);
+        let mut container = pod.workspace_container(
+            "registry.example/workspace:1",
+            ResourceRequirements::default(),
+        );
+        suppress_legacy_environment(
+            &template,
+            &mut container,
+            &BTreeSet::from([
+                "HOME".to_owned(),
+                "LEGACY_TOKEN".to_owned(),
+                "MWC_WORKSPACE_HOME".to_owned(),
+            ]),
+        );
+
+        let environment = container.env.unwrap();
+        assert_eq!(
+            environment
+                .iter()
+                .filter(|item| item.name == "HOME")
+                .map(|item| item.value.as_deref())
+                .collect::<Vec<_>>(),
+            [Some("/workspace")]
+        );
+        assert_eq!(
+            environment
+                .iter()
+                .filter(|item| item.name == "MWC_WORKSPACE_HOME")
+                .map(|item| item.value.as_deref())
+                .collect::<Vec<_>>(),
+            [Some("/workspace")]
+        );
+        assert!(environment.iter().all(|item| item.name != "LEGACY_TOKEN"));
+    }
+
+    #[test]
+    fn sshd_set_env_quotes_spaces_and_quotation_marks() {
+        let mut template = template();
+        template.workspace_home = "/home/node-dev".to_owned();
+        template.cluster_access = true;
+        template.buildkit = true;
+        template
+            .environment
+            .insert("TOOL_FLAGS".to_owned(), "--name \"hello world\"".to_owned());
+        let config = WorkspacePod::from_template(&template).ssh_set_env();
+        assert!(config.contains("\"HOME=/home/node-dev\""));
+        assert!(config.contains("\"KUBECONFIG=/home/node-dev/.mwc/kubeconfig\""));
+        assert!(config.contains(
+            "\"BUILDKIT_HOST=unix:///home/node-dev/.cache/buildkit/runtime/buildkit/buildkitd.sock\""
+        ));
+        assert!(config.contains("\"TOOL_FLAGS=--name \\\"hello world\\\"\""));
     }
 }

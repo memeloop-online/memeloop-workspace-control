@@ -19,6 +19,11 @@ use crate::{
     storage::{IdempotencyDecision, InjectionScopeRef, Principal, StoredInjectionSummary},
 };
 
+#[path = "injections/delete.rs"]
+mod deletion;
+
+pub(super) use deletion::{__path_delete, delete};
+
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub(super) struct PreviewRequest {
     pub organization_id: Option<Uuid>,

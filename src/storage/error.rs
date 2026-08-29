@@ -48,6 +48,10 @@ pub enum StorageError {
     TemplateNotFound,
     #[error("workspace template is invalid")]
     InvalidTemplate,
+    #[error("plugin configuration is invalid")]
+    InvalidPluginConfiguration,
+    #[error("plugin configuration version changed")]
+    PluginConfigurationVersionConflict,
     #[error("workspace template must be disabled before deletion")]
     TemplateMustBeDisabled,
     #[error("workspace template is referenced by one or more workspaces")]

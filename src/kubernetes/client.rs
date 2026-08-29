@@ -43,6 +43,22 @@ impl KubernetesCoordinator {
     ) -> Result<(), ReconcileError> {
         let mut desired = self.builder.build(workspace)?;
         let revision = injections.revision()?;
+        let workspace_container = desired
+            .stateful_set
+            .spec
+            .as_mut()
+            .and_then(|spec| spec.template.spec.as_mut())
+            .and_then(|spec| {
+                spec.containers
+                    .iter_mut()
+                    .find(|container| container.name == "workspace")
+            })
+            .ok_or(ReconcileError::MissingWorkspaceContainer)?;
+        super::workspace_pod::suppress_legacy_environment(
+            &workspace.template,
+            workspace_container,
+            &injections.environment_targets,
+        );
         desired.injections = injections;
         desired.ssh_identity = ssh_identity;
         let template_metadata = desired
@@ -223,4 +239,6 @@ pub enum ReconcileError {
     MissingObjectName,
     #[error("desired workspace StatefulSet has no Pod template metadata")]
     MissingPodTemplateMetadata,
+    #[error("desired workspace StatefulSet has no workspace container")]
+    MissingWorkspaceContainer,
 }

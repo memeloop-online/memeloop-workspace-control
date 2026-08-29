@@ -26,6 +26,8 @@ async fn test_app() -> Router {
             ssh_public_host: None,
             internal_ssh_host: None,
             web_shell_public_origin: None,
+            prometheus_url: None,
+            plugin_dir: None,
         },
         database,
     )))
@@ -145,4 +147,12 @@ async fn openapi_document_contains_versioned_api() {
     let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert!(body["paths"]["/api/v1/system/info"].is_object());
     assert!(body["paths"]["/api/v1/webhooks"].is_object());
+    assert!(body["paths"]["/api/v1/plugins"].is_object());
+    assert!(body["paths"]["/api/v1/plugins/{plugin_id}/configuration"]["delete"].is_object());
+    assert!(body["paths"]["/api/v1/injections/{scope}/{scope_id}/{key}"]["delete"].is_object());
+    assert!(
+        body["components"]["schemas"]["WorkspaceTemplateSpec"]["properties"]
+            .get("environment")
+            .is_none()
+    );
 }

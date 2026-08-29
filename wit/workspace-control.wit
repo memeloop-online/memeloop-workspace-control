@@ -1,0 +1,39 @@
+package memeloop:workspace-control@0.1.0;
+
+interface types {
+  record create-context {
+    installation-id: string,
+    actor-user-id: string,
+    organization-id: string,
+    owner-id: string,
+    template-id: string,
+    configuration-json: string,
+  }
+
+  record workspace-plan {
+    name: string,
+    image: string,
+    access-mode: string,
+    cpu-millis: u64,
+    memory-mib: u64,
+    gpu-count: u32,
+    disk-gib: u64,
+    buildkit-enabled: bool,
+    cluster-access: bool,
+  }
+
+  record decision {
+    allow: bool,
+    /// Must be predeclared in plugin.json. No guest free text crosses the ABI.
+    code: option<string>,
+  }
+}
+
+interface workspace-create-policy {
+  use types.{create-context, workspace-plan, decision};
+  evaluate: func(context: create-context, plan: workspace-plan) -> result<decision, string>;
+}
+
+world plugin {
+  export workspace-create-policy;
+}

@@ -16,6 +16,10 @@ CPU and memory requests are set by default because utilization-based HPA metrics
 denominator without them. The chart rejects a PostgreSQL autoscaling deployment if either request
 is removed.
 
+Set `monitoring.prometheusUrl` to an in-cluster Prometheus base URL to show PVC usage,
+capacity, and available bytes. The URL is optional; the control plane uses bounded,
+fixed queries and needs neither Kubernetes node proxy nor Pod exec permissions.
+
 Every install requires an immutable `installationId`, a 32-byte envelope key,
 an independent internal-auth token, a pinned ttyd image, and a persistent
 OpenSSH host-key Secret. The chart never generates or stores those values in a
@@ -48,3 +52,16 @@ facility.
 Before installing on K3S, run `scripts/k3s/preflight.sh`. After rollout, run
 `scripts/k3s/verify-installation.sh`; both scripts are read-only and require explicit environment
 variables so they cannot silently target a default installation.
+
+## WASM plugins
+
+Plugin packages are an operator-controlled GitOps surface, not a runtime marketplace. Set exactly
+one of `plugins.existingConfigMap` or `plugins.existingClaim`; the chart mounts it read-only and
+sets `MWC_PLUGIN_DIR`. ConfigMap users must provide `plugins.configMapItems` whose destination paths
+place every package below its own first-level directory. A package or Component change requires a
+Pod restart. The application has no Web upload/install endpoint and does not hot-reload code.
+
+Mounting a package is the v0.1 approval for all contributions it declares. Any visible malformed,
+incompatible, duplicated, symlinked, escaping, or oversized package makes startup fail closed.
+Runtime policy traps and limits reject only that workspace creation; existing workspaces and cleanup
+actions remain available.

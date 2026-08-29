@@ -188,6 +188,89 @@ async fn inline_injection_failure_rolls_back_workspace_and_first_job() {
 }
 
 #[tokio::test]
+async fn admitted_template_must_match_the_transactional_workspace_snapshot() {
+    let database = database().await;
+    let admin = database
+        .create_user("Admin", ADMIN_TOKEN, true, 100)
+        .await
+        .unwrap();
+    let organization = database
+        .create_organization(
+            CreateOrganization {
+                name: "Admission snapshot".to_owned(),
+                owner_user_id: admin.user_id,
+            },
+            101,
+        )
+        .await
+        .unwrap();
+    let resources = Resources {
+        cpu_millis: 1_000,
+        memory_mib: 2_048,
+        gpu_count: 0,
+        disk_gib: 20,
+    };
+    let template_id = create_template(
+        &database,
+        organization.id,
+        "Original",
+        "registry.example/workspace:1",
+        AccessMode::Internal,
+        resources,
+        102,
+    )
+    .await;
+    let admitted_yaml = database
+        .get_workspace_template(template_id)
+        .await
+        .unwrap()
+        .yaml;
+    database
+        .replace_workspace_template(
+            template_id,
+            &WorkspaceTemplateDocument::new(
+                "Changed",
+                WorkspaceTemplateSpec::standard(
+                    "registry.example/workspace:1",
+                    AccessMode::Internal,
+                    resources,
+                ),
+            )
+            .to_yaml()
+            .unwrap(),
+            true,
+            103,
+        )
+        .await
+        .unwrap();
+    let result = database
+        .create_workspace_with_admitted_template(
+            CreateWorkspace {
+                organization_id: organization.id,
+                owner_id: admin.user_id,
+                name: "rejected-race".to_owned(),
+                template_id,
+                organization_injection_refs: None,
+                user_injection_refs: None,
+            },
+            None,
+            &admitted_yaml,
+            true,
+            admin.user_id,
+            104,
+        )
+        .await;
+    assert!(matches!(result, Err(StorageError::TemplateNotFound)));
+    assert!(
+        database
+            .list_workspaces(organization.id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
 async fn template_deletion_requires_disabled_unreferenced_template() {
     let database = database().await;
     let admin = database

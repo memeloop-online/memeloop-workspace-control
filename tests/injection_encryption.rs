@@ -151,3 +151,72 @@ async fn user_and_workspace_scopes_cannot_set_locked_flag() {
         .await;
     assert!(matches!(result, Err(StorageError::InvalidInjectionLock)));
 }
+
+#[tokio::test]
+async fn deleting_locked_injections_requires_privilege_and_writes_audit() {
+    let database = Database::connect("sqlite::memory:", "injection-test".parse().unwrap())
+        .await
+        .unwrap();
+    database.migrate().await.unwrap();
+    let organization_id = Uuid::now_v7();
+    let scope = InjectionScopeRef {
+        scope: InjectionScope::Organization,
+        scope_id: organization_id,
+    };
+    let actor = Uuid::now_v7();
+    database
+        .replace_injection(
+            &cipher(2),
+            scope,
+            item(
+                "locked-policy",
+                InjectionValue::Utf8("required".to_owned()),
+                true,
+            ),
+            actor,
+            10,
+        )
+        .await
+        .unwrap();
+
+    assert!(matches!(
+        database
+            .delete_injection(scope, "locked-policy", false, actor, 11)
+            .await,
+        Err(StorageError::InvalidInjectionLock)
+    ));
+    assert_eq!(
+        database
+            .list_injection_summaries(scope)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+
+    assert!(
+        database
+            .delete_injection(scope, "locked-policy", true, actor, 12)
+            .await
+            .unwrap()
+    );
+    assert!(
+        database
+            .list_injection_summaries(scope)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        !database
+            .delete_injection(scope, "locked-policy", true, actor, 13)
+            .await
+            .unwrap()
+    );
+
+    let audit = database.list_audit(organization_id, 10).await.unwrap();
+    assert_eq!(audit[0].action, "injection.delete");
+    assert_eq!(audit[0].actor_user_id, Some(actor));
+    assert_eq!(audit[0].metadata["key"], "locked-policy");
+    assert_eq!(audit[0].metadata["version"], 1);
+}

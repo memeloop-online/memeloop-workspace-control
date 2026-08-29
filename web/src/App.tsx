@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
 import { ApiClient } from "./api";
 import { InjectionPanel } from "./InjectionPanel";
@@ -7,7 +7,9 @@ import { WorkspacePanel } from "./WorkspacePanel";
 import { useI18n } from "./i18n";
 import type { Organization, Principal, WorkspaceResponse } from "./types";
 
-type View = "workspaces" | "injections" | "system";
+type View = "workspaces" | "injections" | "plugins" | "system";
+
+const PluginPanel = lazy(() => import("./PluginPanel").then(({ PluginPanel: component }) => ({ default: component })));
 
 export default function App() {
   const { locale, setLocale, t } = useI18n();
@@ -84,7 +86,9 @@ export default function App() {
   }, [notice]);
 
   useEffect(() => {
-    if (view === "system" && !canManageOrganization) setView("workspaces");
+    if ((view === "system" || view === "plugins") && !canManageOrganization) {
+      setView("workspaces");
+    }
   }, [canManageOrganization, view]);
 
   function login(event: FormEvent) {
@@ -131,6 +135,7 @@ export default function App() {
         <nav>
           <Nav active={view === "workspaces"} onClick={() => setView("workspaces")} icon="◇">{t("workspaces")}</Nav>
           <Nav active={view === "injections"} onClick={() => setView("injections")} icon="⌁">{t("credentials")}</Nav>
+          {canManageOrganization && <Nav active={view === "plugins"} onClick={() => setView("plugins")} icon="⬡">{t("pluginsTitle")}</Nav>}
           {canManageOrganization && <Nav active={view === "system"} onClick={() => setView("system")} icon="◉">{t("operations")}</Nav>}
         </nav>
         <div className="sidebar-foot"><span className="live-dot" />{t("apiOnline")}</div>
@@ -148,6 +153,8 @@ export default function App() {
           <WorkspacePanel api={api} principal={principal} organizationId={organizationId} workspaces={workspaces} busy={loading} onRefresh={refresh} onError={setNotice} />
         ) : view === "injections" ? (
           <InjectionPanel api={api} principal={principal} organizationId={organizationId} workspaces={workspaces} onError={setNotice} />
+        ) : view === "plugins" ? (
+          <Suspense fallback={<div className="empty" role="status">{t("pluginsLoading")}</div>}><PluginPanel token={token} organizationId={organizationId} systemAdmin={principal.system_admin} onOpenCredentials={() => setView("injections")} /></Suspense>
         ) : (
           <OperationsPanel api={api} principal={principal} organizationId={organizationId} workspaces={workspaces} onError={setNotice} />
         )}

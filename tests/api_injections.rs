@@ -38,6 +38,8 @@ async fn app(with_cipher: bool) -> (Router, Uuid) {
         ssh_public_host: None,
         internal_ssh_host: None,
         web_shell_public_origin: None,
+        prometheus_url: None,
+        plugin_dir: None,
     };
     let state = if with_cipher {
         AppState::with_cipher(
@@ -242,4 +244,92 @@ async fn injection_write_requires_configured_encryption_key() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+}
+
+#[tokio::test]
+async fn injection_delete_is_idempotent_and_removes_the_summary() {
+    let (app, user_id) = app(true).await;
+    let uri = format!("/api/v1/injections/user/{user_id}/temporary-token");
+    let item = json!({
+        "key": "temporary-token",
+        "kind": "environment_variable",
+        "target": "TEMPORARY_TOKEN",
+        "value": {"encoding": "utf8", "value": "delete-me"},
+        "sensitive": true,
+        "locked": false,
+        "version": 0,
+        "file_mode": null,
+        "owner": null,
+        "group": null,
+        "template_selector": null,
+        "labels": {}
+    });
+    let created = app
+        .clone()
+        .oneshot(request(
+            Method::PUT,
+            &uri,
+            Some("create-temporary-token"),
+            Some(item),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(created.status(), StatusCode::OK);
+
+    let deleted = app
+        .clone()
+        .oneshot(request(
+            Method::DELETE,
+            &uri,
+            Some("delete-temporary-token"),
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(deleted.status(), StatusCode::NO_CONTENT);
+
+    let replay = app
+        .clone()
+        .oneshot(request(
+            Method::DELETE,
+            &uri,
+            Some("delete-temporary-token"),
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(replay.status(), StatusCode::NO_CONTENT);
+
+    let list = app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            &format!("/api/v1/injections/user/{user_id}"),
+            None,
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(body_json_array_length(list).await, 0);
+
+    let missing = app
+        .oneshot(request(
+            Method::DELETE,
+            &uri,
+            Some("delete-already-missing-token"),
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(missing.status(), StatusCode::NO_CONTENT);
+}
+
+async fn body_json_array_length(response: axum::response::Response) -> usize {
+    let (status, body) = response_body(response).await;
+    assert_eq!(status, StatusCode::OK);
+    serde_json::from_slice::<Value>(&body)
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .len()
 }

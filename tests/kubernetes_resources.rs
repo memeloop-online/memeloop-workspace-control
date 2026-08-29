@@ -327,7 +327,7 @@ fn only_templates_requesting_cluster_access_receive_an_owned_cluster_admin_ident
             && variable.value.as_deref() == Some("/home/cluster-admin/.mwc/kubeconfig")
     }));
     let config = resources.workspace_config.data.as_ref().unwrap();
-    assert!(config["sshd_config"].contains(" KUBECONFIG=/home/cluster-admin/.mwc/kubeconfig"));
+    assert!(config["sshd_config"].contains("\"KUBECONFIG=/home/cluster-admin/.mwc/kubeconfig\""));
     assert!(config["mwc-workspace-bootstrap"].contains("server: https://kubernetes.default.svc"));
     assert!(
         config["mwc-workspace-bootstrap"]
@@ -663,9 +663,11 @@ fn node_template_reuses_the_existing_image_with_platform_bootstrap() {
     );
     let sshd_config = &resources.workspace_config.data.as_ref().unwrap()["sshd_config"];
     assert_eq!(sshd_config.matches("SetEnv ").count(), 1);
-    assert!(sshd_config.contains(" PATH=/usr/local/bin:/usr/local/sbin:/home/node-dev/.local/bin"));
+    assert!(
+        sshd_config.contains("\"PATH=/usr/local/bin:/usr/local/sbin:/home/node-dev/.local/bin")
+    );
     assert!(sshd_config.contains(
-        " BUILDKIT_HOST=unix:///home/node-dev/.cache/buildkit/runtime/buildkit/buildkitd.sock"
+        "\"BUILDKIT_HOST=unix:///home/node-dev/.cache/buildkit/runtime/buildkit/buildkitd.sock\""
     ));
     assert!(
         resources.workspace_config.data.as_ref().unwrap()["mwc-workspace-bootstrap"]
@@ -683,6 +685,13 @@ fn node_template_reuses_the_existing_image_with_platform_bootstrap() {
         resources.workspace_config.data.as_ref().unwrap()["mwc-workspace-bootstrap"]
             .contains("usermod -p '*' \"$workspace_user\"")
     );
+    let bootstrap = &resources.workspace_config.data.as_ref().unwrap()["mwc-workspace-bootstrap"];
+    assert!(bootstrap.contains(".owner // empty"));
+    assert!(bootstrap.contains("owner=$workspace_user"));
+    assert!(bootstrap.contains("secret) mode=384"));
+    assert!(bootstrap.contains("config_map) mode=420"));
+    assert!(bootstrap.contains("prepare_runtime_sshd_config"));
+    assert!(bootstrap.contains("exec /usr/sbin/sshd -D -e -f \"$runtime_sshd_config\""));
 }
 
 #[test]
@@ -831,6 +840,15 @@ fn materializes_values_without_putting_secrets_in_metadata_or_manifest() {
     let manifest = &materialized.file_config_map.data.as_ref().unwrap()["workspace-files.json"];
     assert!(manifest.contains("/workspace/.config/settings.yml"));
     assert!(!manifest.contains(config_value));
+    let environment_manifest =
+        &materialized.file_config_map.data.as_ref().unwrap()["workspace-environment.json"];
+    assert!(environment_manifest.contains("REGISTRY_TOKEN"));
+    assert!(environment_manifest.contains("env-0000"));
+    assert!(!environment_manifest.contains(secret_value));
+    assert_eq!(
+        materialized.file_secret.data.as_ref().unwrap()["env-0000"].0,
+        secret_value.as_bytes()
+    );
     let serialized = serde_json::to_string(&materialized.environment_secret.metadata).unwrap();
     assert!(!serialized.contains(secret_value));
 }

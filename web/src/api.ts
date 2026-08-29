@@ -204,6 +204,13 @@ export class ApiClient {
     );
   }
 
+  deleteInjection(scope: InjectionScope, scopeId: string, key: string): Promise<void> {
+    return this.request(
+      `/api/v1/injections/${scope}/${scopeId}/${encodeURIComponent(key)}`,
+      { method: "DELETE", idempotent: true },
+    );
+  }
+
   previewInjections(input: {
     organization_id: string | null;
     user_id: string;

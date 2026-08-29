@@ -52,6 +52,7 @@ pub struct WorkspaceTemplateSpec {
     #[serde(default)]
     pub node_selector: BTreeMap<String, String>,
     #[serde(default)]
+    #[schema(ignore)]
     pub environment: BTreeMap<String, String>,
 }
 
@@ -98,6 +99,19 @@ impl WorkspaceTemplateDocument {
             return Err(TemplateError::Name);
         }
         self.spec.validate()
+    }
+
+    /// Validates a template submitted through the current authoring API.
+    ///
+    /// Historical templates and workspace snapshots may still contain `environment`, so regular
+    /// parsing remains backward compatible. New mutable environment data belongs to the encrypted,
+    /// selector-aware injection cascade instead.
+    pub fn validate_authoring(&self) -> Result<(), TemplateError> {
+        self.validate()?;
+        if !self.spec.environment.is_empty() {
+            return Err(TemplateError::ReadOnlyEnvironment);
+        }
+        Ok(())
     }
 }
 
@@ -241,6 +255,8 @@ pub enum TemplateError {
     Scheduling,
     #[error("template environment is invalid")]
     Environment,
+    #[error("template environment is read-only compatibility data; use injection items")]
+    ReadOnlyEnvironment,
 }
 
 #[cfg(test)]
@@ -340,5 +356,30 @@ mod tests {
         spec.environment
             .insert("TOOL_FLAGS".to_owned(), "--color always".to_owned());
         assert_eq!(spec.validate(), Ok(()));
+    }
+
+    #[test]
+    fn historical_environment_parses_but_current_authoring_rejects_it() {
+        let mut spec = WorkspaceTemplateSpec::standard(
+            "registry.example/dev:latest",
+            AccessMode::Internal,
+            Resources {
+                cpu_millis: 1_000,
+                memory_mib: 1_024,
+                gpu_count: 0,
+                disk_gib: 20,
+            },
+        );
+        spec.environment
+            .insert("LEGACY_TOKEN".to_owned(), "legacy-value".to_owned());
+        let document = WorkspaceTemplateDocument::new("Legacy", spec);
+        let yaml = document.to_yaml().unwrap();
+
+        let parsed = WorkspaceTemplateDocument::parse(&yaml).unwrap();
+        assert_eq!(parsed.spec.environment["LEGACY_TOKEN"], "legacy-value");
+        assert_eq!(
+            parsed.validate_authoring(),
+            Err(TemplateError::ReadOnlyEnvironment)
+        );
     }
 }

@@ -146,6 +146,7 @@ export interface Workspace {
 export interface WorkspaceResponse {
   workspace: Workspace;
   namespace: string;
+  ssh_connection: WorkspaceSshConnection | null;
   ssh_host: string | null;
   ssh_port: number | null;
   ssh_command: string | null;
@@ -156,9 +157,32 @@ export interface WorkspaceResponse {
   jump_host_key: { algorithm: string; public_key: string; fingerprint: string } | null;
 }
 
+export interface WorkspaceSshConnection {
+  display_name: string;
+  alias: string;
+  hostname: string;
+  port: number;
+  user: string;
+  command: string;
+  config: string;
+  app: {
+    display_name: string;
+    hostname: string;
+    ssh_port: number | null;
+    port_strategy: "ssh_config";
+  };
+}
+
 export interface WorkspaceRuntime {
   allocated: Resources;
   pvc_capacity: string | null;
+  storage: {
+    status: "available" | "stale" | "unavailable" | "disabled";
+    used_bytes: number | null;
+    capacity_bytes: number | null;
+    available_bytes: number | null;
+    observed_at: number | null;
+  };
   metrics_available: boolean;
   pods: { name: string; phase: string | null; ready: boolean; restarts: number }[];
   metrics: { pod: string; container: string; cpu: string | null; memory: string | null }[];

@@ -21,6 +21,7 @@ pub enum ApiError {
     KubernetesUnavailable,
     Kubernetes(kube::Error),
     Injection(crate::injections::InjectionError),
+    Plugin(crate::plugins::PluginError),
     Storage(StorageError),
 }
 
@@ -33,6 +34,12 @@ impl From<StorageError> for ApiError {
 impl From<crate::injections::InjectionError> for ApiError {
     fn from(error: crate::injections::InjectionError) -> Self {
         Self::Injection(error)
+    }
+}
+
+impl From<crate::plugins::PluginError> for ApiError {
+    fn from(error: crate::plugins::PluginError) -> Self {
+        Self::Plugin(error)
     }
 }
 
@@ -111,6 +118,40 @@ impl ApiError {
                 "invalid_injection",
                 error.to_string(),
             ),
+            Self::Plugin(crate::plugins::PluginError::NotFound) => response(
+                StatusCode::NOT_FOUND,
+                "plugin_not_found",
+                "the plugin is not loaded",
+            ),
+            Self::Plugin(crate::plugins::PluginError::InvalidConfiguration) => response(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "invalid_plugin_configuration",
+                "the plugin configuration does not satisfy its current schema",
+            ),
+            Self::Plugin(crate::plugins::PluginError::ConfigurationVersionConflict) => response(
+                StatusCode::CONFLICT,
+                "plugin_configuration_version_conflict",
+                "the plugin configuration version changed",
+            ),
+            Self::Plugin(crate::plugins::PluginError::AdmissionDenied {
+                plugin_id,
+                decision_code,
+            }) => {
+                tracing::warn!(%plugin_id, %decision_code, "workspace create policy denied request");
+                response(
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    "plugin_admission_denied",
+                    "workspace creation was rejected by an installed policy",
+                )
+            }
+            Self::Plugin(error) => {
+                tracing::error!(error = %error, "plugin execution failed closed");
+                response(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "plugin_execution_failed",
+                    "workspace creation policy could not be evaluated",
+                )
+            }
             Self::Storage(error) => storage_response(error),
         }
     }
@@ -175,6 +216,16 @@ fn storage_response(error: StorageError) -> ErrorResponse {
             StatusCode::BAD_REQUEST,
             "invalid_template",
             "template or image policy is invalid",
+        ),
+        StorageError::InvalidPluginConfiguration => response(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "invalid_plugin_configuration",
+            "the plugin configuration is invalid",
+        ),
+        StorageError::PluginConfigurationVersionConflict => response(
+            StatusCode::CONFLICT,
+            "plugin_configuration_version_conflict",
+            "the plugin configuration version changed",
         ),
         StorageError::TemplateMustBeDisabled => response(
             StatusCode::CONFLICT,

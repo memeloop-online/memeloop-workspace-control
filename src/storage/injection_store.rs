@@ -13,6 +13,7 @@ use crate::{
 
 use super::{Database, StorageError};
 
+mod deletion;
 mod persistence;
 
 use persistence::{

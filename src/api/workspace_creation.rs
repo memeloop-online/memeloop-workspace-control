@@ -3,7 +3,7 @@ use crate::{
         InjectionItem, InjectionScope, InjectionSelection, filter_injection_refs,
         resolve_injections, select_injections, validate_injection_item,
     },
-    storage::{CreateWorkspace, InjectionScopeRef},
+    storage::{CreateWorkspace, InjectionScopeRef, WorkspaceTemplate},
     workspaces::{Workspace, WorkspaceState},
 };
 
@@ -12,6 +12,7 @@ use super::{ApiError, AppState};
 pub(super) async fn validate_inline_injections(
     state: &AppState,
     command: &CreateWorkspace,
+    template: &WorkspaceTemplate,
     inline: &[InjectionItem],
 ) -> Result<(), ApiError> {
     for item in inline {
@@ -51,10 +52,6 @@ pub(super) async fn validate_inline_injections(
                 scope_id: command.owner_id,
             },
         )
-        .await?;
-    let template = state
-        .database
-        .get_workspace_template(command.template_id)
         .await?;
     if !template.enabled
         || template

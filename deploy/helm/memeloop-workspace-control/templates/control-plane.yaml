@@ -60,6 +60,14 @@ spec:
             - name: MWC_INTERNAL_SSH_HOST
               value: {{ .Values.workspace.internalSshHost | quote }}
             {{- end }}
+            {{- if .Values.monitoring.prometheusUrl }}
+            - name: MWC_PROMETHEUS_URL
+              value: {{ .Values.monitoring.prometheusUrl | quote }}
+            {{- end }}
+            {{- if or .Values.plugins.existingConfigMap .Values.plugins.existingClaim }}
+            - name: MWC_PLUGIN_DIR
+              value: {{ .Values.plugins.mountPath | quote }}
+            {{- end }}
             - name: MWC_HIGRESS_NAMESPACE
               value: {{ .Values.higress.namespace | quote }}
             - name: MWC_HIGRESS_GATEWAY_NAME
@@ -126,11 +134,31 @@ spec:
               port: api
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
-          {{- if eq .Values.mode "sqlite" }}
+          {{- if or (eq .Values.mode "sqlite") .Values.plugins.existingConfigMap .Values.plugins.existingClaim }}
           volumeMounts:
+            {{- if eq .Values.mode "sqlite" }}
             - name: data
               mountPath: /var/lib/mwc
+            {{- end }}
+            {{- if or .Values.plugins.existingConfigMap .Values.plugins.existingClaim }}
+            - name: plugins
+              mountPath: {{ .Values.plugins.mountPath | quote }}
+              readOnly: true
+            {{- end }}
           {{- end }}
+      {{- if or .Values.plugins.existingConfigMap .Values.plugins.existingClaim }}
+      volumes:
+        - name: plugins
+          {{- if .Values.plugins.existingConfigMap }}
+          configMap:
+            name: {{ .Values.plugins.existingConfigMap | quote }}
+            items:
+              {{- toYaml .Values.plugins.configMapItems | nindent 14 }}
+          {{- else }}
+          persistentVolumeClaim:
+            claimName: {{ .Values.plugins.existingClaim | quote }}
+          {{- end }}
+      {{- end }}
   {{- if eq .Values.mode "sqlite" }}
   volumeClaimTemplates:
     - metadata:

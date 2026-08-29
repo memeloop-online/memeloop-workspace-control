@@ -90,7 +90,9 @@ impl Database {
         }
         for table in IMPORT_ORDER {
             let Some(rows) = snapshot.tables.get(*table) else {
-                if *table == "workspace_injection_refs" && snapshot.schema_version < 7 {
+                if (*table == "workspace_injection_refs" && snapshot.schema_version < 7)
+                    || (*table == "plugin_configurations" && snapshot.schema_version < 11)
+                {
                     continue;
                 }
                 return Err(StorageError::SnapshotMissingTable((*table).to_owned()));
@@ -199,6 +201,7 @@ const IMPORT_ORDER: &[&str] = &[
     "organization_memberships",
     "organization_quotas",
     "user_quotas",
+    "plugin_configurations",
     "image_policies",
     "workspace_templates",
     "workspaces",
@@ -232,6 +235,10 @@ const EXPORT_QUERIES: &[(&str, &str)] = &[
     (
         "user_quotas",
         "SELECT json_object('installation_id', installation_id, 'user_id', user_id, 'cpu_millis', cpu_millis, 'memory_mib', memory_mib, 'gpu_count', gpu_count, 'disk_gib', disk_gib, 'updated_at', updated_at) item FROM user_quotas WHERE installation_id = ?1 ORDER BY user_id",
+    ),
+    (
+        "plugin_configurations",
+        "SELECT json_object('installation_id', installation_id, 'plugin_id', plugin_id, 'scope_key', scope_key, 'scope_kind', scope_kind, 'organization_id', organization_id, 'value_json', value_json, 'schema_digest', schema_digest, 'version', version, 'updated_by', updated_by, 'updated_at', updated_at) item FROM plugin_configurations WHERE installation_id = ?1 ORDER BY plugin_id, scope_key",
     ),
     (
         "image_policies",

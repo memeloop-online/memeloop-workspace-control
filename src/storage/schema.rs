@@ -1,4 +1,4 @@
-pub(super) const SCHEMA_VERSION: i64 = 10;
+pub(super) const SCHEMA_VERSION: i64 = 11;
 pub(super) const MIGRATION_TABLE: &str = "CREATE TABLE IF NOT EXISTS schema_migrations (\
     version BIGINT PRIMARY KEY, applied_at BIGINT NOT NULL\
 )";
@@ -169,4 +169,19 @@ pub(super) const PROFILE_RENAME_MIGRATIONS: &[&str] = &[
 pub(super) const TEMPLATE_YAML_MIGRATIONS: &[&str] = &[
     "ALTER TABLE workspace_templates ADD COLUMN template_yaml TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE workspaces ADD COLUMN template_snapshot_yaml TEXT NOT NULL DEFAULT ''",
+];
+
+pub(super) const PLUGIN_CONFIGURATION_MIGRATIONS: &[&str] = &[
+    "CREATE TABLE IF NOT EXISTS plugin_configurations (\
+        installation_id TEXT NOT NULL, plugin_id TEXT NOT NULL, scope_key TEXT NOT NULL, \
+        scope_kind TEXT NOT NULL CHECK (scope_kind IN ('installation', 'organization')), \
+        organization_id TEXT, value_json TEXT NOT NULL, schema_digest TEXT NOT NULL, \
+        version BIGINT NOT NULL, \
+        updated_by TEXT NOT NULL, updated_at BIGINT NOT NULL, \
+        PRIMARY KEY (installation_id, plugin_id, scope_key), \
+        FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE, \
+        FOREIGN KEY (updated_by) REFERENCES users(id)\
+    )",
+    "CREATE INDEX IF NOT EXISTS plugin_configurations_organization_idx ON plugin_configurations \
+        (installation_id, organization_id, plugin_id)",
 ];

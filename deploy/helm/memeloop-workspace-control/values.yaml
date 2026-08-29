@@ -31,6 +31,16 @@ workspace:
   # Stable Tailnet node DNS name or IP. Enables per-workspace, auto-assigned SSH NodePorts.
   internalSshHost: ""
 
+# Plugins are installed only by GitOps as a read-only mount. The API does not
+# upload, install, or hot-reload executable code. Exactly one source may be set.
+plugins:
+  existingConfigMap: ""
+  # Map ConfigMap keys into first-level package directories, for example:
+  # [{key: plugin-json, path: quota-policy/plugin.json}]
+  configMapItems: []
+  existingClaim: ""
+  mountPath: /var/lib/mwc/plugins
+
 public:
   sshHost: ""
   apiDomain: ""
@@ -91,6 +101,9 @@ networkPolicy:
   enabled: true
 
 monitoring:
+  # Optional Prometheus base URL used for PVC usage/capacity/available telemetry.
+  # The control plane performs fixed instant queries; no user-provided PromQL is accepted.
+  prometheusUrl: ""
   serviceMonitor:
     enabled: false
     interval: 30s

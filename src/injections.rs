@@ -11,7 +11,7 @@ mod validation;
 
 pub use validation::validate_injection_item;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum InjectionScope {
     Organization,
@@ -78,6 +78,12 @@ pub struct ResolvedInjectionSummary {
 pub struct ResolvedInjection {
     pub source: InjectionScope,
     pub item: InjectionItem,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum InjectionDestinationKind {
+    Environment,
+    File,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -206,7 +212,7 @@ pub fn resolve_injections(
     user: &[InjectionItem],
     workspace: &[InjectionItem],
 ) -> Result<Vec<ResolvedInjection>, InjectionError> {
-    let mut resolved = BTreeMap::<String, ResolvedInjection>::new();
+    let mut resolved = BTreeMap::<(InjectionDestinationKind, String), ResolvedInjection>::new();
 
     apply_scope(&mut resolved, InjectionScope::Organization, organization)?;
     apply_scope(&mut resolved, InjectionScope::User, user)?;
@@ -216,11 +222,12 @@ pub fn resolve_injections(
 }
 
 fn apply_scope(
-    resolved: &mut BTreeMap<String, ResolvedInjection>,
+    resolved: &mut BTreeMap<(InjectionDestinationKind, String), ResolvedInjection>,
     scope: InjectionScope,
     items: &[InjectionItem],
 ) -> Result<(), InjectionError> {
-    let mut seen = BTreeMap::<&str, ()>::new();
+    let mut seen_keys = BTreeSet::<&str>::new();
+    let mut seen_destinations = BTreeSet::<(InjectionDestinationKind, &str)>::new();
     for item in items {
         if item.key.is_empty() {
             return Err(InjectionError::EmptyKey);
@@ -231,22 +238,34 @@ fn apply_scope(
                 scope,
             });
         }
-        if seen.insert(&item.key, ()).is_some() {
+        if !seen_keys.insert(&item.key) {
             return Err(InjectionError::DuplicateInScope {
                 key: item.key.clone(),
                 scope,
             });
         }
-        if let Some(existing) = resolved.get(&item.key)
+        let destination_kind = destination_kind(item.kind);
+        let destination = (destination_kind, item.target.as_str());
+        if !seen_destinations.insert(destination) {
+            return Err(InjectionError::DuplicateDestinationInScope {
+                kind: item.kind,
+                target: item.target.clone(),
+                scope,
+            });
+        }
+        let destination = (destination_kind, item.target.clone());
+        if let Some(existing) = resolved.get(&destination)
             && existing.item.locked
         {
             return Err(InjectionError::LockedOverride {
-                key: item.key.clone(),
+                key: existing.item.key.clone(),
+                kind: item.kind,
+                target: item.target.clone(),
                 attempted_scope: scope,
             });
         }
         resolved.insert(
-            item.key.clone(),
+            destination,
             ResolvedInjection {
                 source: scope,
                 item: item.clone(),
@@ -254,6 +273,15 @@ fn apply_scope(
         );
     }
     Ok(())
+}
+
+fn destination_kind(kind: InjectionKind) -> InjectionDestinationKind {
+    match kind {
+        InjectionKind::EnvironmentVariable => InjectionDestinationKind::Environment,
+        InjectionKind::SecretFile | InjectionKind::ConfigFile | InjectionKind::SshPublicKey => {
+            InjectionDestinationKind::File
+        }
+    }
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -276,21 +304,35 @@ pub enum InjectionError {
     InvalidLabelSelector,
     #[error("Base64 injection value is invalid")]
     InvalidBase64,
+    #[error("environment variable values must be UTF-8 without control characters")]
+    InvalidEnvironmentValue,
     #[error("SSH public key injection must contain one valid OpenSSH public key")]
     InvalidSshPublicKey,
     #[error("duplicate injection {key} in {scope:?} scope")]
     DuplicateInScope { key: String, scope: InjectionScope },
+    #[error("duplicate {kind:?} injection target {target} in {scope:?} scope")]
+    DuplicateDestinationInScope {
+        kind: InjectionKind,
+        target: String,
+        scope: InjectionScope,
+    },
     #[error("only organization injections may be locked: {key} in {scope:?} scope")]
     LockOutsideOrganization { key: String, scope: InjectionScope },
-    #[error("{attempted_scope:?} injection cannot override locked organization injection {key}")]
+    #[error(
+        "{attempted_scope:?} injection cannot override locked organization injection {key} at {kind:?} target {target}"
+    )]
     LockedOverride {
         key: String,
+        kind: InjectionKind,
+        target: String,
         attempted_scope: InjectionScope,
     },
 }
 
 #[cfg(test)]
 mod tests {
+    use base64::Engine;
+
     use super::*;
 
     fn item(key: &str, value: &str, locked: bool) -> InjectionItem {
@@ -338,8 +380,79 @@ mod tests {
             error,
             InjectionError::LockedOverride {
                 key: "policy".to_owned(),
+                kind: InjectionKind::ConfigFile,
+                target: "/workspace/policy".to_owned(),
                 attempted_scope: InjectionScope::User,
             }
+        );
+    }
+
+    #[test]
+    fn destination_overrides_do_not_depend_on_display_key() {
+        let mut organization = item("组织默认值", "org", false);
+        organization.kind = InjectionKind::EnvironmentVariable;
+        organization.target = "HTTP_PROXY".to_owned();
+        let mut workspace = item("实例代理", "workspace", false);
+        workspace.kind = InjectionKind::EnvironmentVariable;
+        workspace.target = "HTTP_PROXY".to_owned();
+
+        let resolved = resolve_injections(&[organization], &[], &[workspace]).unwrap();
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved[0].item.key, "实例代理");
+        assert_eq!(resolved[0].source, InjectionScope::Workspace);
+    }
+
+    #[test]
+    fn all_file_kinds_share_the_same_path_destination() {
+        let mut organization = item("公开配置", "org", false);
+        organization.kind = InjectionKind::ConfigFile;
+        organization.target = "/workspace/.config/tool.conf".to_owned();
+        let mut workspace = item("敏感配置", "workspace", false);
+        workspace.kind = InjectionKind::SecretFile;
+        workspace.target = "/workspace/.config/tool.conf".to_owned();
+        workspace.sensitive = true;
+
+        let resolved = resolve_injections(&[organization], &[], &[workspace]).unwrap();
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved[0].item.kind, InjectionKind::SecretFile);
+        assert_eq!(resolved[0].item.key, "敏感配置");
+        assert_eq!(resolved[0].source, InjectionScope::Workspace);
+    }
+
+    #[test]
+    fn locked_destination_rejects_a_differently_named_override() {
+        let mut organization = item("组织代理", "org", true);
+        organization.kind = InjectionKind::EnvironmentVariable;
+        organization.target = "HTTP_PROXY".to_owned();
+        let mut user = item("个人代理", "user", false);
+        user.kind = InjectionKind::EnvironmentVariable;
+        user.target = "HTTP_PROXY".to_owned();
+
+        assert_eq!(
+            resolve_injections(&[organization], &[user], &[]),
+            Err(InjectionError::LockedOverride {
+                key: "组织代理".to_owned(),
+                kind: InjectionKind::EnvironmentVariable,
+                target: "HTTP_PROXY".to_owned(),
+                attempted_scope: InjectionScope::User,
+            })
+        );
+    }
+
+    #[test]
+    fn one_scope_cannot_define_the_same_destination_twice() {
+        let mut first = item("first", "one", false);
+        first.target = "/workspace/shared".to_owned();
+        let mut second = item("second", "two", false);
+        second.target = "/workspace/shared".to_owned();
+
+        assert_eq!(
+            resolve_injections(&[], &[first, second], &[]),
+            Err(InjectionError::DuplicateDestinationInScope {
+                kind: InjectionKind::ConfigFile,
+                target: "/workspace/shared".to_owned(),
+                scope: InjectionScope::User,
+            })
         );
     }
 
@@ -350,6 +463,29 @@ mod tests {
         assert_eq!(
             result[0].item.value,
             InjectionValue::Utf8(multiline.to_owned())
+        );
+    }
+
+    #[test]
+    fn environment_values_reject_binary_and_configuration_control_characters() {
+        for value in ["line\nfeed", "carriage\rreturn", "tab\tvalue", "nul\0value"] {
+            let mut environment = item("environment", value, false);
+            environment.kind = InjectionKind::EnvironmentVariable;
+            environment.target = "TOOL_VALUE".to_owned();
+            assert_eq!(
+                validate_injection_item(&environment),
+                Err(InjectionError::InvalidEnvironmentValue)
+            );
+        }
+
+        let mut binary = item("binary", "unused", false);
+        binary.kind = InjectionKind::EnvironmentVariable;
+        binary.target = "TOOL_VALUE".to_owned();
+        binary.value =
+            InjectionValue::Base64(base64::engine::general_purpose::STANDARD.encode([255]));
+        assert_eq!(
+            validate_injection_item(&binary),
+            Err(InjectionError::InvalidEnvironmentValue)
         );
     }
 

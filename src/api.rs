@@ -16,6 +16,7 @@ use utoipa::{OpenApi, ToSchema};
 use crate::{
     config::{AppConfig, DatabaseMode, InstallationId},
     crypto::EnvelopeCipher,
+    plugins::PluginRuntime,
     storage::Database,
 };
 
@@ -28,6 +29,7 @@ mod idempotency;
 mod injections;
 mod metrics;
 mod organizations;
+mod plugins;
 mod runtime;
 mod ssh;
 mod ui;
@@ -50,10 +52,12 @@ pub struct AppState {
     request_count: Arc<AtomicU64>,
     kubernetes_client: Option<kube::Client>,
     jump_host_public_key: Option<crate::storage::WorkspaceSshPublicIdentity>,
+    pub(super) plugins: PluginRuntime,
 }
 
 impl AppState {
     pub fn new(config: AppConfig, database: Database) -> Self {
+        let plugins = PluginRuntime::disabled(database.clone());
         Self {
             config,
             database,
@@ -63,10 +67,12 @@ impl AppState {
             request_count: Arc::new(AtomicU64::new(0)),
             kubernetes_client: None,
             jump_host_public_key: None,
+            plugins,
         }
     }
 
     pub fn with_cipher(config: AppConfig, database: Database, cipher: EnvelopeCipher) -> Self {
+        let plugins = PluginRuntime::disabled(database.clone());
         Self {
             config,
             database,
@@ -76,6 +82,7 @@ impl AppState {
             request_count: Arc::new(AtomicU64::new(0)),
             kubernetes_client: None,
             jump_host_public_key: None,
+            plugins,
         }
     }
 
@@ -99,6 +106,10 @@ impl AppState {
             fingerprint: key.fingerprint(ssh_key::HashAlg::Sha256).to_string(),
         });
         Ok(())
+    }
+
+    pub fn set_plugin_runtime(&mut self, plugins: PluginRuntime) {
+        self.plugins = plugins;
     }
 
     fn verify_internal_auth_token(&self, token: &str) -> bool {
@@ -145,7 +156,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         )
         .route(
             "/api/v1/injections/{scope}/{scope_id}/{key}",
-            axum::routing::put(injections::replace),
+            axum::routing::put(injections::replace).delete(injections::delete),
         )
         .route("/api/v1/injections/preview", post(injections::preview))
         .route(
@@ -170,6 +181,13 @@ pub fn router(state: Arc<AppState>) -> Router {
         )
         .route("/api/v1/audit", get(admin::audit))
         .route("/api/v1/admin/scaling", get(admin::scaling))
+        .route("/api/v1/plugins", get(plugins::list))
+        .route(
+            "/api/v1/plugins/{plugin_id}/configuration",
+            get(plugins::get_configuration)
+                .put(plugins::put_configuration)
+                .delete(plugins::delete_configuration),
+        )
         .route(
             "/api/v1/webhooks",
             get(webhooks::list).post(webhooks::create),
@@ -283,6 +301,7 @@ async fn system_info(State(state): State<Arc<AppState>>) -> Json<SystemInfoRespo
         events::stream,
         injections::list,
         injections::replace,
+        injections::delete,
         injections::preview,
         organizations::create,
         organizations::list,
@@ -296,6 +315,10 @@ async fn system_info(State(state): State<Arc<AppState>>) -> Json<SystemInfoRespo
         user_quota::set,
         admin::audit,
         admin::scaling,
+        plugins::list,
+        plugins::get_configuration,
+        plugins::put_configuration,
+        plugins::delete_configuration,
         catalog::list_images,
         catalog::put_image,
         catalog::list_templates,
@@ -353,8 +376,13 @@ async fn system_info(State(state): State<Arc<AppState>>) -> Json<SystemInfoRespo
         crate::injections::ResolvedInjectionSummary,
         injections::PreviewRequest,
         workspaces::WorkspaceResponse,
+        workspaces::WorkspaceSshConnection,
+        workspaces::WorkspaceAppSshConnection,
+        workspaces::SshPortStrategy,
         runtime::WorkspaceRuntimeResponse,
         runtime::WorkspaceRuntimeEntry,
+        runtime::StorageTelemetry,
+        runtime::StorageTelemetryStatus,
         runtime::PodRuntime,
         runtime::PodMetric,
         runtime::PodEvent,
@@ -362,6 +390,10 @@ async fn system_info(State(state): State<Arc<AppState>>) -> Json<SystemInfoRespo
         admin::CreateUserRequest,
         admin::MembershipRequest,
         admin::ScalingResponse,
+        plugins::PluginManifestView,
+        plugins::PluginConfigurationView,
+        plugins::PutPluginConfigurationRequest,
+        plugins::DeletePluginConfigurationRequest,
         catalog::PutImageRequest,
         catalog::ReplaceTemplateRequest,
         catalog::SetTemplateEnabledRequest,

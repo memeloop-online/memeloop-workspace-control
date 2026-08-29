@@ -35,8 +35,15 @@ impl Database {
         actor_user_id: Uuid,
         now: i64,
     ) -> Result<Workspace, StorageError> {
-        self.create_workspace_inner(command, None, allow_cluster_access, actor_user_id, now)
-            .await
+        self.create_workspace_inner(
+            command,
+            None,
+            None,
+            allow_cluster_access,
+            actor_user_id,
+            now,
+        )
+        .await
     }
 
     pub async fn create_workspace_with_inline_injections(
@@ -51,6 +58,27 @@ impl Database {
         self.create_workspace_inner(
             command,
             Some((cipher, inline)),
+            None,
+            allow_cluster_access,
+            actor_user_id,
+            now,
+        )
+        .await
+    }
+
+    pub async fn create_workspace_with_admitted_template(
+        &self,
+        command: CreateWorkspace,
+        inline: Option<(&EnvelopeCipher, &[InjectionItem])>,
+        admitted_template_yaml: &str,
+        allow_cluster_access: bool,
+        actor_user_id: Uuid,
+        now: i64,
+    ) -> Result<Workspace, StorageError> {
+        self.create_workspace_inner(
+            command,
+            inline,
+            Some(admitted_template_yaml),
             allow_cluster_access,
             actor_user_id,
             now,
@@ -62,6 +90,7 @@ impl Database {
         &self,
         command: CreateWorkspace,
         inline: Option<(&EnvelopeCipher, &[InjectionItem])>,
+        admitted_template_yaml: Option<&str>,
         allow_cluster_access: bool,
         actor_user_id: Uuid,
         now: i64,
@@ -78,6 +107,7 @@ impl Database {
             command: &command,
             injection_refs: &injection_refs,
             inline,
+            admitted_template_yaml,
             allow_cluster_access,
             actor_user_id,
             now,
@@ -177,6 +207,7 @@ struct WorkspaceCreation<'a> {
     command: &'a CreateWorkspace,
     injection_refs: &'a WorkspaceInjectionRefs,
     inline: Option<(&'a EnvelopeCipher, &'a [InjectionItem])>,
+    admitted_template_yaml: Option<&'a str>,
     allow_cluster_access: bool,
     actor_user_id: Uuid,
     now: i64,
@@ -217,6 +248,7 @@ async fn create_sqlite(
         creation.allow_cluster_access,
     )
     .await?;
+    verify_admitted_template(creation, &snapshot)?;
     let yaml = snapshot.yaml.clone();
     let workspace = build_workspace(command, snapshot, creation.now);
     super::workspace_admission::admit_sqlite(connection, installation_id, &workspace).await?;
@@ -256,6 +288,7 @@ async fn create_postgres(
         creation.allow_cluster_access,
     )
     .await?;
+    verify_admitted_template(creation, &snapshot)?;
     let yaml = snapshot.yaml.clone();
     let workspace = build_workspace(command, snapshot, creation.now);
     super::workspace_admission::admit_postgres(connection, installation_id, &workspace).await?;
@@ -279,6 +312,19 @@ async fn create_postgres(
     )
     .await?;
     Ok(workspace)
+}
+
+fn verify_admitted_template(
+    creation: &WorkspaceCreation<'_>,
+    snapshot: &super::template_store::ResolvedTemplateSnapshot,
+) -> Result<(), StorageError> {
+    if creation
+        .admitted_template_yaml
+        .is_some_and(|expected| expected != snapshot.yaml)
+    {
+        return Err(StorageError::TemplateNotFound);
+    }
+    Ok(())
 }
 
 async fn insert_sqlite(

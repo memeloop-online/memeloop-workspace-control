@@ -20,6 +20,7 @@ mod job_store;
 mod job_types;
 mod leases;
 mod metrics_store;
+mod plugin_store;
 mod schema;
 mod ssh_access;
 mod ssh_identity;
@@ -43,6 +44,7 @@ pub use image_policy_store::ImagePolicy;
 pub use injection_store::{InjectionScopeRef, StoredInjectionSummary};
 pub use job_types::{ClaimedJob, NewJob};
 pub use metrics_store::{JobCounts, UserWorkspaceMetrics, WorkspaceMetrics};
+pub use plugin_store::{PluginConfigurationWrite, StoredPluginConfiguration};
 pub use ssh_access::SshAccessCandidate;
 pub use ssh_identity::{WorkspaceSshIdentity, WorkspaceSshPublicIdentity};
 pub use template_store::{CreateWorkspaceTemplate, WorkspaceTemplate};
@@ -178,6 +180,11 @@ async fn migrate_sqlite(pool: &SqlitePool, applied_at: i64) -> Result<(), Storag
             sqlx::query(migration).execute(&mut *transaction).await?;
         }
     }
+    if version < 11 {
+        for migration in schema::PLUGIN_CONFIGURATION_MIGRATIONS {
+            sqlx::query(migration).execute(&mut *transaction).await?;
+        }
+    }
     if version < schema::SCHEMA_VERSION {
         sqlx::query("INSERT INTO schema_migrations (version, applied_at) VALUES (?1, ?2)")
             .bind(schema::SCHEMA_VERSION)
@@ -218,6 +225,11 @@ async fn migrate_postgres(
     }
     if version < 10 {
         for migration in schema::TEMPLATE_YAML_MIGRATIONS {
+            sqlx::query(migration).execute(&mut *transaction).await?;
+        }
+    }
+    if version < 11 {
+        for migration in schema::PLUGIN_CONFIGURATION_MIGRATIONS {
             sqlx::query(migration).execute(&mut *transaction).await?;
         }
     }

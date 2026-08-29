@@ -1,8 +1,9 @@
-use std::{fmt, net::SocketAddr, str::FromStr};
+use std::{fmt, net::SocketAddr, path::PathBuf, str::FromStr};
 
 use clap::Args;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use url::Url;
 use utoipa::ToSchema;
 
 const MAX_INSTALLATION_ID_LENGTH: usize = 20;
@@ -43,6 +44,15 @@ pub struct AppConfig {
     /// Public origin used for ttyd links, for example https://shell.example.com.
     #[arg(long, env = "MWC_WEB_SHELL_PUBLIC_ORIGIN")]
     pub web_shell_public_origin: Option<String>,
+
+    /// Prometheus base URL used for PVC usage telemetry. Omit to disable storage telemetry.
+    #[arg(long, env = "MWC_PROMETHEUS_URL")]
+    pub prometheus_url: Option<Url>,
+
+    /// Read-only root whose immediate child directories are plugin packages.
+    /// Package changes take effect only after a process restart.
+    #[arg(long, env = "MWC_PLUGIN_DIR")]
+    pub plugin_dir: Option<PathBuf>,
 }
 
 impl AppConfig {
@@ -85,6 +95,16 @@ impl AppConfig {
             })
         {
             return Err(ConfigError::InvalidWebShellOrigin);
+        }
+        if self.prometheus_url.as_ref().is_some_and(|url| {
+            !matches!(url.scheme(), "http" | "https")
+                || url.host_str().is_none()
+                || !url.username().is_empty()
+                || url.password().is_some()
+                || url.query().is_some()
+                || url.fragment().is_some()
+        }) {
+            return Err(ConfigError::InvalidPrometheusUrl);
         }
         Ok(())
     }
@@ -189,6 +209,8 @@ pub enum ConfigError {
     InvalidInternalSshHost,
     #[error("Web Shell public origin must be an https origin without a trailing slash")]
     InvalidWebShellOrigin,
+    #[error("Prometheus URL must be an http(s) base URL without credentials, query, or fragment")]
+    InvalidPrometheusUrl,
 }
 
 fn valid_ssh_host(host: &str) -> bool {
@@ -237,6 +259,8 @@ mod tests {
             ssh_public_host: None,
             internal_ssh_host: None,
             web_shell_public_origin: None,
+            prometheus_url: None,
+            plugin_dir: None,
         };
         assert_eq!(
             config.validate(),
@@ -255,6 +279,8 @@ mod tests {
             ssh_public_host: None,
             internal_ssh_host: Some("100.64.12.34".to_owned()),
             web_shell_public_origin: None,
+            prometheus_url: None,
+            plugin_dir: None,
         };
         assert!(base.validate().is_ok());
         assert!(
@@ -273,5 +299,42 @@ mod tests {
             .validate(),
             Err(ConfigError::InvalidInternalSshHost)
         );
+    }
+
+    #[test]
+    fn prometheus_url_accepts_safe_base_urls_only() {
+        let base = AppConfig {
+            installation_id: "test".parse().unwrap(),
+            listen_address: "127.0.0.1:8080".parse().unwrap(),
+            database_url: "sqlite::memory:".to_owned(),
+            replica_count: 1,
+            instance_id: "one".to_owned(),
+            ssh_public_host: None,
+            internal_ssh_host: None,
+            web_shell_public_origin: None,
+            prometheus_url: Some(
+                "http://prometheus.monitoring.svc:9090/prometheus"
+                    .parse()
+                    .unwrap(),
+            ),
+            plugin_dir: None,
+        };
+        assert!(base.validate().is_ok());
+        for invalid in [
+            "ftp://prometheus.example",
+            "http://user:password@prometheus.example",
+            "http://prometheus.example?query=up",
+            "http://prometheus.example/#fragment",
+        ] {
+            assert_eq!(
+                AppConfig {
+                    prometheus_url: Some(invalid.parse().unwrap()),
+                    ..base.clone()
+                }
+                .validate(),
+                Err(ConfigError::InvalidPrometheusUrl),
+                "{invalid}"
+            );
+        }
     }
 }

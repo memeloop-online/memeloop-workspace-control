@@ -8,7 +8,9 @@ state_dir="$workspace_root/.mwc"
 authorized_keys="$state_dir/authorized_keys"
 runtime_dir=/run/mwc-ssh
 manifest=/var/run/workspace-injections/config/workspace-files.json
+environment_manifest=/var/run/workspace-injections/config/workspace-environment.json
 kubeconfig="$state_dir/kubeconfig"
+runtime_sshd_config="$runtime_dir/sshd_config"
 
 prepare_layout() {
     if [ "${MWC_PRESERVE_HOME_ROOT:-false}" = true ]; then
@@ -94,15 +96,27 @@ prepare() {
             object=$(printf '%s' "$entry" | jq -r '.object')
             data_key=$(printf '%s' "$entry" | jq -r '.data_key')
             target=$(printf '%s' "$entry" | jq -r '.target')
-            mode=$(printf '%s' "$entry" | jq -r '.mode // 384')
-            owner=$(printf '%s' "$entry" | jq -r '.owner // "workspace"')
-            group=$(printf '%s' "$entry" | jq -r '.group // "workspace"')
+            mode=$(printf '%s' "$entry" | jq -r '.mode // empty')
+            owner=$(printf '%s' "$entry" | jq -r '.owner // empty')
+            group=$(printf '%s' "$entry" | jq -r '.group // empty')
+            if [ -z "$owner" ]; then
+                owner=$workspace_user
+            fi
+            if [ -z "$group" ]; then
+                group=$workspace_group
+            fi
             kind=$(printf '%s' "$entry" | jq -r '.kind')
             case "$object" in
                 secret) source=/var/run/workspace-injections/secret/$data_key ;;
                 config_map) source=/var/run/workspace-injections/config/$data_key ;;
                 *) echo "invalid injection object" >&2; exit 1 ;;
             esac
+            if [ -z "$mode" ]; then
+                case "$object" in
+                    secret) mode=384 ;;
+                    config_map) mode=420 ;;
+                esac
+            fi
             numeric_mode=$(printf '%o' "$mode")
             install -D -m "$numeric_mode" -o "$owner" -g "$group" "$source" "$target"
             if [ "$kind" = ssh_public_key ]; then
@@ -117,6 +131,42 @@ prepare() {
     printf 'localhost,127.0.0.1 ' > "$runtime_dir/known_hosts"
     cat "$runtime_dir/ssh_host_ed25519_key.pub" >> "$runtime_dir/known_hosts"
     chmod 0644 "$runtime_dir/known_hosts"
+    prepare_runtime_sshd_config
+}
+
+prepare_runtime_sshd_config() {
+    install -m 0600 -o root -g root /etc/workspace-platform/sshd_config "$runtime_sshd_config"
+    if [ ! -r "$environment_manifest" ]; then
+        return
+    fi
+    environment_count=$(jq -r '.environment | length' "$environment_manifest")
+    environment_index=0
+    while [ "$environment_index" -lt "$environment_count" ]; do
+        entry=$(jq -c ".environment[$environment_index]" "$environment_manifest")
+        environment_index=$((environment_index + 1))
+        name=$(printf '%s' "$entry" | jq -r '.name')
+        object=$(printf '%s' "$entry" | jq -r '.object')
+        data_key=$(printf '%s' "$entry" | jq -r '.data_key')
+        case "$name" in
+            HOME|MWC_WORKSPACE_USER|MWC_WORKSPACE_HOME|MWC_IN_CLUSTER_KUBECONFIG|MWC_PRESERVE_HOME_ROOT|MWC_BUILDKIT_ENABLED)
+                continue
+                ;;
+            KUBECONFIG)
+                if [ "${MWC_IN_CLUSTER_KUBECONFIG:-false}" = true ]; then continue; fi
+                ;;
+            BUILDKIT_HOST)
+                if [ "${MWC_BUILDKIT_ENABLED:-false}" = true ]; then continue; fi
+                ;;
+        esac
+        case "$object" in
+            secret) source=/var/run/workspace-injections/secret/$data_key ;;
+            config_map) source=/var/run/workspace-injections/config/$data_key ;;
+            *) echo "invalid environment injection object" >&2; exit 1 ;;
+        esac
+        value=$(cat "$source")
+        escaped=$(printf '%s=%s' "$name" "$value" | sed 's/\\/\\\\/g; s/"/\\"/g')
+        printf 'SetEnv "%s"\n' "$escaped" >> "$runtime_sshd_config"
+    done
 }
 
 install_compat_openssh() {
@@ -139,13 +189,13 @@ case "${1:-serve}" in
     serve)
         install_compat_openssh
         prepare
-        exec /usr/sbin/sshd -D -e -f /etc/workspace-platform/sshd_config
+        exec /usr/sbin/sshd -D -e -f "$runtime_sshd_config"
         ;;
     # Kept as a command alias so an already-created Pod template can roll forward safely.
     compat-serve)
         install_compat_openssh
         prepare
-        exec /usr/sbin/sshd -D -e -f /etc/workspace-platform/sshd_config
+        exec /usr/sbin/sshd -D -e -f "$runtime_sshd_config"
         ;;
     *) echo "usage: mwc-workspace-bootstrap prepare-layout|prepare|serve|compat-serve" >&2; exit 64 ;;
 esac

@@ -80,4 +80,13 @@ app.kubernetes.io/instance: {{ include "mwc.name" . }}
 {{- if and .Values.jumpHost.enabled (not .Values.jumpHost.hostKeySecretName) -}}
 {{- fail "jumpHost.hostKeySecretName is required when jumpHost is enabled" -}}
 {{- end -}}
+{{- if and .Values.plugins.existingConfigMap .Values.plugins.existingClaim -}}
+{{- fail "plugins.existingConfigMap and plugins.existingClaim are mutually exclusive" -}}
+{{- end -}}
+{{- if and .Values.plugins.existingConfigMap (empty .Values.plugins.configMapItems) -}}
+{{- fail "plugins.configMapItems must map files into first-level package directories" -}}
+{{- end -}}
+{{- if and (not .Values.plugins.existingConfigMap) (not (empty .Values.plugins.configMapItems)) -}}
+{{- fail "plugins.existingConfigMap is required when plugins.configMapItems is set" -}}
+{{- end -}}
 {{- end -}}

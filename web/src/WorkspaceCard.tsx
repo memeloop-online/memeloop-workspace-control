@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { useI18n } from "./i18n";
 import type { Locale } from "./i18n";
 import type { WorkspaceResponse, WorkspaceRuntime } from "./types";
+import { WorkspaceConnectionDialog } from "./WorkspaceConnectionDialog";
 import {
   aggregateRuntimeUsage,
   formatCpuMillis,
@@ -48,21 +49,7 @@ export function WorkspaceCard({ item, runtime, onAction, onOpenShell, onRequestR
 
       <ResourceOverview item={item} runtime={runtime} />
 
-      {(item.ssh_command || item.ssh_config) && (
-        <div className="connection-strip">
-          {item.ssh_command && <ConnectionItem label="SSH" value={item.ssh_command} />}
-          {item.ssh_config && <ConnectionItem label="Codex" value={`mwc-${workspace.short_id}`} />}
-        </div>
-      )}
-
-      {(item.ssh_config || item.workspace_host_key || item.jump_host_key) && (
-        <details className="connection-details">
-          <summary>{t("connectionDetails")}</summary>
-          {item.ssh_config && <CopyLine label={t("copySshConfig")} value={item.ssh_config} />}
-          {item.workspace_host_key && <CopyLine label={t("hostKey")} value={`${item.workspace_host_key.fingerprint} ${item.workspace_host_key.public_key}`} />}
-          {item.jump_host_key && <CopyLine label={t("jumpKey")} value={`${item.jump_host_key.fingerprint} ${item.jump_host_key.public_key}`} />}
-        </details>
-      )}
+      {item.ssh_connection && <WorkspaceConnectionDialog connection={item.ssh_connection} workspaceHostKey={item.workspace_host_key} jumpHostKey={item.jump_host_key} />}
 
       <div className="workspace-toolbar">
         <div className="primary-actions">
@@ -93,8 +80,8 @@ function ResourceOverview({ item, runtime }: { item: WorkspaceResponse; runtime?
   return <div className="resource-overview">
     <ResourceMeter label="CPU" actual={formatCpuMillis(usage.cpuMillis)} requested={`${resources.cpu_millis}m`} percent={cpuPercent} />
     <ResourceMeter label={t("memory")} actual={formatMemoryMiB(usage.memoryMiB)} requested={`${formatMemoryMiB(resources.memory_mib)}`} percent={memoryPercent} />
-    <div className="capacity-meter"><div><span>{t("disk")}</span><strong>{formatStorageCapacity(runtime?.pvc_capacity, resources.disk_gib)}</strong></div><small>{t("configuredCapacity")} · {t("storageTelemetryUnavailable")}</small></div>
-    {(resources.gpu_count > 0 || (runtime?.allocated.gpu_count ?? 0) > 0) && <ResourceMeter label="GPU" actual={String(runtime?.allocated.gpu_count ?? 0)} requested={String(resources.gpu_count)} percent={usagePercent(runtime?.allocated.gpu_count ?? null, resources.gpu_count)} />}
+    <DiskMeter runtime={runtime} configuredGiB={resources.disk_gib} />
+    {resources.gpu_count > 0 && <div className="capacity-meter"><div><span>GPU</span><strong>{resources.gpu_count} GPU</strong></div><small>{t("configuredAllocation")} · {t("gpuTelemetryUnavailable")}</small></div>}
   </div>;
 }
 
@@ -103,15 +90,27 @@ function ResourceMeter({ label, actual, requested, percent }: { label: string; a
   const valueText = percent === null ? `${label}: ${t("metricsUnavailable")}` : `${actual} / ${requested}, ${formatPercent(percent)}`;
   return <div className="resource-meter">
     <div className="resource-meter-heading"><span>{label}</span><strong>{actual} <small>/ {requested}</small></strong></div>
-    <div className="resource-track" role="progressbar" aria-label={`${label} ${t("usageOfRequested")}`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent ?? undefined} aria-valuetext={valueText}><span className={percent !== null && percent > 0 ? "has-value" : ""} style={{ width: percent === null ? "0" : `${percent}%` }} /></div>
-    <small>{t("usageOfRequested")} · {formatPercent(percent)}</small>
+    <div className="resource-track" role="progressbar" aria-label={`${label} ${t("usageOfLimit")}`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent ?? undefined} aria-valuetext={valueText}><span className={percent !== null && percent > 0 ? "has-value" : ""} style={{ width: percent === null ? "0" : `${percent}%` }} /></div>
+    <small>{t("usageOfLimit")} · {formatPercent(percent)}</small>
   </div>;
 }
 
-function ConnectionItem({ label, value }: { label: string; value: string }) {
+function DiskMeter({ runtime, configuredGiB }: { runtime?: WorkspaceRuntime; configuredGiB: number }) {
   const { t } = useI18n();
-  const [copied, setCopied] = useState(false);
-  return <div className="connection-item"><span>{label}</span><code title={value}>{value}</code><button aria-label={`${t("copy")} ${label}`} onClick={() => { void navigator.clipboard.writeText(value); setCopied(true); window.setTimeout(() => setCopied(false), 1200); }}>{copied ? t("copied") : t("copy")}</button></div>;
+  const telemetry = runtime?.storage;
+  const usable = telemetry?.status === "available" || telemetry?.status === "stale";
+  const used = usable ? telemetry.used_bytes : null;
+  const capacity = usable ? telemetry.capacity_bytes : null;
+  const percent = used !== null && capacity !== null && capacity > 0 ? Math.min(100, Math.max(0, used / capacity * 100)) : null;
+  const configured = formatStorageCapacity(runtime?.pvc_capacity, configuredGiB);
+  const actual = used === null ? "—" : formatBytes(used);
+  const status = telemetry?.status === "stale" ? t("storageTelemetryStale") : telemetry?.status === "disabled" ? t("storageTelemetryDisabled") : telemetry?.status === "available" ? t("storageTelemetryAvailable") : t("storageTelemetryUnavailable");
+  const valueText = percent === null ? `${t("disk")}: ${status}` : `${actual} / ${formatBytes(capacity ?? 0)}, ${formatPercent(percent)}`;
+  return <div className="resource-meter disk-meter">
+    <div className="resource-meter-heading"><span>{t("disk")}</span><strong>{actual} <small>/ {configured}</small></strong></div>
+    <div className="resource-track" role="progressbar" aria-label={`${t("disk")} ${t("storageUsage")}`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent ?? undefined} aria-valuetext={valueText}><span className={percent !== null && percent > 0 ? "has-value" : ""} style={{ width: percent === null ? "0" : `${percent}%` }} /></div>
+    <small>{status}{telemetry?.observed_at ? ` · ${t("observedAt")} ${new Date(telemetry.observed_at * 1_000).toLocaleString()}` : ""}</small>
+  </div>;
 }
 
 function RuntimeStatus({ id, runtime }: { id: string; runtime: WorkspaceRuntime }) {
@@ -137,12 +136,6 @@ function EventLog({ id, runtime, locale }: { id: string; runtime: WorkspaceRunti
   </section>;
 }
 
-function CopyLine({ label, value }: { label: string; value: string }) {
-  const { t } = useI18n();
-  const [copied, setCopied] = useState(false);
-  return <div className="copy-line"><span>{label}</span><code>{value}</code><button onClick={() => { void navigator.clipboard.writeText(value); setCopied(true); window.setTimeout(() => setCopied(false), 1200); }}>{copied ? t("copied") : t("copy")}</button></div>;
-}
-
 function StateBadge({ state }: { state: string; locale: Locale }) {
   const { t } = useI18n();
   const labels = {
@@ -161,4 +154,16 @@ function formatStorageCapacity(value: string | null | undefined, fallbackGiB: nu
   if (!value) return `${fallbackGiB} GiB`;
   const binary = value.match(/^([0-9]+(?:\.[0-9]+)?)(Ki|Mi|Gi|Ti)$/);
   return binary ? `${binary[1]} ${binary[2]}B` : value;
+}
+
+function formatBytes(value: number): string {
+  if (!Number.isFinite(value) || value < 0) return "—";
+  const units = ["B", "KiB", "MiB", "GiB", "TiB"];
+  let scaled = value;
+  let unit = 0;
+  while (scaled >= 1024 && unit < units.length - 1) {
+    scaled /= 1024;
+    unit += 1;
+  }
+  return `${scaled >= 10 || unit === 0 ? scaled.toFixed(0) : scaled.toFixed(1)} ${units[unit]}`;
 }
