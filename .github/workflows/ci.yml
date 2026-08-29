@@ -254,6 +254,8 @@ jobs:
               test "$(id -u workspace)" -gt 0
               test "$(passwd --status workspace | cut -d " " -f 2)" = NP
               install -d /etc/ssh/platform
+              install -d /etc/workspace-platform
+              install -m 0600 /dev/null /etc/workspace-platform/sshd_config
               ssh-keygen -q -t ed25519 -N "" -f /etc/ssh/platform/ssh_host_ed25519_key
               chown root:root /workspace
               chmod 0777 /workspace
