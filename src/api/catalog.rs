@@ -283,6 +283,40 @@ pub(super) async fn set_template_enabled(
     .await
 }
 
+#[utoipa::path(delete, path = "/api/v1/templates/{template_id}", params(("template_id" = Uuid, Path)), responses((status = 204), (status = 403, body = super::ErrorEnvelope), (status = 409, body = super::ErrorEnvelope)))]
+pub(super) async fn delete_template(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(template_id): Path<Uuid>,
+) -> Result<StatusCode, ApiError> {
+    let actor = principal(&state, &headers).await?;
+    let current = state.database.get_workspace_template(template_id).await?;
+    let allowed = current
+        .organization_id
+        .map_or(actor.system_admin, |organization_id| {
+            actor.allows(Permission::ManageOrganization, organization_id)
+        });
+    if !allowed || current.template.cluster_access && !actor.system_admin {
+        return Err(ApiError::Forbidden);
+    }
+    let deleted = state
+        .database
+        .delete_workspace_template(template_id, actor.system_admin)
+        .await?;
+    state
+        .database
+        .record_audit(
+            Some(actor.user_id),
+            deleted.organization_id,
+            None,
+            "template.delete",
+            serde_json::json!({"template_id": deleted.id, "name": deleted.name}),
+            unix_timestamp()?,
+        )
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 async fn reserve(
     state: &AppState,
     scope: &str,

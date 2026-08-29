@@ -224,18 +224,80 @@ impl Database {
             }
         }
     }
+
+    pub async fn delete_workspace_template(
+        &self,
+        template_id: Uuid,
+        allow_cluster_access: bool,
+    ) -> Result<WorkspaceTemplate, StorageError> {
+        match self {
+            Self::Sqlite {
+                pool,
+                installation_id,
+            } => {
+                let mut transaction = pool.begin().await?;
+                let current = sqlx::query(&format!("SELECT {TEMPLATE_COLUMNS} FROM workspace_templates WHERE installation_id = ?1 AND id = ?2"))
+                    .bind(installation_id.as_str()).bind(template_id.to_string()).fetch_optional(&mut *transaction).await?.map(TemplateDatabaseRow::Sqlite);
+                let template = ensure_template_access(current, allow_cluster_access)?;
+                let referenced = sqlx::query_scalar::<_, i64>("SELECT EXISTS(SELECT 1 FROM workspaces WHERE installation_id = ?1 AND template_id = ?2)")
+                    .bind(installation_id.as_str()).bind(template_id.to_string()).fetch_one(&mut *transaction).await? != 0;
+                ensure_template_deletable(template.enabled, referenced)?;
+                sqlx::query(
+                    "DELETE FROM workspace_templates WHERE installation_id = ?1 AND id = ?2",
+                )
+                .bind(installation_id.as_str())
+                .bind(template_id.to_string())
+                .execute(&mut *transaction)
+                .await?;
+                transaction.commit().await?;
+                Ok(template)
+            }
+            Self::Postgres {
+                pool,
+                installation_id,
+            } => {
+                let mut transaction = pool.begin().await?;
+                let current = sqlx::query(&format!("SELECT {TEMPLATE_COLUMNS} FROM workspace_templates WHERE installation_id = $1 AND id = $2 FOR UPDATE"))
+                    .bind(installation_id.as_str()).bind(template_id.to_string()).fetch_optional(&mut *transaction).await?.map(TemplateDatabaseRow::Postgres);
+                let template = ensure_template_access(current, allow_cluster_access)?;
+                let referenced = sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM workspaces WHERE installation_id = $1 AND template_id = $2)")
+                    .bind(installation_id.as_str()).bind(template_id.to_string()).fetch_one(&mut *transaction).await?;
+                ensure_template_deletable(template.enabled, referenced)?;
+                sqlx::query(
+                    "DELETE FROM workspace_templates WHERE installation_id = $1 AND id = $2",
+                )
+                .bind(installation_id.as_str())
+                .bind(template_id.to_string())
+                .execute(&mut *transaction)
+                .await?;
+                transaction.commit().await?;
+                Ok(template)
+            }
+        }
+    }
 }
 
 fn ensure_template_access(
     row: Option<TemplateDatabaseRow>,
     allow_cluster_access: bool,
-) -> Result<(), StorageError> {
+) -> Result<WorkspaceTemplate, StorageError> {
     let template = match row {
         Some(TemplateDatabaseRow::Sqlite(row)) => decode_template(row),
         Some(TemplateDatabaseRow::Postgres(row)) => decode_template(row),
         None => return Err(StorageError::TemplateNotFound),
     }?;
-    ensure_cluster_access(&template.template, allow_cluster_access)
+    ensure_cluster_access(&template.template, allow_cluster_access)?;
+    Ok(template)
+}
+
+fn ensure_template_deletable(enabled: bool, referenced: bool) -> Result<(), StorageError> {
+    if enabled {
+        return Err(StorageError::TemplateMustBeDisabled);
+    }
+    if referenced {
+        return Err(StorageError::TemplateInUse);
+    }
+    Ok(())
 }
 
 async fn insert_template_sqlite(

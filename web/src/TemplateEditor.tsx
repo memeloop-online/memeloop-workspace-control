@@ -108,6 +108,14 @@ export function TemplateEditor({ api, organizationId, templates, canGrantCluster
     catch (error) { onError(message(error)); }
   }
 
+  async function remove(template: WorkspaceTemplate) {
+    if (!confirm(`${template.name}: ${t("deleteTemplateConfirm")}`)) return;
+    setSaving(true);
+    try { await api.deleteTemplate(template.id); startNew(); await onRefresh(); }
+    catch (error) { onError(message(error)); }
+    finally { setSaving(false); }
+  }
+
   return <div className="template-manager">
     <div className="template-manager-toolbar">
       <div><h3>{t("templates")}</h3><small>{selected ? `${t("editingTemplate")} · ${selected.name}` : t("newTemplate")}</small></div>
@@ -116,7 +124,7 @@ export function TemplateEditor({ api, organizationId, templates, canGrantCluster
     <div className="template-manager-layout">
       <div className="template-list selectable-list" role="listbox" aria-label={t("templates")}>
         {templates.map((template) => <button type="button" role="option" aria-selected={selectedId === template.id} className={selectedId === template.id ? "selected" : ""} key={template.id} onClick={() => selectTemplate(template)}>
-          <span><strong>{template.name}</strong><small>{template.workspace_user} · {template.access_mode === "internal" ? t("internal") : t("public")}</small></span>
+          <span><strong>{template.name}</strong><small>{t("workspaceUser")}: <code>{template.workspace_user}</code> · {template.access_mode === "internal" ? t("internal") : t("public")}</small></span>
           <span className={template.enabled ? "healthy" : "muted"}>{template.enabled ? t("enabled") : t("disabled")}</span>
         </button>)}
         {templates.length === 0 && <p>{t("noTemplates")}</p>}
@@ -148,7 +156,7 @@ export function TemplateEditor({ api, organizationId, templates, canGrantCluster
           <label className="wide"><Field label={t("nodeSelector")} help={t("keyValueLinesHelp")} /><textarea value={draft.nodeSelector} onChange={(event) => change({ ...draft, nodeSelector: event.target.value })} placeholder="k3s-worker-ready=true" /></label>
           <label className="wide"><Field label={t("environmentVariables")} help={t("keyValueLinesHelp")} /><textarea value={draft.environment} onChange={(event) => change({ ...draft, environment: event.target.value })} placeholder="HOME=/workspace" /></label>
         </div>}
-        <div className="form-actions"><button className="button primary" disabled={saving}>{saving ? t("saving") : selectedId ? t("saveChanges") : t("createTemplate")}</button>{selected && <button type="button" className={selected.enabled ? "button danger" : "button"} onClick={() => void toggle(selected)}>{selected.enabled ? t("disable") : t("enable")}</button>}</div>
+        <div className="form-actions"><button className="button primary" disabled={saving}>{saving ? t("saving") : selectedId ? t("saveChanges") : t("createTemplate")}</button>{selected && <button type="button" className={selected.enabled ? "button danger" : "button"} disabled={saving} onClick={() => void toggle(selected)}>{selected.enabled ? t("disable") : t("enable")}</button>}{selected && !selected.enabled && <button type="button" className="button danger" disabled={saving} onClick={() => void remove(selected)}>{t("deleteTemplate")}</button>}</div>
       </form>
     </div>
   </div>;

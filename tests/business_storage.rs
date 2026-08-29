@@ -188,6 +188,92 @@ async fn inline_injection_failure_rolls_back_workspace_and_first_job() {
 }
 
 #[tokio::test]
+async fn template_deletion_requires_disabled_unreferenced_template() {
+    let database = database().await;
+    let admin = database
+        .create_user("Admin", ADMIN_TOKEN, true, 100)
+        .await
+        .unwrap();
+    let organization = database
+        .create_organization(
+            CreateOrganization {
+                name: "Template lifecycle".to_owned(),
+                owner_user_id: admin.user_id,
+            },
+            101,
+        )
+        .await
+        .unwrap();
+    let resources = Resources {
+        cpu_millis: 1_000,
+        memory_mib: 2_048,
+        gpu_count: 0,
+        disk_gib: 20,
+    };
+    let template_id = create_template(
+        &database,
+        organization.id,
+        "Referenced",
+        "registry.example/workspace:1",
+        AccessMode::Internal,
+        resources,
+        102,
+    )
+    .await;
+    assert!(matches!(
+        database.delete_workspace_template(template_id, true).await,
+        Err(StorageError::TemplateMustBeDisabled)
+    ));
+    database
+        .create_workspace(
+            CreateWorkspace {
+                organization_id: organization.id,
+                owner_id: admin.user_id,
+                name: "keeps-snapshot".to_owned(),
+                template_id,
+                organization_injection_refs: None,
+                user_injection_refs: None,
+            },
+            true,
+            admin.user_id,
+            103,
+        )
+        .await
+        .unwrap();
+    database
+        .set_workspace_template_enabled(template_id, false, true, 104)
+        .await
+        .unwrap();
+    assert!(matches!(
+        database.delete_workspace_template(template_id, true).await,
+        Err(StorageError::TemplateInUse)
+    ));
+
+    let unused_id = create_template(
+        &database,
+        organization.id,
+        "Unused",
+        "registry.example/workspace:1",
+        AccessMode::Internal,
+        resources,
+        105,
+    )
+    .await;
+    database
+        .set_workspace_template_enabled(unused_id, false, true, 106)
+        .await
+        .unwrap();
+    database
+        .delete_workspace_template(unused_id, true)
+        .await
+        .unwrap();
+    assert!(matches!(
+        database.get_workspace_template(unused_id).await,
+        Err(StorageError::TemplateNotFound)
+    ));
+}
+
+#[tokio::test]
 async fn image_allowlist_and_template_contract_are_admitted_atomically() {
     let database = database().await;
     let admin = database

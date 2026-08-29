@@ -176,6 +176,16 @@ fn storage_response(error: StorageError) -> ErrorResponse {
             "invalid_template",
             "template or image policy is invalid",
         ),
+        StorageError::TemplateMustBeDisabled => response(
+            StatusCode::CONFLICT,
+            "template_must_be_disabled",
+            "disable the workspace template before deleting it",
+        ),
+        StorageError::TemplateInUse => response(
+            StatusCode::CONFLICT,
+            "template_in_use",
+            "the workspace template is still referenced by a workspace",
+        ),
         StorageError::PrivilegedTemplateForbidden => response(
             StatusCode::FORBIDDEN,
             "privileged_template_forbidden",

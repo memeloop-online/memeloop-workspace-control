@@ -184,7 +184,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         )
         .route(
             "/api/v1/templates/{template_id}",
-            axum::routing::put(catalog::replace_template),
+            axum::routing::put(catalog::replace_template).delete(catalog::delete_template),
         )
         .route(
             "/api/v1/templates/{template_id}/enabled",
@@ -301,6 +301,7 @@ async fn system_info(State(state): State<Arc<AppState>>) -> Json<SystemInfoRespo
         catalog::list_templates,
         catalog::create_template,
         catalog::replace_template,
+        catalog::delete_template,
         catalog::set_template_enabled,
         workspaces::create,
         workspaces::list,

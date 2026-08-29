@@ -136,6 +136,10 @@ export class ApiClient {
     });
   }
 
+  deleteTemplate(templateId: string): Promise<void> {
+    return this.request(`/api/v1/templates/${templateId}`, { method: "DELETE" });
+  }
+
   webhooks(organizationId: string): Promise<WebhookSubscription[]> {
     return this.request(`/api/v1/webhooks?organization_id=${organizationId}`);
   }

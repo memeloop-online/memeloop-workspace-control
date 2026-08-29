@@ -294,6 +294,37 @@ async fn management_api_enforces_system_and_organization_boundaries() {
     assert_eq!(disabled.status(), StatusCode::OK);
     assert_eq!(body_json(disabled).await["enabled"], false);
 
+    let deleted_template = app
+        .clone()
+        .oneshot(
+            authenticated(
+                Request::delete(format!("/api/v1/templates/{template_id}")),
+                CREATED_TOKEN,
+            )
+            .body(Body::empty())
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(deleted_template.status(), StatusCode::NO_CONTENT);
+
+    let templates_after_delete = app
+        .clone()
+        .oneshot(
+            authenticated(
+                Request::get(format!(
+                    "/api/v1/templates?organization_id={}",
+                    organization.id
+                )),
+                CREATED_TOKEN,
+            )
+            .body(Body::empty())
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(body_json(templates_after_delete).await, json!([]));
+
     let revoked = app
         .clone()
         .oneshot(
