@@ -7,12 +7,12 @@ Kubernetes/K3s version matrix.
 
 The currently accepted amd64 images are pinned by registry digest:
 
-- control plane: `ghcr.io/memeloop-online/memeloop-workspace-control@sha256:db80a8f2c1e213d1b46fdb39fc35a7f89fa3061f5c3b83eba807fc9319382b76`
-- workspace Contract v1: `ghcr.io/memeloop-online/memeloop-workspace-control-workspace@sha256:d5a15805a31366bcaee51a1f92e2801db6017e7723b9b6aff45c335d1208b511`
-- stock ttyd/OpenSSH client: `ghcr.io/memeloop-online/memeloop-workspace-control-ttyd@sha256:2e36f9a784a0a5b178840c6d442bba17c82b7622a50880826d1e823f3f3203dd`
-- OpenSSH jump: `ghcr.io/memeloop-online/memeloop-workspace-control-ssh-jump@sha256:75036db4c07b64582c95bcf1b8d36ec075a3ba83893c87785269cba794c0d611`
+- control plane: `ghcr.io/memeloop-online/memeloop-workspace-control@sha256:59954972685769366c714f666dbae188b5f5260a2c7acf533aed7d588a99ccdc`
+- workspace Contract v1: `ghcr.io/memeloop-online/memeloop-workspace-control-workspace@sha256:80df488c2f15c8ab99f467a0160994463cf8c2f4cc9e3c02a567df9a7ba7367b`
+- stock ttyd/OpenSSH client: `ghcr.io/memeloop-online/memeloop-workspace-control-ttyd@sha256:22770a329edf5b4c3599fc545fa6b4e9caab5cc035d245eb1b86b9e34f2439e8`
+- OpenSSH jump: `ghcr.io/memeloop-online/memeloop-workspace-control-ssh-jump@sha256:7a5bc283f580b933a8053f0cb1452d7bca3eb540dca2c654a0e2d1c42e122274`
 
-These are the outputs of CI run `33306409113`; do not substitute a mutable tag during acceptance.
+These are the outputs of CI run `33308161925`; do not substitute a mutable tag during acceptance.
 
 Run the read-only preflight before Helm changes. All target-identifying values are mandatory:
 
