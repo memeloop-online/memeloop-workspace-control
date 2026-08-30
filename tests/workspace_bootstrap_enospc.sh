@@ -27,6 +27,8 @@ test -s /run/mwc-ssh/ssh_host_ed25519_key
 test -s /run/mwc-ssh/known_hosts
 test -s /run/mwc-ssh/sshd_config
 /usr/sbin/sshd -t -f /run/mwc-ssh/sshd_config
+test "$(stat -c %a /workspace)" = "750"
+test "$(stat -c %U:%G /workspace)" = "workspace:workspace"
 test -e /run/mwc-ssh/reserve-released
 test ! -e /workspace/.mwc/storage-reserve
 test "$(df -P /workspace | awk 'NR == 2 {print $5}')" != "100%"

@@ -80,7 +80,10 @@ regenerable_link_best_effort() {
 prepare_regenerable_link() {
     link_path=$1
     target=$2
-    install -d -m 0700 -o "$workspace_user" -g "$workspace_group" "$(dirname "$link_path")"
+    link_parent=$(dirname "$link_path")
+    if [ ! -d "$link_parent" ]; then
+        install -d -m 0700 -o "$workspace_user" -g "$workspace_group" "$link_parent"
+    fi
     if [ -L "$link_path" ]; then
         return
     fi
