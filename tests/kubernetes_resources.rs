@@ -212,9 +212,19 @@ fn configured_tailnet_access_adds_an_ssh_only_automatic_node_port() {
         resources.service.spec.as_ref().unwrap().type_.as_deref(),
         Some("ClusterIP")
     );
+    assert_eq!(
+        resources
+            .service
+            .spec
+            .as_ref()
+            .unwrap()
+            .publish_not_ready_addresses,
+        Some(true)
+    );
     let ssh_service = resources.internal_ssh_service.unwrap();
     let spec = ssh_service.spec.unwrap();
     assert_eq!(spec.type_.as_deref(), Some("NodePort"));
+    assert_eq!(spec.publish_not_ready_addresses, Some(true));
     let ports = spec.ports.unwrap();
     assert_eq!(ports.len(), 1, "ttyd must never be published by NodePort");
     assert_eq!(ports[0].name.as_deref(), Some("ssh"));
@@ -324,10 +334,10 @@ fn only_templates_requesting_cluster_access_receive_an_owned_cluster_admin_ident
     }));
     assert!(environment.iter().any(|variable| {
         variable.name == "KUBECONFIG"
-            && variable.value.as_deref() == Some("/home/cluster-admin/.mwc/kubeconfig")
+            && variable.value.as_deref() == Some("/run/mwc-ssh/kubeconfig")
     }));
     let config = resources.workspace_config.data.as_ref().unwrap();
-    assert!(config["sshd_config"].contains("\"KUBECONFIG=/home/cluster-admin/.mwc/kubeconfig\""));
+    assert!(config["sshd_config"].contains("\"KUBECONFIG=/run/mwc-ssh/kubeconfig\""));
     assert!(config["mwc-workspace-bootstrap"].contains("server: https://kubernetes.default.svc"));
     assert!(
         config["mwc-workspace-bootstrap"]
@@ -641,19 +651,7 @@ fn node_template_reuses_the_existing_image_with_platform_bootstrap() {
             .type_,
         "Unconfined"
     );
-    assert!(
-        pod.init_containers
-            .as_ref()
-            .unwrap()
-            .iter()
-            .any(|container| {
-                container.name == "buildctl"
-                    && container.image.as_deref().is_some_and(|image| {
-                        image.starts_with("harbor.k3s.onetwo.website/")
-                            && image.contains("@sha256:")
-                    })
-            })
-    );
+    assert_eq!(pod.init_containers.as_ref().unwrap().len(), 1);
     assert!(
         resources.workspace_config.data.as_ref().unwrap()["sshd_config"]
             .contains("AllowUsers node-dev")
@@ -663,12 +661,13 @@ fn node_template_reuses_the_existing_image_with_platform_bootstrap() {
     );
     let sshd_config = &resources.workspace_config.data.as_ref().unwrap()["sshd_config"];
     assert_eq!(sshd_config.matches("SetEnv ").count(), 1);
-    assert!(
-        sshd_config.contains("\"PATH=/usr/local/bin:/usr/local/sbin:/home/node-dev/.local/bin")
-    );
     assert!(sshd_config.contains(
-        "\"BUILDKIT_HOST=unix:///home/node-dev/.cache/buildkit/runtime/buildkit/buildkitd.sock\""
+        "\"PATH=/run/mwc-buildkit/bin:/usr/local/bin:/usr/local/sbin:/home/node-dev/.local/bin"
     ));
+    assert!(
+        sshd_config
+            .contains("\"BUILDKIT_HOST=unix:///run/mwc-buildkit/runtime/buildkit/buildkitd.sock\"")
+    );
     assert!(
         resources.workspace_config.data.as_ref().unwrap()["mwc-workspace-bootstrap"]
             .contains("apt-get install -y --no-install-recommends jq openssh-server")
@@ -691,7 +690,167 @@ fn node_template_reuses_the_existing_image_with_platform_bootstrap() {
     assert!(bootstrap.contains("secret) mode=384"));
     assert!(bootstrap.contains("config_map) mode=420"));
     assert!(bootstrap.contains("prepare_runtime_sshd_config"));
+    assert!(bootstrap.contains("mark_home_degraded"));
+    assert!(bootstrap.contains("regenerable_link_best_effort"));
+    assert!(bootstrap.contains("release_reserve_if_critical"));
     assert!(bootstrap.contains("exec /usr/sbin/sshd -D -e -f \"$runtime_sshd_config\""));
+}
+
+#[test]
+fn regenerable_data_uses_bounded_pod_lifetime_storage() {
+    let mut workspace = workspace(WorkspaceState::Ready);
+    workspace.template.buildkit = true;
+    workspace.template.storage_policy.runtime_tmp_memory_mib = 640;
+    workspace.template.storage_policy.build_scratch_gib = 14;
+    workspace.template.storage_policy.buildkit_cache_gib = 9;
+    workspace.template.storage_policy.codex_scratch_gib = 3;
+
+    let resources = builder().build(&workspace).unwrap();
+    let pod = resources.stateful_set.spec.unwrap().template.spec.unwrap();
+    let volume = |name: &str| {
+        pod.volumes
+            .as_ref()
+            .unwrap()
+            .iter()
+            .find(|volume| volume.name == name)
+            .unwrap()
+            .empty_dir
+            .as_ref()
+            .unwrap()
+    };
+    assert_eq!(volume("runtime-tmp").medium.as_deref(), Some("Memory"));
+    assert_eq!(
+        volume("runtime-tmp").size_limit.as_ref().unwrap().0,
+        "640Mi"
+    );
+    assert_eq!(
+        volume("build-scratch").size_limit.as_ref().unwrap().0,
+        "14Gi"
+    );
+    assert_eq!(
+        volume("buildkit-cache").size_limit.as_ref().unwrap().0,
+        "9Gi"
+    );
+    assert_eq!(
+        volume("codex-scratch").size_limit.as_ref().unwrap().0,
+        "3Gi"
+    );
+    assert_eq!(
+        volume("runtime-ssh").size_limit.as_ref().unwrap().0,
+        "128Mi"
+    );
+    assert_eq!(volume("runtime-ssh").medium.as_deref(), Some("Memory"));
+    assert_eq!(volume("ttyd-tmp").medium.as_deref(), Some("Memory"));
+    assert_eq!(volume("ttyd-tmp").size_limit.as_ref().unwrap().0, "128Mi");
+
+    let workspace_container = pod
+        .containers
+        .iter()
+        .find(|container| container.name == "workspace")
+        .unwrap();
+    let mounts = workspace_container.volume_mounts.as_ref().unwrap();
+    assert!(mounts.iter().any(|mount| {
+        mount.name == "runtime-tmp" && matches!(mount.mount_path.as_str(), "/tmp" | "/var/tmp")
+    }));
+    assert!(mounts.iter().any(|mount| {
+        mount.name == "build-scratch" && mount.mount_path == "/var/lib/mwc/build-scratch"
+    }));
+    assert!(mounts.iter().any(|mount| {
+        mount.name == "codex-scratch" && mount.mount_path == "/var/lib/mwc/codex-scratch"
+    }));
+    assert!(mounts.iter().any(|mount| {
+        mount.name == "buildkit-cache" && mount.mount_path == "/run/mwc-buildkit"
+    }));
+    assert!(!mounts.iter().any(|mount| {
+        mount.name == "workspace-data" && matches!(mount.mount_path.as_str(), "/tmp" | "/var/tmp")
+    }));
+    let ttyd = pod
+        .containers
+        .iter()
+        .find(|container| container.name == "ttyd")
+        .unwrap();
+    let ttyd_mounts = ttyd.volume_mounts.as_ref().unwrap();
+    assert!(ttyd_mounts.iter().any(|mount| {
+        mount.name == "ttyd-tmp" && matches!(mount.mount_path.as_str(), "/tmp" | "/var/tmp")
+    }));
+    assert!(!ttyd_mounts.iter().any(|mount| mount.name == "runtime-tmp"));
+    let environment = workspace_container.env.as_ref().unwrap();
+    assert!(environment.iter().any(|variable| {
+        variable.name == "CARGO_TARGET_DIR"
+            && variable.value.as_deref() == Some("/var/lib/mwc/build-scratch/cargo-target")
+    }));
+    assert!(environment.iter().any(|variable| {
+        variable.name == "BUILDKIT_HOST"
+            && variable.value.as_deref()
+                == Some("unix:///run/mwc-buildkit/runtime/buildkit/buildkitd.sock")
+    }));
+    assert!(environment.iter().any(|variable| {
+        variable.name == "MWC_HOME_RESERVE_MIB" && variable.value.as_deref() == Some("1024")
+    }));
+    assert_eq!(
+        workspace_container
+            .resources
+            .as_ref()
+            .unwrap()
+            .limits
+            .as_ref()
+            .unwrap()["ephemeral-storage"]
+            .0,
+        "17664Mi"
+    );
+
+    let buildkit = pod
+        .containers
+        .iter()
+        .find(|container| container.name == "buildkitd")
+        .unwrap();
+    assert!(
+        buildkit
+            .volume_mounts
+            .as_ref()
+            .unwrap()
+            .iter()
+            .any(|mount| {
+                mount.name == "buildkit-cache" && mount.mount_path == "/var/lib/mwc-buildkit"
+            })
+    );
+    assert!(
+        !buildkit
+            .volume_mounts
+            .as_ref()
+            .unwrap()
+            .iter()
+            .any(|mount| {
+                mount.name == "workspace-data"
+                    && matches!(mount.mount_path.as_str(), "/tmp" | "/var/tmp")
+            })
+    );
+    assert_eq!(
+        buildkit
+            .resources
+            .as_ref()
+            .unwrap()
+            .limits
+            .as_ref()
+            .unwrap()["ephemeral-storage"]
+            .0,
+        "9Gi"
+    );
+    assert_eq!(
+        buildkit
+            .resources
+            .as_ref()
+            .unwrap()
+            .requests
+            .as_ref()
+            .unwrap()["ephemeral-storage"]
+            .0,
+        "1Gi"
+    );
+
+    let sshd = &resources.workspace_config.data.as_ref().unwrap()["sshd_config"];
+    assert!(sshd.contains("AuthorizedKeysFile /run/mwc-ssh/authorized_keys"));
+    assert!(sshd.contains("Banner /run/mwc-ssh/storage-banner"));
 }
 
 #[test]

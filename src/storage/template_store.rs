@@ -1,11 +1,15 @@
 use serde::{Deserialize, Serialize};
-use sqlx::{PgConnection, Row, SqliteConnection, postgres::PgRow, sqlite::SqliteRow};
+use sqlx::{PgConnection, SqliteConnection, postgres::PgRow, sqlite::SqliteRow};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::templates::{WorkspaceTemplateDocument, WorkspaceTemplateSpec};
 
 use super::{Database, StorageError, image_policy_store::validate_image};
+
+mod row;
+
+use row::{TemplateDatabaseRow, decode_optional_template, decode_template};
 
 const TEMPLATE_COLUMNS: &str =
     "id, organization_id, template_yaml, enabled, created_at, updated_at";
@@ -358,42 +362,6 @@ fn normalize_yaml(yaml: &str) -> Result<String, StorageError> {
         yaml.to_owned()
     } else {
         format!("{yaml}\n")
-    })
-}
-
-fn decode_optional_template(
-    row: Option<TemplateDatabaseRow>,
-) -> Result<WorkspaceTemplate, StorageError> {
-    match row {
-        Some(TemplateDatabaseRow::Sqlite(row)) => decode_template(row),
-        Some(TemplateDatabaseRow::Postgres(row)) => decode_template(row),
-        None => Err(StorageError::TemplateNotFound),
-    }
-}
-
-enum TemplateDatabaseRow {
-    Sqlite(SqliteRow),
-    Postgres(PgRow),
-}
-
-fn decode_template<R: Row>(row: R) -> Result<WorkspaceTemplate, StorageError>
-where
-    for<'a> &'a str: sqlx::ColumnIndex<R>,
-    String: for<'d> sqlx::Decode<'d, R::Database> + sqlx::Type<R::Database>,
-    i64: for<'d> sqlx::Decode<'d, R::Database> + sqlx::Type<R::Database>,
-{
-    let organization: Option<String> = row.try_get("organization_id")?;
-    let yaml: String = row.try_get("template_yaml")?;
-    let document = parse_document(&yaml)?;
-    Ok(WorkspaceTemplate {
-        id: Uuid::parse_str(&row.try_get::<String, _>("id")?)?,
-        organization_id: organization.map(|id| Uuid::parse_str(&id)).transpose()?,
-        name: document.metadata.name,
-        template: document.spec,
-        yaml,
-        enabled: row.try_get::<i64, _>("enabled")? != 0,
-        created_at: row.try_get("created_at")?,
-        updated_at: row.try_get("updated_at")?,
     })
 }
 

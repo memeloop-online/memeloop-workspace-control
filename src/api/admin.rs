@@ -2,19 +2,32 @@ use std::sync::Arc;
 
 use axum::{
     Json,
-    extract::{Path, Query, State},
+    extract::{Path, State},
     http::{HeaderMap, StatusCode},
     response::Response,
 };
 use serde::{Deserialize, Serialize};
-use utoipa::{IntoParams, ToSchema};
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::{
     auth::{Permission, Role},
     config::DatabaseMode,
     quota::Resources,
-    storage::{AuditRecord, IdempotencyDecision, JobCounts, UserSummary},
+    storage::{IdempotencyDecision, JobCounts, UserSummary},
+};
+
+#[path = "admin/audit.rs"]
+mod audit_api;
+#[path = "admin/settings.rs"]
+mod settings;
+
+pub(super) use audit_api::{__path_audit, audit};
+pub(super) use settings::{
+    __path_create_api_key, __path_delete_api_key, __path_get_profile, __path_list_api_keys,
+    __path_update_profile, CreateApiKeyRequest, CreatedApiKeyResponse, UpdateUserProfileRequest,
+    UserProfileResponse, create_api_key, delete_api_key, get_profile, list_api_keys,
+    update_profile,
 };
 
 use super::{
@@ -37,12 +50,6 @@ pub(super) struct CreateUserRequest {
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub(super) struct MembershipRequest {
     role: Role,
-}
-
-#[derive(Debug, Deserialize, IntoParams)]
-pub(super) struct AuditQuery {
-    organization_id: Uuid,
-    limit: Option<u32>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -294,24 +301,6 @@ pub(super) async fn set_quota(
         )
         .await?;
     finish_empty(&state, &scope, key, &request_hash).await
-}
-
-#[utoipa::path(get, path = "/api/v1/audit", params(AuditQuery), responses((status = 200, body = [AuditRecord]), (status = 403, body = super::ErrorEnvelope)))]
-pub(super) async fn audit(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-    Query(query): Query<AuditQuery>,
-) -> Result<Json<Vec<AuditRecord>>, ApiError> {
-    let actor = principal(&state, &headers).await?;
-    if !actor.allows(Permission::ManageOrganization, query.organization_id) {
-        return Err(ApiError::Forbidden);
-    }
-    Ok(Json(
-        state
-            .database
-            .list_audit(query.organization_id, query.limit.unwrap_or(100))
-            .await?,
-    ))
 }
 
 #[utoipa::path(get, path = "/api/v1/admin/scaling", responses((status = 200, body = ScalingResponse), (status = 403, body = super::ErrorEnvelope)))]

@@ -28,6 +28,18 @@ pub enum StorageError {
     TokenTooShort,
     #[error("authenticated user was not found")]
     UserNotFound,
+    #[error("display name or avatar URL is invalid")]
+    InvalidUserProfile,
+    #[error("API key name is invalid")]
+    InvalidApiKey,
+    #[error("API key was not found")]
+    ApiKeyNotFound,
+    #[error("the last active API key cannot be revoked")]
+    LastApiKey,
+    #[error("a user may have at most 20 active API keys")]
+    TooManyApiKeys,
+    #[error("audit pagination or filters are invalid")]
+    InvalidAuditQuery,
     #[error("organization was not found")]
     OrganizationNotFound,
     #[error("database contains unknown role {0}")]
@@ -52,6 +64,24 @@ pub enum StorageError {
     InvalidPluginConfiguration,
     #[error("plugin configuration version changed")]
     PluginConfigurationVersionConflict,
+    #[error("plugin install inspection was not found")]
+    PluginInspectionNotFound,
+    #[error("plugin install inspection expired")]
+    PluginInspectionExpired,
+    #[error("plugin package digest does not match")]
+    PluginDigestMismatch,
+    #[error("plugin package version changed")]
+    PluginPackageVersionConflict,
+    #[error("plugin capability was not declared or approved")]
+    PluginCapabilityNotApproved,
+    #[error("plugin package was not found")]
+    PluginPackageNotFound,
+    #[error("plugin UI session is invalid or expired")]
+    PluginUiSessionInvalid,
+    #[error("plugin storage capacity was reached")]
+    PluginCapacityExceeded,
+    #[error("too many active plugin inspections")]
+    TooManyPluginInspections,
     #[error("workspace template must be disabled before deletion")]
     TemplateMustBeDisabled,
     #[error("workspace template is referenced by one or more workspaces")]
@@ -107,6 +137,8 @@ pub enum StorageError {
     SnapshotSchemaTooNew(i64),
     #[error("snapshot is missing required table {0}")]
     SnapshotMissingTable(String),
+    #[error("snapshot contains invalid dynamic plugin state")]
+    InvalidPluginSnapshot,
     #[error("PostgreSQL import destination is not empty")]
     ImportDestinationNotEmpty,
 }

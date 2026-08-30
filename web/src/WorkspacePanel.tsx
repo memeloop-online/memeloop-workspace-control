@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
 import type { ApiClient } from "./api";
+import { CredentialReferencePicker } from "./forms/CredentialReferencePicker";
 import { useI18n } from "./i18n";
 import { WorkspaceCard } from "./WorkspaceCard";
 import type {
@@ -153,14 +154,6 @@ export function WorkspacePanel(props: Props) {
     }
   }
 
-  function toggleReference(
-    key: string,
-    selected: string[],
-    update: (value: string[]) => void,
-  ) {
-    update(selected.includes(key) ? selected.filter((value) => value !== key) : [...selected, key]);
-  }
-
   async function action(
     id: string,
     value: "start" | "stop" | "restart" | "delete",
@@ -208,7 +201,7 @@ export function WorkspacePanel(props: Props) {
 
       <div className="section-heading">
         <div>
-          <p className="eyebrow">WORKSPACES</p>
+          <p className="eyebrow">{t("workspaces")}</p>
           <h2>{t("workspaces")}</h2>
         </div>
         <button className="button primary" onClick={() => setShowCreate((value) => !value)}>
@@ -223,20 +216,7 @@ export function WorkspacePanel(props: Props) {
           {selectedTemplate && <dl className="template-summary wide"><div><dt>{t("image")}</dt><dd><code>{selectedTemplate.image}</code></dd></div><div><dt><FieldTitle label={t("accessMode")} help={selectedTemplate.access_mode === "internal" ? t("internalHelp") : t("publicHelp")} /></dt><dd>{selectedTemplate.access_mode === "internal" ? t("internal") : t("public")}</dd></div><div><dt>{t("resources")}</dt><dd>{selectedTemplate.resources.cpu_millis}m CPU · {selectedTemplate.resources.memory_mib} MiB · {selectedTemplate.resources.disk_gib} GiB · {selectedTemplate.resources.gpu_count} GPU</dd></div><div><dt>{t("workspaceUser")}</dt><dd><code>{selectedTemplate.workspace_user} · {selectedTemplate.workspace_home}</code></dd></div></dl>}
           <label>{t("injectionReferences")}<select value={explicitInjectionRefs ? "selected" : "all"} onChange={(e) => setReferenceMode(e.target.value === "selected")}><option value="all">{t("allMatching")}</option><option value="selected">{t("selectedReferences")}</option></select></label>
           {explicitInjectionRefs && (
-            <fieldset className="injection-ref-picker wide">
-              <legend>{t("organizationAndUserCredentials")}</legend>
-              <div>
-                <strong>{t("scopeOrganization")}</strong>
-                {organizationInjections.length === 0 && <small>{t("noItems")}</small>}
-                {organizationInjections.map((item) => <label key={item.key}><input type="checkbox" checked={item.locked || organizationRefs.includes(item.key)} disabled={item.locked} onChange={() => toggleReference(item.key, organizationRefs, setOrganizationRefs)} /><span>{item.key}{item.locked ? ` · ${t("locked")}` : ""}</span></label>)}
-              </div>
-              <div>
-                <strong>{t("scopeUser")}</strong>
-                {userInjections.length === 0 && <small>{t("noItems")}</small>}
-                {userInjections.map((item) => <label key={item.key}><input type="checkbox" checked={userRefs.includes(item.key)} onChange={() => toggleReference(item.key, userRefs, setUserRefs)} /><span>{item.key}</span></label>)}
-              </div>
-              <p>{t("selectedReferenceHelp")}</p>
-            </fieldset>
+            <CredentialReferencePicker organizationItems={organizationInjections} userItems={userInjections} organizationSelected={organizationRefs} userSelected={userRefs} onOrganizationSelected={setOrganizationRefs} onUserSelected={setUserRefs} />
           )}
           <div className="form-actions"><button className="button primary" disabled={submitting || !templateId}>{submitting ? t("creating") : t("submitCreate")}</button></div>
         </form>

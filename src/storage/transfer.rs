@@ -7,6 +7,8 @@ use crate::{quota::Resources, templates::WorkspaceTemplateDocument, workspaces::
 
 use super::{Database, StorageError};
 
+mod plugin_state;
+
 const SNAPSHOT_FORMAT_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -42,6 +44,7 @@ impl Database {
                 .collect::<Result<Vec<_>, _>>()?;
             tables.insert((*name).to_owned(), values);
         }
+        tables.extend(plugin_state::export_tables(pool, installation_id.as_str()).await?);
         Ok(DatabaseSnapshot {
             format_version: SNAPSHOT_FORMAT_VERSION,
             schema_version: self.schema_version().await?,
@@ -74,6 +77,7 @@ impl Database {
             return Err(StorageError::SnapshotSchemaTooNew(snapshot.schema_version));
         }
 
+        let plugin_tables = plugin_state::prepare_import(snapshot)?;
         let mut transaction = pool.begin().await?;
         sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
             .bind(format!("mwc:import:{installation_id}"))
@@ -81,7 +85,8 @@ impl Database {
             .await?;
         let existing: i64 = sqlx::query_scalar(
             "SELECT (SELECT COUNT(*) FROM users) + (SELECT COUNT(*) FROM organizations) + \
-            (SELECT COUNT(*) FROM workspaces) + (SELECT COUNT(*) FROM injection_items)",
+            (SELECT COUNT(*) FROM workspaces) + (SELECT COUNT(*) FROM injection_items) + \
+            (SELECT COUNT(*) FROM plugin_packages)",
         )
         .fetch_one(&mut *transaction)
         .await?;
@@ -89,9 +94,15 @@ impl Database {
             return Err(StorageError::ImportDestinationNotEmpty);
         }
         for table in IMPORT_ORDER {
-            let Some(rows) = snapshot.tables.get(*table) else {
+            let rows = plugin_tables
+                .as_ref()
+                .and_then(|tables| tables.get(*table))
+                .or_else(|| snapshot.tables.get(*table));
+            let Some(rows) = rows else {
                 if (*table == "workspace_injection_refs" && snapshot.schema_version < 7)
                     || (*table == "plugin_configurations" && snapshot.schema_version < 11)
+                    || (plugin_state::is_plugin_table(table) && snapshot.schema_version < 13)
+                    || (*table == "user_api_keys" && snapshot.schema_version < 14)
                 {
                     continue;
                 }
@@ -109,6 +120,13 @@ impl Database {
                 .bind(json)
                 .execute(&mut *transaction)
                 .await?;
+        }
+        if snapshot.schema_version < 14 {
+            sqlx::query(
+                "INSERT INTO user_api_keys (id, installation_id, user_id, name, token_prefix, token_hash, last_used_at, created_at, revoked_at) SELECT id, installation_id, id, 'Legacy key', 'legacy', token_hash, NULL, created_at, NULL FROM users WHERE true ON CONFLICT (installation_id, token_hash) DO NOTHING",
+            )
+            .execute(&mut *transaction)
+            .await?;
         }
         transaction.commit().await?;
         Ok(())
@@ -197,6 +215,10 @@ fn normalize_snapshot_rows(
 
 const IMPORT_ORDER: &[&str] = &[
     "users",
+    "user_api_keys",
+    "plugin_packages",
+    "plugin_assets",
+    "plugin_catalog_metadata",
     "organizations",
     "organization_memberships",
     "organization_quotas",
@@ -218,7 +240,11 @@ const IMPORT_ORDER: &[&str] = &[
 const EXPORT_QUERIES: &[(&str, &str)] = &[
     (
         "users",
-        "SELECT json_object('id', id, 'installation_id', installation_id, 'display_name', display_name, 'token_hash', token_hash, 'system_admin', system_admin, 'disabled', disabled, 'created_at', created_at) item FROM users WHERE installation_id = ?1 ORDER BY id",
+        "SELECT json_object('id', id, 'installation_id', installation_id, 'display_name', display_name, 'token_hash', token_hash, 'system_admin', system_admin, 'disabled', disabled, 'created_at', created_at, 'avatar_url', avatar_url) item FROM users WHERE installation_id = ?1 ORDER BY id",
+    ),
+    (
+        "user_api_keys",
+        "SELECT json_object('id', id, 'installation_id', installation_id, 'user_id', user_id, 'name', name, 'token_prefix', token_prefix, 'token_hash', token_hash, 'last_used_at', last_used_at, 'created_at', created_at, 'revoked_at', revoked_at) item FROM user_api_keys WHERE installation_id = ?1 ORDER BY user_id, created_at, id",
     ),
     (
         "organizations",

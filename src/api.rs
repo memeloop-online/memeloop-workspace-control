@@ -3,12 +3,7 @@ use std::sync::{
     atomic::{AtomicU64, Ordering},
 };
 
-use axum::{
-    Json, Router,
-    extract::State,
-    http::StatusCode,
-    routing::{get, post},
-};
+use axum::{Json, Router, extract::State, http::StatusCode};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use utoipa::{OpenApi, ToSchema};
@@ -30,6 +25,7 @@ mod injections;
 mod metrics;
 mod organizations;
 mod plugins;
+mod routes;
 mod runtime;
 mod ssh;
 mod ui;
@@ -143,110 +139,11 @@ impl AppState {
 }
 
 pub fn router(state: Arc<AppState>) -> Router {
-    Router::new()
-        .route("/healthz", get(health))
-        .route("/readyz", get(ready))
-        .route("/metrics", get(metrics::prometheus))
-        .route("/api/v1/system/info", get(system_info))
-        .route("/api/v1/me", get(auth::me))
-        .route("/api/v1/events", get(events::stream))
-        .route(
-            "/api/v1/injections/{scope}/{scope_id}",
-            get(injections::list),
-        )
-        .route(
-            "/api/v1/injections/{scope}/{scope_id}/{key}",
-            axum::routing::put(injections::replace).delete(injections::delete),
-        )
-        .route("/api/v1/injections/preview", post(injections::preview))
-        .route(
-            "/api/v1/organizations",
-            get(organizations::list).post(organizations::create),
-        )
-        .route(
-            "/api/v1/admin/users",
-            get(admin::list_users).post(admin::create_user),
-        )
-        .route(
-            "/api/v1/organizations/{organization_id}/members/{user_id}",
-            axum::routing::put(admin::upsert_membership).delete(admin::remove_membership),
-        )
-        .route(
-            "/api/v1/organizations/{organization_id}/quota",
-            get(admin::get_quota).put(admin::set_quota),
-        )
-        .route(
-            "/api/v1/admin/users/{user_id}/quota",
-            get(user_quota::get).put(user_quota::set),
-        )
-        .route("/api/v1/audit", get(admin::audit))
-        .route("/api/v1/admin/scaling", get(admin::scaling))
-        .route("/api/v1/plugins", get(plugins::list))
-        .route(
-            "/api/v1/plugins/{plugin_id}/configuration",
-            get(plugins::get_configuration)
-                .put(plugins::put_configuration)
-                .delete(plugins::delete_configuration),
-        )
-        .route(
-            "/api/v1/webhooks",
-            get(webhooks::list).post(webhooks::create),
-        )
-        .route(
-            "/api/v1/admin/images",
-            get(catalog::list_images).put(catalog::put_image),
-        )
-        .route(
-            "/api/v1/templates",
-            get(catalog::list_templates).post(catalog::create_template),
-        )
-        .route(
-            "/api/v1/templates/{template_id}",
-            axum::routing::put(catalog::replace_template).delete(catalog::delete_template),
-        )
-        .route(
-            "/api/v1/templates/{template_id}/enabled",
-            axum::routing::put(catalog::set_template_enabled),
-        )
-        .route(
-            "/api/v1/workspaces",
-            get(workspaces::list).post(workspaces::create),
-        )
-        .route("/api/v1/workspaces/{workspace_id}", get(workspaces::get))
-        .route("/api/v1/workspace-runtimes", get(runtime::list))
-        .route(
-            "/api/v1/workspaces/{workspace_id}/runtime",
-            get(runtime::get),
-        )
-        .route(
-            "/api/v1/workspaces/{workspace_id}/actions/{action}",
-            post(workspaces::action),
-        )
-        .route(
-            "/api/v1/workspaces/{workspace_id}/web-shell-tickets",
-            post(web_shell::issue),
-        )
-        .route("/api/v1/openapi.json", get(openapi))
-        .fallback(ui::asset)
-        .layer(axum::middleware::from_fn_with_state(
-            state.clone(),
-            metrics::count,
-        ))
-        .with_state(state)
+    routes::router(state)
 }
 
 pub fn internal_router(state: Arc<AppState>) -> Router {
-    Router::new()
-        .route(
-            "/api/v1/internal/web-shell/authorize",
-            get(web_shell::authorize),
-        )
-        .route(
-            "/api/v1/internal/ssh/authorized-key",
-            get(ssh::authorized_key),
-        )
-        .route("/api/v1/internal/ssh/login-users", get(ssh::login_users))
-        .with_state(state)
+    routes::internal_router(state)
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -298,6 +195,11 @@ async fn system_info(State(state): State<Arc<AppState>>) -> Json<SystemInfoRespo
         health,
         system_info,
         auth::me,
+        admin::get_profile,
+        admin::update_profile,
+        admin::list_api_keys,
+        admin::create_api_key,
+        admin::delete_api_key,
         events::stream,
         injections::list,
         injections::replace,
@@ -315,7 +217,7 @@ async fn system_info(State(state): State<Arc<AppState>>) -> Json<SystemInfoRespo
         user_quota::set,
         admin::audit,
         admin::scaling,
-        plugins::list,
+        plugins::lifecycle::list_packages,
         plugins::get_configuration,
         plugins::put_configuration,
         plugins::delete_configuration,
@@ -348,6 +250,8 @@ async fn system_info(State(state): State<Arc<AppState>>) -> Json<SystemInfoRespo
         crate::storage::Organization,
         crate::storage::UserSummary,
         crate::storage::AuditRecord,
+        crate::storage::AuditPage,
+        crate::storage::ApiKeySummary,
         crate::storage::JobCounts,
         crate::storage::ImagePolicy,
         crate::storage::WorkspaceTemplate,
@@ -361,6 +265,7 @@ async fn system_info(State(state): State<Arc<AppState>>) -> Json<SystemInfoRespo
         crate::workspaces::AccessMode,
         crate::templates::WorkspaceTemplateDocument,
         crate::templates::WorkspaceTemplateSpec,
+        crate::templates::WorkspaceStoragePolicy,
         crate::templates::PodResourceRequest,
         crate::quota::Resources,
         crate::injections::InjectionItem,
@@ -383,11 +288,16 @@ async fn system_info(State(state): State<Arc<AppState>>) -> Json<SystemInfoRespo
         runtime::WorkspaceRuntimeEntry,
         runtime::StorageTelemetry,
         runtime::StorageTelemetryStatus,
+        runtime::StoragePressure,
         runtime::PodRuntime,
         runtime::PodMetric,
         runtime::PodEvent,
         web_shell::WebShellTicketResponse,
         admin::CreateUserRequest,
+        admin::UserProfileResponse,
+        admin::UpdateUserProfileRequest,
+        admin::CreateApiKeyRequest,
+        admin::CreatedApiKeyResponse,
         admin::MembershipRequest,
         admin::ScalingResponse,
         plugins::PluginManifestView,

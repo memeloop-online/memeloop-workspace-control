@@ -1,6 +1,14 @@
 import { parse, stringify } from "yaml";
 
-import type { AccessMode, WorkspaceTemplate } from "../types";
+import type { AccessMode, WorkspaceStoragePolicy, WorkspaceTemplate } from "../types";
+
+export const DEFAULT_STORAGE_POLICY: WorkspaceStoragePolicy = {
+  runtime_tmp_memory_mib: 512,
+  build_scratch_gib: 12,
+  buildkit_cache_gib: 8,
+  codex_scratch_gib: 2,
+  home_reserve_mib: 1024,
+};
 
 export interface NumericPolicy {
   min: number;
@@ -16,7 +24,20 @@ export const TEMPLATE_NUMBER_POLICIES = {
   ephemeral: { min: 128, step: 128, max: 1_048_576 },
   gpu: { min: 0, step: 1, max: 64 },
   disk: { min: 1, step: 1, max: 16_384 },
+  runtimeTmpMemory: { min: 64, step: 64, max: 4_096 },
+  buildScratch: { min: 1, step: 1, max: 256 },
+  buildkitCache: { min: 1, step: 1, max: 256 },
+  codexScratch: { min: 1, step: 1, max: 32 },
+  homeReserve: { min: 64, step: 64, max: 4_096 },
 } as const satisfies Record<string, NumericPolicy>;
+
+export interface TemplateStoragePolicyDraft {
+  runtime_tmp_memory_mib: string;
+  build_scratch_gib: string;
+  buildkit_cache_gib: string;
+  codex_scratch_gib: string;
+  home_reserve_mib: string;
+}
 
 export interface TemplateDraft {
   name: string;
@@ -34,6 +55,7 @@ export interface TemplateDraft {
   home: string;
   preserveHome: boolean;
   buildkit: boolean;
+  storagePolicy: TemplateStoragePolicyDraft;
   clusterAccess: boolean;
   requiredNodes: string;
   preferredNodes: string;
@@ -65,12 +87,13 @@ export function emptyTemplateDraft(): TemplateDraft {
     disk: "50",
     requestCpu: "500",
     requestMemory: "1024",
-    requestEphemeral: "",
-    limitEphemeral: "",
+    requestEphemeral: "2048",
+    limitEphemeral: "14592",
     user: "workspace",
     home: "/workspace",
     preserveHome: false,
     buildkit: false,
+    storagePolicy: storagePolicyDraft(DEFAULT_STORAGE_POLICY),
     clusterAccess: false,
     requiredNodes: "",
     preferredNodes: "",
@@ -87,12 +110,22 @@ export function templateDraftToYaml(draft: TemplateDraft): string {
   const requestMemory = parseRequiredNumber(draft.requestMemory, TEMPLATE_NUMBER_POLICIES.requestMemory);
   const requestEphemeral = parseOptionalNumber(draft.requestEphemeral, TEMPLATE_NUMBER_POLICIES.ephemeral);
   const limitEphemeral = parseOptionalNumber(draft.limitEphemeral, TEMPLATE_NUMBER_POLICIES.ephemeral);
+  const storagePolicy: WorkspaceStoragePolicy = {
+    runtime_tmp_memory_mib: parseRequiredNumber(draft.storagePolicy.runtime_tmp_memory_mib, TEMPLATE_NUMBER_POLICIES.runtimeTmpMemory),
+    build_scratch_gib: parseRequiredNumber(draft.storagePolicy.build_scratch_gib, TEMPLATE_NUMBER_POLICIES.buildScratch),
+    buildkit_cache_gib: parseRequiredNumber(draft.storagePolicy.buildkit_cache_gib, TEMPLATE_NUMBER_POLICIES.buildkitCache),
+    codex_scratch_gib: parseRequiredNumber(draft.storagePolicy.codex_scratch_gib, TEMPLATE_NUMBER_POLICIES.codexScratch),
+    home_reserve_mib: parseOptionalNumber(draft.storagePolicy.home_reserve_mib, TEMPLATE_NUMBER_POLICIES.homeReserve),
+  };
 
   if (requestCpu > cpu || requestMemory > memory) {
     throw new TemplateDraftError("resource_request_exceeds_limit");
   }
   if (requestEphemeral !== null && limitEphemeral !== null && requestEphemeral > limitEphemeral) {
     throw new TemplateDraftError("ephemeral_request_exceeds_limit");
+  }
+  if (storagePolicy.home_reserve_mib !== null && (storagePolicy.home_reserve_mib >= disk * 1_024 || storagePolicy.home_reserve_mib * 10 > disk * 1_024)) {
+    throw new TemplateDraftError("invalid_template_number");
   }
 
   const spec: Record<string, unknown> = {
@@ -104,6 +137,7 @@ export function templateDraftToYaml(draft: TemplateDraft): string {
     workspace_home: draft.home,
     preserve_home_ownership: draft.preserveHome,
     buildkit: draft.buildkit,
+    storage_policy: storagePolicy,
     cluster_access: draft.clusterAccess,
   };
   if (requestEphemeral !== null) (spec.pod_requests as Record<string, unknown>).ephemeral_storage_mib = requestEphemeral;
@@ -134,10 +168,32 @@ export function templateDraftFromYaml(yaml: string): TemplateDraft {
     home: String(spec.workspace_home ?? ""),
     preserveHome: Boolean(spec.preserve_home_ownership ?? spec.preserve_home_root),
     buildkit: Boolean(spec.buildkit),
+    storagePolicy: storagePolicyDraft(parseStoragePolicy(spec.storage_policy)),
     clusterAccess: Boolean(spec.cluster_access),
     requiredNodes: (spec.required_node_names ?? []).join(", "),
     preferredNodes: (spec.preferred_node_names ?? []).join(", "),
     nodeSelector: formatPairs(spec.node_selector),
+  };
+}
+
+function parseStoragePolicy(value: unknown): WorkspaceStoragePolicy {
+  const policy = value && typeof value === "object" ? value as Partial<WorkspaceStoragePolicy> : {};
+  return {
+    runtime_tmp_memory_mib: Number(policy.runtime_tmp_memory_mib ?? DEFAULT_STORAGE_POLICY.runtime_tmp_memory_mib),
+    build_scratch_gib: Number(policy.build_scratch_gib ?? DEFAULT_STORAGE_POLICY.build_scratch_gib),
+    buildkit_cache_gib: Number(policy.buildkit_cache_gib ?? DEFAULT_STORAGE_POLICY.buildkit_cache_gib),
+    codex_scratch_gib: Number(policy.codex_scratch_gib ?? DEFAULT_STORAGE_POLICY.codex_scratch_gib),
+    home_reserve_mib: policy.home_reserve_mib == null ? null : Number(policy.home_reserve_mib),
+  };
+}
+
+function storagePolicyDraft(policy: WorkspaceStoragePolicy): TemplateStoragePolicyDraft {
+  return {
+    runtime_tmp_memory_mib: String(policy.runtime_tmp_memory_mib),
+    build_scratch_gib: String(policy.build_scratch_gib),
+    buildkit_cache_gib: String(policy.buildkit_cache_gib),
+    codex_scratch_gib: String(policy.codex_scratch_gib),
+    home_reserve_mib: optionalNumberText(policy.home_reserve_mib),
   };
 }
 

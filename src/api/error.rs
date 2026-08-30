@@ -8,6 +8,10 @@ use utoipa::ToSchema;
 
 use crate::storage::StorageError;
 
+mod plugin;
+
+use plugin::{plugin_distribution_response, plugin_response};
+
 #[derive(Debug)]
 pub enum ApiError {
     Unauthorized,
@@ -22,6 +26,7 @@ pub enum ApiError {
     Kubernetes(kube::Error),
     Injection(crate::injections::InjectionError),
     Plugin(crate::plugins::PluginError),
+    PluginDistribution(&'static str),
     Storage(StorageError),
 }
 
@@ -59,101 +64,91 @@ type ErrorResponse = (StatusCode, &'static str, String);
 impl ApiError {
     fn response_parts(self) -> ErrorResponse {
         match self {
-            Self::Unauthorized => response(
-                StatusCode::UNAUTHORIZED,
-                "unauthorized",
-                "a valid Bearer token is required",
-            ),
-            Self::Forbidden => response(
-                StatusCode::FORBIDDEN,
-                "forbidden",
-                "the authenticated user is not allowed to perform this action",
-            ),
-            Self::BadRequest(message) => response(StatusCode::BAD_REQUEST, "bad_request", message),
-            Self::MissingIdempotencyKey => response(
-                StatusCode::BAD_REQUEST,
-                "missing_idempotency_key",
-                "Idempotency-Key header is required",
-            ),
-            Self::IdempotencyConflict => response(
-                StatusCode::CONFLICT,
-                "idempotency_conflict",
-                "this idempotency key was already used with a different request",
-            ),
-            Self::IdempotencyInProgress => response(
-                StatusCode::CONFLICT,
-                "idempotency_in_progress",
-                "an equivalent request is still in progress",
-            ),
-            Self::EncryptionUnavailable => response(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "encryption_unavailable",
-                "injection APIs require MWC_ENCRYPTION_KEY",
-            ),
-            Self::WorkspaceNotConnectable => response(
-                StatusCode::CONFLICT,
-                "workspace_not_connectable",
-                "new Web Shell and SSH authorization requires a ready workspace",
-            ),
-            Self::KubernetesUnavailable => response(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "kubernetes_unavailable",
-                "runtime observations require Kubernetes coordination",
-            ),
-            Self::Kubernetes(error) => {
-                tracing::error!(error = %error, "Kubernetes runtime observation failed");
-                response(
-                    StatusCode::BAD_GATEWAY,
-                    "kubernetes_error",
-                    "Kubernetes runtime observations could not be read",
-                )
-            }
-            Self::Injection(error @ crate::injections::InjectionError::LockedOverride { .. }) => (
-                StatusCode::CONFLICT,
-                "locked_injection_conflict",
-                error.to_string(),
-            ),
-            Self::Injection(error) => (
-                StatusCode::BAD_REQUEST,
-                "invalid_injection",
-                error.to_string(),
-            ),
-            Self::Plugin(crate::plugins::PluginError::NotFound) => response(
-                StatusCode::NOT_FOUND,
-                "plugin_not_found",
-                "the plugin is not loaded",
-            ),
-            Self::Plugin(crate::plugins::PluginError::InvalidConfiguration) => response(
-                StatusCode::UNPROCESSABLE_ENTITY,
-                "invalid_plugin_configuration",
-                "the plugin configuration does not satisfy its current schema",
-            ),
-            Self::Plugin(crate::plugins::PluginError::ConfigurationVersionConflict) => response(
-                StatusCode::CONFLICT,
-                "plugin_configuration_version_conflict",
-                "the plugin configuration version changed",
-            ),
-            Self::Plugin(crate::plugins::PluginError::AdmissionDenied {
-                plugin_id,
-                decision_code,
-            }) => {
-                tracing::warn!(%plugin_id, %decision_code, "workspace create policy denied request");
-                response(
-                    StatusCode::UNPROCESSABLE_ENTITY,
-                    "plugin_admission_denied",
-                    "workspace creation was rejected by an installed policy",
-                )
-            }
-            Self::Plugin(error) => {
-                tracing::error!(error = %error, "plugin execution failed closed");
-                response(
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    "plugin_execution_failed",
-                    "workspace creation policy could not be evaluated",
-                )
-            }
+            error @ (Self::Unauthorized
+            | Self::Forbidden
+            | Self::BadRequest(_)
+            | Self::MissingIdempotencyKey
+            | Self::IdempotencyConflict
+            | Self::IdempotencyInProgress
+            | Self::EncryptionUnavailable
+            | Self::WorkspaceNotConnectable
+            | Self::KubernetesUnavailable
+            | Self::Kubernetes(_)) => operational_response(error),
+            Self::Injection(error) => injection_response(error),
+            Self::Plugin(error) => plugin_response(error),
+            Self::PluginDistribution(code) => plugin_distribution_response(code),
             Self::Storage(error) => storage_response(error),
         }
+    }
+}
+
+fn operational_response(error: ApiError) -> ErrorResponse {
+    match error {
+        ApiError::Unauthorized => response(
+            StatusCode::UNAUTHORIZED,
+            "unauthorized",
+            "a valid Bearer token is required",
+        ),
+        ApiError::Forbidden => response(
+            StatusCode::FORBIDDEN,
+            "forbidden",
+            "the authenticated user is not allowed to perform this action",
+        ),
+        ApiError::BadRequest(message) => response(StatusCode::BAD_REQUEST, "bad_request", message),
+        ApiError::MissingIdempotencyKey => response(
+            StatusCode::BAD_REQUEST,
+            "missing_idempotency_key",
+            "Idempotency-Key header is required",
+        ),
+        ApiError::IdempotencyConflict => response(
+            StatusCode::CONFLICT,
+            "idempotency_conflict",
+            "this idempotency key was already used with a different request",
+        ),
+        ApiError::IdempotencyInProgress => response(
+            StatusCode::CONFLICT,
+            "idempotency_in_progress",
+            "an equivalent request is still in progress",
+        ),
+        ApiError::EncryptionUnavailable => response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "encryption_unavailable",
+            "injection APIs require MWC_ENCRYPTION_KEY",
+        ),
+        ApiError::WorkspaceNotConnectable => response(
+            StatusCode::CONFLICT,
+            "workspace_not_connectable",
+            "new Web Shell and SSH authorization requires a ready workspace",
+        ),
+        ApiError::KubernetesUnavailable => response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "kubernetes_unavailable",
+            "runtime observations require Kubernetes coordination",
+        ),
+        ApiError::Kubernetes(error) => {
+            tracing::error!(error = %error, "Kubernetes runtime observation failed");
+            response(
+                StatusCode::BAD_GATEWAY,
+                "kubernetes_error",
+                "Kubernetes runtime observations could not be read",
+            )
+        }
+        _ => unreachable!("operational_response only accepts operational API errors"),
+    }
+}
+
+fn injection_response(error: crate::injections::InjectionError) -> ErrorResponse {
+    match error {
+        error @ crate::injections::InjectionError::LockedOverride { .. } => (
+            StatusCode::CONFLICT,
+            "locked_injection_conflict",
+            error.to_string(),
+        ),
+        error => (
+            StatusCode::BAD_REQUEST,
+            "invalid_injection",
+            error.to_string(),
+        ),
     }
 }
 
@@ -171,6 +166,12 @@ impl IntoResponse for ApiError {
 }
 
 fn storage_response(error: StorageError) -> ErrorResponse {
+    if let Some(response) = identity_storage_response(&error) {
+        return response;
+    }
+    if let Some(response) = plugin_storage_response(&error) {
+        return response;
+    }
     match error {
         StorageError::WorkspaceNotFound => response(
             StatusCode::NOT_FOUND,
@@ -217,16 +218,6 @@ fn storage_response(error: StorageError) -> ErrorResponse {
             "invalid_template",
             "template or image policy is invalid",
         ),
-        StorageError::InvalidPluginConfiguration => response(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "invalid_plugin_configuration",
-            "the plugin configuration is invalid",
-        ),
-        StorageError::PluginConfigurationVersionConflict => response(
-            StatusCode::CONFLICT,
-            "plugin_configuration_version_conflict",
-            "the plugin configuration version changed",
-        ),
         StorageError::TemplateMustBeDisabled => response(
             StatusCode::CONFLICT,
             "template_must_be_disabled",
@@ -266,6 +257,108 @@ fn storage_response(error: StorageError) -> ErrorResponse {
             )
         }
     }
+}
+
+fn identity_storage_response(error: &StorageError) -> Option<ErrorResponse> {
+    Some(match error {
+        StorageError::UserNotFound => response(
+            StatusCode::NOT_FOUND,
+            "user_not_found",
+            "the user was not found",
+        ),
+        StorageError::InvalidUserProfile => response(
+            StatusCode::BAD_REQUEST,
+            "invalid_user_profile",
+            "display name must be 1-80 characters and custom avatars must use a plain HTTPS URL",
+        ),
+        StorageError::InvalidApiKey => response(
+            StatusCode::BAD_REQUEST,
+            "invalid_api_key",
+            "API key names must contain 1-80 characters",
+        ),
+        StorageError::ApiKeyNotFound => response(
+            StatusCode::NOT_FOUND,
+            "api_key_not_found",
+            "the API key was not found",
+        ),
+        StorageError::LastApiKey => response(
+            StatusCode::CONFLICT,
+            "last_api_key",
+            "create another API key before revoking the last active key",
+        ),
+        StorageError::TooManyApiKeys => response(
+            StatusCode::CONFLICT,
+            "too_many_api_keys",
+            "revoke an API key before creating another one",
+        ),
+        StorageError::InvalidAuditQuery => response(
+            StatusCode::BAD_REQUEST,
+            "invalid_audit_query",
+            "audit pagination or filters are invalid",
+        ),
+        _ => return None,
+    })
+}
+
+fn plugin_storage_response(error: &StorageError) -> Option<ErrorResponse> {
+    Some(match error {
+        StorageError::InvalidPluginConfiguration => response(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "invalid_plugin_configuration",
+            "the plugin configuration is invalid",
+        ),
+        StorageError::PluginConfigurationVersionConflict => response(
+            StatusCode::CONFLICT,
+            "plugin_configuration_version_conflict",
+            "the plugin configuration version changed",
+        ),
+        StorageError::PluginInspectionNotFound => response(
+            StatusCode::NOT_FOUND,
+            "plugin_inspection_not_found",
+            "the plugin inspection was not found",
+        ),
+        StorageError::PluginInspectionExpired => response(
+            StatusCode::CONFLICT,
+            "plugin_inspection_expired",
+            "the plugin inspection expired",
+        ),
+        StorageError::PluginDigestMismatch => response(
+            StatusCode::CONFLICT,
+            "plugin_digest_mismatch",
+            "the plugin package digest changed",
+        ),
+        StorageError::PluginPackageVersionConflict => response(
+            StatusCode::CONFLICT,
+            "plugin_package_version_conflict",
+            "the installed plugin version changed",
+        ),
+        StorageError::PluginCapabilityNotApproved => response(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "plugin_capability_not_approved",
+            "a requested plugin capability was not declared",
+        ),
+        StorageError::PluginPackageNotFound => response(
+            StatusCode::NOT_FOUND,
+            "plugin_not_found",
+            "the plugin package was not found",
+        ),
+        StorageError::PluginUiSessionInvalid => response(
+            StatusCode::UNAUTHORIZED,
+            "plugin_ui_session_invalid",
+            "the plugin UI session is invalid or expired",
+        ),
+        StorageError::PluginCapacityExceeded => response(
+            StatusCode::CONFLICT,
+            "plugin_capacity_exceeded",
+            "the installation plugin capacity was reached",
+        ),
+        StorageError::TooManyPluginInspections => response(
+            StatusCode::TOO_MANY_REQUESTS,
+            "too_many_plugin_inspections",
+            "finish or wait for existing plugin inspections before uploading another package",
+        ),
+        _ => return None,
+    })
 }
 
 fn response(status: StatusCode, code: &'static str, message: &str) -> ErrorResponse {

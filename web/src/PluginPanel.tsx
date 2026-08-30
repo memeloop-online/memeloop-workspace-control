@@ -2,12 +2,16 @@ import Form from "@rjsf/core";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useI18n } from "./i18n";
 import { PluginApi } from "./plugins/api";
+import { PluginAuthorizationDialog } from "./plugins/PluginAuthorizationDialog";
+import { PluginInstaller } from "./plugins/PluginInstaller";
+import { PluginSurfaceHost } from "./plugins/PluginSurfaceHost";
 import { checkPluginSchema, configurationKey } from "./plugins/schema";
 import { safeValidator } from "./plugins/safeValidator";
-import { nextConfigurationScope, pluginCatalogState, pluginErrorMessageKey } from "./plugins/viewModel";
+import { nextConfigurationScope, pluginCatalogState, pluginErrorMessageKey, pluginSourceSummary } from "./plugins/viewModel";
 import type {
   PluginConfiguration,
   PluginConfigurationScope,
+  PluginInspection,
   PluginManifest,
 } from "./plugins/types";
 
@@ -26,6 +30,8 @@ export function PluginPanel({
   const api = useMemo(() => new PluginApi(token), [token]);
   const [plugins, setPlugins] = useState<PluginManifest[]>([]);
   const [selected, setSelected] = useState<PluginManifest | null>(null);
+  const [installerTarget, setInstallerTarget] = useState<PluginManifest | null | undefined>(undefined);
+  const [inspection, setInspection] = useState<PluginInspection | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const catalogState = pluginCatalogState(loading, error, plugins.length);
@@ -44,19 +50,36 @@ export function PluginPanel({
 
   useEffect(() => { void load(); }, [load]);
 
+  async function setEnabled(plugin: PluginManifest) {
+    try {
+      const updated = await api.setEnabled(plugin.id, !plugin.enabled, plugin.package_version);
+      setPlugins((values) => values.map((value) => value.id === updated.id ? updated : value));
+      setError("");
+    } catch (reason) { setError(pluginErrorMessage(reason, t)); }
+  }
+
+  async function uninstall(plugin: PluginManifest) {
+    if (!confirm(t("pluginUninstallConfirm"))) return;
+    try {
+      await api.uninstall(plugin.id, plugin.package_version);
+      setPlugins((values) => values.filter((value) => value.id !== plugin.id));
+      setError("");
+    } catch (reason) { setError(pluginErrorMessage(reason, t)); }
+  }
+
+  function installed(plugin: PluginManifest) {
+    setPlugins((values) => values.some((value) => value.id === plugin.id) ? values.map((value) => value.id === plugin.id ? plugin : value) : [...values, plugin]);
+    setInspection(null);
+    setInstallerTarget(undefined);
+  }
+
   return <section className="panel-stack plugin-page" aria-labelledby="plugin-page-title">
-    <div className="section-heading">
-      <div><p className="eyebrow">WASM COMPONENTS</p><h2 id="plugin-page-title">{t("pluginsTitle")}</h2></div>
-      <span className="read-only-badge">{t("pluginsReadOnlyCatalog")}</span>
-    </div>
-    <div className="security-note plugin-notice" role="note">
-      <strong>{t("pluginsRestartNotice")}</strong>
-      <span>{t("pluginsRestartDetail")}</span>
-    </div>
+    <div className="section-heading"><div><p className="eyebrow">PLUGINS</p><h2 id="plugin-page-title">{t("pluginsTitle")}</h2><p className="section-copy">{t("pluginsDescription")}</p></div>{systemAdmin && <button className="button primary" type="button" onClick={() => setInstallerTarget(null)}>{t("pluginInstall")}</button>}</div>
     {catalogState === "error" && <div className="error-banner" role="alert">{error}<button type="button" onClick={() => void load()}>{t("pluginRetry")}</button></div>}
     {catalogState === "loading" ? <div className="empty" role="status">{t("pluginsLoading")}</div> : catalogState === "empty" ? (
-      <div className="empty plugin-empty"><strong>{t("pluginsEmpty")}</strong><span>{t("pluginsEmptyHint")}</span></div>
-    ) : <div className="plugin-grid">{plugins.map((plugin) => <PluginCard key={plugin.id} plugin={plugin} onConfigure={() => setSelected(plugin)} />)}</div>}
+      <div className="empty plugin-empty"><strong>{t("pluginsEmpty")}</strong><span>{systemAdmin ? t("pluginsEmptyHint") : t("pluginsEmptyMemberHint")}</span>{systemAdmin && <button className="button primary" type="button" onClick={() => setInstallerTarget(null)}>{t("pluginInstall")}</button>}</div>
+    ) : <div className="plugin-grid">{plugins.map((plugin) => <PluginCard key={plugin.id} plugin={plugin} systemAdmin={systemAdmin} onConfigure={() => setSelected(plugin)} onUpdate={() => setInstallerTarget(plugin)} onToggle={() => void setEnabled(plugin)} onUninstall={() => void uninstall(plugin)} />)}</div>}
+    <PluginSurfaceHost api={api} plugins={plugins} placement="admin_tab" organizationId={organizationId} />
     {selected && <ConfigurationDialog
       api={api}
       plugin={selected}
@@ -65,36 +88,57 @@ export function PluginPanel({
       onClose={() => setSelected(null)}
       onOpenCredentials={onOpenCredentials}
     />}
+    {installerTarget !== undefined && <PluginInstaller api={api} updateTarget={installerTarget} onClose={() => setInstallerTarget(undefined)} onInspected={(value) => { setInstallerTarget(undefined); setInspection(value); }} />}
+    {inspection && <PluginAuthorizationDialog api={api} inspection={inspection} onClose={() => setInspection(null)} onInstalled={installed} />}
   </section>;
 }
 
-function PluginCard({ plugin, onConfigure }: { plugin: PluginManifest; onConfigure: () => void }) {
+function PluginCard({ plugin, systemAdmin, onConfigure, onUpdate, onToggle, onUninstall }: { plugin: PluginManifest; systemAdmin: boolean; onConfigure: () => void; onUpdate: () => void; onToggle: () => void; onUninstall: () => void }) {
   const { t } = useI18n();
-  const configurable = Boolean(plugin.configuration_schema);
-  return <article className={`plugin-card ${plugin.loaded ? "" : "failed"}`}>
+  const configurable = Boolean(plugin.configuration_schema) && plugin.approved_contributions.includes("configuration");
+  const healthy = plugin.runtime_status !== "error";
+  return <article className={`plugin-card ${healthy ? "" : "failed"}`}>
     <header>
       <div><h3>{plugin.name || plugin.id}</h3><code>{plugin.id}</code></div>
-      <span className={`plugin-load-state ${plugin.loaded ? "loaded" : "failed"}`}>{plugin.loaded ? t("pluginLoaded") : t("pluginLoadFailed")}</span>
+      <span className={`plugin-load-state ${plugin.runtime_status}`}>{t(runtimeStatusKey(plugin.runtime_status))}</span>
     </header>
     {plugin.description && <p>{plugin.description}</p>}
     <dl className="plugin-facts">
       <div><dt>{t("pluginVersion")}</dt><dd>{plugin.version}</dd></div>
+      <div><dt>{t("pluginSource")}</dt><dd>{pluginSourceSummary(plugin.source_kind, plugin.source_ref, plugin.source_details) || t("pluginSourceUnknown")}</dd></div>
+      {plugin.source_confirmation && <div><dt>{t("pluginSourceConfirmation")}</dt><dd>{t(plugin.source_confirmation === "gitops_mounted" ? "pluginSourceConfigured" : "pluginSourceAdministratorConfirmed")}</dd></div>}
       <div><dt>{t("pluginInterfaceVersion")}</dt><dd>{plugin.wit_version}</dd></div>
-      <div><dt>{t("pluginSource")}</dt><dd><code>{plugin.source || t("pluginSourceUnknown")}</code></dd></div>
-      <div><dt>{t("pluginContributions")}</dt><dd>{plugin.workspace_create_policy ? t("pluginWorkspaceAdmission") : t("pluginNoContributions")}</dd></div>
     </dl>
-    <div className="plugin-capabilities" aria-label={t("pluginApprovedContributions")}>
-      {plugin.approved_contributions.length ? plugin.approved_contributions.map((contribution) => <span key={contribution}>{contribution}</span>) : <span>{t("pluginNoContributions")}</span>}
-    </div>
-    <small className="plugin-no-host-capabilities">{t("pluginNoCapabilities")}</small>
-    {plugin.denial_codes.length > 0 && <div className="plugin-denial-codes"><strong>{t("pluginDenialCodes")}</strong>{plugin.denial_codes.map((code) => <code key={code}>{code}</code>)}</div>}
-    {!plugin.loaded && <div className="plugin-failure" role="status"><code>{plugin.error_code || "plugin_load_failed"}</code>{plugin.error_message && <span>{plugin.error_message}</span>}</div>}
+    <div className="plugin-permissions"><strong>{t("pluginApprovedContributions")}</strong><div>{plugin.approved_contributions.length ? plugin.approved_contributions.map((contribution) => <span key={contribution}>{t(contributionTitle(contribution))}</span>) : <span>{t("pluginNoPermissionsRequested")}</span>}</div></div>
+    {plugin.approved_contributions.includes("workspace_create_policy") && plugin.denial_codes.length > 0 && <div className="plugin-denial-codes"><strong>{t("pluginDenialCodes")}</strong>{plugin.denial_codes.map((code) => <code key={code}>{code}</code>)}</div>}
+    {plugin.runtime_error_code && <div className="plugin-failure" role="status"><code>{plugin.runtime_error_code}</code><span>{t(runtimeErrorKey(plugin.runtime_error_code))}</span></div>}
+    <details className="plugin-package-details"><summary>{t("pluginPackageDetails")}</summary><dl><dt>{t("pluginPackageVersion")}</dt><dd>#{plugin.package_version}</dd><dt>SHA-256</dt><dd><code>{plugin.package_digest}</code></dd></dl></details>
     <footer>
-      <button className="button" type="button" disabled={!plugin.loaded || !configurable} onClick={onConfigure}>
+      <button className="button" type="button" disabled={!healthy || !configurable} onClick={onConfigure}>
         {configurable ? t("pluginConfigure") : t("pluginNoConfiguration")}
       </button>
+      {systemAdmin && <><button className="button" type="button" onClick={onUpdate}>{t("pluginUpdate")}</button><button className="button" type="button" onClick={onToggle}>{plugin.enabled ? t("pluginDisable") : t("pluginEnable")}</button><button className="button danger" type="button" onClick={onUninstall}>{t("pluginUninstall")}</button></>}
     </footer>
   </article>;
+}
+
+function contributionTitle(contribution: string) {
+  const known: Record<string, "pluginContribution_workspace_create_policy" | "pluginContribution_configuration" | "pluginContribution_ui_surfaces" | "pluginContribution_api_routes" | "pluginContribution_api_middleware"> = {
+    workspace_create_policy: "pluginContribution_workspace_create_policy", configuration: "pluginContribution_configuration", ui_surfaces: "pluginContribution_ui_surfaces", api_routes: "pluginContribution_api_routes", api_middleware: "pluginContribution_api_middleware",
+  };
+  return known[contribution] ?? "pluginContributions";
+}
+
+function runtimeStatusKey(status: PluginManifest["runtime_status"]): "pluginLoaded" | "pluginDisabledState" | "pluginLoadFailed" {
+  if (status === "loaded") return "pluginLoaded";
+  if (status === "disabled") return "pluginDisabledState";
+  return "pluginLoadFailed";
+}
+
+function runtimeErrorKey(code: NonNullable<PluginManifest["runtime_error_code"]>): "pluginCompileFailed" | "pluginSchemaInvalid" | "pluginInterfaceIncompatible" {
+  if (code === "compile_failed") return "pluginCompileFailed";
+  if (code === "schema_invalid") return "pluginSchemaInvalid";
+  return "pluginInterfaceIncompatible";
 }
 
 function ConfigurationDialog({ api, plugin, organizationId, systemAdmin, onClose, onOpenCredentials }: {

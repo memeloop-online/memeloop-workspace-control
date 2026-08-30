@@ -15,7 +15,7 @@ use k8s_openapi::{
     },
 };
 
-use crate::workspaces::Workspace;
+use crate::{templates::WorkspaceStoragePolicy, workspaces::Workspace};
 
 use super::{
     ResourceBuilder, namespaced_metadata,
@@ -78,10 +78,7 @@ fn containers(
 }
 
 fn pod_spec(pod: WorkspacePod<'_>, workspace: &Workspace, containers: Vec<Container>) -> PodSpec {
-    let mut init_containers = vec![pod.workspace_init_container(&workspace.template.image)];
-    if let Some(buildkit_init) = pod.buildkit_init_container() {
-        init_containers.push(buildkit_init);
-    }
+    let init_containers = vec![pod.workspace_init_container(&workspace.template.image)];
     let cluster_access = workspace.template.cluster_access;
     PodSpec {
         automount_service_account_token: Some(cluster_access),
@@ -92,7 +89,7 @@ fn pod_spec(pod: WorkspacePod<'_>, workspace: &Workspace, containers: Vec<Contai
         node_selector: pod.node_selector(),
         security_context: pod.pod_security_context(),
         image_pull_secrets: pod.image_pull_secrets(),
-        volumes: Some(workspace_volumes()),
+        volumes: Some(workspace_volumes(&workspace.template.storage_policy)),
         ..PodSpec::default()
     }
 }
@@ -142,7 +139,11 @@ fn ttyd_container(builder: &ResourceBuilder, pod: WorkspacePod<'_>, short_id: &s
             protocol: Some("TCP".to_owned()),
             ..ContainerPort::default()
         }]),
-        volume_mounts: Some(vec![mount("runtime-ssh", "/etc/ssh/platform", true)]),
+        volume_mounts: Some(vec![
+            mount("runtime-ssh", "/etc/ssh/platform", true),
+            mount("ttyd-tmp", "/tmp", false),
+            mount("ttyd-tmp", "/var/tmp", false),
+        ]),
         resources: Some(ResourceRequirements {
             requests: Some(BTreeMap::from([
                 ("cpu".to_owned(), Quantity("10m".to_owned())),
@@ -158,7 +159,7 @@ fn ttyd_container(builder: &ResourceBuilder, pod: WorkspacePod<'_>, short_id: &s
     }
 }
 
-fn workspace_volumes() -> Vec<Volume> {
+fn workspace_volumes(policy: &WorkspaceStoragePolicy) -> Vec<Volume> {
     vec![
         Volume {
             name: "ssh-identity".to_owned(),
@@ -196,10 +197,54 @@ fn workspace_volumes() -> Vec<Volume> {
         },
         Volume {
             name: "runtime-ssh".to_owned(),
-            empty_dir: Some(EmptyDirVolumeSource::default()),
+            empty_dir: Some(bounded_empty_dir("128Mi", Some("Memory"))),
+            ..Volume::default()
+        },
+        Volume {
+            name: "runtime-tmp".to_owned(),
+            empty_dir: Some(bounded_empty_dir(
+                &format!("{}Mi", policy.runtime_tmp_memory_mib),
+                Some("Memory"),
+            )),
+            ..Volume::default()
+        },
+        Volume {
+            name: "ttyd-tmp".to_owned(),
+            empty_dir: Some(bounded_empty_dir("128Mi", Some("Memory"))),
+            ..Volume::default()
+        },
+        Volume {
+            name: "build-scratch".to_owned(),
+            empty_dir: Some(bounded_empty_dir(
+                &format!("{}Gi", policy.build_scratch_gib),
+                None,
+            )),
+            ..Volume::default()
+        },
+        Volume {
+            name: "buildkit-cache".to_owned(),
+            empty_dir: Some(bounded_empty_dir(
+                &format!("{}Gi", policy.buildkit_cache_gib),
+                None,
+            )),
+            ..Volume::default()
+        },
+        Volume {
+            name: "codex-scratch".to_owned(),
+            empty_dir: Some(bounded_empty_dir(
+                &format!("{}Gi", policy.codex_scratch_gib),
+                None,
+            )),
             ..Volume::default()
         },
     ]
+}
+
+fn bounded_empty_dir(size: &str, medium: Option<&str>) -> EmptyDirVolumeSource {
+    EmptyDirVolumeSource {
+        medium: medium.map(str::to_owned),
+        size_limit: Some(Quantity(size.to_owned())),
+    }
 }
 
 fn workspace_claim(

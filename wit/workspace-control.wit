@@ -1,4 +1,4 @@
-package memeloop:workspace-control@0.1.0;
+package memeloop:workspace-control@0.2.0;
 
 interface types {
   record create-context {
@@ -27,13 +27,36 @@ interface types {
     /// Must be predeclared in plugin.json. No guest free text crosses the ABI.
     code: option<string>,
   }
+
+  record request-context {
+    installation-id: string,
+    actor-user-id: option<string>,
+    organization-id: option<string>,
+    method: string,
+    path: string,
+    configuration-json: string,
+  }
+
+  record api-request {
+    context: request-context,
+    route-id: string,
+    body: list<u8>,
+  }
+
+  record api-response {
+    status: u16,
+    content-type: string,
+    body: list<u8>,
+  }
 }
 
-interface workspace-create-policy {
-  use types.{create-context, workspace-plan, decision};
-  evaluate: func(context: create-context, plan: workspace-plan) -> result<decision, string>;
+interface plugin-backend {
+  use types.{create-context, workspace-plan, decision, request-context, api-request, api-response};
+  admit-create: func(context: create-context, plan: workspace-plan) -> result<decision, string>;
+  handle-api: func(request: api-request) -> result<api-response, string>;
+  check-request: func(context: request-context) -> result<decision, string>;
 }
 
 world plugin {
-  export workspace-create-policy;
+  export plugin-backend;
 }

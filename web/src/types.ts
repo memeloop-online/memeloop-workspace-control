@@ -25,9 +25,25 @@ export interface Membership {
 export interface Principal {
   user_id: string;
   display_name: string;
+  avatar_url?: string | null;
   system_admin: boolean;
   memberships: Membership[];
 }
+
+export interface UserProfile {
+  display_name: string;
+  avatar_url: string | null;
+}
+
+export interface ApiKeySummary {
+  id: string;
+  name: string;
+  prefix: string;
+  last_used_at: number | null;
+  created_at: number;
+}
+
+export type CreatedApiKey = ApiKeySummary & { token: string };
 
 export interface Organization {
   id: string;
@@ -64,6 +80,7 @@ export interface WorkspaceTemplate {
   workspace_home: string;
   preserve_home_ownership: boolean;
   buildkit: boolean;
+  storage_policy: WorkspaceStoragePolicy;
   cluster_access: boolean;
   required_node_names: string[];
   preferred_node_names: string[];
@@ -71,6 +88,14 @@ export interface WorkspaceTemplate {
   environment: Record<string, string>;
   yaml: string;
   enabled: boolean;
+}
+
+export interface WorkspaceStoragePolicy {
+  runtime_tmp_memory_mib: number;
+  build_scratch_gib: number;
+  buildkit_cache_gib: number;
+  codex_scratch_gib: number;
+  home_reserve_mib: number | null;
 }
 
 export interface PodResourceRequest {
@@ -90,6 +115,11 @@ export interface AuditRecord {
   action: string;
   metadata: Record<string, unknown>;
   created_at: number;
+}
+
+export interface AuditPage {
+  items: AuditRecord[];
+  next_offset: number | null;
 }
 
 export interface ScalingStatus {
@@ -131,6 +161,7 @@ export interface Workspace {
   workspace_home: string;
   preserve_home_ownership: boolean;
   buildkit: boolean;
+  storage_policy: WorkspaceStoragePolicy;
   cluster_access: boolean;
   required_node_names: string[];
   preferred_node_names: string[];
@@ -182,6 +213,8 @@ export interface WorkspaceRuntime {
     capacity_bytes: number | null;
     available_bytes: number | null;
     observed_at: number | null;
+    used_percent: number | null;
+    pressure: "normal" | "warning" | "critical" | null;
   };
   metrics_available: boolean;
   pods: { name: string; phase: string | null; ready: boolean; restarts: number }[];

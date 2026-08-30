@@ -1,6 +1,8 @@
 import type {
   ApiFailure,
-  AuditRecord,
+  ApiKeySummary,
+  AuditPage,
+  CreatedApiKey,
   CreateWorkspace,
   InjectionDraft,
   InjectionScope,
@@ -12,6 +14,7 @@ import type {
   Role,
   ScalingStatus,
   StoredInjection,
+  UserProfile,
   UserSummary,
   WebShellTicket,
   WebhookSubscription,
@@ -40,6 +43,30 @@ export class ApiClient {
 
   me(): Promise<Principal> {
     return this.request("/api/v1/me");
+  }
+
+  profile(): Promise<UserProfile> {
+    return this.request("/api/v1/me/profile");
+  }
+
+  updateProfile(profile: UserProfile): Promise<UserProfile> {
+    return this.request("/api/v1/me/profile", {
+      method: "PUT", body: JSON.stringify(profile),
+    });
+  }
+
+  apiKeys(): Promise<ApiKeySummary[]> {
+    return this.request("/api/v1/me/api-keys");
+  }
+
+  createApiKey(name: string): Promise<CreatedApiKey> {
+    return this.request("/api/v1/me/api-keys", {
+      method: "POST", body: JSON.stringify({ name }),
+    });
+  }
+
+  deleteApiKey(id: string): Promise<void> {
+    return this.request(`/api/v1/me/api-keys/${encodeURIComponent(id)}`, { method: "DELETE" });
   }
 
   organizations(): Promise<Organization[]> {
@@ -96,8 +123,13 @@ export class ApiClient {
     });
   }
 
-  audit(organizationId: string): Promise<AuditRecord[]> {
-    return this.request(`/api/v1/audit?organization_id=${organizationId}`);
+  audit(organizationId: string | undefined, options: { limit?: number; offset?: number; action?: string; actor?: string; workspace?: string; q?: string } = {}): Promise<AuditPage> {
+    const query = new URLSearchParams();
+    if (organizationId) query.set("organization_id", organizationId);
+    for (const [key, value] of Object.entries(options)) {
+      if (value !== undefined && value !== "") query.set(key, String(value));
+    }
+    return this.request(`/api/v1/audit?${query}`);
   }
 
   scaling(): Promise<ScalingStatus> {

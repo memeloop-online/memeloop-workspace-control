@@ -1,20 +1,28 @@
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     fs,
     path::{Component as PathComponent, Path, PathBuf},
 };
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::Digest as _;
 use utoipa::ToSchema;
 
 use super::{ConfigurationSchema, PluginError};
+
+mod extensions;
+use extensions::validate_extensions;
+pub use extensions::{
+    PluginApiMiddleware, PluginApiRoute, PluginAssetDescriptor, PluginRoutePermission,
+    PluginUiPlacement, PluginUiSurface,
+};
 
 const MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
 const MAX_COMPONENT_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_PACKAGE_BYTES: u64 = 80 * 1024 * 1024;
 const MAX_PACKAGE_FILES: usize = 64;
-const SUPPORTED_INTERFACE: &str = ">=0.1.0, <0.2.0";
+const SUPPORTED_INTERFACE: &str = ">=0.1.0, <0.3.0";
 
 #[derive(Clone, Debug, Deserialize, Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
@@ -28,6 +36,14 @@ pub struct PluginManifest {
     pub workspace_create_policy: bool,
     pub denial_codes: Vec<String>,
     pub configuration: Option<PluginConfigurationContribution>,
+    #[serde(default)]
+    pub assets: Vec<PluginAssetDescriptor>,
+    #[serde(default)]
+    pub ui_surfaces: Vec<PluginUiSurface>,
+    #[serde(default)]
+    pub api_routes: Vec<PluginApiRoute>,
+    #[serde(default)]
+    pub api_middleware: Vec<PluginApiMiddleware>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, ToSchema)]
@@ -35,6 +51,11 @@ pub struct PluginManifest {
 pub struct PluginConfigurationContribution {
     pub schema: Value,
     pub default: Value,
+}
+
+pub(crate) struct ValidatedPluginContent {
+    pub(crate) manifest: PluginManifest,
+    pub(super) configuration_schema: Option<ConfigurationSchema>,
 }
 
 pub(super) struct ValidatedPackage {
@@ -142,15 +163,21 @@ fn validate_manifest(manifest: &PluginManifest) -> Result<(), PluginError> {
             "plugin interface version is not supported",
         ));
     }
-    if manifest.workspace_create_policy && manifest.wasm.is_none() {
+    let backend_contribution = manifest.workspace_create_policy
+        || !manifest.api_routes.is_empty()
+        || !manifest.api_middleware.is_empty();
+    if backend_contribution && manifest.wasm.is_none() {
         return Err(PluginError::invalid(
-            "workspace create policy requires a component",
+            "backend contributions require a component",
         ));
     }
-    if manifest.wasm.is_some() && !manifest.workspace_create_policy {
+    if manifest.wasm.is_some() && !backend_contribution {
         return Err(PluginError::invalid(
-            "components must declare workspace_create_policy",
+            "component has no backend contribution",
         ));
+    }
+    if manifest.wasm.is_some() && interface < semver::Version::new(0, 2, 0) {
+        return Err(PluginError::invalid("components require WIT version 0.2"));
     }
     let mut unique = BTreeSet::new();
     for code in &manifest.denial_codes {
@@ -164,7 +191,76 @@ fn validate_manifest(manifest: &PluginManifest) -> Result<(), PluginError> {
             return Err(PluginError::invalid("plugin denial code is invalid"));
         }
     }
+    validate_extensions(manifest)?;
     Ok(())
+}
+
+pub(crate) fn validate_plugin_content(
+    manifest_json: &[u8],
+    component: Option<&[u8]>,
+    assets: &BTreeMap<String, (String, Vec<u8>)>,
+) -> Result<ValidatedPluginContent, PluginError> {
+    if manifest_json.is_empty() || manifest_json.len() > MAX_MANIFEST_BYTES as usize {
+        return Err(PluginError::invalid("plugin manifest exceeds size limits"));
+    }
+    if component.is_some_and(|value| value.len() > MAX_COMPONENT_BYTES as usize) {
+        return Err(PluginError::invalid("plugin component exceeds size limits"));
+    }
+    let manifest: PluginManifest = serde_json::from_slice(manifest_json)
+        .map_err(|_| PluginError::invalid("plugin.json is invalid"))?;
+    validate_manifest(&manifest)?;
+    if manifest.wasm.is_some() != component.is_some() {
+        return Err(PluginError::invalid("manifest and component do not match"));
+    }
+    let expected: BTreeSet<_> = manifest
+        .assets
+        .iter()
+        .map(|asset| asset.path.as_str())
+        .collect();
+    if expected.len() != manifest.assets.len()
+        || expected.len() != assets.len()
+        || assets.keys().any(|path| !expected.contains(path.as_str()))
+    {
+        return Err(PluginError::invalid(
+            "manifest assets do not match package assets",
+        ));
+    }
+    for descriptor in &manifest.assets {
+        let (media_type, content) = assets
+            .get(&descriptor.path)
+            .ok_or_else(|| PluginError::invalid("plugin asset is missing"))?;
+        let digest = format!("{:x}", sha2::Sha256::digest(content));
+        if media_type != &descriptor.media_type
+            || descriptor.size_bytes != content.len() as u64
+            || descriptor.sha256 != digest
+        {
+            return Err(PluginError::invalid(
+                "plugin asset metadata does not match content",
+            ));
+        }
+    }
+    if let Some(bytes) = component {
+        let mut config = wasmtime::Config::new();
+        config.wasm_component_model(true);
+        config.consume_fuel(true);
+        config.epoch_interruption(true);
+        let engine = wasmtime::Engine::new(&config).map_err(|_| PluginError::RuntimeUnavailable)?;
+        wasmtime::component::Component::new(&engine, bytes)
+            .map_err(|_| PluginError::invalid("component could not be compiled"))?;
+    }
+    let configuration_schema = manifest
+        .configuration
+        .as_ref()
+        .map(|configuration| {
+            let schema = ConfigurationSchema::compile(&configuration.schema)?;
+            schema.validate(&configuration.default)?;
+            Ok::<_, PluginError>(schema)
+        })
+        .transpose()?;
+    Ok(ValidatedPluginContent {
+        manifest,
+        configuration_schema,
+    })
 }
 
 fn safe_component_path(root: &Path, relative: &str) -> Result<PathBuf, PluginError> {

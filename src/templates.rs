@@ -44,6 +44,8 @@ pub struct WorkspaceTemplateSpec {
     #[serde(default)]
     pub buildkit: bool,
     #[serde(default)]
+    pub storage_policy: WorkspaceStoragePolicy,
+    #[serde(default)]
     pub cluster_access: bool,
     #[serde(default)]
     pub required_node_names: Vec<String>,
@@ -54,6 +56,55 @@ pub struct WorkspaceTemplateSpec {
     #[serde(default)]
     #[schema(ignore)]
     pub environment: BTreeMap<String, String>,
+}
+
+/// Bounded, Pod-lifetime storage for data that can be regenerated safely.
+///
+/// The workspace Home PVC remains the durable boundary. These limits do not reserve node disk;
+/// Kubernetes enforces them only as upper bounds for the corresponding `emptyDir` volumes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct WorkspaceStoragePolicy {
+    pub runtime_tmp_memory_mib: u64,
+    pub build_scratch_gib: u64,
+    pub buildkit_cache_gib: u64,
+    pub codex_scratch_gib: u64,
+    pub home_reserve_mib: Option<u64>,
+}
+
+impl Default for WorkspaceStoragePolicy {
+    fn default() -> Self {
+        Self {
+            runtime_tmp_memory_mib: 512,
+            build_scratch_gib: 12,
+            buildkit_cache_gib: 8,
+            codex_scratch_gib: 2,
+            home_reserve_mib: None,
+        }
+    }
+}
+
+impl WorkspaceStoragePolicy {
+    fn validate(self, disk_gib: u64) -> Result<(), TemplateError> {
+        if !(64..=4_096).contains(&self.runtime_tmp_memory_mib)
+            || !(1..=256).contains(&self.build_scratch_gib)
+            || !(1..=256).contains(&self.buildkit_cache_gib)
+            || !(1..=32).contains(&self.codex_scratch_gib)
+            || self.home_reserve_mib.is_some_and(|reserve| {
+                !(64..=4_096).contains(&reserve)
+                    || reserve >= disk_gib.saturating_mul(1_024)
+                    || reserve.saturating_mul(10) > disk_gib.saturating_mul(1_024)
+            })
+        {
+            return Err(TemplateError::StoragePolicy);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn effective_home_reserve_mib(self, disk_gib: u64) -> u64 {
+        self.home_reserve_mib
+            .unwrap_or_else(|| disk_gib.saturating_mul(1_024).saturating_div(10).min(1_024))
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
@@ -163,6 +214,7 @@ impl WorkspaceTemplateSpec {
         {
             return Err(TemplateError::Environment);
         }
+        self.storage_policy.validate(self.resources.disk_gib)?;
         Ok(())
     }
 
@@ -178,13 +230,14 @@ impl WorkspaceTemplateSpec {
             pod_requests: PodResourceRequest {
                 cpu_millis: resources.cpu_millis,
                 memory_mib: resources.memory_mib,
-                ephemeral_storage_mib: None,
+                ephemeral_storage_mib: Some(2_048),
             },
-            ephemeral_storage_limit_mib: None,
+            ephemeral_storage_limit_mib: Some(14_592),
             workspace_user: "workspace".to_owned(),
             workspace_home: "/workspace".to_owned(),
             preserve_home_ownership: false,
             buildkit: false,
+            storage_policy: WorkspaceStoragePolicy::default(),
             cluster_access: false,
             required_node_names: Vec::new(),
             preferred_node_names: Vec::new(),
@@ -257,129 +310,9 @@ pub enum TemplateError {
     Environment,
     #[error("template environment is read-only compatibility data; use injection items")]
     ReadOnlyEnvironment,
+    #[error("template storage policy is invalid")]
+    StoragePolicy,
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn yaml_round_trip_contains_only_explicit_template_fields() {
-        let mut spec = WorkspaceTemplateSpec::standard(
-            "registry.example/node@sha256:test",
-            AccessMode::Internal,
-            Resources {
-                cpu_millis: 6_000,
-                memory_mib: 4_096,
-                gpu_count: 0,
-                disk_gib: 60,
-            },
-        );
-        spec.workspace_user = "node-dev".to_owned();
-        spec.workspace_home = "/home/node-dev".to_owned();
-        let document = WorkspaceTemplateDocument::new("Node.js 开发", spec);
-        let yaml = document.to_yaml().unwrap();
-        assert!(!yaml.contains("runtimeProfile"));
-        assert!(!yaml.contains("runtime_profile"));
-        assert!(yaml.contains("access_mode: internal"));
-        assert!(yaml.contains("workspace_user: node-dev"));
-        assert!(yaml.contains("preserve_home_ownership: false"));
-        assert!(!yaml.contains("preserve_home_root"));
-        assert_eq!(WorkspaceTemplateDocument::parse(&yaml).unwrap(), document);
-        let legacy_yaml = yaml.replace("preserve_home_ownership", "preserve_home_root");
-        assert_eq!(
-            WorkspaceTemplateDocument::parse(&legacy_yaml).unwrap(),
-            document
-        );
-        let json = serde_json::to_value(&document.spec).unwrap();
-        assert_eq!(json["access_mode"], "internal");
-        assert_eq!(json["workspace_user"], "node-dev");
-        assert!(json.get("accessMode").is_none());
-    }
-
-    #[test]
-    fn rejects_requests_above_limits() {
-        let mut spec = WorkspaceTemplateSpec::standard(
-            "registry.example/dev:latest",
-            AccessMode::Internal,
-            Resources {
-                cpu_millis: 1_000,
-                memory_mib: 1_024,
-                gpu_count: 0,
-                disk_gib: 20,
-            },
-        );
-        spec.pod_requests.cpu_millis = 1_001;
-        assert_eq!(spec.validate(), Err(TemplateError::PodResources));
-    }
-
-    #[test]
-    fn rejects_values_that_could_escape_generated_ssh_configuration() {
-        let resources = Resources {
-            cpu_millis: 1_000,
-            memory_mib: 1_024,
-            gpu_count: 0,
-            disk_gib: 20,
-        };
-        let mut spec = WorkspaceTemplateSpec::standard(
-            "registry.example/dev:latest",
-            AccessMode::Internal,
-            resources,
-        );
-        spec.workspace_user = "workspace\nPermitRootLogin yes".to_owned();
-        assert_eq!(spec.validate(), Err(TemplateError::WorkspaceIdentity));
-
-        let mut spec = WorkspaceTemplateSpec::standard(
-            "registry.example/dev:latest",
-            AccessMode::Internal,
-            resources,
-        );
-        spec.environment.insert(
-            "HOME".to_owned(),
-            "/workspace\nPermitRootLogin=yes".to_owned(),
-        );
-        assert_eq!(spec.validate(), Err(TemplateError::Environment));
-    }
-
-    #[test]
-    fn allows_spaces_in_environment_values() {
-        let mut spec = WorkspaceTemplateSpec::standard(
-            "registry.example/dev:latest",
-            AccessMode::Internal,
-            Resources {
-                cpu_millis: 1_000,
-                memory_mib: 1_024,
-                gpu_count: 0,
-                disk_gib: 20,
-            },
-        );
-        spec.environment
-            .insert("TOOL_FLAGS".to_owned(), "--color always".to_owned());
-        assert_eq!(spec.validate(), Ok(()));
-    }
-
-    #[test]
-    fn historical_environment_parses_but_current_authoring_rejects_it() {
-        let mut spec = WorkspaceTemplateSpec::standard(
-            "registry.example/dev:latest",
-            AccessMode::Internal,
-            Resources {
-                cpu_millis: 1_000,
-                memory_mib: 1_024,
-                gpu_count: 0,
-                disk_gib: 20,
-            },
-        );
-        spec.environment
-            .insert("LEGACY_TOKEN".to_owned(), "legacy-value".to_owned());
-        let document = WorkspaceTemplateDocument::new("Legacy", spec);
-        let yaml = document.to_yaml().unwrap();
-
-        let parsed = WorkspaceTemplateDocument::parse(&yaml).unwrap();
-        assert_eq!(parsed.spec.environment["LEGACY_TOKEN"], "legacy-value");
-        assert_eq!(
-            parsed.validate_authoring(),
-            Err(TemplateError::ReadOnlyEnvironment)
-        );
-    }
-}
+mod tests;

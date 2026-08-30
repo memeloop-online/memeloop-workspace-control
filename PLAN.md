@@ -76,6 +76,39 @@ SQLite 模式可通过内置导出和迁移命令升级到 PostgreSQL 模式。�
 6. 数据库只保留不含敏感值的审计墓碑。
 7. 管理型 StorageClass 必须使用 `reclaimPolicy: Delete`。
 
+## 工作区存储韧性
+
+工作区必须把持久数据、可再生成数据和连接运行时分开，禁止再把 Home PVC 下的目录
+通过 `subPath` 挂载到 `/tmp`、`/var/tmp`、BuildKit 状态目录或 SSH 运行目录：
+
+- Longhorn Home PVC 只保存仓库、用户配置、凭据、Codex 会话和 SQLite 状态。
+- `/tmp`、`/var/tmp`、OpenSSH 配置/密钥副本、ttyd 临时文件使用有上限的内存
+  `emptyDir`，并与 Home 的剩余空间解耦。
+- 编译器临时目录、Cargo target/registry/git cache 和通用包缓存使用有上限的节点本地
+  `emptyDir`；现存迁移缓存不自动删除，停机清理为空后再链接到该层。
+- BuildKit 配置、状态、socket、缓存和 `buildctl` 使用独立的节点本地 `emptyDir`，其
+  就绪状态不能阻止 OpenSSH 提供恢复通道。
+- `.codex` 整体保持持久化，只把 `.codex/.tmp` 放入有上限的临时卷。平台不得通过
+  sidecar、定时任务或在线 `VACUUM` 并发修改 Codex SQLite。
+
+所有 `emptyDir` 随工作区 Pod 停止或重建而整体清空，不按 mtime 删除活跃文件。模板
+声明临时卷上限、容器 `ephemeral-storage` 申请/上限和 Home 紧急预留；平台在 Home
+低于 80% 时创建自身拥有的预留文件，在达到 90% 时只释放该预留，为 SQLite 收尾和
+人工清理提供空间。Home 写满时，文件注入可以进入明确的降级状态，但授权公钥、host
+key、sshd 配置、kubeconfig、SSH 和 ttyd 仍必须依赖独立运行时卷并可启动；Home 缺失、
+只读或挂载无效仍是硬错误。
+
+Prometheus 必须记录每个 Home PVC 的实际使用率和承载工作区节点的临时存储申请率，
+在 80%/90% 触发 warning/critical，并同时监控节点 `DiskPressure`。Grafana 展示整体、
+用户和工作区维度，Loki 复用 Pod 标签收集控制面与工作区日志。上述能力直接复用现有
+Kubernetes、Longhorn、Prometheus Operator、Grafana、Alertmanager 和 Loki，不依赖
+Tailscale 或 Coder Premium。
+
+Codex 日志数据库的历史膨胀只能在工作区完全停止、确认无进程持有数据库、完成
+Longhorn 快照并通过 SQLite 完整性检查后离线压缩。任何自动清理不得删除对话/线程
+数据库；即使 Home 已满，平台只承诺 SSH/网页终端恢复通道可用，不承诺 Codex 能继续
+写入持久状态。
+
 ## 公网 SSH 与端口复用
 
 公网 SSH 使用链路：`SSH 客户端 → Higress 固定 TCP 22 → OpenSSH 跳板机 → 工作区 ClusterIP Service:2222`。
@@ -139,12 +172,12 @@ Ready 后返回 ProxyJump SSH 命令、SSH config 片段、跳板机和工作区
 - 验证 ttyd、Higress WebSocket、external-auth 和一次性 ticket。
 - 验证三级 Secret 覆盖、锁定和 API 内联注入。
 - 验证删除后 Namespace、PVC、Secret、路由和跳板授权全部清理。
-- 集成和部署测试仅运行在自有 KCS 实例，不建立 Kubernetes/K3s 多版本测试矩阵。
+- 集成和部署测试仅运行在自有 K3s 实例，不建立 Kubernetes/K3s 多版本测试矩阵。
 
 ## 明确边界
 
 - SQLite 模式不能横向扩展。
-- PostgreSQL 模式可以横向扩展，但 PostgreSQL 和 KCS API Server 仍是共享瓶颈。
+- PostgreSQL 模式可以横向扩展，但 PostgreSQL 和 Kubernetes API Server 仍是共享瓶颈。
 - 公网工作区共享一个 Higress SSH 端口。
 - 跳板机使用标准 OpenSSH，不实现自定义 SSH 协议。
 - 不包含 VS Code、自研 Web Terminal、计费结算、自动休眠或 Kubernetes 多版本认证。

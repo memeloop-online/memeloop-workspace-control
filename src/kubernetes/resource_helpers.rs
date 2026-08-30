@@ -23,6 +23,9 @@ pub(super) fn service(
         metadata: namespaced_metadata("workspace", namespace, labels),
         spec: Some(ServiceSpec {
             type_: Some("ClusterIP".to_owned()),
+            // SSH is the recovery channel. An optional sidecar (for example BuildKit) must not
+            // remove the workspace endpoint while sshd itself remains available.
+            publish_not_ready_addresses: Some(true),
             selector: Some(pod_labels.clone()),
             ports: Some(vec![
                 service_port("ssh", 2222),
@@ -45,6 +48,7 @@ pub(super) fn internal_ssh_service(
         metadata: namespaced_metadata("workspace-ssh", namespace, labels),
         spec: Some(ServiceSpec {
             type_: Some("NodePort".to_owned()),
+            publish_not_ready_addresses: Some(true),
             selector: Some(pod_labels.clone()),
             // Deliberately omit nodePort: Kubernetes owns stable allocation for the life of
             // this Service. ttyd remains reachable only on the separate ClusterIP Service.
@@ -155,8 +159,7 @@ pub(super) fn workspace_config(
             (
                 "sshd_config".to_owned(),
                 format!(
-                    "Port 2222\nListenAddress 0.0.0.0\nHostKey /run/mwc-ssh/ssh_host_ed25519_key\nAuthorizedKeysFile {}/.mwc/authorized_keys\nStrictModes {}\n{}PasswordAuthentication no\nKbdInteractiveAuthentication no\nPermitRootLogin no\nAllowUsers {}\nAllowTcpForwarding yes\nPermitTunnel no\nX11Forwarding no\nSubsystem sftp internal-sftp\nPidFile /run/mwc-ssh/sshd.pid\n",
-                    pod.home,
+                    "Port 2222\nListenAddress 0.0.0.0\nHostKey /run/mwc-ssh/ssh_host_ed25519_key\nAuthorizedKeysFile /run/mwc-ssh/authorized_keys\nBanner /run/mwc-ssh/storage-banner\nStrictModes {}\n{}PasswordAuthentication no\nKbdInteractiveAuthentication no\nPermitRootLogin no\nAllowUsers {}\nAllowTcpForwarding yes\nPermitTunnel no\nX11Forwarding no\nSubsystem sftp internal-sftp\nPidFile /run/mwc-ssh/sshd.pid\n",
                     pod.ssh_strict_modes(),
                     pod.ssh_set_env(),
                     pod.login_user

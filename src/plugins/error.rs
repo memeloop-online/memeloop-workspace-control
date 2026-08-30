@@ -10,6 +10,10 @@ pub enum PluginError {
     NotFound,
     #[error("plugin configuration is invalid")]
     InvalidConfiguration,
+    #[error("plugin API request is invalid")]
+    InvalidApiRequest,
+    #[error("plugin API middleware rejected the request")]
+    MiddlewareDenied,
     #[error("plugin configuration version changed")]
     ConfigurationVersionConflict,
     #[error("workspace creation was rejected by an admission plugin")]

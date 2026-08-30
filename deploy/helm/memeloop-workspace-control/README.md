@@ -55,13 +55,14 @@ variables so they cannot silently target a default installation.
 
 ## WASM plugins
 
-Plugin packages are an operator-controlled GitOps surface, not a runtime marketplace. Set exactly
-one of `plugins.existingConfigMap` or `plugins.existingClaim`; the chart mounts it read-only and
-sets `MWC_PLUGIN_DIR`. ConfigMap users must provide `plugins.configMapItems` whose destination paths
-place every package below its own first-level directory. A package or Component change requires a
-Pod restart. The application has no Web upload/install endpoint and does not hot-reload code.
+Plugin packages may be supplied through the administrator-only inspection and confirmation API;
+their bytes, assets, approvals, enabled state, and optimistic version are persisted in the
+authoritative database and hot-reloaded. An optional operator-controlled startup source can also be
+mounted by setting exactly one of `plugins.existingConfigMap` or `plugins.existingClaim`; changes to
+that read-only startup mount require a Pod restart. ConfigMap users must map each package below its
+own first-level directory with `plugins.configMapItems`.
 
-Mounting a package is the v0.1 approval for all contributions it declares. Any visible malformed,
+Mounting a startup package is its GitOps approval. Any visible malformed,
 incompatible, duplicated, symlinked, escaping, or oversized package makes startup fail closed.
 Runtime policy traps and limits reject only that workspace creation; existing workspaces and cleanup
 actions remain available.

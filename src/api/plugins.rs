@@ -13,7 +13,6 @@ use uuid::Uuid;
 
 use crate::{
     auth::Permission,
-    plugins::PluginManifest,
     storage::{IdempotencyDecision, PluginConfigurationWrite, Principal},
 };
 
@@ -25,6 +24,17 @@ use super::{
         unix_timestamp,
     },
 };
+
+mod backend;
+pub(super) mod lifecycle;
+mod surfaces;
+
+pub(super) use backend::{api_middleware, invoke_api_route};
+pub(super) use lifecycle::{
+    confirm_install, inspect_github_release, inspect_upload, inspect_url, list_packages,
+    set_enabled, uninstall,
+};
+pub(super) use surfaces::{bridge, create_surface_session, surface_asset};
 
 #[derive(Debug, Serialize, ToSchema)]
 pub(super) struct PluginManifestView {
@@ -77,22 +87,6 @@ pub(super) struct PluginConfigurationView {
     schema_changed: bool,
     valid: bool,
     updated_at: Option<i64>,
-}
-
-#[utoipa::path(get, path = "/api/v1/plugins", responses((status = 200, body = [PluginManifestView]), (status = 403, body = super::ErrorEnvelope)))]
-pub(super) async fn list(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-) -> Result<Json<Vec<PluginManifestView>>, ApiError> {
-    let _actor = principal(&state, &headers).await?;
-    Ok(Json(
-        state
-            .plugins
-            .manifests()
-            .into_iter()
-            .map(manifest_view)
-            .collect(),
-    ))
 }
 
 #[utoipa::path(get, path = "/api/v1/plugins/{plugin_id}/configuration", params(("plugin_id" = String, Path), PluginConfigurationQuery), responses((status = 200, body = PluginConfigurationView), (status = 403, body = super::ErrorEnvelope), (status = 404, body = super::ErrorEnvelope)))]
@@ -206,40 +200,6 @@ pub(super) async fn delete_configuration(
         .await?;
     let view = configuration_view(&state, &plugin_id, query.organization_id).await?;
     finish(&state, &scope, key, &request_hash, &view).await
-}
-
-fn manifest_view(manifest: PluginManifest) -> PluginManifestView {
-    let mut contributions = Vec::new();
-    if manifest.workspace_create_policy {
-        contributions.push("workspace_create_policy".to_owned());
-    }
-    if manifest.configuration.is_some() {
-        contributions.push("configuration".to_owned());
-    }
-    let (schema, default) = manifest
-        .configuration
-        .map_or((None, None), |configuration| {
-            (Some(configuration.schema), Some(configuration.default))
-        });
-    PluginManifestView {
-        id: manifest.id,
-        name: manifest.name,
-        version: manifest.version,
-        description: manifest.description,
-        wit_version: manifest.wit_version,
-        workspace_create_policy: manifest.workspace_create_policy,
-        denial_codes: manifest.denial_codes,
-        declared_contributions: contributions.clone(),
-        // A package can enter this process only through the operator-owned,
-        // read-only mount. In v0.1 that installation act is the approval.
-        approved_contributions: contributions,
-        configuration_schema: schema,
-        configuration_default: default,
-        loaded: true,
-        source: "mounted",
-        error_code: None,
-        error_message: None,
-    }
 }
 
 async fn configuration_view(

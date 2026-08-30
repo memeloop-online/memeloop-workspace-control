@@ -12,6 +12,8 @@ const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
 const MAX_SAMPLES: usize = 1_000;
 const STALE_AFTER_SECONDS: i64 = 5 * 60;
 const WORKSPACE_PVC_NAME: &str = "workspace-data-workspace-0";
+const WARNING_PERCENT: f64 = 80.0;
+const CRITICAL_PERCENT: f64 = 90.0;
 
 #[derive(Debug, Clone, Copy, Serialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
@@ -22,6 +24,14 @@ pub(crate) enum StorageTelemetryStatus {
     Disabled,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum StoragePressure {
+    Normal,
+    Warning,
+    Critical,
+}
+
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub(crate) struct StorageTelemetry {
     pub(super) status: StorageTelemetryStatus,
@@ -29,6 +39,8 @@ pub(crate) struct StorageTelemetry {
     pub(super) capacity_bytes: Option<u64>,
     pub(super) available_bytes: Option<u64>,
     pub(super) observed_at: Option<i64>,
+    pub(super) used_percent: Option<f64>,
+    pub(super) pressure: Option<StoragePressure>,
 }
 
 impl StorageTelemetry {
@@ -39,6 +51,8 @@ impl StorageTelemetry {
             capacity_bytes: None,
             available_bytes: None,
             observed_at: None,
+            used_percent: None,
+            pressure: None,
         }
     }
 }
@@ -66,6 +80,11 @@ impl StorageMetricBatch {
             .observed_at
             .min(capacity.observed_at)
             .min(available.observed_at);
+        let used_percent = if capacity.value == 0 {
+            None
+        } else {
+            Some((used.value as f64 / capacity.value as f64 * 100.0).clamp(0.0, 100.0))
+        };
         StorageTelemetry {
             status: if now.saturating_sub(observed_at) > STALE_AFTER_SECONDS {
                 StorageTelemetryStatus::Stale
@@ -76,7 +95,19 @@ impl StorageMetricBatch {
             capacity_bytes: Some(capacity.value),
             available_bytes: Some(available.value),
             observed_at: Some(observed_at),
+            used_percent,
+            pressure: used_percent.map(storage_pressure),
         }
+    }
+}
+
+fn storage_pressure(used_percent: f64) -> StoragePressure {
+    if used_percent >= CRITICAL_PERCENT {
+        StoragePressure::Critical
+    } else if used_percent >= WARNING_PERCENT {
+        StoragePressure::Warning
+    } else {
+        StoragePressure::Normal
     }
 }
 
@@ -303,5 +334,16 @@ mod tests {
             values.telemetry("ws-test-missing", 1_100).status,
             StorageTelemetryStatus::Unavailable
         ));
+        assert!(matches!(
+            values.telemetry("ws-test-01abc", 1_100).pressure,
+            Some(StoragePressure::Critical)
+        ));
+    }
+
+    #[test]
+    fn storage_pressure_uses_warning_and_critical_thresholds() {
+        assert!(matches!(storage_pressure(79.9), StoragePressure::Normal));
+        assert!(matches!(storage_pressure(80.0), StoragePressure::Warning));
+        assert!(matches!(storage_pressure(90.0), StoragePressure::Critical));
     }
 }

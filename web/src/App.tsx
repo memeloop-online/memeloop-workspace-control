@@ -1,15 +1,19 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
 import { ApiClient } from "./api";
-import { InjectionPanel } from "./InjectionPanel";
-import { OperationsPanel } from "./OperationsPanel";
+import { BrandIcon } from "./BrandIcon";
+import { UserAvatar } from "./UserAvatar";
 import { WorkspacePanel } from "./WorkspacePanel";
 import { useI18n } from "./i18n";
 import type { Organization, Principal, WorkspaceResponse } from "./types";
 
-type View = "workspaces" | "injections" | "plugins" | "system";
+type View = "workspaces" | "injections" | "plugins" | "administration" | "audit" | "settings";
 
+const AdminPanel = lazy(() => import("./OperationsPanel").then(({ AdminPanel: component }) => ({ default: component })));
+const AuditPanel = lazy(() => import("./AuditPanel").then(({ AuditPanel: component }) => ({ default: component })));
+const InjectionPanel = lazy(() => import("./InjectionPanel").then(({ InjectionPanel: component }) => ({ default: component })));
 const PluginPanel = lazy(() => import("./PluginPanel").then(({ PluginPanel: component }) => ({ default: component })));
+const SettingsPanel = lazy(() => import("./SettingsPanel").then(({ SettingsPanel: component }) => ({ default: component })));
 
 export default function App() {
   const { locale, setLocale, t } = useI18n();
@@ -31,6 +35,7 @@ export default function App() {
   const api = useMemo(() => new ApiClient(token), [token]);
   const organizationRole = principal?.memberships.find((membership) => membership.organization_id === organizationId)?.role;
   const canManageOrganization = Boolean(principal?.system_admin || organizationRole === "organization_admin");
+  const currentOrganization = organizations.find((organization) => organization.id === organizationId);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -59,7 +64,12 @@ export default function App() {
         if (!active) return;
         setPrincipal(value);
         setOrganizations(visibleOrganizations);
-        setOrganizationId((current) => current || visibleOrganizations[0]?.id || "");
+        setOrganizationId((current) => {
+          const saved = localStorage.getItem("mwc.organization-id") ?? "";
+          if (visibleOrganizations.some((organization) => organization.id === current)) return current;
+          if (visibleOrganizations.some((organization) => organization.id === saved)) return saved;
+          return visibleOrganizations[0]?.id ?? "";
+        });
         setFatal("");
       })
       .catch((error) => {
@@ -86,7 +96,7 @@ export default function App() {
   }, [notice]);
 
   useEffect(() => {
-    if ((view === "system" || view === "plugins") && !canManageOrganization) {
+    if ((view === "administration" || view === "audit" || view === "plugins") && !canManageOrganization) {
       setView("workspaces");
     }
   }, [canManageOrganization, view]);
@@ -107,12 +117,18 @@ export default function App() {
     setWorkspaces([]);
   }
 
+  function selectOrganization(next: string) {
+    setOrganizationId(next);
+    if (next) localStorage.setItem("mwc.organization-id", next);
+    else localStorage.removeItem("mwc.organization-id");
+  }
+
   if (!token || !principal) {
     return (
       <main className="login-shell">
-        <div className="ambient one" /><div className="ambient two" />
+        <div className="ambient one" aria-hidden="true" /><div className="ambient two" aria-hidden="true" />
         <section className="login-card">
-          <div className="brand-mark large"><span>M</span></div>
+          <BrandIcon className="large" size={54} />
           <p className="eyebrow">MEMELOOP CONTROL PLANE</p>
           <div className="display-controls"><LanguagePicker locale={locale} setLocale={setLocale} /><button type="button" onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>{theme === "dark" ? t("themeLight") : t("themeDark")}</button></div>
           <h1>{t("loginTitle")}</h1>
@@ -131,35 +147,41 @@ export default function App() {
   return (
     <div className="app-shell">
       <aside className="sidebar">
-        <div className="brand"><div className="brand-mark"><span>M</span></div><div><strong>Memeloop</strong><small>Workspace Control</small></div></div>
+        <div className="brand"><BrandIcon /><div><strong>Memeloop</strong><small>Workspace Control</small></div></div>
         <nav>
           <Nav active={view === "workspaces"} onClick={() => setView("workspaces")} icon="◇">{t("workspaces")}</Nav>
           <Nav active={view === "injections"} onClick={() => setView("injections")} icon="⌁">{t("credentials")}</Nav>
           {canManageOrganization && <Nav active={view === "plugins"} onClick={() => setView("plugins")} icon="⬡">{t("pluginsTitle")}</Nav>}
-          {canManageOrganization && <Nav active={view === "system"} onClick={() => setView("system")} icon="◉">{t("operations")}</Nav>}
+          {canManageOrganization && <Nav active={view === "administration"} onClick={() => setView("administration")} icon="◉">{t("administration")}</Nav>}
+          {canManageOrganization && <Nav active={view === "audit"} onClick={() => setView("audit")} icon="≡">{t("audit")}</Nav>}
+          <Nav active={view === "settings"} onClick={() => setView("settings")} icon="⚙">{t("settings")}</Nav>
         </nav>
         <div className="sidebar-foot"><span className="live-dot" />{t("apiOnline")}</div>
       </aside>
 
       <main className="content">
         <header className="topbar">
-          <div>
-            <label className="org-picker">{t("organization")}<select value={organizationId} onChange={(event) => setOrganizationId(event.target.value)}>{organizations.map((organization) => <option key={organization.id} value={organization.id}>{organization.name}</option>)}</select></label>
-          </div>
-          <div className="topbar-actions"><LanguagePicker locale={locale} setLocale={setLocale} className="utility-select" /><button className="utility-button" onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>{theme === "dark" ? t("themeLight") : t("themeDark")}</button><div className="user-menu"><div className="avatar">{principal.display_name.slice(0, 1).toUpperCase()}</div><div><strong>{principal.display_name}</strong><small>{principal.system_admin ? t("systemAdmin") : organizationRole === "organization_admin" ? t("organizationAdmin") : t("organizationMember")}</small></div><button onClick={logout}>{t("logout")}</button></div></div>
+          <div className="current-organization"><span>{t("currentOrganization")}</span><strong>{currentOrganization?.name ?? t("notEnabled")}</strong></div>
+          <div className="topbar-actions"><LanguagePicker locale={locale} setLocale={setLocale} className="utility-select" /><button className="utility-button" onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>{theme === "dark" ? t("themeLight") : t("themeDark")}</button><div className="user-menu"><button className="user-menu-trigger" onClick={() => setView("settings")}><UserAvatar displayName={principal.display_name} userId={principal.user_id} avatarUrl={principal.avatar_url} /><span><strong>{principal.display_name}</strong><small>{principal.system_admin ? t("systemAdmin") : organizationRole === "organization_admin" ? t("organizationAdmin") : t("organizationMember")}</small></span></button><button className="logout-button" onClick={logout}>{t("logout")}</button></div></div>
         </header>
 
-        {!organizationId ? <EmptyOrganization systemAdmin={principal.system_admin} /> : view === "workspaces" ? (
-          <WorkspacePanel api={api} principal={principal} organizationId={organizationId} workspaces={workspaces} busy={loading} onRefresh={refresh} onError={setNotice} />
-        ) : view === "injections" ? (
-          <InjectionPanel api={api} principal={principal} organizationId={organizationId} workspaces={workspaces} onError={setNotice} />
-        ) : view === "plugins" ? (
-          <Suspense fallback={<div className="empty" role="status">{t("pluginsLoading")}</div>}><PluginPanel token={token} organizationId={organizationId} systemAdmin={principal.system_admin} onOpenCredentials={() => setView("injections")} /></Suspense>
-        ) : (
-          <OperationsPanel api={api} principal={principal} organizationId={organizationId} workspaces={workspaces} onError={setNotice} />
-        )}
+        <Suspense fallback={<div className="empty" role="status">{t("loading")}</div>}>
+          {view === "settings" ? (
+            <SettingsPanel api={api} principal={principal} organizations={organizations} organizationId={organizationId} onOrganizationChange={selectOrganization} onProfileChanged={(profile) => setPrincipal((current) => current ? { ...current, ...profile } : current)} onError={setNotice} />
+          ) : view === "audit" ? (
+            <AuditPanel api={api} organizationId={organizationId} systemAdmin={principal.system_admin} onError={setNotice} />
+          ) : !organizationId ? <EmptyOrganization systemAdmin={principal.system_admin} /> : view === "workspaces" ? (
+            <WorkspacePanel api={api} principal={principal} organizationId={organizationId} workspaces={workspaces} busy={loading} onRefresh={refresh} onError={setNotice} />
+          ) : view === "injections" ? (
+            <InjectionPanel api={api} principal={principal} organizationId={organizationId} workspaces={workspaces} onError={setNotice} />
+          ) : view === "plugins" ? (
+            <PluginPanel token={token} organizationId={organizationId} systemAdmin={principal.system_admin} onOpenCredentials={() => setView("injections")} />
+          ) : (
+            <AdminPanel api={api} principal={principal} organizationId={organizationId} workspaces={workspaces} onError={setNotice} />
+          )}
+        </Suspense>
       </main>
-      {notice && <div className="toast">{notice}</div>}
+      {notice && <div className="toast" role="status" aria-live="polite" aria-atomic="true">{notice}</div>}
     </div>
   );
 }
@@ -170,12 +192,12 @@ function LanguagePicker({ locale, setLocale, className }: { locale: "zh-CN" | "e
 }
 
 function Nav({ active, onClick, icon, children }: { active: boolean; onClick: () => void; icon: string; children: string }) {
-  return <button className={active ? "active" : ""} onClick={onClick}><span>{icon}</span>{children}</button>;
+  return <button className={active ? "active" : ""} aria-current={active ? "page" : undefined} onClick={onClick}><span aria-hidden="true">{icon}</span>{children}</button>;
 }
 
 function EmptyOrganization({ systemAdmin }: { systemAdmin: boolean }) {
   const { t } = useI18n();
-  return <div className="empty-page"><div className="brand-mark large"><span>+</span></div><h2>{t("noOrganization")}</h2><p>{systemAdmin ? t("noOrganizationAdmin") : t("noOrganizationMember")}</p><a className="button" href="/api/v1/openapi.json" target="_blank">{t("viewOpenApi")}</a></div>;
+  return <div className="empty-page"><BrandIcon className="large" size={54} /><h2>{t("noOrganization")}</h2><p>{systemAdmin ? t("noOrganizationAdmin") : t("noOrganizationMember")}</p><a className="button" href="/api/v1/openapi.json" target="_blank" rel="noreferrer">{t("viewOpenApi")}</a></div>;
 }
 
 function message(error: unknown) {

@@ -417,7 +417,7 @@ async fn management_api_enforces_system_and_organization_boundaries() {
         .unwrap();
     assert_eq!(audit.status(), StatusCode::OK);
     let audit: Value = body_json(audit).await;
-    assert!(audit.as_array().unwrap().iter().all(|record| {
+    assert!(audit["items"].as_array().unwrap().iter().all(|record| {
         (record["actor_user_id"] == admin.user_id.to_string()
             && record["actor_display_name"] == "Admin")
             || (record["actor_user_id"] == created_user_id
@@ -436,7 +436,7 @@ async fn management_api_enforces_system_and_organization_boundaries() {
     let scaling: Value = body_json(scaling).await;
     assert_eq!(scaling["database_mode"], "sqlite");
     assert_eq!(scaling["configured_replicas"], 1);
-    assert_eq!(scaling["schema_version"], 11);
+    assert_eq!(scaling["schema_version"], 14);
 }
 
 fn authenticated(

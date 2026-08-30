@@ -1,5 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
+import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import type { ApiClient } from "./api";
+import { WorkspaceCombobox } from "./forms/WorkspaceCombobox";
 import { useI18n } from "./i18n";
 import type {
   InjectionKind,
@@ -27,10 +29,11 @@ interface Props {
 
 export function InjectionPanel(props: Props) {
   const { t } = useI18n();
+  const scopeTabsId = useId();
   const canManageOrganization = props.principal.system_admin || props.principal.memberships.some((membership) => membership.organization_id === props.organizationId && membership.role === "organization_admin");
+  const scopeValues: InjectionScope[] = [...(canManageOrganization ? ["organization" as const] : []), "user", "workspace"];
   const [scope, setScope] = useState<InjectionScope>("user");
   const [workspaceId, setWorkspaceId] = useState(props.workspaces[0]?.workspace.id ?? "");
-  const [workspaceQuery, setWorkspaceQuery] = useState(props.workspaces[0] ? workspaceLabel(props.workspaces[0]) : "");
   const [items, setItems] = useState<StoredInjection[]>([]);
   const [templates, setTemplates] = useState<WorkspaceTemplate[]>([]);
   const [draft, setDraft] = useState(emptyInjectionDraft);
@@ -38,6 +41,7 @@ export function InjectionPanel(props: Props) {
   const [preview, setPreview] = useState<ResolvedInjection[]>([]);
   const [saving, setSaving] = useState(false);
   const [search, setSearch] = useState("");
+  const [mobilePane, setMobilePane] = useState<"list" | "editor">("list");
 
   const filteredItems = useMemo(() => {
     const query = search.trim().toLocaleLowerCase();
@@ -79,13 +83,13 @@ export function InjectionPanel(props: Props) {
   useEffect(() => {
     if (!workspaceId && props.workspaces[0]) {
       setWorkspaceId(props.workspaces[0].workspace.id);
-      setWorkspaceQuery(workspaceLabel(props.workspaces[0]));
     }
   }, [props.workspaces, workspaceId]);
 
   function resetDraft() {
     setSelectedKey(null);
     setDraft(emptyInjectionDraft());
+    setMobilePane("list");
   }
 
   function changeScope(value: InjectionScope) {
@@ -101,6 +105,27 @@ export function InjectionPanel(props: Props) {
     }
     setSelectedKey(item.key);
     setDraft(draftFromStored(item));
+    setMobilePane("editor");
+  }
+
+  function startNew() {
+    setSelectedKey(null);
+    setDraft(emptyInjectionDraft());
+    setMobilePane("editor");
+  }
+
+  function scopeKeyDown(event: ReactKeyboardEvent<HTMLButtonElement>, current: InjectionScope) {
+    const currentIndex = scopeValues.indexOf(current);
+    let nextIndex = currentIndex;
+    if (event.key === "ArrowRight" || event.key === "ArrowDown") nextIndex = (currentIndex + 1) % scopeValues.length;
+    else if (event.key === "ArrowLeft" || event.key === "ArrowUp") nextIndex = (currentIndex - 1 + scopeValues.length) % scopeValues.length;
+    else if (event.key === "Home") nextIndex = 0;
+    else if (event.key === "End") nextIndex = scopeValues.length - 1;
+    else return;
+    event.preventDefault();
+    const next = scopeValues[nextIndex];
+    changeScope(next);
+    requestAnimationFrame(() => document.getElementById(`${scopeTabsId}-${next}`)?.focus());
   }
 
   async function save() {
@@ -154,29 +179,34 @@ export function InjectionPanel(props: Props) {
   return (
     <section className="panel-stack">
       <div className="section-heading">
-        <div><p className="eyebrow">CREDENTIALS</p><h2>{t("credentialsTitle")}</h2></div>
+        <div><p className="eyebrow">{t("credentials")}</p><h2>{t("credentialsTitle")}</h2></div>
         <button className="button" onClick={() => void runPreview()}>{t("credentialsPreview")}</button>
       </div>
-      <div className="scope-tabs">
-        {([...(canManageOrganization ? ["organization" as const] : []), "user", "workspace"] as InjectionScope[]).map((value) => (
-          <button className={scope === value ? "active" : ""} onClick={() => changeScope(value)} key={value}>
+      <div className="scope-tabs" role="tablist" aria-label={t("credentials")}>
+        {scopeValues.map((value) => (
+          <button id={`${scopeTabsId}-${value}`} role="tab" aria-selected={scope === value} aria-controls={`${scopeTabsId}-panel`} tabIndex={scope === value ? 0 : -1} className={scope === value ? "active" : ""} onClick={() => changeScope(value)} onKeyDown={(event) => scopeKeyDown(event, value)} key={value}>
             {value === "organization" ? t("scopeOrganization") : value === "user" ? t("scopeUser") : t("scopeWorkspace")}
           </button>
         ))}
       </div>
-      {scope === "workspace" && (
-        <label className="standalone-label">{t("workspaces")}<input type="search" list="credential-workspaces" value={workspaceQuery} onChange={(event) => { const value = event.target.value; setWorkspaceQuery(value); const selected = props.workspaces.find((item) => workspaceLabel(item) === value || item.workspace.id === value); setWorkspaceId(selected?.workspace.id ?? ""); }} placeholder={t("workspaceAutocomplete")} autoComplete="off" /><datalist id="credential-workspaces">{props.workspaces.map((item) => <option value={workspaceLabel(item)} key={item.workspace.id} />)}</datalist></label>
-      )}
-
-      <div className="injection-layout">
-        <div className="injection-list">
+      <div id={`${scopeTabsId}-panel`} role="tabpanel" aria-labelledby={`${scopeTabsId}-${scope}`} className="injection-scope-panel">
+        {scope === "workspace" && (
+          <WorkspaceCombobox items={props.workspaces} selectedId={workspaceId} onChange={setWorkspaceId} />
+        )}
+        <div className="mobile-master-detail" aria-label={t("credentials")}>
+          <button type="button" aria-pressed={mobilePane === "list"} onClick={() => setMobilePane("list")}>{t("savedCredentials")}</button>
+          <button type="button" aria-pressed={mobilePane === "editor"} onClick={() => selectedKey ? setMobilePane("editor") : startNew()}>{selectedKey ? t("editingCredential") : t("newCredential")}</button>
+        </div>
+        <div className="injection-layout">
+        <div className={`injection-list${mobilePane === "list" ? "" : " mobile-pane-hidden"}`}>
           <h3>{t("savedCredentials")}</h3>
           <input className="credential-search" type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder={t("searchCredentials")} aria-label={t("searchCredentials")} />
-          <div className="credential-scroll">
-          {filteredItems.length === 0 && <div className="empty compact">{t("noCredentials")}</div>}
+          <p className="sr-only" role="status" aria-live="polite">{filteredItems.length === 0 ? t("noCredentials") : `${t("savedCredentials")}: ${filteredItems.length}`}</p>
+          <div className="credential-scroll" aria-label={t("savedCredentials")}>
+          {filteredItems.length === 0 && <div className="empty compact" role="status">{t("noCredentials")}</div>}
           {filteredItems.map((item) => (
             <button className={`injection-row${selectedKey === item.key ? " selected" : ""}`} aria-pressed={selectedKey === item.key} key={item.key} onClick={() => selectItem(item)}>
-              <span className="kind-icon">{kindGlyph(item.kind)}</span>
+              <span className="kind-icon" title={kindLabel(item.kind, t)} aria-label={kindLabel(item.kind, t)}>{kindShortLabel(item.kind, t)}</span>
               <span><strong>{item.key}</strong><small>{item.target}</small></span>
               <span className="version">v{item.version}{item.locked ? ` · ${t("locked")}` : ""}</span>
             </button>
@@ -184,7 +214,10 @@ export function InjectionPanel(props: Props) {
           </div>
         </div>
 
-        <InjectionEditorForm draft={draft} update={setDraft} scope={scope} templates={templates} selectedKey={selectedKey} saving={saving} disabled={!scopeId} onReset={resetDraft} onSubmit={save} onDelete={remove} />
+        <div className={`injection-editor-pane${mobilePane === "editor" ? "" : " mobile-pane-hidden"}`}>
+          <InjectionEditorForm draft={draft} update={setDraft} scope={scope} templates={templates} selectedKey={selectedKey} saving={saving} disabled={!scopeId} onReset={resetDraft} onSubmit={save} onDelete={remove} />
+        </div>
+        </div>
       </div>
 
       {preview.length > 0 && <div className="preview-card"><h3>{t("resolvedSources")}</h3><div className="preview-grid">{preview.map((item) => <div key={item.key}><strong>{item.key}</strong><span>{item.source === "organization" ? t("fromOrganization") : item.source === "user" ? t("fromUser") : t("fromWorkspace")}</span><small>{item.target}{item.locked ? ` · ${t("locked")}` : ""}</small></div>)}</div></div>}
@@ -192,12 +225,8 @@ export function InjectionPanel(props: Props) {
   );
 }
 
-function kindGlyph(kind: InjectionKind) {
-  return kind === "environment_variable" ? "ENV" : kind === "ssh_public_key" ? "SSH" : kind === "secret_file" ? "SEC" : "CFG";
-}
-
-function workspaceLabel(item: WorkspaceResponse) {
-  return `${item.workspace.name} · ${item.workspace.short_id}`;
+function kindShortLabel(kind: InjectionKind, t: ReturnType<typeof useI18n>["t"]) {
+  return kind === "environment_variable" ? t("kindShortEnvironment") : kind === "ssh_public_key" ? t("kindShortSsh") : kind === "secret_file" ? t("kindShortSecret") : t("kindShortConfig");
 }
 
 function kindLabel(kind: InjectionKind, t: ReturnType<typeof useI18n>["t"]) {

@@ -31,8 +31,9 @@ workspace:
   # Stable Tailnet node DNS name or IP. Enables per-workspace, auto-assigned SSH NodePorts.
   internalSshHost: ""
 
-# Plugins are installed only by GitOps as a read-only mount. The API does not
-# upload, install, or hot-reload executable code. Exactly one source may be set.
+# Optional read-only startup packages can be supplied by ConfigMap or PVC.
+# Dynamically inspected and administrator-approved packages are persisted in
+# the authoritative database and hot-reloaded; exactly one startup mount source may be set.
 plugins:
   existingConfigMap: ""
   # Map ConfigMap keys into first-level package directories, for example:
@@ -108,3 +109,8 @@ monitoring:
     enabled: false
     interval: 30s
     labels: {}
+  prometheusRule:
+    enabled: false
+    labels: {}
+    warningFor: 15m
+    criticalFor: 5m

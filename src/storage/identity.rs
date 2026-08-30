@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use sqlx::{PgConnection, Row, SqliteConnection};
+use sqlx::Row;
 use utoipa::ToSchema;
 use uuid::Uuid;
 
@@ -9,7 +9,12 @@ use crate::{
     quota::Resources,
 };
 
-use super::{Database, StorageError};
+use super::{
+    ApiKeySummary, Database, StorageError,
+    user_settings::{insert_key_postgres, insert_key_sqlite, token_prefix},
+};
+
+mod backend;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
 pub struct Principal {
@@ -64,11 +69,19 @@ impl Database {
         validate_token(token)?;
         let user_id = Uuid::now_v7();
         let token_hash = hash_token(token);
+        let initial_key = ApiKeySummary {
+            id: user_id,
+            name: "Initial key".to_owned(),
+            prefix: token_prefix(token),
+            last_used_at: None,
+            created_at: now,
+        };
         match self {
             Self::Sqlite {
                 pool,
                 installation_id,
             } => {
+                let mut transaction = pool.begin().await?;
                 sqlx::query(
                     "INSERT INTO users (id, installation_id, display_name, token_hash, \
                     system_admin, disabled, created_at) VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6)",
@@ -76,16 +89,26 @@ impl Database {
                 .bind(user_id.to_string())
                 .bind(installation_id.as_str())
                 .bind(display_name)
-                .bind(token_hash)
+                .bind(&token_hash)
                 .bind(i64::from(system_admin))
                 .bind(now)
-                .execute(pool)
+                .execute(&mut *transaction)
                 .await?;
+                insert_key_sqlite(
+                    &mut transaction,
+                    installation_id.as_str(),
+                    user_id,
+                    &initial_key,
+                    &token_hash,
+                )
+                .await?;
+                transaction.commit().await?;
             }
             Self::Postgres {
                 pool,
                 installation_id,
             } => {
+                let mut transaction = pool.begin().await?;
                 sqlx::query(
                     "INSERT INTO users (id, installation_id, display_name, token_hash, \
                     system_admin, disabled, created_at) VALUES ($1, $2, $3, $4, $5, 0, $6)",
@@ -93,11 +116,20 @@ impl Database {
                 .bind(user_id.to_string())
                 .bind(installation_id.as_str())
                 .bind(display_name)
-                .bind(token_hash)
+                .bind(&token_hash)
                 .bind(i64::from(system_admin))
                 .bind(now)
-                .execute(pool)
+                .execute(&mut *transaction)
                 .await?;
+                insert_key_postgres(
+                    &mut transaction,
+                    installation_id.as_str(),
+                    user_id,
+                    &initial_key,
+                    &token_hash,
+                )
+                .await?;
+                transaction.commit().await?;
             }
         }
         Ok(Principal {
@@ -119,8 +151,10 @@ impl Database {
                 installation_id,
             } => {
                 let row = sqlx::query(
-                    "SELECT id, display_name, system_admin FROM users WHERE \
-                    installation_id = ?1 AND token_hash = ?2 AND disabled = 0",
+                    "SELECT u.id, u.display_name, u.system_admin, k.id AS key_id, \
+                    k.last_used_at FROM users u \
+                    JOIN user_api_keys k ON k.installation_id = u.installation_id AND k.user_id = u.id \
+                    WHERE u.installation_id = ?1 AND k.token_hash = ?2 AND k.revoked_at IS NULL AND u.disabled = 0",
                 )
                 .bind(installation_id.as_str())
                 .bind(token_hash)
@@ -128,8 +162,16 @@ impl Database {
                 .await?;
                 let Some(row) = row else { return Ok(None) };
                 let user_id = Uuid::parse_str(row.try_get::<String, _>("id")?.as_str())?;
+                let key_id: String = row.try_get("key_id")?;
+                backend::mark_key_used_sqlite(
+                    pool,
+                    installation_id.as_str(),
+                    &key_id,
+                    row.try_get("last_used_at")?,
+                )
+                .await?;
                 let memberships =
-                    sqlite_memberships(pool, installation_id.as_str(), user_id).await?;
+                    backend::sqlite_memberships(pool, installation_id.as_str(), user_id).await?;
                 Ok(Some(Principal {
                     user_id,
                     display_name: row.try_get("display_name")?,
@@ -142,8 +184,10 @@ impl Database {
                 installation_id,
             } => {
                 let row = sqlx::query(
-                    "SELECT id, display_name, system_admin FROM users WHERE \
-                    installation_id = $1 AND token_hash = $2 AND disabled = 0",
+                    "SELECT u.id, u.display_name, u.system_admin, k.id AS key_id, \
+                    k.last_used_at FROM users u \
+                    JOIN user_api_keys k ON k.installation_id = u.installation_id AND k.user_id = u.id \
+                    WHERE u.installation_id = $1 AND k.token_hash = $2 AND k.revoked_at IS NULL AND u.disabled = 0",
                 )
                 .bind(installation_id.as_str())
                 .bind(token_hash)
@@ -151,8 +195,16 @@ impl Database {
                 .await?;
                 let Some(row) = row else { return Ok(None) };
                 let user_id = Uuid::parse_str(row.try_get::<String, _>("id")?.as_str())?;
+                let key_id: String = row.try_get("key_id")?;
+                backend::mark_key_used_postgres(
+                    pool,
+                    installation_id.as_str(),
+                    &key_id,
+                    row.try_get("last_used_at")?,
+                )
+                .await?;
                 let memberships =
-                    postgres_memberships(pool, installation_id.as_str(), user_id).await?;
+                    backend::postgres_memberships(pool, installation_id.as_str(), user_id).await?;
                 Ok(Some(Principal {
                     user_id,
                     display_name: row.try_get("display_name")?,
@@ -182,7 +234,7 @@ impl Database {
                 installation_id,
             } => {
                 let mut transaction = pool.begin().await?;
-                insert_organization_sqlite(
+                backend::insert_organization_sqlite(
                     &mut transaction,
                     installation_id.as_str(),
                     &organization,
@@ -197,7 +249,7 @@ impl Database {
                 installation_id,
             } => {
                 let mut transaction = pool.begin().await?;
-                insert_organization_postgres(
+                backend::insert_organization_postgres(
                     &mut transaction,
                     installation_id.as_str(),
                     &organization,
@@ -255,92 +307,7 @@ impl Database {
     }
 }
 
-async fn insert_organization_sqlite(
-    connection: &mut SqliteConnection,
-    installation_id: &str,
-    organization: &Organization,
-    owner_user_id: Uuid,
-    now: i64,
-) -> Result<(), StorageError> {
-    sqlx::query(
-        "INSERT INTO organizations (id, installation_id, name, created_at) VALUES (?1, ?2, ?3, ?4)",
-    )
-    .bind(organization.id.to_string())
-    .bind(installation_id)
-    .bind(&organization.name)
-    .bind(now)
-    .execute(&mut *connection)
-    .await?;
-    sqlx::query("INSERT INTO organization_memberships (installation_id, organization_id, user_id, role, created_at) VALUES (?1, ?2, ?3, 'organization_admin', ?4)")
-        .bind(installation_id).bind(organization.id.to_string()).bind(owner_user_id.to_string())
-        .bind(now).execute(&mut *connection).await?;
-    Ok(())
-}
-
-async fn insert_organization_postgres(
-    connection: &mut PgConnection,
-    installation_id: &str,
-    organization: &Organization,
-    owner_user_id: Uuid,
-    now: i64,
-) -> Result<(), StorageError> {
-    sqlx::query(
-        "INSERT INTO organizations (id, installation_id, name, created_at) VALUES ($1, $2, $3, $4)",
-    )
-    .bind(organization.id.to_string())
-    .bind(installation_id)
-    .bind(&organization.name)
-    .bind(now)
-    .execute(&mut *connection)
-    .await?;
-    sqlx::query("INSERT INTO organization_memberships (installation_id, organization_id, user_id, role, created_at) VALUES ($1, $2, $3, 'organization_admin', $4)")
-        .bind(installation_id).bind(organization.id.to_string()).bind(owner_user_id.to_string())
-        .bind(now).execute(&mut *connection).await?;
-    Ok(())
-}
-
-async fn sqlite_memberships(
-    pool: &sqlx::SqlitePool,
-    installation_id: &str,
-    user_id: Uuid,
-) -> Result<Vec<Membership>, StorageError> {
-    let rows = sqlx::query("SELECT organization_id, role FROM organization_memberships WHERE installation_id = ?1 AND user_id = ?2")
-        .bind(installation_id).bind(user_id.to_string()).fetch_all(pool).await?;
-    decode_memberships(
-        rows.iter()
-            .map(|row| (row.try_get("organization_id"), row.try_get("role"))),
-    )
-}
-
-async fn postgres_memberships(
-    pool: &sqlx::PgPool,
-    installation_id: &str,
-    user_id: Uuid,
-) -> Result<Vec<Membership>, StorageError> {
-    let rows = sqlx::query("SELECT organization_id, role FROM organization_memberships WHERE installation_id = $1 AND user_id = $2")
-        .bind(installation_id).bind(user_id.to_string()).fetch_all(pool).await?;
-    decode_memberships(
-        rows.iter()
-            .map(|row| (row.try_get("organization_id"), row.try_get("role"))),
-    )
-}
-
-fn decode_memberships<I>(rows: I) -> Result<Vec<Membership>, StorageError>
-where
-    I: IntoIterator<Item = (Result<String, sqlx::Error>, Result<String, sqlx::Error>)>,
-{
-    rows.into_iter()
-        .map(|(organization_id, role)| {
-            let role = role?;
-            Ok(Membership {
-                organization_id: Uuid::parse_str(&organization_id?)?,
-                role: Role::from_database(&role).ok_or(StorageError::UnknownRole(role))?,
-            })
-        })
-        .collect()
-}
-
-fn hash_token(token: &str) -> String {
+pub(super) fn hash_token(token: &str) -> String {
     format!("{:x}", Sha256::digest(token.as_bytes()))
 }
 

@@ -304,7 +304,7 @@ where
     })
 }
 
-fn decode_audit<R: Row>(row: R) -> Result<AuditRecord, StorageError>
+pub(super) fn decode_audit<R: Row>(row: R) -> Result<AuditRecord, StorageError>
 where
     for<'a> &'a str: sqlx::ColumnIndex<R>,
     String: for<'d> sqlx::Decode<'d, R::Database> + sqlx::Type<R::Database>,

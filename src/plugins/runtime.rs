@@ -1,21 +1,19 @@
-use std::{path::Path, sync::Arc, time::Duration};
+use std::{
+    path::Path,
+    sync::{Arc, RwLock},
+    time::Duration,
+};
 
 use serde::Serialize;
-use tokio::sync::Semaphore;
+use tokio::sync::{Mutex, Semaphore};
 use uuid::Uuid;
-use wasmtime::component::{Component, Linker};
-use wasmtime::{Config, Engine, Store, StoreLimitsBuilder};
+use wasmtime::component::Component;
+use wasmtime::{Config, Engine};
 
 use crate::{storage::Database, templates::WorkspaceTemplateSpec};
 
-use super::{
-    ConfigurationSchema, Plugin, PluginError, PluginManifest, discover,
-    memeloop::workspace_control::types,
-};
+use super::{ConfigurationSchema, PluginError, PluginManifest, discover};
 
-const FUEL_LIMIT: u64 = 1_000_000;
-const MEMORY_LIMIT: usize = 16 * 1024 * 1024;
-const EXECUTION_TIMEOUT: Duration = Duration::from_millis(300);
 const EPOCH_TICK: Duration = Duration::from_millis(10);
 const MAX_CONCURRENT_EXECUTIONS: usize = 16;
 
@@ -24,14 +22,45 @@ struct LoadedPlugin {
     manifest: PluginManifest,
     component: Option<Component>,
     configuration_schema: Option<ConfigurationSchema>,
+    source_kind: String,
+    source_ref: String,
+    package_digest: String,
+    source_confirmation: String,
+    approved_contributions: Vec<String>,
+    package_version: u64,
+    enabled: bool,
+}
+
+mod execution;
+use execution::{invoke, invoke_api, invoke_middleware, wit_workspace_plan};
+mod catalog;
+mod configuration;
+
+#[derive(Default)]
+struct RuntimeRegistry {
+    catalog_revision: u64,
+    plugins: Vec<LoadedPlugin>,
 }
 
 #[derive(Clone)]
 pub struct PluginRuntime {
     engine: Option<Engine>,
-    plugins: Arc<Vec<LoadedPlugin>>,
+    plugins: Arc<RwLock<RuntimeRegistry>>,
     database: Database,
     execution_slots: Arc<Semaphore>,
+    refresh_lock: Arc<Mutex<()>>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct RuntimePluginView {
+    pub manifest: PluginManifest,
+    pub source_kind: String,
+    pub source_ref: String,
+    pub package_digest: String,
+    pub source_confirmation: String,
+    pub approved_contributions: Vec<String>,
+    pub package_version: u64,
+    pub enabled: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -56,6 +85,22 @@ pub struct WorkspaceCreatePlan {
     pub cluster_access: bool,
 }
 
+#[derive(Clone, Debug)]
+pub struct PluginRequestContext {
+    pub installation_id: String,
+    pub actor_user_id: Option<Uuid>,
+    pub organization_id: Option<Uuid>,
+    pub method: String,
+    pub path: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct PluginApiResponse {
+    pub status: u16,
+    pub content_type: String,
+    pub body: Vec<u8>,
+}
+
 impl WorkspaceCreatePlan {
     pub fn from_template(name: &str, template: &WorkspaceTemplateSpec) -> Self {
         Self {
@@ -76,20 +121,15 @@ impl PluginRuntime {
     pub fn disabled(database: Database) -> Self {
         Self {
             engine: None,
-            plugins: Arc::default(),
+            plugins: Arc::new(RwLock::new(RuntimeRegistry::default())),
             database,
             execution_slots: Arc::new(Semaphore::new(MAX_CONCURRENT_EXECUTIONS)),
+            refresh_lock: Arc::new(Mutex::new(())),
         }
     }
 
     pub fn load(root: Option<&Path>, database: Database) -> Result<Self, PluginError> {
-        let Some(root) = root else {
-            return Ok(Self::disabled(database));
-        };
-        let packages = discover(root)?;
-        if packages.is_empty() {
-            return Ok(Self::disabled(database));
-        }
+        let packages = root.map(discover).transpose()?.unwrap_or_default();
         let mut config = Config::new();
         config.wasm_component_model(true);
         config.consume_fuel(true);
@@ -97,6 +137,7 @@ impl PluginRuntime {
         let engine = Engine::new(&config).map_err(|_| PluginError::RuntimeUnavailable)?;
         let mut plugins = Vec::with_capacity(packages.len());
         for package in packages {
+            let mounted_name = package.manifest.id.clone();
             let component = package
                 .component_path
                 .as_ref()
@@ -109,7 +150,17 @@ impl PluginRuntime {
                 manifest: package.manifest,
                 component,
                 configuration_schema: package.configuration_schema,
+                source_kind: "mounted".to_owned(),
+                source_ref: mounted_name,
+                package_digest: String::new(),
+                source_confirmation: "gitops_mounted".to_owned(),
+                approved_contributions: Vec::new(),
+                package_version: 0,
+                enabled: true,
             });
+        }
+        for plugin in &mut plugins {
+            plugin.approved_contributions = declared_contributions(&plugin.manifest);
         }
         let epoch_engine = engine.clone();
         tokio::spawn(async move {
@@ -121,55 +172,14 @@ impl PluginRuntime {
         });
         Ok(Self {
             engine: Some(engine),
-            plugins: Arc::new(plugins),
+            plugins: Arc::new(RwLock::new(RuntimeRegistry {
+                catalog_revision: 0,
+                plugins,
+            })),
             database,
             execution_slots: Arc::new(Semaphore::new(MAX_CONCURRENT_EXECUTIONS)),
+            refresh_lock: Arc::new(Mutex::new(())),
         })
-    }
-
-    pub fn manifests(&self) -> Vec<PluginManifest> {
-        self.plugins
-            .iter()
-            .map(|plugin| plugin.manifest.clone())
-            .collect()
-    }
-
-    pub fn manifest(&self, plugin_id: &str) -> Option<PluginManifest> {
-        self.plugins
-            .iter()
-            .find(|plugin| plugin.manifest.id == plugin_id)
-            .map(|plugin| plugin.manifest.clone())
-    }
-
-    pub fn validate_configuration(
-        &self,
-        plugin_id: &str,
-        value: &serde_json::Value,
-    ) -> Result<(), PluginError> {
-        let plugin = self
-            .plugins
-            .iter()
-            .find(|plugin| plugin.manifest.id == plugin_id)
-            .ok_or(PluginError::NotFound)?;
-        plugin
-            .configuration_schema
-            .as_ref()
-            .ok_or(PluginError::InvalidConfiguration)?
-            .validate(value)
-    }
-
-    pub fn configuration_schema_digest(&self, plugin_id: &str) -> Result<String, PluginError> {
-        let plugin = self
-            .plugins
-            .iter()
-            .find(|plugin| plugin.manifest.id == plugin_id)
-            .ok_or(PluginError::NotFound)?;
-        Ok(plugin
-            .configuration_schema
-            .as_ref()
-            .ok_or(PluginError::InvalidConfiguration)?
-            .digest()
-            .to_owned())
     }
 
     pub async fn admit_workspace_create(
@@ -177,10 +187,21 @@ impl PluginRuntime {
         context: WorkspaceCreateContext,
         plan: WorkspaceCreatePlan,
     ) -> Result<(), PluginError> {
+        self.synchronize().await?;
         let policies: Vec<_> = self
             .plugins
+            .read()
+            .map_err(|_| PluginError::RuntimeUnavailable)?
+            .plugins
             .iter()
-            .filter(|plugin| plugin.manifest.workspace_create_policy)
+            .filter(|plugin| {
+                plugin.enabled
+                    && plugin.manifest.workspace_create_policy
+                    && plugin
+                        .approved_contributions
+                        .iter()
+                        .any(|value| value == "workspace_create_policy")
+            })
             .cloned()
             .collect();
         if policies.is_empty() {
@@ -190,7 +211,7 @@ impl PluginRuntime {
         let mut configured = Vec::with_capacity(policies.len());
         for plugin in policies {
             let configuration = self
-                .effective_configuration(&plugin, context.organization_id)
+                .effective_configuration(&plugin, Some(context.organization_id))
                 .await?;
             configured.push((plugin, configuration));
         }
@@ -214,116 +235,127 @@ impl PluginRuntime {
             .map_err(|_| PluginError::ExecutionFailed)?
     }
 
-    async fn effective_configuration(
+    pub async fn invoke_api_route(
         &self,
-        plugin: &LoadedPlugin,
-        organization_id: Uuid,
-    ) -> Result<serde_json::Value, PluginError> {
-        let configured = self
-            .database
-            .plugin_configuration_for_scope(&plugin.manifest.id, Some(organization_id))
-            .await?
-            .or(self
-                .database
-                .plugin_configuration_for_scope(&plugin.manifest.id, None)
-                .await?);
-        if configured.as_ref().is_some_and(|stored| {
-            plugin
-                .configuration_schema
-                .as_ref()
-                .is_none_or(|schema| stored.schema_digest != schema.digest())
-        }) {
-            return Err(PluginError::InvalidConfiguration);
+        plugin_id: &str,
+        route_id: &str,
+        context: PluginRequestContext,
+        body: Vec<u8>,
+    ) -> Result<PluginApiResponse, PluginError> {
+        const MAX_REQUEST_BODY: usize = 256 * 1024;
+        if body.len() > MAX_REQUEST_BODY {
+            return Err(PluginError::InvalidApiRequest);
         }
-        let value = configured.map_or_else(
-            || {
-                plugin
-                    .manifest
-                    .configuration
-                    .as_ref()
-                    .map(|configuration| configuration.default.clone())
-                    .unwrap_or_else(|| serde_json::json!({}))
-            },
-            |stored| stored.value,
-        );
-        if let Some(schema) = &plugin.configuration_schema {
-            schema.validate(&value)?;
+        self.synchronize().await?;
+        let plugin = self
+            .plugins
+            .read()
+            .map_err(|_| PluginError::RuntimeUnavailable)?
+            .plugins
+            .iter()
+            .find(|plugin| {
+                plugin.enabled
+                    && plugin.manifest.id == plugin_id
+                    && plugin
+                        .approved_contributions
+                        .iter()
+                        .any(|value| value == "api_routes")
+                    && plugin
+                        .manifest
+                        .api_routes
+                        .iter()
+                        .any(|route| route.id == route_id)
+            })
+            .cloned()
+            .ok_or(PluginError::NotFound)?;
+        let configuration = self
+            .effective_configuration(&plugin, context.organization_id)
+            .await?;
+        let engine = self.engine.clone().ok_or(PluginError::RuntimeUnavailable)?;
+        let permit = self
+            .execution_slots
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|_| PluginError::RuntimeUnavailable)?;
+        let route_id = route_id.to_owned();
+        let call = tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            invoke_api(&engine, &plugin, &route_id, &context, &configuration, body)
+        });
+        tokio::time::timeout(Duration::from_millis(500), call)
+            .await
+            .map_err(|_| PluginError::ExecutionFailed)?
+            .map_err(|_| PluginError::ExecutionFailed)?
+    }
+
+    pub async fn check_api_middleware(
+        &self,
+        context: PluginRequestContext,
+    ) -> Result<(), PluginError> {
+        let plugins = self
+            .plugins
+            .read()
+            .map_err(|_| PluginError::RuntimeUnavailable)?
+            .plugins
+            .iter()
+            .filter(|plugin| {
+                plugin.enabled
+                    && !plugin.manifest.api_middleware.is_empty()
+                    && plugin
+                        .approved_contributions
+                        .iter()
+                        .any(|value| value == "api_middleware")
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        if plugins.is_empty() {
+            return Ok(());
         }
-        Ok(value)
+        let mut configured = Vec::with_capacity(plugins.len());
+        for plugin in plugins {
+            let configuration = self
+                .effective_configuration(&plugin, context.organization_id)
+                .await?;
+            configured.push((plugin, configuration));
+        }
+        let engine = self.engine.clone().ok_or(PluginError::RuntimeUnavailable)?;
+        let permit = self
+            .execution_slots
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|_| PluginError::RuntimeUnavailable)?;
+        let call = tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            for (plugin, configuration) in configured {
+                invoke_middleware(&engine, &plugin, &context, &configuration)?;
+            }
+            Ok(())
+        });
+        tokio::time::timeout(Duration::from_millis(500), call)
+            .await
+            .map_err(|_| PluginError::ExecutionFailed)?
+            .map_err(|_| PluginError::ExecutionFailed)?
     }
 }
 
-fn invoke(
-    engine: &Engine,
-    plugin: &LoadedPlugin,
-    context: &WorkspaceCreateContext,
-    plan: &types::WorkspacePlan,
-    configuration: &serde_json::Value,
-) -> Result<(), PluginError> {
-    let component = plugin
-        .component
-        .as_ref()
-        .ok_or(PluginError::ExecutionFailed)?;
-    let limits = StoreLimitsBuilder::new()
-        .memory_size(MEMORY_LIMIT)
-        .instances(8)
-        .tables(2)
-        .memories(2)
-        .build();
-    let mut store = Store::new(engine, limits);
-    store.limiter(|limits| limits);
-    store.set_epoch_deadline(
-        u64::try_from(
-            EXECUTION_TIMEOUT
-                .as_millis()
-                .div_ceil(EPOCH_TICK.as_millis()),
-        )
-        .unwrap_or(u64::MAX)
-        .max(1),
-    );
-    store
-        .set_fuel(FUEL_LIMIT)
-        .map_err(|_| PluginError::ExecutionFailed)?;
-    let linker = Linker::new(engine);
-    let bindings = Plugin::instantiate(&mut store, component, &linker)
-        .map_err(|_| PluginError::ExecutionFailed)?;
-    let context = types::CreateContext {
-        installation_id: context.installation_id.clone(),
-        actor_user_id: context.actor_user_id.to_string(),
-        organization_id: context.organization_id.to_string(),
-        owner_id: context.owner_id.to_string(),
-        template_id: context.template_id.to_string(),
-        configuration_json: serde_json::to_string(configuration)
-            .map_err(|_| PluginError::ExecutionFailed)?,
-    };
-    let decision = bindings
-        .memeloop_workspace_control_workspace_create_policy()
-        .call_evaluate(&mut store, &context, plan)
-        .map_err(|_| PluginError::ExecutionFailed)?
-        .map_err(|_| PluginError::ExecutionFailed)?;
-    if decision.allow {
-        return Ok(());
+fn declared_contributions(manifest: &PluginManifest) -> Vec<String> {
+    let mut contributions = Vec::new();
+    if manifest.workspace_create_policy {
+        contributions.push("workspace_create_policy".to_owned());
     }
-    let code = decision.code.ok_or(PluginError::ExecutionFailed)?;
-    if !plugin.manifest.denial_codes.contains(&code) {
-        return Err(PluginError::ExecutionFailed);
+    if manifest.configuration.is_some() {
+        contributions.push("configuration".to_owned());
     }
-    Err(PluginError::AdmissionDenied {
-        plugin_id: plugin.manifest.id.clone(),
-        decision_code: code,
-    })
-}
-
-fn wit_workspace_plan(workspace: &WorkspaceCreatePlan) -> types::WorkspacePlan {
-    types::WorkspacePlan {
-        name: workspace.name.clone(),
-        image: workspace.image.clone(),
-        access_mode: workspace.access_mode.clone(),
-        cpu_millis: workspace.cpu_millis,
-        memory_mib: workspace.memory_mib,
-        gpu_count: workspace.gpu_count,
-        disk_gib: workspace.disk_gib,
-        buildkit_enabled: workspace.buildkit_enabled,
-        cluster_access: workspace.cluster_access,
+    if !manifest.ui_surfaces.is_empty() {
+        contributions.push("ui_surfaces".to_owned());
     }
+    if !manifest.api_routes.is_empty() {
+        contributions.push("api_routes".to_owned());
+    }
+    if !manifest.api_middleware.is_empty() {
+        contributions.push("api_middleware".to_owned());
+    }
+    contributions
 }

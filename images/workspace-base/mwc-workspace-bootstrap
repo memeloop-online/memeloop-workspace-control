@@ -5,30 +5,94 @@ workspace_user=${MWC_WORKSPACE_USER:-workspace}
 workspace_root=${MWC_WORKSPACE_HOME:-/workspace}
 workspace_group=$(id -gn "$workspace_user")
 state_dir="$workspace_root/.mwc"
-authorized_keys="$state_dir/authorized_keys"
 runtime_dir=/run/mwc-ssh
+authorized_keys="$runtime_dir/authorized_keys"
+build_scratch=${MWC_BUILD_SCRATCH:-/var/lib/mwc/build-scratch}
+codex_scratch=/var/lib/mwc/codex-scratch
 manifest=/var/run/workspace-injections/config/workspace-files.json
 environment_manifest=/var/run/workspace-injections/config/workspace-environment.json
-kubeconfig="$state_dir/kubeconfig"
+kubeconfig="$runtime_dir/kubeconfig"
 runtime_sshd_config="$runtime_dir/sshd_config"
+reserve_file="$state_dir/storage-reserve"
 
 prepare_layout() {
+    # Runtime mounts are prepared first. A full durable PVC must never prevent the platform from
+    # recording pressure or starting its SSH runtime.
+    install -d -m 0700 "$runtime_dir"
+    if [ ! -d "$workspace_root" ]; then
+        echo "workspace Home volume is not mounted" >&2
+        exit 70
+    fi
+    home_has_data=false
+    if [ -d "$state_dir" ] || find "$workspace_root" -mindepth 1 -maxdepth 1 -print -quit | grep -q .; then
+        home_has_data=true
+    fi
     if [ "${MWC_PRESERVE_HOME_ROOT:-false}" = true ]; then
         # A migrated Coder PVC root is intentionally root:1000/2775. Do not rewrite it;
         # only create and own platform-managed children beneath that mount.
-        mkdir -p "$workspace_root"
+        :
     else
         install -d -m 0750 -o "$workspace_user" -g "$workspace_group" "$workspace_root"
     fi
-    install -d -m 0700 -o "$workspace_user" -g "$workspace_group" "$state_dir"
-    # These PVC subdirectories are mounted as /tmp and /var/tmp. Keep normal sticky
-    # world-writable semantics so the compatibility package manager and image user can both use
-    # them; the BuildKit-only directory remains private.
-    install -d -m 1777 -o "$workspace_user" -g "$workspace_group" \
-        "$workspace_root/.tmp/dev" "$workspace_root/.tmp/var"
+    # Pod-lifetime volumes back these paths. Home contains durable user data only.
+    install -d -m 1777 -o "$workspace_user" -g "$workspace_group" /tmp /var/tmp
     install -d -m 0700 -o "$workspace_user" -g "$workspace_group" \
-        "$workspace_root/.tmp/buildkit"
-    install -d -m 0700 "$runtime_dir"
+        "$build_scratch" "$build_scratch/bin" "$build_scratch/tmp" "$build_scratch/cache" \
+        "$build_scratch/cargo-target" "$build_scratch/cargo-registry" \
+        "$build_scratch/cargo-git" "$codex_scratch"
+    if [ "$home_has_data" = true ]; then
+        durable_dir_best_effort "$state_dir"
+        regenerable_link_best_effort "$workspace_root/.cache" "$build_scratch/cache"
+        regenerable_link_best_effort "$workspace_root/.cargo/registry" "$build_scratch/cargo-registry"
+        regenerable_link_best_effort "$workspace_root/.cargo/git" "$build_scratch/cargo-git"
+        regenerable_link_best_effort "$workspace_root/.codex/.tmp" "$codex_scratch"
+    else
+        install -d -m 0700 -o "$workspace_user" -g "$workspace_group" "$state_dir"
+        prepare_regenerable_link "$workspace_root/.cache" "$build_scratch/cache"
+        prepare_regenerable_link "$workspace_root/.cargo/registry" "$build_scratch/cargo-registry"
+        prepare_regenerable_link "$workspace_root/.cargo/git" "$build_scratch/cargo-git"
+        prepare_regenerable_link "$workspace_root/.codex/.tmp" "$codex_scratch"
+    fi
+    if [ "${MWC_BUILDKIT_ENABLED:-false}" = true ]; then
+        regenerable_link_best_effort \
+            "$workspace_root/.local/bin/buildctl" "/run/mwc-buildkit/bin/buildctl"
+    fi
+}
+
+mark_home_degraded() {
+    : > "$runtime_dir/home-degraded"
+    printf '%s\n' 'Home 存储空间不足，持久目录初始化已降级；SSH 仍可用于清理。' \
+        > "$runtime_dir/storage-banner"
+}
+
+durable_dir_best_effort() {
+    if ! install -d -m 0700 -o "$workspace_user" -g "$workspace_group" "$1"; then
+        mark_home_degraded
+    fi
+}
+
+regenerable_link_best_effort() {
+    if ! prepare_regenerable_link "$1" "$2"; then
+        mark_home_degraded
+    fi
+}
+
+prepare_regenerable_link() {
+    link_path=$1
+    target=$2
+    install -d -m 0700 -o "$workspace_user" -g "$workspace_group" "$(dirname "$link_path")"
+    if [ -L "$link_path" ]; then
+        return
+    fi
+    if [ -d "$link_path" ] && [ -z "$(ls -A "$link_path")" ]; then
+        rmdir "$link_path"
+    elif [ -e "$link_path" ]; then
+        # Existing migrated caches are never deleted implicitly. Operators can remove them while
+        # the workspace is stopped; the next start will replace the empty path with this link.
+        return
+    fi
+    ln -s "$target" "$link_path"
+    chown -h "$workspace_user:$workspace_group" "$link_path"
 }
 
 prepare_kubeconfig() {
@@ -36,7 +100,7 @@ prepare_kubeconfig() {
         rm -f "$kubeconfig"
         return
     fi
-    temporary_kubeconfig="$state_dir/.kubeconfig.tmp"
+    temporary_kubeconfig="$runtime_dir/.kubeconfig.tmp"
     cat > "$temporary_kubeconfig" <<'EOF'
 apiVersion: v1
 kind: Config
@@ -63,6 +127,7 @@ EOF
 
 prepare() {
     prepare_layout
+    release_reserve_if_critical
     prepare_kubeconfig
 
     # Debian images commonly create service users with a leading `!` in shadow. sshd treats that
@@ -118,10 +183,14 @@ prepare() {
                 esac
             fi
             numeric_mode=$(printf '%o' "$mode")
-            install -D -m "$numeric_mode" -o "$owner" -g "$group" "$source" "$target"
             if [ "$kind" = ssh_public_key ]; then
                 cat "$source" >> "$authorized_keys"
                 printf '\n' >> "$authorized_keys"
+            fi
+            if ! install -D -m "$numeric_mode" -o "$owner" -g "$group" "$source" "$target"; then
+                : > "$runtime_dir/injection-failed"
+                printf '%s\n' 'Home 存储空间不足：文件注入暂未更新，请先清理持久数据。' \
+                    > "$runtime_dir/storage-banner"
             fi
         done
     fi
@@ -132,14 +201,65 @@ prepare() {
     cat "$runtime_dir/ssh_host_ed25519_key.pub" >> "$runtime_dir/known_hosts"
     chmod 0644 "$runtime_dir/known_hosts"
     prepare_runtime_sshd_config
+    update_storage_banner
+}
+
+update_storage_banner() {
+    used_percent=$(df -P "$workspace_root" | awk 'NR == 2 {gsub(/%/, "", $5); print $5}')
+    warning=80
+    critical=90
+    reserve=${MWC_HOME_RESERVE_MIB:-1024}
+    if [ "$used_percent" -ge "$critical" ] && [ -f "$reserve_file" ]; then
+        unlink "$reserve_file"
+        : > "$runtime_dir/reserve-released"
+        used_percent=$(df -P "$workspace_root" | awk 'NR == 2 {gsub(/%/, "", $5); print $5}')
+    elif [ "$used_percent" -lt "$warning" ] && [ ! -e "$runtime_dir/reserve-released" ] \
+        && [ -d "$state_dir" ] && [ ! -f "$reserve_file" ] \
+        && command -v fallocate >/dev/null 2>&1; then
+        if fallocate -l "${reserve}MiB" "$reserve_file" 2>/dev/null; then
+            chmod 000 "$reserve_file"
+        fi
+        used_percent=$(df -P "$workspace_root" | awk 'NR == 2 {gsub(/%/, "", $5); print $5}')
+    fi
+    if [ -e "$runtime_dir/injection-failed" ]; then
+        printf '文件注入未能完全更新，请检查 Home 存储空间后重启工作区。\n' \
+            > "$runtime_dir/storage-banner"
+    elif [ -e "$runtime_dir/home-degraded" ]; then
+        printf 'Home 持久目录初始化已降级，请清理空间后重启工作区。\n' \
+            > "$runtime_dir/storage-banner"
+    elif [ "$used_percent" -ge "$critical" ]; then
+        printf 'Home 存储已使用 %s%%，请清理持久数据；SSH 和网页终端会继续运行。\n' \
+            "$used_percent" > "$runtime_dir/storage-banner"
+    elif [ "$used_percent" -ge "$warning" ]; then
+        printf 'Home 存储已使用 %s%%，建议尽快清理持久数据。\n' \
+            "$used_percent" > "$runtime_dir/storage-banner"
+    else
+        : > "$runtime_dir/storage-banner"
+    fi
+}
+
+release_reserve_if_critical() {
+    used_percent=$(df -P "$workspace_root" | awk 'NR == 2 {gsub(/%/, "", $5); print $5}')
+    critical=90
+    if [ "$used_percent" -ge "$critical" ] && [ -f "$reserve_file" ]; then
+        unlink "$reserve_file"
+        : > "$runtime_dir/reserve-released"
+    fi
+}
+
+storage_pressure_monitor() {
+    while :; do
+        update_storage_banner
+        sleep 60
+    done
 }
 
 prepare_runtime_sshd_config() {
     install -m 0600 -o root -g root /etc/workspace-platform/sshd_config "$runtime_sshd_config"
-    if [ ! -r "$environment_manifest" ]; then
-        return
+    environment_count=0
+    if [ -r "$environment_manifest" ]; then
+        environment_count=$(jq -r '.environment | length' "$environment_manifest")
     fi
-    environment_count=$(jq -r '.environment | length' "$environment_manifest")
     environment_index=0
     while [ "$environment_index" -lt "$environment_count" ]; do
         entry=$(jq -c ".environment[$environment_index]" "$environment_manifest")
@@ -148,7 +268,7 @@ prepare_runtime_sshd_config() {
         object=$(printf '%s' "$entry" | jq -r '.object')
         data_key=$(printf '%s' "$entry" | jq -r '.data_key')
         case "$name" in
-            HOME|MWC_WORKSPACE_USER|MWC_WORKSPACE_HOME|MWC_IN_CLUSTER_KUBECONFIG|MWC_PRESERVE_HOME_ROOT|MWC_BUILDKIT_ENABLED)
+            HOME|TMPDIR|TMP|TEMP|XDG_CACHE_HOME|CARGO_TARGET_DIR|MWC_WORKSPACE_USER|MWC_WORKSPACE_HOME|MWC_IN_CLUSTER_KUBECONFIG|MWC_PRESERVE_HOME_ROOT|MWC_BUILDKIT_ENABLED|MWC_BUILD_SCRATCH|MWC_HOME_RESERVE_MIB)
                 continue
                 ;;
             KUBECONFIG)
@@ -164,9 +284,17 @@ prepare_runtime_sshd_config() {
             *) echo "invalid environment injection object" >&2; exit 1 ;;
         esac
         value=$(cat "$source")
+        if [ "$name" = PATH ] && [ "${MWC_BUILDKIT_ENABLED:-false}" = true ]; then
+            value="/run/mwc-buildkit/bin:$value"
+        fi
         escaped=$(printf '%s=%s' "$name" "$value" | sed 's/\\/\\\\/g; s/"/\\"/g')
         printf 'SetEnv "%s"\n' "$escaped" >> "$runtime_sshd_config"
     done
+    if [ "${MWC_BUILDKIT_ENABLED:-false}" = true ] \
+        && ! grep -q '"PATH=' "$runtime_sshd_config"; then
+        escaped_path=$(printf '%s' "/run/mwc-buildkit/bin:$PATH" | sed 's/\\/\\\\/g; s/"/\\"/g')
+        printf 'SetEnv "PATH=%s"\n' "$escaped_path" >> "$runtime_sshd_config"
+    fi
 }
 
 install_compat_openssh() {
@@ -189,12 +317,14 @@ case "${1:-serve}" in
     serve)
         install_compat_openssh
         prepare
+        storage_pressure_monitor &
         exec /usr/sbin/sshd -D -e -f "$runtime_sshd_config"
         ;;
     # Kept as a command alias so an already-created Pod template can roll forward safely.
     compat-serve)
         install_compat_openssh
         prepare
+        storage_pressure_monitor &
         exec /usr/sbin/sshd -D -e -f "$runtime_sshd_config"
         ;;
     *) echo "usage: mwc-workspace-bootstrap prepare-layout|prepare|serve|compat-serve" >&2; exit 64 ;;

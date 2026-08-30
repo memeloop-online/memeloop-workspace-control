@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use k8s_openapi::{
     api::core::v1::{
         AppArmorProfile, Capabilities, Container, EnvVar, ExecAction, Probe, ResourceRequirements,
-        SeccompProfile, SecurityContext, VolumeMount,
+        SeccompProfile, SecurityContext,
     },
     apimachinery::pkg::api::resource::Quantity,
 };
@@ -12,19 +12,7 @@ use super::resource_helpers::mount;
 
 pub(super) const IMAGE: &str = "harbor.k3s.onetwo.website/docker-io/moby/buildkit:v0.32.2-rootless@sha256:504731e577c20559c00f968f33219f30115e70be29ab96728d1d06e963fc494b";
 
-pub(super) fn init_container(enabled: bool) -> Option<Container> {
-    enabled.then(|| Container {
-        name: "buildctl".to_owned(),
-        image: Some(IMAGE.to_owned()),
-        command: Some(vec!["sh".to_owned(), "-c".to_owned()]),
-        args: Some(vec![init_script().to_owned()]),
-        volume_mounts: Some(vec![mount("workspace-data", "/mnt/home", false)]),
-        security_context: Some(non_root_security_context(false, false)),
-        ..Container::default()
-    })
-}
-
-pub(super) fn container(enabled: bool) -> Option<Container> {
+pub(super) fn container(enabled: bool, cache_limit_gib: u64) -> Option<Container> {
     if !enabled {
         return None;
     }
@@ -43,13 +31,11 @@ pub(super) fn container(enabled: bool) -> Option<Container> {
     Some(Container {
         name: "buildkitd".to_owned(),
         image: Some(IMAGE.to_owned()),
-        args: Some(vec![
-            "--config".to_owned(),
-            "/home/user/.config/buildkit/buildkitd.toml".to_owned(),
-        ]),
+        command: Some(vec!["sh".to_owned(), "-c".to_owned()]),
+        args: Some(vec![sidecar_script().to_owned()]),
         env: Some(vec![
-            env("TMPDIR", "/tmp"),
-            env("XDG_RUNTIME_DIR", "/run/user/1000"),
+            env("TMPDIR", "/var/lib/mwc-buildkit/tmp"),
+            env("XDG_RUNTIME_DIR", "/var/lib/mwc-buildkit/runtime"),
         ]),
         readiness_probe: Some(probe.clone()),
         liveness_probe: Some(Probe {
@@ -57,29 +43,15 @@ pub(super) fn container(enabled: bool) -> Option<Container> {
             ..probe
         }),
         resources: Some(ResourceRequirements {
-            requests: Some(quantities("250m", "512Mi", "128Mi")),
-            limits: Some(quantities("4", "4Gi", "512Mi")),
+            requests: Some(quantities("250m", "512Mi", "1Gi")),
+            limits: Some(quantities("4", "4Gi", &format!("{cache_limit_gib}Gi"))),
             ..ResourceRequirements::default()
         }),
-        volume_mounts: Some(vec![
-            sub_path_mount(
-                "workspace-data",
-                "/home/user/.config/buildkit",
-                ".config/buildkit",
-            ),
-            sub_path_mount(
-                "workspace-data",
-                "/home/user/.local/share/buildkit",
-                ".cache/buildkit/state",
-            ),
-            sub_path_mount(
-                "workspace-data",
-                "/run/user/1000",
-                ".cache/buildkit/runtime",
-            ),
-            sub_path_mount("workspace-data", "/tmp", ".tmp/buildkit"),
-            sub_path_mount("workspace-data", "/var/tmp", ".tmp/buildkit"),
-        ]),
+        volume_mounts: Some(vec![mount(
+            "buildkit-cache",
+            "/var/lib/mwc-buildkit",
+            false,
+        )]),
         security_context: Some(non_root_security_context(true, true)),
         ..Container::default()
     })
@@ -101,16 +73,6 @@ fn env(name: &str, value: &str) -> EnvVar {
         name: name.to_owned(),
         value: Some(value.to_owned()),
         ..EnvVar::default()
-    }
-}
-
-fn sub_path_mount(name: &str, path: &str, sub_path: &str) -> VolumeMount {
-    VolumeMount {
-        name: name.to_owned(),
-        mount_path: path.to_owned(),
-        sub_path: Some(sub_path.to_owned()),
-        read_only: Some(false),
-        ..VolumeMount::default()
     }
 }
 
@@ -145,22 +107,16 @@ fn non_root_security_context(
     }
 }
 
-fn init_script() -> &'static str {
+fn sidecar_script() -> &'static str {
     r#"set -eu
-mkdir -p /mnt/home/.local/bin /mnt/home/.cache/buildkit/state \
-  /mnt/home/.cache/buildkit/runtime/buildkit /mnt/home/.tmp/dev \
-  /mnt/home/.tmp/buildkit /mnt/home/.tmp/var /mnt/home/workspace \
-  /mnt/home/.cargo/registry /mnt/home/.cargo/git \
-  /mnt/home/.cache/cargo-target /mnt/home/.config/buildkit \
-  /mnt/home/.config/docker /mnt/home/.cache/ms-playwright \
-  /mnt/home/.cache/npm /mnt/home/.cache/yarn /mnt/home/.local/share/pnpm \
-  /mnt/home/.local/share /mnt/home/.local/state
-cp /usr/bin/buildctl /mnt/home/.local/bin/buildctl
-chmod 0555 /mnt/home/.local/bin/buildctl
-cat > /mnt/home/.config/buildkit/buildkitd.toml <<'CONFIG'
-root = "/home/user/.local/share/buildkit"
+mkdir -p /var/lib/mwc-buildkit/bin /var/lib/mwc-buildkit/config \
+  /var/lib/mwc-buildkit/runtime /var/lib/mwc-buildkit/state /var/lib/mwc-buildkit/tmp
+cp /usr/bin/buildctl /var/lib/mwc-buildkit/bin/buildctl
+chmod 0555 /var/lib/mwc-buildkit/bin/buildctl
+cat > /var/lib/mwc-buildkit/config/buildkitd.toml <<'CONFIG'
+root = "/var/lib/mwc-buildkit/state"
 [grpc]
-  address = ["unix:///run/user/1000/buildkit/buildkitd.sock"]
+  address = ["unix:///var/lib/mwc-buildkit/runtime/buildkit/buildkitd.sock"]
 [cdi]
   disabled = true
 [worker.oci]
@@ -176,5 +132,6 @@ root = "/home/user/.local/share/buildkit"
 [worker.containerd]
   enabled = false
 CONFIG
+exec buildkitd --config /var/lib/mwc-buildkit/config/buildkitd.toml
 "#
 }

@@ -46,7 +46,7 @@ pauses periodic refresh while the tab is hidden. Kubernetes Events are loaded on
 opens the event view. The batch API uses fixed-count cluster list operations rather than one
 request per workspace.
 
-Each workspace remains a separate Namespace and StatefulSet by design. Use the `standard`
-runtime adaptation for low-cost workloads that do not require the BuildKit sidecar. ttyd has a
+Each workspace remains a separate Namespace and StatefulSet by design. Keep BuildKit disabled in
+templates whose workloads do not build OCI images. ttyd has a
 small explicit request and a bounded limit so scheduling and capacity accounting are predictable.
 Do not share one workspace Pod between mutually untrusted users to reduce cost.

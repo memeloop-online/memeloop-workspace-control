@@ -6,4 +6,5 @@
 *.sqlite-shm
 *.sqlite-wal
 /web/node_modules/
+/web/artifacts/
 /web/*.tsbuildinfo

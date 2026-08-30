@@ -72,6 +72,16 @@ jobs:
       - run: cargo test --locked --all-features
         env:
           MWC_TEST_POSTGRES_URL: postgresql://postgres:postgres@localhost:5432/mwc_test
+      - name: Verify workspace bootstrap survives a full Home
+        run: |
+          docker build -t mwc-workspace-enospc images/workspace-base
+          docker run --rm --entrypoint /bin/sh \
+            --tmpfs /workspace:size=8m,mode=0750 \
+            --tmpfs /run/mwc-ssh:size=16m,mode=0700 \
+            --tmpfs /var/lib/mwc/build-scratch:size=32m,mode=0770 \
+            --tmpfs /var/lib/mwc/codex-scratch:size=4m,mode=0770 \
+            -v "$PWD/tests/workspace_bootstrap_enospc.sh:/test-enospc:ro" \
+            mwc-workspace-enospc /test-enospc
       - name: Verify Helm chart
         run: |
           curl -fsSL https://get.helm.sh/helm-v4.2.4-linux-amd64.tar.gz -o helm.tgz
@@ -115,10 +125,23 @@ jobs:
             --set workspace.ttydImage=tsl0922/ttyd:1.7.7 \
             --set jumpHost.enabled=false \
             --set monitoring.serviceMonitor.enabled=true \
+            --set monitoring.prometheusRule.enabled=true \
             --set monitoring.serviceMonitor.labels.release=monitoring)
           grep -q 'kind: ServiceMonitor' <<<"${rendered_monitoring}"
           grep -q 'release: monitoring' <<<"${rendered_monitoring}"
           grep -q 'path: /metrics' <<<"${rendered_monitoring}"
+          grep -q 'kind: PrometheusRule' <<<"${rendered_monitoring}"
+          grep -q 'record: mwc_workspace_home_used_percent' <<<"${rendered_monitoring}"
+          grep -q 'alert: MwcWorkspaceHomeStorageWarning' <<<"${rendered_monitoring}"
+          grep -q 'alert: MwcWorkspaceHomeStorageCritical' <<<"${rendered_monitoring}"
+          grep -q 'record: mwc_node_workspace_ephemeral_storage_requested_bytes' <<<"${rendered_monitoring}"
+          grep -q 'record: mwc_node_ephemeral_storage_requested_percent' <<<"${rendered_monitoring}"
+          grep -q 'alert: MwcNodeEphemeralStorageRequestsWarning' <<<"${rendered_monitoring}"
+          grep -q 'alert: MwcNodeEphemeralStorageRequestsCritical' <<<"${rendered_monitoring}"
+          grep -q 'alert: MwcNodeDiskPressure' <<<"${rendered_monitoring}"
+          grep -q 'kube_pod_info{namespace=~"ws-monitoring-.*"}' <<<"${rendered_monitoring}"
+          grep -q '>= 80' <<<"${rendered_monitoring}"
+          grep -q '>= 90' <<<"${rendered_monitoring}"
           if linux-amd64/helm template bad-digest deploy/helm/memeloop-workspace-control \
             --set installationId=bad-digest \
             --set secrets.encryptionSecretName=enc \

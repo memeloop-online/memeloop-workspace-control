@@ -148,6 +148,15 @@ async fn openapi_document_contains_versioned_api() {
     assert!(body["paths"]["/api/v1/system/info"].is_object());
     assert!(body["paths"]["/api/v1/webhooks"].is_object());
     assert!(body["paths"]["/api/v1/plugins"].is_object());
+    assert!(body["paths"]["/api/v1/me/profile"]["put"].is_object());
+    assert!(body["paths"]["/api/v1/me/api-keys"]["post"].is_object());
+    assert!(
+        body["paths"]["/api/v1/me/api-keys"]["post"]["description"]
+            .as_str()
+            .unwrap()
+            .contains("shown only in this response")
+    );
+    assert!(body["paths"]["/api/v1/audit"]["get"].is_object());
     assert!(body["paths"]["/api/v1/plugins/{plugin_id}/configuration"]["delete"].is_object());
     assert!(body["paths"]["/api/v1/injections/{scope}/{scope_id}/{key}"]["delete"].is_object());
     assert!(

@@ -1,0 +1,102 @@
+{{- if .Values.monitoring.prometheusRule.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "mwc.name" . }}-workspace-storage
+  labels:
+    {{- include "mwc.labels" . | nindent 4 }}
+    {{- with .Values.monitoring.prometheusRule.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  groups:
+    - name: {{ include "mwc.name" . }}.workspace-storage
+      rules:
+        - record: mwc_workspace_home_used_percent
+          expr: |
+            100 * kubelet_volume_stats_used_bytes{namespace=~"ws-{{ .Values.installationId }}-.*",persistentvolumeclaim="workspace-data-workspace-0"}
+              / kubelet_volume_stats_capacity_bytes{namespace=~"ws-{{ .Values.installationId }}-.*",persistentvolumeclaim="workspace-data-workspace-0"}
+          labels:
+            installation_id: {{ .Values.installationId | quote }}
+        - record: mwc_node_workspace_ephemeral_storage_requested_bytes
+          expr: |
+            sum by (node) (
+              sum by (namespace, pod, container) (
+                kube_pod_container_resource_requests{namespace=~"ws-{{ .Values.installationId }}-.*",resource="ephemeral_storage",unit="byte"}
+              )
+              * on (namespace, pod) group_left (node)
+              max by (namespace, pod, node) (
+                kube_pod_info{namespace=~"ws-{{ .Values.installationId }}-.*"}
+              )
+            )
+          labels:
+            installation_id: {{ .Values.installationId | quote }}
+        - record: mwc_node_ephemeral_storage_requested_percent
+          expr: |
+            100 * (
+              sum by (node) (
+                sum by (namespace, pod, container) (
+                  kube_pod_container_resource_requests{resource="ephemeral_storage",unit="byte"}
+                )
+                * on (namespace, pod) group_left (node)
+                max by (namespace, pod, node) (kube_pod_info)
+              )
+              and on (node)
+              max by (node) (kube_pod_info{namespace=~"ws-{{ .Values.installationId }}-.*"})
+            )
+            / on (node)
+            max by (node) (kube_node_status_allocatable{resource="ephemeral_storage",unit="byte"})
+          labels:
+            installation_id: {{ .Values.installationId | quote }}
+        - alert: MwcWorkspaceHomeStorageWarning
+          expr: |
+            mwc_workspace_home_used_percent{installation_id="{{ .Values.installationId }}"}
+              >= 80
+            and
+            mwc_workspace_home_used_percent{installation_id="{{ .Values.installationId }}"}
+              < 90
+          for: {{ .Values.monitoring.prometheusRule.warningFor | quote }}
+          labels:
+            severity: warning
+          annotations:
+            summary: "Workspace Home storage is approaching capacity"
+            description: "{{`{{ $labels.namespace }}`}} Home PVC usage has remained above 80%."
+        - alert: MwcWorkspaceHomeStorageCritical
+          expr: |
+            mwc_workspace_home_used_percent{installation_id="{{ .Values.installationId }}"}
+              >= 90
+          for: {{ .Values.monitoring.prometheusRule.criticalFor | quote }}
+          labels:
+            severity: critical
+          annotations:
+            summary: "Workspace Home storage is critically full"
+            description: "{{`{{ $labels.namespace }}`}} Home PVC usage has remained above 90%; SSH remains available so durable data can be cleaned safely."
+        - alert: MwcNodeEphemeralStorageRequestsWarning
+          expr: mwc_node_ephemeral_storage_requested_percent{installation_id="{{ .Values.installationId }}"} >= 80 and mwc_node_ephemeral_storage_requested_percent{installation_id="{{ .Values.installationId }}"} < 90
+          for: {{ .Values.monitoring.prometheusRule.warningFor | quote }}
+          labels:
+            severity: warning
+          annotations:
+            summary: "Ephemeral-storage requests are approaching workspace node capacity"
+            description: "All Pod requests on workspace node {{`{{ $labels.node }}`}} have remained above 80% of allocatable ephemeral storage."
+        - alert: MwcNodeEphemeralStorageRequestsCritical
+          expr: mwc_node_ephemeral_storage_requested_percent{installation_id="{{ .Values.installationId }}"} >= 90
+          for: {{ .Values.monitoring.prometheusRule.criticalFor | quote }}
+          labels:
+            severity: critical
+          annotations:
+            summary: "Ephemeral-storage requests are critically overcommitted on a workspace node"
+            description: "All Pod requests on workspace node {{`{{ $labels.node }}`}} have remained above 90% of allocatable ephemeral storage."
+        - alert: MwcNodeDiskPressure
+          expr: |
+            kube_node_status_condition{condition="DiskPressure",status="true"} == 1
+            and on (node)
+            max by (node) (kube_pod_info{namespace=~"ws-{{ .Values.installationId }}-.*"})
+          for: 5m
+          labels:
+            severity: critical
+            installation_id: {{ .Values.installationId | quote }}
+          annotations:
+            summary: "Kubernetes node reports DiskPressure"
+            description: "{{`{{ $labels.node }}`}} reports DiskPressure; Pod-lifetime workspace data may be evicted even when individual size limits are not reached."
+{{- end }}

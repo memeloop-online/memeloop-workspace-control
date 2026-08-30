@@ -18,6 +18,7 @@ use tracing_subscriber::EnvFilter;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
+        .json()
         .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
         .init();
 
@@ -40,6 +41,8 @@ async fn serve(config: AppConfig, database: Database) -> Result<(), Box<dyn std:
     let installation_id = config.installation_id.clone();
     let cipher = load_cipher()?;
     let plugins = PluginRuntime::load(config.plugin_dir.as_deref(), database.clone())?;
+    plugins.synchronize().await?;
+    plugins.spawn_catalog_refresher();
     let kubernetes_enabled = env_bool("MWC_KUBERNETES_ENABLED", false)?;
     let (kubernetes_client, workspace_handler) =
         kubernetes_runtime(&config, &database, &cipher, kubernetes_enabled).await?;

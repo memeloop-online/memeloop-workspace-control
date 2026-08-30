@@ -9,8 +9,16 @@ wasmtime::component::bindgen!({
 });
 
 pub use error::PluginError;
-pub use manifest::{PluginConfigurationContribution, PluginManifest};
-pub use runtime::{PluginRuntime, WorkspaceCreateContext, WorkspaceCreatePlan};
+pub(crate) use manifest::validate_plugin_content;
+pub use manifest::{
+    PluginApiMiddleware, PluginApiRoute, PluginAssetDescriptor, PluginConfigurationContribution,
+    PluginManifest, PluginRoutePermission, PluginUiPlacement, PluginUiSurface,
+};
+pub(crate) use runtime::RuntimePluginView;
+pub use runtime::{
+    PluginApiResponse, PluginRequestContext, PluginRuntime, WorkspaceCreateContext,
+    WorkspaceCreatePlan,
+};
 
 use manifest::discover;
 use schema::ConfigurationSchema;

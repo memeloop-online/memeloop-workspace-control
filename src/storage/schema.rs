@@ -1,4 +1,4 @@
-pub(super) const SCHEMA_VERSION: i64 = 11;
+pub(super) const SCHEMA_VERSION: i64 = 14;
 pub(super) const MIGRATION_TABLE: &str = "CREATE TABLE IF NOT EXISTS schema_migrations (\
     version BIGINT PRIMARY KEY, applied_at BIGINT NOT NULL\
 )";
@@ -184,4 +184,63 @@ pub(super) const PLUGIN_CONFIGURATION_MIGRATIONS: &[&str] = &[
     )",
     "CREATE INDEX IF NOT EXISTS plugin_configurations_organization_idx ON plugin_configurations \
         (installation_id, organization_id, plugin_id)",
+];
+
+pub(super) const DYNAMIC_PLUGIN_MIGRATIONS: &[&str] = &[
+    "CREATE TABLE IF NOT EXISTS plugin_packages (\
+        installation_id TEXT NOT NULL, plugin_id TEXT NOT NULL, manifest_json TEXT NOT NULL, \
+        component_bytes BYTEA, package_digest TEXT NOT NULL, source_kind TEXT NOT NULL, \
+        source_ref TEXT NOT NULL, source_confirmation TEXT NOT NULL, enabled BIGINT NOT NULL, \
+        approved_contributions_json TEXT NOT NULL, version BIGINT NOT NULL, \
+        created_by TEXT NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, \
+        PRIMARY KEY (installation_id, plugin_id), FOREIGN KEY (created_by) REFERENCES users(id)\
+    )",
+    "CREATE TABLE IF NOT EXISTS plugin_install_inspections (\
+        id TEXT PRIMARY KEY, installation_id TEXT NOT NULL, plugin_id TEXT NOT NULL, \
+        manifest_json TEXT NOT NULL, component_bytes BYTEA, package_digest TEXT NOT NULL, \
+        size_bytes BIGINT NOT NULL, source_kind TEXT NOT NULL, source_ref TEXT NOT NULL, \
+        source_confirmation TEXT NOT NULL, declared_contributions_json TEXT NOT NULL, \
+        assets_json TEXT NOT NULL, \
+        created_by TEXT NOT NULL, created_at BIGINT NOT NULL, expires_at BIGINT NOT NULL, \
+        FOREIGN KEY (created_by) REFERENCES users(id)\
+    )",
+    "CREATE INDEX IF NOT EXISTS plugin_inspections_expiry_idx ON plugin_install_inspections \
+        (installation_id, expires_at)",
+    "CREATE TABLE IF NOT EXISTS plugin_assets (\
+        installation_id TEXT NOT NULL, plugin_id TEXT NOT NULL, asset_path TEXT NOT NULL, \
+        media_type TEXT NOT NULL, content_bytes BYTEA NOT NULL, content_digest TEXT NOT NULL, \
+        PRIMARY KEY (installation_id, plugin_id, asset_path), \
+        FOREIGN KEY (installation_id, plugin_id) REFERENCES plugin_packages(installation_id, plugin_id) \
+            ON DELETE CASCADE\
+    )",
+    "CREATE TABLE IF NOT EXISTS plugin_ui_sessions (\
+        id TEXT PRIMARY KEY, installation_id TEXT NOT NULL, plugin_id TEXT NOT NULL, \
+        surface_id TEXT NOT NULL, user_id TEXT NOT NULL, ticket_hash TEXT NOT NULL, \
+        cookie_hash TEXT NOT NULL, channel_nonce TEXT NOT NULL, \
+        allowed_bridge_methods_json TEXT NOT NULL, entrypoint TEXT NOT NULL, package_digest TEXT NOT NULL, \
+        expires_at BIGINT NOT NULL, consumed_at BIGINT, created_at BIGINT NOT NULL, \
+        UNIQUE (installation_id, ticket_hash), FOREIGN KEY (user_id) REFERENCES users(id), \
+        FOREIGN KEY (installation_id, plugin_id) REFERENCES plugin_packages(installation_id, plugin_id) \
+            ON DELETE CASCADE\
+    )",
+    "CREATE TABLE IF NOT EXISTS plugin_catalog_metadata (\
+        installation_id TEXT PRIMARY KEY, revision BIGINT NOT NULL\
+    )",
+];
+
+pub(super) const USER_SETTINGS_MIGRATIONS: &[&str] = &[
+    "ALTER TABLE users ADD COLUMN avatar_url TEXT",
+    "CREATE TABLE IF NOT EXISTS user_api_keys (\
+        id TEXT PRIMARY KEY, installation_id TEXT NOT NULL, user_id TEXT NOT NULL, \
+        name TEXT NOT NULL, token_prefix TEXT NOT NULL, token_hash TEXT NOT NULL, \
+        last_used_at BIGINT, created_at BIGINT NOT NULL, revoked_at BIGINT, \
+        UNIQUE (installation_id, token_hash), \
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE\
+    )",
+    "CREATE INDEX IF NOT EXISTS user_api_keys_user_idx ON user_api_keys \
+        (installation_id, user_id, revoked_at, created_at, id)",
+    "INSERT INTO user_api_keys (id, installation_id, user_id, name, token_prefix, token_hash, \
+        last_used_at, created_at, revoked_at) \
+        SELECT id, installation_id, id, 'Legacy key', 'legacy', token_hash, NULL, created_at, NULL \
+        FROM users WHERE true ON CONFLICT (installation_id, token_hash) DO NOTHING",
 ];
