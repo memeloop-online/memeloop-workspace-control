@@ -43,7 +43,8 @@ jobs:
           elif [ "${BEFORE_SHA}" = "0000000000000000000000000000000000000000" ]; then
             changed=true
           elif git diff --quiet "${BEFORE_SHA}" "${CURRENT_SHA}" -- \
-            .dockerignore Cargo.toml Cargo.lock Dockerfile src web images; then
+            .dockerignore Cargo.toml Cargo.lock Dockerfile src web images \
+            tests/workspace_bootstrap_enospc.sh .github/workflows/ci.yml; then
             changed=false
           else
             changed=true
