@@ -1,9 +1,16 @@
+FROM node:24-bookworm-slim AS web-builder
+WORKDIR /build/web
+COPY web/package.json web/package-lock.json ./
+RUN npm ci
+COPY web ./
+RUN npm run build
+
 FROM rust:1.98-bookworm AS builder
 WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
 COPY wit ./wit
-COPY web/dist ./web/dist
+COPY --from=web-builder /build/web/dist ./web/dist
 COPY images/workspace-base/mwc-workspace-bootstrap ./images/workspace-base/mwc-workspace-bootstrap
 RUN cargo build --locked --release
 
