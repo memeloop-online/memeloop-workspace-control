@@ -1,7 +1,5 @@
-import { constants, access, mkdtemp, rm } from "node:fs/promises";
+import { constants, access } from "node:fs/promises";
 import http from "node:http";
-import os from "node:os";
-import path from "node:path";
 import { chromium } from "playwright-core";
 
 const chrome = await findChromium();
@@ -35,11 +33,10 @@ const server = http.createServer((request, response) => {
   response.writeHead(404).end();
 });
 
-const profile = await mkdtemp(path.join(os.tmpdir(), "mwc-plugin-sandbox-"));
 let browser;
 try {
   const port = await listen(server);
-  browser = await chromium.launch({ executablePath: chrome, headless: true, args: ["--no-sandbox", "--disable-dev-shm-usage"], timeout: 15_000 });
+  browser = await chromium.launch({ executablePath: chrome, headless: true, args: ["--no-sandbox", "--disable-dev-shm-usage"], timeout: 45_000 });
   const context = await browser.newContext();
   const page = await context.newPage();
   await page.goto(`http://127.0.0.1:${port}/parent`, { waitUntil: "load", timeout: 10_000 });
@@ -50,7 +47,6 @@ try {
 } finally {
   await browser?.close();
   server.close();
-  await rm(profile, { recursive: true, force: true });
 }
 
 function send(response, contentType, body) {
