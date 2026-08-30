@@ -18,7 +18,10 @@ reserve_file="$state_dir/storage-reserve"
 prepare_layout() {
     # Runtime mounts are prepared first. A full durable PVC must never prevent the platform from
     # recording pressure or starting its SSH runtime.
-    install -d -m 0700 "$runtime_dir"
+    # sshd drops to the workspace user before opening AuthorizedKeysFile. Allow that user's group
+    # to traverse the memory-backed runtime directory without granting directory listing access;
+    # host and ttyd private keys inside it remain root-owned 0600 files.
+    install -d -m 0710 -o root -g "$workspace_group" "$runtime_dir"
     if [ ! -d "$workspace_root" ]; then
         echo "workspace Home volume is not mounted" >&2
         exit 70
@@ -135,12 +138,12 @@ prepare() {
 
     # Debian images commonly create service users with a leading `!` in shadow. sshd treats that
     # as a fully locked account and rejects public keys before checking authorized_keys. Replace
-    # only that marker with an unusable password hash; password and keyboard authentication stay
-    # disabled in the platform sshd_config.
+    # only that marker with the conventional non-hash `NP` sentinel. Password and keyboard
+    # authentication stay disabled in the platform sshd_config, so no password login is exposed.
     if command -v usermod >/dev/null 2>&1; then
         shadow_password=$(getent shadow "$workspace_user" | cut -d: -f2)
         case "$shadow_password" in
-            !*) usermod -p '*' "$workspace_user" ;;
+            !*) usermod -p NP "$workspace_user" ;;
         esac
     fi
 

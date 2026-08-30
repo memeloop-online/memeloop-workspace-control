@@ -3,6 +3,9 @@ set -eu
 
 install -d /etc/ssh/platform /etc/workspace-platform /workspace/.mwc
 ssh-keygen -q -t ed25519 -N '' -f /etc/ssh/platform/ssh_host_ed25519_key
+# Exercise the common Debian service-account state that previously rejected public keys before
+# AuthorizedKeysFile was consulted.
+usermod -p '!locked' workspace
 cat > /etc/workspace-platform/sshd_config <<'EOF'
 Port 2222
 HostKey /run/mwc-ssh/ssh_host_ed25519_key
@@ -27,6 +30,10 @@ test -s /run/mwc-ssh/ssh_host_ed25519_key
 test -s /run/mwc-ssh/known_hosts
 test -s /run/mwc-ssh/sshd_config
 /usr/sbin/sshd -t -f /run/mwc-ssh/sshd_config
+test "$(getent shadow workspace | cut -d: -f2)" = "NP"
+test "$(stat -c %a /run/mwc-ssh)" = "710"
+test "$(stat -c %U:%G /run/mwc-ssh)" = "root:workspace"
+su -s /bin/sh workspace -c 'test -r /run/mwc-ssh/authorized_keys'
 test "$(stat -c %a /workspace)" = "750"
 test "$(stat -c %U:%G /workspace)" = "workspace:workspace"
 test -e /run/mwc-ssh/reserve-released
