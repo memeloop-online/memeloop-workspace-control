@@ -38,7 +38,9 @@ jobs:
           BEFORE_SHA: ${{ github.event.before }}
           CURRENT_SHA: ${{ github.sha }}
         run: |
-          if [ "${EVENT_NAME}" != "push" ]; then
+          if [ "${EVENT_NAME}" = "workflow_dispatch" ]; then
+            changed=true
+          elif [ "${EVENT_NAME}" != "push" ]; then
             changed=false
           elif [ "${BEFORE_SHA}" = "0000000000000000000000000000000000000000" ]; then
             changed=true
