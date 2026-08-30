@@ -6,15 +6,22 @@ The chart supports exactly two runtime shapes:
 - `mode=postgresql`: a Deployment plus an optional HPA. PostgreSQL is external
   and its URL comes from a Kubernetes Secret.
 
-The service exposes Prometheus text at `/metrics`, including platform and per-user
-workspace/resource aggregates. Set `monitoring.serviceMonitor.enabled=true` when
-the Prometheus Operator is installed. After a metrics adapter maps
+The service exposes OpenMetrics at `/metrics`, including HTTP latency/errors, active streams,
+upstream calls, durable queues, process/allocator memory, plugin state, and platform/per-user
+workspace aggregates. Set `monitoring.serviceMonitor.enabled=true` when the Prometheus Operator is
+installed; it scrapes the existing internal Service and the chart permits its configured monitoring
+namespace through NetworkPolicy. After a metrics adapter maps
 `rate(mwc_http_requests_total)` to `mwc_http_requests_per_second` and publishes
 `mwc_jobs_pending`, PostgreSQL installations can enable `autoscaling.customMetrics` so the HPA
 uses request rate and task backlog in addition to CPU and memory.
 CPU and memory requests are set by default because utilization-based HPA metrics have no valid
 denominator without them. The chart rejects a PostgreSQL autoscaling deployment if either request
 is removed.
+
+Set `monitoring.diagnostics.enabled=true` only during an incident to activate release CPU and
+jemalloc heap pprof capture on the existing internal listener. These endpoints require the internal
+Bearer token and are never added to Higress. See `docs/OBSERVABILITY.md` for endpoint contracts,
+overhead, port-forward commands and retention guidance.
 
 Set `monitoring.prometheusUrl` to an in-cluster Prometheus base URL to show PVC usage,
 capacity, and available bytes. The URL is optional; the control plane uses bounded,

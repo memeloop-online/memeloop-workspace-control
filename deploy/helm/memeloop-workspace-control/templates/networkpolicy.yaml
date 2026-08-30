@@ -31,4 +31,13 @@ spec:
       ports:
         - protocol: TCP
           port: 8081
+    {{- if .Values.monitoring.serviceMonitor.enabled }}
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.monitoring.serviceMonitor.namespace | quote }}
+      ports:
+        - protocol: TCP
+          port: 8081
+    {{- end }}
 {{- end }}

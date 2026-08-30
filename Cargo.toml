@@ -38,6 +38,12 @@ url = "2"
 wasmtime = { version = "47.0.3", default-features = false, features = ["component-model", "cranelift", "runtime", "std"] }
 zeroize = "1"
 
+[target.'cfg(target_os = "linux")'.dependencies]
+jemalloc_pprof = "0.9.0"
+pprof = { version = "0.15.0", default-features = false, features = ["prost-codec"] }
+tikv-jemalloc-ctl = { version = "0.7.0", features = ["stats"] }
+tikv-jemallocator = { version = "0.7.0", features = ["profiling", "stats"] }
+
 [dev-dependencies]
 http-body-util = "0.1"
 tempfile = "3"
@@ -45,4 +51,6 @@ tower = { version = "0.5", features = ["util"] }
 
 [profile.release]
 lto = "thin"
-strip = "symbols"
+# Keep the symbol table so pprof captures from the release binary remain actionable. DWARF
+# debuginfo is still omitted from the production image.
+strip = "debuginfo"

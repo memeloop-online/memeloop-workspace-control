@@ -16,8 +16,8 @@ pub use manifest::{
 };
 pub(crate) use runtime::RuntimePluginView;
 pub use runtime::{
-    PluginApiResponse, PluginRequestContext, PluginRuntime, WorkspaceCreateContext,
-    WorkspaceCreatePlan,
+    PluginApiResponse, PluginRequestContext, PluginRuntime, PluginRuntimeMetrics,
+    WorkspaceCreateContext, WorkspaceCreatePlan,
 };
 
 use manifest::discover;

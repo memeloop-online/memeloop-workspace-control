@@ -97,6 +97,9 @@ pub(super) async fn list(
         .kubernetes_client
         .clone()
         .ok_or(ApiError::KubernetesUnavailable)?;
+    let kubernetes_request = state
+        .observability
+        .begin_upstream(crate::observability::UpstreamKind::Kubernetes);
     let selector = format!(
         "{OWNER_INSTALLATION_LABEL}={}",
         state.config.installation_id
@@ -115,9 +118,11 @@ pub(super) async fn list(
         tracing::debug!(%error, "metrics.k8s.io is unavailable");
         BTreeMap::new()
     });
+    kubernetes_request.success();
     let storage_metrics = fetch_storage_metrics(
         state.config.prometheus_url.as_ref(),
         &state.config.installation_id,
+        &state.observability,
     )
     .await;
     let observed_now = unix_timestamp();
@@ -141,31 +146,30 @@ pub(super) async fn list(
             pvc_map.insert(workspace_id, capacity);
         }
     }
-    Ok(Json(
-        workspaces
-            .into_iter()
-            .map(|workspace| {
-                let workspace_id = workspace.id;
-                let namespace = state
-                    .config
-                    .installation_id
-                    .workspace_namespace(&workspace.short_id)
-                    .unwrap_or_default();
-                WorkspaceRuntimeEntry {
-                    workspace_id,
-                    runtime: WorkspaceRuntimeResponse {
-                        allocated: workspace.template.resources,
-                        pvc_capacity: pvc_map.remove(&workspace_id),
-                        storage: storage_metrics.telemetry(&namespace, observed_now),
-                        metrics_available,
-                        pods: pod_map.remove(&workspace_id).unwrap_or_default(),
-                        metrics: metric_map.get(&workspace_id).cloned().unwrap_or_default(),
-                        events: Vec::new(),
-                    },
-                }
-            })
-            .collect(),
-    ))
+    let response = workspaces
+        .into_iter()
+        .map(|workspace| {
+            let workspace_id = workspace.id;
+            let namespace = state
+                .config
+                .installation_id
+                .workspace_namespace(&workspace.short_id)
+                .unwrap_or_default();
+            WorkspaceRuntimeEntry {
+                workspace_id,
+                runtime: WorkspaceRuntimeResponse {
+                    allocated: workspace.template.resources,
+                    pvc_capacity: pvc_map.remove(&workspace_id),
+                    storage: storage_metrics.telemetry(&namespace, observed_now),
+                    metrics_available,
+                    pods: pod_map.remove(&workspace_id).unwrap_or_default(),
+                    metrics: metric_map.get(&workspace_id).cloned().unwrap_or_default(),
+                    events: Vec::new(),
+                },
+            }
+        })
+        .collect();
+    Ok(Json(response))
 }
 
 #[utoipa::path(get, path = "/api/v1/workspaces/{workspace_id}/runtime", params(("workspace_id" = Uuid, Path)), responses((status = 200, body = WorkspaceRuntimeResponse), (status = 403, body = super::ErrorEnvelope), (status = 503, body = super::ErrorEnvelope)))]
@@ -183,6 +187,9 @@ pub(super) async fn get(
         .kubernetes_client
         .clone()
         .ok_or(ApiError::KubernetesUnavailable)?;
+    let kubernetes_request = state
+        .observability
+        .begin_upstream(crate::observability::UpstreamKind::Kubernetes);
     let namespace = state
         .config
         .installation_id
@@ -219,13 +226,15 @@ pub(super) async fn get(
             (false, Vec::new())
         }
     };
+    kubernetes_request.success();
     let storage = fetch_storage_metrics(
         state.config.prometheus_url.as_ref(),
         &state.config.installation_id,
+        &state.observability,
     )
     .await
     .telemetry(&namespace, unix_timestamp());
-    Ok(Json(WorkspaceRuntimeResponse {
+    let response = WorkspaceRuntimeResponse {
         allocated: workspace.template.resources,
         pvc_capacity,
         storage,
@@ -233,7 +242,8 @@ pub(super) async fn get(
         pods,
         metrics,
         events,
-    }))
+    };
+    Ok(Json(response))
 }
 
 fn unix_timestamp() -> i64 {

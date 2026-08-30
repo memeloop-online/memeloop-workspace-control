@@ -23,10 +23,12 @@ pub(super) struct EventQuery {
 }
 
 struct EventStreamState {
+    stream_guard: crate::observability::StreamGuard,
     database: Database,
     organization_id: Uuid,
     cursor: Option<Uuid>,
     pending: VecDeque<EventRecord>,
+    pending_bytes: u64,
     notifier: EventNotifier,
     initial_query: bool,
 }
@@ -57,10 +59,12 @@ pub(super) async fn stream(
     let notifier = state.database.event_notifier().await?;
     let event_stream = stream::unfold(
         EventStreamState {
+            stream_guard: state.observability.begin_sse(),
             database: state.database.clone(),
             organization_id: query.organization_id,
             cursor,
             pending: VecDeque::new(),
+            pending_bytes: 0,
             notifier,
             initial_query: true,
         },
@@ -78,6 +82,10 @@ async fn next_event(
 ) -> Option<(Result<Event, Infallible>, EventStreamState)> {
     loop {
         if let Some(record) = state.pending.pop_front() {
+            state.pending_bytes = state
+                .pending_bytes
+                .saturating_sub(serialized_event_bytes(&record));
+            state.stream_guard.set_buffer_bytes(state.pending_bytes);
             state.cursor = Some(record.id);
             let event = match Event::default()
                 .id(record.id.to_string())
@@ -106,7 +114,12 @@ async fn next_event(
             .list_events(state.organization_id, state.cursor, 100)
             .await
         {
-            Ok(records) => state.pending.extend(records),
+            Ok(records) => {
+                let bytes = records.iter().map(serialized_event_bytes).sum::<u64>();
+                state.pending.extend(records);
+                state.pending_bytes = state.pending_bytes.saturating_add(bytes);
+                state.stream_guard.set_buffer_bytes(state.pending_bytes);
+            }
             Err(error) => {
                 tracing::error!(error = %error, "SSE event query failed");
                 let event = Event::default()
@@ -116,4 +129,11 @@ async fn next_event(
             }
         }
     }
+}
+
+fn serialized_event_bytes(record: &EventRecord) -> u64 {
+    serde_json::to_vec(record)
+        .map_or(0, |value| value.len())
+        .try_into()
+        .unwrap_or(u64::MAX)
 }

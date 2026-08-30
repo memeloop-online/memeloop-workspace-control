@@ -5,7 +5,10 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use utoipa::ToSchema;
 
-use crate::config::InstallationId;
+use crate::{
+    config::InstallationId,
+    observability::{Observability, UpstreamKind},
+};
 
 const QUERY_TIMEOUT: Duration = Duration::from_secs(3);
 const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
@@ -140,11 +143,12 @@ pub(super) enum StorageMetricError {
 pub(super) async fn fetch(
     base_url: Option<&Url>,
     installation_id: &InstallationId,
+    observability: &Observability,
 ) -> StorageMetricBatch {
     let Some(base_url) = base_url else {
         return empty_batch(StorageTelemetryStatus::Disabled);
     };
-    match fetch_configured(base_url, installation_id).await {
+    match fetch_configured(base_url, installation_id, observability).await {
         Ok(metrics) => StorageMetricBatch {
             status: StorageTelemetryStatus::Available,
             used: metrics.used,
@@ -170,6 +174,7 @@ fn empty_batch(status: StorageTelemetryStatus) -> StorageMetricBatch {
 async fn fetch_configured(
     base_url: &Url,
     installation_id: &InstallationId,
+    observability: &Observability,
 ) -> Result<FetchedMetrics, StorageMetricError> {
     let client = Client::builder()
         .timeout(QUERY_TIMEOUT)
@@ -183,9 +188,9 @@ async fn fetch_configured(
     let capacity_query = format!("kubelet_volume_stats_capacity_bytes{selector}");
     let available_query = format!("kubelet_volume_stats_available_bytes{selector}");
     let (used, capacity, available) = tokio::try_join!(
-        query(&client, base_url, &used_query),
-        query(&client, base_url, &capacity_query),
-        query(&client, base_url, &available_query),
+        query(&client, base_url, &used_query, observability),
+        query(&client, base_url, &capacity_query, observability),
+        query(&client, base_url, &available_query, observability),
     )?;
     Ok(FetchedMetrics {
         used,
@@ -198,7 +203,9 @@ async fn query(
     client: &Client,
     base_url: &Url,
     expression: &str,
+    observability: &Observability,
 ) -> Result<BTreeMap<String, Sample>, StorageMetricError> {
+    let request = observability.begin_upstream(UpstreamKind::Prometheus);
     let mut url = base_url.clone();
     let path = format!("{}/api/v1/query", url.path().trim_end_matches('/'));
     url.set_path(&path);
@@ -214,7 +221,9 @@ async fn query(
         }
         body.extend_from_slice(&chunk);
     }
-    parse_response(&body)
+    let parsed = parse_response(&body)?;
+    request.success();
+    Ok(parsed)
 }
 
 #[derive(Deserialize)]

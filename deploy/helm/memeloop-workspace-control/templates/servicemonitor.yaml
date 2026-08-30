@@ -13,7 +13,7 @@ spec:
     matchLabels:
       {{- include "mwc.selectorLabels" . | nindent 6 }}
   endpoints:
-    - port: api
+    - port: auth
       path: /metrics
       interval: {{ .Values.monitoring.serviceMonitor.interval | quote }}
       scheme: http

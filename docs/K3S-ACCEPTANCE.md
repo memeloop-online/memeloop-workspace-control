@@ -55,6 +55,24 @@ scripts/k3s/verify-workspace-cleanup.sh
 The scripts do not install, patch or delete resources. Preserve their output together with the
 API responses and OpenSSH command transcripts as acceptance evidence.
 
+## Control-plane observability
+
+1. Confirm the Pod probes call `/livez` and `/readyz`. During normal operation both return `200`;
+   temporarily make only the database unavailable and confirm liveness remains `200` while
+   readiness becomes `503` within two seconds.
+2. Enable `monitoring.serviceMonitor.enabled`, then confirm Prometheus discovers the existing
+   internal Service on named port `auth`. `/metrics` must use the OpenMetrics content type, end in
+   `# EOF`, and contain HTTP count/latency/error, active request/stream, upstream, durable queue,
+   process RSS, allocator and bounded component-memory families.
+3. Exercise a templated workspace API route with two different workspace UUIDs. Confirm the
+   resulting `mwc_http_requests_total` series contains the route template and neither UUID.
+4. Set `monitoring.diagnostics.enabled=true` for a controlled incident. Through a local
+   port-forward to the internal Service, verify `/diagnostics/process`, a one-second CPU capture,
+   and a heap capture with the internal Bearer token. Confirm missing or invalid authorization is
+   rejected and that the same paths return `404` through the public Higress URL.
+5. Disable diagnostics after capture and confirm the rollout removes the profiling temporary
+   volume. Do not retain profile artifacts beyond the incident evidence window.
+
 ## Installation topology
 
 1. Install `internal-a` with SQLite and no public SSH route.

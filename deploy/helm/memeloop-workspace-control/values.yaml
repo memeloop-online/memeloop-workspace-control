@@ -108,7 +108,13 @@ monitoring:
   serviceMonitor:
     enabled: false
     interval: 30s
+    # Namespace whose Prometheus Pods may scrape the internal Service on port 8081.
+    namespace: monitoring
     labels: {}
+  diagnostics:
+    # Enables authenticated pprof endpoints on the existing internal listener only.
+    enabled: false
+    tempSizeLimit: 32Mi
   prometheusRule:
     enabled: false
     labels: {}

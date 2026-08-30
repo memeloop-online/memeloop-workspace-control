@@ -54,6 +54,12 @@ spec:
               value: "true"
             - name: MWC_INTERNAL_LISTEN_ADDRESS
               value: "0.0.0.0:8081"
+            {{- if .Values.monitoring.diagnostics.enabled }}
+            - name: MWC_DIAGNOSTICS_ENABLED
+              value: "true"
+            - name: TMPDIR
+              value: /var/run/mwc-diagnostics
+            {{- end }}
             - name: MWC_TTYD_IMAGE
               value: {{ .Values.workspace.ttydImage | quote }}
             {{- if .Values.workspace.internalSshHost }}
@@ -130,11 +136,11 @@ spec:
               port: api
           livenessProbe:
             httpGet:
-              path: /healthz
+              path: /livez
               port: api
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
-          {{- if or (eq .Values.mode "sqlite") .Values.plugins.existingConfigMap .Values.plugins.existingClaim }}
+          {{- if or (eq .Values.mode "sqlite") .Values.plugins.existingConfigMap .Values.plugins.existingClaim .Values.monitoring.diagnostics.enabled }}
           volumeMounts:
             {{- if eq .Values.mode "sqlite" }}
             - name: data
@@ -145,9 +151,14 @@ spec:
               mountPath: {{ .Values.plugins.mountPath | quote }}
               readOnly: true
             {{- end }}
+            {{- if .Values.monitoring.diagnostics.enabled }}
+            - name: diagnostics-tmp
+              mountPath: /var/run/mwc-diagnostics
+            {{- end }}
           {{- end }}
-      {{- if or .Values.plugins.existingConfigMap .Values.plugins.existingClaim }}
+      {{- if or .Values.plugins.existingConfigMap .Values.plugins.existingClaim .Values.monitoring.diagnostics.enabled }}
       volumes:
+        {{- if or .Values.plugins.existingConfigMap .Values.plugins.existingClaim }}
         - name: plugins
           {{- if .Values.plugins.existingConfigMap }}
           configMap:
@@ -158,6 +169,13 @@ spec:
           persistentVolumeClaim:
             claimName: {{ .Values.plugins.existingClaim | quote }}
           {{- end }}
+        {{- end }}
+        {{- if .Values.monitoring.diagnostics.enabled }}
+        - name: diagnostics-tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: {{ .Values.monitoring.diagnostics.tempSizeLimit }}
+        {{- end }}
       {{- end }}
   {{- if eq .Values.mode "sqlite" }}
   volumeClaimTemplates:

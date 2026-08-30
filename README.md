@@ -43,7 +43,7 @@ export MWC_TTYD_IMAGE='tsl0922/ttyd:1.7.7'
 
 探针与 OpenAPI：
 
-- `GET /healthz`
+- `GET /livez`（`/healthz` 保留为兼容别名）
 - `GET /readyz`
 - `GET /api/v1/system/info`
 - `GET /api/v1/openapi.json`

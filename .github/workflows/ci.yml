@@ -128,11 +128,17 @@ jobs:
             --set workspace.ttydImage=tsl0922/ttyd:1.7.7 \
             --set jumpHost.enabled=false \
             --set monitoring.serviceMonitor.enabled=true \
+            --set monitoring.diagnostics.enabled=true \
             --set monitoring.prometheusRule.enabled=true \
             --set monitoring.serviceMonitor.labels.release=monitoring)
           grep -q 'kind: ServiceMonitor' <<<"${rendered_monitoring}"
           grep -q 'release: monitoring' <<<"${rendered_monitoring}"
           grep -q 'path: /metrics' <<<"${rendered_monitoring}"
+          grep -q 'port: auth' <<<"${rendered_monitoring}"
+          grep -q 'name: MWC_DIAGNOSTICS_ENABLED' <<<"${rendered_monitoring}"
+          grep -q 'path: /livez' <<<"${rendered_monitoring}"
+          grep -q 'name: diagnostics-tmp' <<<"${rendered_monitoring}"
+          grep -q 'kubernetes.io/metadata.name: "monitoring"' <<<"${rendered_monitoring}"
           grep -q 'kind: PrometheusRule' <<<"${rendered_monitoring}"
           grep -q 'record: mwc_workspace_home_used_percent' <<<"${rendered_monitoring}"
           grep -q 'alert: MwcWorkspaceHomeStorageWarning' <<<"${rendered_monitoring}"

@@ -1,21 +1,38 @@
-use std::sync::Arc;
+use std::{fmt::Write, sync::Arc};
 
 use axum::{
-    extract::{Request, State},
-    http::{StatusCode, header::CONTENT_TYPE},
+    extract::{MatchedPath, Request, State},
+    http::{StatusCode, header},
     middleware::Next,
     response::{IntoResponse, Response},
 };
 
+use crate::{
+    observability::{HTTP_DURATION_BUCKETS, RuntimeSnapshot},
+    plugins::PluginRuntimeMetrics,
+};
+
 use super::AppState;
+
+const OPENMETRICS_CONTENT_TYPE: &str = "application/openmetrics-text; version=1.0.0; charset=utf-8";
 
 pub(super) async fn count(
     State(state): State<Arc<AppState>>,
     request: Request,
     next: Next,
 ) -> Response {
-    state.count_request();
-    next.run(request).await
+    let request_bytes = content_length(request.headers());
+    let route = route_label(&request);
+    let observation =
+        state
+            .observability
+            .begin_http(request.method().as_str(), route, request_bytes);
+    let response = next.run(request).await;
+    observation.finish(
+        response.status().as_u16(),
+        content_length(response.headers()),
+    );
+    response
 }
 
 pub(super) async fn prometheus(State(state): State<Arc<AppState>>) -> Response {
@@ -24,17 +41,20 @@ pub(super) async fn prometheus(State(state): State<Arc<AppState>>) -> Response {
         state.database.workspace_metrics()
     ) {
         Ok((jobs, workspace_metrics)) => {
-            let mut body = format!(
-                "# TYPE mwc_http_requests_total counter\nmwc_http_requests_total {}\n# TYPE mwc_jobs gauge\nmwc_jobs{{status=\"pending\"}} {}\nmwc_jobs{{status=\"running\"}} {}\nmwc_jobs{{status=\"completed\"}} {}\n# TYPE mwc_jobs_pending gauge\nmwc_jobs_pending {}\n# TYPE mwc_configured_replicas gauge\nmwc_configured_replicas {}\n",
-                state.request_count(),
-                jobs.pending,
-                jobs.running,
-                jobs.completed,
-                jobs.pending,
-                state.config.replica_count,
+            let runtime = state.observability.snapshot();
+            let plugins = state.plugins.runtime_metrics();
+            let mut body = String::with_capacity(16 * 1024);
+            append_runtime_metrics(&mut body, &runtime, plugins);
+            append_upstream_configuration(
+                &mut body,
+                state.kubernetes_client.is_some(),
+                state.config.prometheus_url.is_some(),
+                state.cipher.is_some(),
             );
+            append_job_metrics(&mut body, &jobs, state.config.replica_count);
             append_workspace_metrics(&mut body, &workspace_metrics);
-            ([(CONTENT_TYPE, "text/plain; version=0.0.4")], body).into_response()
+            body.push_str("# EOF\n");
+            ([(header::CONTENT_TYPE, OPENMETRICS_CONTENT_TYPE)], body).into_response()
         }
         Err(error) => {
             tracing::error!(error = %error, "metrics database query failed");
@@ -43,9 +63,244 @@ pub(super) async fn prometheus(State(state): State<Arc<AppState>>) -> Response {
     }
 }
 
-fn append_workspace_metrics(body: &mut String, metrics: &crate::storage::WorkspaceMetrics) {
-    use std::fmt::Write;
+fn append_runtime_metrics(
+    body: &mut String,
+    runtime: &RuntimeSnapshot,
+    plugins: PluginRuntimeMetrics,
+) {
+    body.push_str("# HELP mwc_process_uptime_seconds Process uptime.\n# TYPE mwc_process_uptime_seconds gauge\n");
+    let _ = writeln!(
+        body,
+        "mwc_process_uptime_seconds {}",
+        runtime.uptime.as_secs_f64()
+    );
+    body.push_str("# HELP mwc_process_resident_memory_bytes Resident set size reported by the operating system.\n# TYPE mwc_process_resident_memory_bytes gauge\n");
+    let _ = writeln!(
+        body,
+        "mwc_process_resident_memory_bytes {}",
+        runtime.process.resident_bytes
+    );
+    body.push_str("# HELP mwc_process_virtual_memory_bytes Virtual address space reported by the operating system.\n# TYPE mwc_process_virtual_memory_bytes gauge\n");
+    let _ = writeln!(
+        body,
+        "mwc_process_virtual_memory_bytes {}",
+        runtime.process.virtual_bytes
+    );
+    body.push_str("# HELP mwc_process_threads Operating-system threads in this process.\n# TYPE mwc_process_threads gauge\n");
+    let _ = writeln!(body, "mwc_process_threads {}", runtime.process.threads);
+    append_allocator_metrics(body, runtime);
+    append_memory_metrics(body, runtime, plugins);
+    append_http_metrics(body, runtime);
+    append_upstream_metrics(body, runtime);
+    append_plugin_metrics(body, plugins);
+}
 
+fn append_memory_metrics(
+    body: &mut String,
+    runtime: &RuntimeSnapshot,
+    plugins: PluginRuntimeMetrics,
+) {
+    body.push_str("# HELP mwc_memory_component_bytes Current bounded in-process memory estimates by component.\n# TYPE mwc_memory_component_bytes gauge\n");
+    let _ = writeln!(
+        body,
+        "mwc_memory_component_bytes{{component=\"http_request_buffers\"}} {}",
+        runtime.request_buffer_bytes
+    );
+    let _ = writeln!(
+        body,
+        "mwc_memory_component_bytes{{component=\"sse_pending_events\"}} {}",
+        runtime.sse_buffer_bytes
+    );
+    let _ = writeln!(
+        body,
+        "mwc_memory_component_bytes{{component=\"plugin_registry_metadata\"}} {}",
+        plugins.registry_metadata_bytes_estimate
+    );
+    body.push_str("# HELP mwc_memory_limit_bytes Configured in-process buffer limits by component.\n# TYPE mwc_memory_limit_bytes gauge\n");
+    for (component, bytes) in [
+        ("plugin_upload", 82_u64 * 1024 * 1024),
+        ("plugin_api_request", 256_u64 * 1024),
+        ("prometheus_response", 1024_u64 * 1024),
+    ] {
+        let _ = writeln!(
+            body,
+            "mwc_memory_limit_bytes{{component=\"{component}\"}} {bytes}"
+        );
+    }
+}
+
+fn append_allocator_metrics(body: &mut String, runtime: &RuntimeSnapshot) {
+    let Some(allocator) = runtime.allocator else {
+        return;
+    };
+    body.push_str("# HELP mwc_allocator_bytes Bytes reported by jemalloc, split by bounded memory state.\n# TYPE mwc_allocator_bytes gauge\n");
+    for (state, value) in [
+        ("allocated", allocator.allocated_bytes),
+        ("active", allocator.active_bytes),
+        ("resident", allocator.resident_bytes),
+        ("mapped", allocator.mapped_bytes),
+        ("metadata", allocator.metadata_bytes),
+        ("retained", allocator.retained_bytes),
+    ] {
+        let _ = writeln!(body, "mwc_allocator_bytes{{state=\"{state}\"}} {value}");
+    }
+}
+
+fn append_http_metrics(body: &mut String, runtime: &RuntimeSnapshot) {
+    body.push_str("# HELP mwc_http_requests_active Requests currently executing on the public API listener.\n# TYPE mwc_http_requests_active gauge\n");
+    let _ = writeln!(body, "mwc_http_requests_active {}", runtime.active_http);
+    body.push_str("# HELP mwc_streams_active Long-lived response streams currently connected.\n# TYPE mwc_streams_active gauge\n");
+    let _ = writeln!(
+        body,
+        "mwc_streams_active{{kind=\"sse\"}} {}",
+        runtime.active_sse
+    );
+    body.push_str("# HELP mwc_http_requests_total Requests completed by bounded method, route template, and status class.\n# TYPE mwc_http_requests_total counter\n");
+    for series in &runtime.http {
+        for (status, count) in &series.requests_by_status {
+            let _ = writeln!(
+                body,
+                "mwc_http_requests_total{{method=\"{}\",route=\"{}\",status_class=\"{status}\"}} {count}",
+                series.method,
+                label(&series.route)
+            );
+        }
+    }
+    append_http_histograms(body, runtime);
+    body.push_str("# HELP mwc_http_body_declared_bytes_total Declared HTTP body bytes observed at request and response boundaries.\n# TYPE mwc_http_body_declared_bytes_total counter\n");
+    for series in &runtime.http {
+        let labels = format!(
+            "method=\"{}\",route=\"{}\"",
+            series.method,
+            label(&series.route)
+        );
+        let _ = writeln!(
+            body,
+            "mwc_http_body_declared_bytes_total{{{labels},direction=\"request\"}} {}",
+            series.request_bytes_total
+        );
+        let _ = writeln!(
+            body,
+            "mwc_http_body_declared_bytes_total{{{labels},direction=\"response\"}} {}",
+            series.response_bytes_total
+        );
+    }
+}
+
+fn append_http_histograms(body: &mut String, runtime: &RuntimeSnapshot) {
+    body.push_str("# HELP mwc_http_request_duration_seconds Request handling latency.\n# TYPE mwc_http_request_duration_seconds histogram\n");
+    for series in &runtime.http {
+        let labels = format!(
+            "method=\"{}\",route=\"{}\"",
+            series.method,
+            label(&series.route)
+        );
+        for (upper, count) in HTTP_DURATION_BUCKETS.iter().zip(series.duration_buckets) {
+            let _ = writeln!(
+                body,
+                "mwc_http_request_duration_seconds_bucket{{{labels},le=\"{upper}\"}} {count}"
+            );
+        }
+        let _ = writeln!(
+            body,
+            "mwc_http_request_duration_seconds_bucket{{{labels},le=\"+Inf\"}} {}",
+            series.duration_count
+        );
+        let _ = writeln!(
+            body,
+            "mwc_http_request_duration_seconds_sum{{{labels}}} {}",
+            series.duration_sum
+        );
+        let _ = writeln!(
+            body,
+            "mwc_http_request_duration_seconds_count{{{labels}}} {}",
+            series.duration_count
+        );
+    }
+}
+
+fn append_upstream_metrics(body: &mut String, runtime: &RuntimeSnapshot) {
+    body.push_str("# HELP mwc_upstream_requests_active Outbound requests currently waiting on an upstream.\n# TYPE mwc_upstream_requests_active gauge\n");
+    body.push_str("# HELP mwc_upstream_requests_total Completed outbound requests by result.\n# TYPE mwc_upstream_requests_total counter\n");
+    for upstream in runtime.upstream {
+        let name = upstream.kind.name();
+        let _ = writeln!(
+            body,
+            "mwc_upstream_requests_active{{upstream=\"{name}\"}} {}",
+            upstream.active
+        );
+        let _ = writeln!(
+            body,
+            "mwc_upstream_requests_total{{upstream=\"{name}\",result=\"success\"}} {}",
+            upstream.success
+        );
+        let _ = writeln!(
+            body,
+            "mwc_upstream_requests_total{{upstream=\"{name}\",result=\"error\"}} {}",
+            upstream.error
+        );
+    }
+}
+
+fn append_upstream_configuration(
+    body: &mut String,
+    kubernetes: bool,
+    prometheus: bool,
+    webhook: bool,
+) {
+    body.push_str("# HELP mwc_upstream_configured Whether an upstream integration is configured for this process.\n# TYPE mwc_upstream_configured gauge\n");
+    for (name, configured) in [
+        ("kubernetes", kubernetes),
+        ("prometheus", prometheus),
+        ("webhook", webhook),
+    ] {
+        let _ = writeln!(
+            body,
+            "mwc_upstream_configured{{upstream=\"{name}\"}} {}",
+            u8::from(configured)
+        );
+    }
+}
+
+fn append_plugin_metrics(body: &mut String, plugins: PluginRuntimeMetrics) {
+    body.push_str("# HELP mwc_plugins Plugins in the hot-reloaded runtime registry.\n# TYPE mwc_plugins gauge\n");
+    for (state, count) in [
+        ("loaded", plugins.loaded),
+        ("enabled", plugins.enabled),
+        ("executable", plugins.executable),
+    ] {
+        let _ = writeln!(body, "mwc_plugins{{state=\"{state}\"}} {count}");
+    }
+    body.push_str("# HELP mwc_plugin_executions_active Wasm plugin executions currently active.\n# TYPE mwc_plugin_executions_active gauge\n");
+    let _ = writeln!(
+        body,
+        "mwc_plugin_executions_active {}",
+        plugins.executions_active
+    );
+    body.push_str("# HELP mwc_plugin_execution_limit Maximum concurrent Wasm plugin executions.\n# TYPE mwc_plugin_execution_limit gauge\n");
+    let _ = writeln!(
+        body,
+        "mwc_plugin_execution_limit {}",
+        plugins.execution_limit
+    );
+}
+
+fn append_job_metrics(body: &mut String, jobs: &crate::storage::JobCounts, replicas: u16) {
+    body.push_str("# HELP mwc_jobs Durable background jobs by state.\n# TYPE mwc_jobs gauge\n");
+    for (status, count) in [
+        ("pending", jobs.pending),
+        ("running", jobs.running),
+        ("completed", jobs.completed),
+    ] {
+        let _ = writeln!(body, "mwc_jobs{{status=\"{status}\"}} {count}");
+    }
+    body.push_str("# HELP mwc_jobs_pending Durable jobs waiting to be claimed.\n# TYPE mwc_jobs_pending gauge\n");
+    let _ = writeln!(body, "mwc_jobs_pending {}", jobs.pending);
+    body.push_str("# HELP mwc_configured_replicas Control-plane replicas configured for this installation.\n# TYPE mwc_configured_replicas gauge\n");
+    let _ = writeln!(body, "mwc_configured_replicas {replicas}");
+}
+
+fn append_workspace_metrics(body: &mut String, metrics: &crate::storage::WorkspaceMetrics) {
     body.push_str("# HELP mwc_workspaces Workspaces managed by lifecycle state.\n# TYPE mwc_workspaces gauge\n");
     for (state, count) in &metrics.states {
         let _ = writeln!(body, "mwc_workspaces{{state=\"{}\"}} {count}", label(state));
@@ -62,8 +317,7 @@ fn append_workspace_metrics(body: &mut String, metrics: &crate::storage::Workspa
             total
         });
     append_resources(body, "mwc_resource_requested", "", &total);
-    body.push_str("# HELP mwc_user_workspaces Workspaces per owner and lifecycle state.\n# TYPE mwc_user_workspaces gauge\n");
-    body.push_str("# HELP mwc_user_resource_requested Requested resources per workspace owner.\n# TYPE mwc_user_resource_requested gauge\n");
+    body.push_str("# HELP mwc_user_workspaces Workspaces per owner and lifecycle state.\n# TYPE mwc_user_workspaces gauge\n# HELP mwc_user_resource_requested Requested resources per workspace owner.\n# TYPE mwc_user_resource_requested gauge\n");
     for user in &metrics.users {
         let labels = format!("user_id=\"{}\"", user.user_id);
         for (state, count) in &user.states {
@@ -88,29 +342,41 @@ fn append_resources(
     prefix: &str,
     resources: &crate::quota::Resources,
 ) {
-    use std::fmt::Write;
-
     let separator = if prefix.is_empty() { "" } else { "," };
-    let _ = writeln!(
-        body,
-        "{metric}{{{prefix}{separator}resource=\"cpu\",unit=\"millicores\"}} {}",
-        resources.cpu_millis
-    );
-    let _ = writeln!(
-        body,
-        "{metric}{{{prefix}{separator}resource=\"memory\",unit=\"mebibytes\"}} {}",
-        resources.memory_mib
-    );
-    let _ = writeln!(
-        body,
-        "{metric}{{{prefix}{separator}resource=\"gpu\",unit=\"devices\"}} {}",
-        resources.gpu_count
-    );
-    let _ = writeln!(
-        body,
-        "{metric}{{{prefix}{separator}resource=\"disk\",unit=\"gibibytes\"}} {}",
-        resources.disk_gib
-    );
+    for (resource, unit, value) in [
+        ("cpu", "millicores", resources.cpu_millis),
+        ("memory", "mebibytes", resources.memory_mib),
+        ("gpu", "devices", u64::from(resources.gpu_count)),
+        ("disk", "gibibytes", resources.disk_gib),
+    ] {
+        let _ = writeln!(
+            body,
+            "{metric}{{{prefix}{separator}resource=\"{resource}\",unit=\"{unit}\"}} {value}"
+        );
+    }
+}
+
+fn route_label(request: &Request) -> String {
+    request
+        .extensions()
+        .get::<MatchedPath>()
+        .map(|path| path.as_str().to_owned())
+        .unwrap_or_else(|| {
+            if request.uri().path().starts_with("/api/") {
+                "unmatched_api".to_owned()
+            } else {
+                "ui_asset".to_owned()
+            }
+        })
+}
+
+fn content_length(headers: &axum::http::HeaderMap) -> u64 {
+    headers
+        .get(header::CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(0)
+        .min(82 * 1024 * 1024)
 }
 
 fn label(value: &str) -> String {

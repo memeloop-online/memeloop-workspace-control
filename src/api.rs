@@ -1,7 +1,4 @@
-use std::sync::{
-    Arc,
-    atomic::{AtomicU64, Ordering},
-};
+use std::{sync::Arc, time::Duration};
 
 use axum::{Json, Router, extract::State, http::StatusCode};
 use serde::Serialize;
@@ -11,6 +8,7 @@ use utoipa::{OpenApi, ToSchema};
 use crate::{
     config::{AppConfig, DatabaseMode, InstallationId},
     crypto::EnvelopeCipher,
+    observability::Observability,
     plugins::PluginRuntime,
     storage::Database,
 };
@@ -18,6 +16,7 @@ use crate::{
 mod admin;
 mod auth;
 mod catalog;
+mod diagnostics;
 mod error;
 mod events;
 mod idempotency;
@@ -45,7 +44,8 @@ pub struct AppState {
     pub(super) cipher: Option<EnvelopeCipher>,
     internal_auth_token_hash: Option<[u8; 32]>,
     trusted_internal_network: bool,
-    request_count: Arc<AtomicU64>,
+    pub(super) observability: Observability,
+    diagnostics_enabled: bool,
     kubernetes_client: Option<kube::Client>,
     jump_host_public_key: Option<crate::storage::WorkspaceSshPublicIdentity>,
     pub(super) plugins: PluginRuntime,
@@ -60,7 +60,8 @@ impl AppState {
             cipher: None,
             internal_auth_token_hash: None,
             trusted_internal_network: false,
-            request_count: Arc::new(AtomicU64::new(0)),
+            observability: Observability::default(),
+            diagnostics_enabled: false,
             kubernetes_client: None,
             jump_host_public_key: None,
             plugins,
@@ -75,7 +76,8 @@ impl AppState {
             cipher: Some(cipher),
             internal_auth_token_hash: None,
             trusted_internal_network: false,
-            request_count: Arc::new(AtomicU64::new(0)),
+            observability: Observability::default(),
+            diagnostics_enabled: false,
             kubernetes_client: None,
             jump_host_public_key: None,
             plugins,
@@ -108,6 +110,14 @@ impl AppState {
         self.plugins = plugins;
     }
 
+    pub fn enable_diagnostics(&mut self) {
+        self.diagnostics_enabled = true;
+    }
+
+    pub fn observability(&self) -> Observability {
+        self.observability.clone()
+    }
+
     fn verify_internal_auth_token(&self, token: &str) -> bool {
         let Some(expected) = self.internal_auth_token_hash else {
             return false;
@@ -129,13 +139,6 @@ impl AppState {
     fn web_shell_internal_caller_allowed(&self, token: Option<&str>) -> bool {
         self.trusted_internal_network || self.internal_caller_allowed(token)
     }
-
-    fn count_request(&self) {
-        self.request_count.fetch_add(1, Ordering::Relaxed);
-    }
-    fn request_count(&self) -> u64 {
-        self.request_count.load(Ordering::Relaxed)
-    }
 }
 
 pub fn router(state: Arc<AppState>) -> Router {
@@ -153,18 +156,25 @@ struct HealthResponse {
 
 #[utoipa::path(
     get,
-    path = "/healthz",
-    responses((status = 200, description = "Process is healthy", body = HealthResponse))
+    path = "/livez",
+    responses((status = 200, description = "Process can serve HTTP", body = HealthResponse))
 )]
 async fn health() -> Json<HealthResponse> {
     Json(HealthResponse { status: "ok" })
 }
 
+#[utoipa::path(
+    get,
+    path = "/readyz",
+    responses(
+        (status = 200, description = "Authoritative database is reachable", body = HealthResponse),
+        (status = 503, description = "Authoritative database is unavailable")
+    )
+)]
 async fn ready(State(state): State<Arc<AppState>>) -> Result<Json<HealthResponse>, StatusCode> {
-    state
-        .database
-        .ping()
+    tokio::time::timeout(Duration::from_secs(2), state.database.ping())
         .await
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?
         .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
     Ok(Json(HealthResponse { status: "ok" }))
 }
@@ -193,6 +203,7 @@ async fn system_info(State(state): State<Arc<AppState>>) -> Json<SystemInfoRespo
 #[openapi(
     paths(
         health,
+        ready,
         system_info,
         auth::me,
         admin::get_profile,

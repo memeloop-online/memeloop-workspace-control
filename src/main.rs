@@ -44,45 +44,43 @@ async fn serve(config: AppConfig, database: Database) -> Result<(), Box<dyn std:
     plugins.synchronize().await?;
     plugins.spawn_catalog_refresher();
     let kubernetes_enabled = env_bool("MWC_KUBERNETES_ENABLED", false)?;
+    let diagnostics_enabled = env_bool("MWC_DIAGNOSTICS_ENABLED", false)?;
+    #[cfg(target_os = "linux")]
+    if diagnostics_enabled {
+        jemalloc_pprof::activate_jemalloc_profiling().await;
+    }
     let (kubernetes_client, workspace_handler) =
         kubernetes_runtime(&config, &database, &cipher, kubernetes_enabled).await?;
-    let worker = job_worker(&config, &database, &cipher, workspace_handler)?;
     let state = app_state(
         &config,
-        database,
-        cipher,
+        database.clone(),
+        cipher.clone(),
         kubernetes_client,
         kubernetes_enabled,
+        diagnostics_enabled,
         plugins,
     )?;
-    let internal_listen_address = internal_listener_address(kubernetes_enabled)?;
-    let internal_state = internal_listen_address.map(|_| {
-        let mut internal_state = state.clone();
-        internal_state.trust_internal_network();
-        Arc::new(internal_state)
-    });
-    let app = router(Arc::new(state));
-
+    let worker = job_worker(
+        &config,
+        &database,
+        &cipher,
+        workspace_handler,
+        state.observability(),
+    )?;
+    let internal_listen_address =
+        internal_listener_address(kubernetes_enabled, diagnostics_enabled)?;
     let (shutdown_tx, _) = tokio::sync::watch::channel(false);
     let worker_handle = worker.map(|worker| {
         let shutdown = shutdown_tx.subscribe();
         tokio::spawn(async move { worker.run_until_shutdown(shutdown).await })
     });
-    let internal_handle = match (internal_listen_address, internal_state) {
-        (Some(internal_address), Some(internal_state)) => {
-            let internal_listener = TcpListener::bind(internal_address).await?;
-            let actual_address = internal_listener.local_addr()?;
-            let shutdown = shutdown_tx.subscribe();
-            info!(%actual_address, "internal authorization listener started");
-            Some(tokio::spawn(async move {
-                axum::serve(internal_listener, internal_router(internal_state))
-                    .with_graceful_shutdown(wait_for_shutdown(shutdown))
-                    .await
-            }))
-        }
-        (None, None) => None,
-        _ => unreachable!(),
-    };
+    let internal_handle = start_internal_listener(
+        internal_listen_address,
+        state.clone(),
+        shutdown_tx.subscribe(),
+    )
+    .await?;
+    let app = router(Arc::new(state));
     let signal_tx = shutdown_tx.clone();
 
     info!(%address, %installation_id, kubernetes_enabled, "control plane listening");
@@ -93,13 +91,44 @@ async fn serve(config: AppConfig, database: Database) -> Result<(), Box<dyn std:
         })
         .await;
     let _ = shutdown_tx.send(true);
-    if let Some(handle) = worker_handle {
-        handle.await??;
-    }
-    if let Some(handle) = internal_handle {
-        handle.await??;
-    }
+    await_background_tasks(worker_handle, internal_handle).await?;
     server_result?;
+    Ok(())
+}
+
+type InternalServerHandle = tokio::task::JoinHandle<Result<(), io::Error>>;
+type WorkerHandle =
+    tokio::task::JoinHandle<Result<(), memeloop_workspace_control::jobs::JobWorkerError>>;
+
+async fn start_internal_listener(
+    address: Option<std::net::SocketAddr>,
+    mut state: AppState,
+    shutdown: tokio::sync::watch::Receiver<bool>,
+) -> Result<Option<InternalServerHandle>, io::Error> {
+    let Some(address) = address else {
+        return Ok(None);
+    };
+    state.trust_internal_network();
+    let listener = TcpListener::bind(address).await?;
+    let actual_address = listener.local_addr()?;
+    info!(%actual_address, "internal authorization listener started");
+    Ok(Some(tokio::spawn(async move {
+        axum::serve(listener, internal_router(Arc::new(state)))
+            .with_graceful_shutdown(wait_for_shutdown(shutdown))
+            .await
+    })))
+}
+
+async fn await_background_tasks(
+    worker: Option<WorkerHandle>,
+    internal: Option<InternalServerHandle>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if let Some(handle) = worker {
+        handle.await??;
+    }
+    if let Some(handle) = internal {
+        handle.await??;
+    }
     Ok(())
 }
 
@@ -139,11 +168,13 @@ fn job_worker(
     database: &Database,
     cipher: &Option<EnvelopeCipher>,
     workspace_handler: Option<WorkspaceReconcileHandler>,
+    observability: memeloop_workspace_control::observability::Observability,
 ) -> Result<Option<JobWorker<ControlPlaneJobHandler>>, Box<dyn std::error::Error>> {
     let Some(worker_cipher) = cipher.clone() else {
         return Ok(None);
     };
-    let webhook_handler = WebhookDeliveryHandler::new(database.clone(), worker_cipher)?;
+    let webhook_handler =
+        WebhookDeliveryHandler::new(database.clone(), worker_cipher, observability)?;
     let handler = Arc::new(ControlPlaneJobHandler::new(
         workspace_handler,
         webhook_handler,
@@ -161,6 +192,7 @@ fn app_state(
     cipher: Option<EnvelopeCipher>,
     kubernetes_client: Option<kube::Client>,
     kubernetes_enabled: bool,
+    diagnostics_enabled: bool,
     plugins: PluginRuntime,
 ) -> Result<AppState, Box<dyn std::error::Error>> {
     let mut state = match cipher {
@@ -171,10 +203,13 @@ fn app_state(
         state.set_kubernetes_client(client);
     }
     state.set_plugin_runtime(plugins);
+    if diagnostics_enabled {
+        state.enable_diagnostics();
+    }
     if let Ok(public_key) = std::env::var("MWC_SSH_JUMP_HOST_PUBLIC_KEY") {
         state.set_jump_host_public_key(&public_key)?;
     }
-    configure_internal_auth(&mut state, kubernetes_enabled)?;
+    configure_internal_auth(&mut state, kubernetes_enabled || diagnostics_enabled)?;
     Ok(state)
 }
 
@@ -206,11 +241,15 @@ fn configure_internal_auth(
 
 fn internal_listener_address(
     kubernetes_enabled: bool,
+    diagnostics_enabled: bool,
 ) -> Result<Option<std::net::SocketAddr>, Box<dyn std::error::Error>> {
     match std::env::var("MWC_INTERNAL_LISTEN_ADDRESS") {
         Ok(value) => Ok(Some(value.parse()?)),
         Err(std::env::VarError::NotPresent) if kubernetes_enabled => {
             Ok(Some("0.0.0.0:8081".parse()?))
+        }
+        Err(std::env::VarError::NotPresent) if diagnostics_enabled => {
+            Ok(Some("127.0.0.1:8081".parse()?))
         }
         Err(std::env::VarError::NotPresent) => Ok(None),
         Err(error) => Err(error.into()),

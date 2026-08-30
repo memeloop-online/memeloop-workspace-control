@@ -8,6 +8,7 @@ use uuid::Uuid;
 
 use crate::{
     crypto::EnvelopeCipher,
+    observability::{Observability, UpstreamKind},
     storage::{ClaimedJob, Database},
 };
 
@@ -17,10 +18,15 @@ pub struct WebhookDeliveryHandler {
     database: Database,
     cipher: EnvelopeCipher,
     client: reqwest::Client,
+    observability: Observability,
 }
 
 impl WebhookDeliveryHandler {
-    pub fn new(database: Database, cipher: EnvelopeCipher) -> Result<Self, JobHandlerError> {
+    pub fn new(
+        database: Database,
+        cipher: EnvelopeCipher,
+        observability: Observability,
+    ) -> Result<Self, JobHandlerError> {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(15))
             .redirect(Policy::none())
@@ -30,6 +36,7 @@ impl WebhookDeliveryHandler {
             database,
             cipher,
             client,
+            observability,
         })
     }
 
@@ -51,6 +58,7 @@ impl WebhookDeliveryHandler {
             .iter()
             .map(|byte| format!("{byte:02x}"))
             .collect::<String>();
+        let request = self.observability.begin_upstream(UpstreamKind::Webhook);
         let response = self
             .client
             .post(&delivery.subscription.url)
@@ -67,6 +75,7 @@ impl WebhookDeliveryHandler {
                 response.status()
             )));
         }
+        request.success();
         Ok(())
     }
 }

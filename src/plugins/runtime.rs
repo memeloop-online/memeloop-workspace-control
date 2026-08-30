@@ -101,6 +101,16 @@ pub struct PluginApiResponse {
     pub body: Vec<u8>,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct PluginRuntimeMetrics {
+    pub loaded: usize,
+    pub enabled: usize,
+    pub executable: usize,
+    pub executions_active: usize,
+    pub execution_limit: usize,
+    pub registry_metadata_bytes_estimate: usize,
+}
+
 impl WorkspaceCreatePlan {
     pub fn from_template(name: &str, template: &WorkspaceTemplateSpec) -> Self {
         Self {
@@ -125,6 +135,37 @@ impl PluginRuntime {
             database,
             execution_slots: Arc::new(Semaphore::new(MAX_CONCURRENT_EXECUTIONS)),
             refresh_lock: Arc::new(Mutex::new(())),
+        }
+    }
+
+    pub fn runtime_metrics(&self) -> PluginRuntimeMetrics {
+        let registry = self.plugins.read().expect("plugin runtime lock poisoned");
+        PluginRuntimeMetrics {
+            loaded: registry.plugins.len(),
+            enabled: registry
+                .plugins
+                .iter()
+                .filter(|plugin| plugin.enabled)
+                .count(),
+            executable: registry
+                .plugins
+                .iter()
+                .filter(|plugin| plugin.component.is_some())
+                .count(),
+            executions_active: MAX_CONCURRENT_EXECUTIONS
+                .saturating_sub(self.execution_slots.available_permits()),
+            execution_limit: MAX_CONCURRENT_EXECUTIONS,
+            registry_metadata_bytes_estimate: registry
+                .plugins
+                .iter()
+                .map(|plugin| {
+                    serde_json::to_vec(&plugin.manifest).map_or(0, |value| value.len())
+                        + plugin.source_kind.len()
+                        + plugin.source_ref.len()
+                        + plugin.package_digest.len()
+                        + plugin.source_confirmation.len()
+                })
+                .sum(),
         }
     }
 

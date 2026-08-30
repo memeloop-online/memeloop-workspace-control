@@ -6,8 +6,9 @@ use axum::{
 };
 
 use super::{
-    AppState, admin, auth, catalog, events, injections, metrics, openapi, organizations, plugins,
-    ready, runtime, ssh, system_info, ui, user_quota, web_shell, webhooks, workspaces,
+    AppState, admin, auth, catalog, diagnostics, events, health, injections, metrics, openapi,
+    organizations, plugins, ready, runtime, ssh, system_info, ui, user_quota, web_shell, webhooks,
+    workspaces,
 };
 
 pub(super) fn router(state: Arc<AppState>) -> Router {
@@ -33,7 +34,8 @@ type ApiRouter = Router<Arc<AppState>>;
 
 fn system_and_identity_routes(router: ApiRouter) -> ApiRouter {
     router
-        .route("/healthz", get(super::health))
+        .route("/livez", get(health))
+        .route("/healthz", get(health))
         .route("/readyz", get(ready))
         .route("/metrics", get(metrics::prometheus))
         .route("/api/v1/system/info", get(system_info))
@@ -184,6 +186,12 @@ fn workspace_routes(router: ApiRouter) -> ApiRouter {
 
 pub(super) fn internal_router(state: Arc<AppState>) -> Router {
     Router::new()
+        .route("/livez", get(health))
+        .route("/readyz", get(ready))
+        .route("/metrics", get(metrics::prometheus))
+        .route("/debug/pprof/profile", get(diagnostics::cpu_profile))
+        .route("/debug/pprof/heap", get(diagnostics::heap_profile))
+        .route("/diagnostics/process", get(diagnostics::process))
         .route(
             "/api/v1/internal/web-shell/authorize",
             get(web_shell::authorize),

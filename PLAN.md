@@ -109,6 +109,20 @@ Longhorn 快照并通过 SQLite 完整性检查后离线压缩。任何自动清
 数据库；即使 Home 已满，平台只承诺 SSH/网页终端恢复通道可用，不承诺 Codex 能继续
 写入持久状态。
 
+## 控制面可观测性与诊断
+
+控制面公开 `/livez` 和 `/readyz`：存活检查只验证进程能够服务请求；就绪检查在两秒
+内验证权威数据库，不把 Kubernetes 或 Prometheus 的短暂故障扩大为整个 API 下线。
+`/metrics` 使用 OpenMetrics，覆盖请求量、模板化路由延迟、错误、活跃请求、SSE、
+上游请求、任务队列、进程 RSS、jemalloc、插件执行和平台/用户资源汇总，所有标签使用
+固定词表或稳定 ID，禁止 URL、工作区名、插件 ID、错误文本和凭据进入指标。
+
+release 构建保留 pprof 所需符号并编入 CPU 与 jemalloc heap profiling。诊断功能默认
+关闭；启用后只复用内部 `8081` 监听器，仍要求内部 Bearer Token，并以有上限的内存
+临时卷承载 heap dump。Helm 不为诊断增加 NodePort、hostPort、Service 或 Higress 公网
+路由。Prometheus Operator 通过内部 ServiceMonitor 抓取，NetworkPolicy 只放行声明的
+监控命名空间。
+
 ## 公网 SSH 与端口复用
 
 公网 SSH 使用链路：`SSH 客户端 → Higress 固定 TCP 22 → OpenSSH 跳板机 → 工作区 ClusterIP Service:2222`。
