@@ -62,8 +62,10 @@ else
   kubectl get hpa "$name" -n "$K3S_RELEASE_NAMESPACE" >/dev/null
 fi
 
-kubectl get endpoints "$name" -n "$K3S_RELEASE_NAMESPACE" -o json \
-  | jq -e '[.subsets[]?.addresses[]?] | length > 0' >/dev/null
+kubectl get endpointslices.discovery.k8s.io -n "$K3S_RELEASE_NAMESPACE" \
+  -l "kubernetes.io/service-name=$name" -o json \
+  | jq -e '[.items[].endpoints[]? | select(.conditions.ready != false) | .addresses[]?] | length > 0' \
+    >/dev/null
 
 release_owner=$(kubectl get namespace "$K3S_RELEASE_NAMESPACE" -o json \
   | jq -r --arg key "$owner_label" '.metadata.labels[$key] // ""')
