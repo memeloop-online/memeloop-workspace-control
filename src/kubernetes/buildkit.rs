@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use k8s_openapi::{
     api::core::v1::{
         AppArmorProfile, Capabilities, Container, EnvVar, ExecAction, Probe, ResourceRequirements,
-        SeccompProfile, SecurityContext,
+        SeccompProfile, SecurityContext, VolumeMount,
     },
     apimachinery::pkg::api::resource::Quantity,
 };
@@ -31,6 +31,16 @@ pub(super) fn bootstrap_container(enabled: bool) -> Option<Container> {
         security_context: Some(non_root_security_context(false, false)),
         ..Container::default()
     })
+}
+
+fn buildkit_tmp_mount() -> VolumeMount {
+    VolumeMount {
+        name: "buildkit-cache".to_owned(),
+        mount_path: "/tmp".to_owned(),
+        sub_path: Some("tmp".to_owned()),
+        read_only: Some(false),
+        ..VolumeMount::default()
+    }
 }
 
 pub(super) fn container(enabled: bool, cache_limit_gib: u64) -> Option<Container> {
@@ -76,11 +86,10 @@ pub(super) fn container(enabled: bool, cache_limit_gib: u64) -> Option<Container
             limits: Some(quantities("4", "4Gi", &format!("{cache_limit_gib}Gi"))),
             ..ResourceRequirements::default()
         }),
-        volume_mounts: Some(vec![mount(
-            "buildkit-cache",
-            "/var/lib/mwc-buildkit",
-            false,
-        )]),
+        volume_mounts: Some(vec![
+            mount("buildkit-cache", "/var/lib/mwc-buildkit", false),
+            buildkit_tmp_mount(),
+        ]),
         security_context: Some(non_root_security_context(true, true)),
         ..Container::default()
     })

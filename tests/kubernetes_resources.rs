@@ -832,6 +832,18 @@ fn regenerable_data_uses_bounded_pod_lifetime_storage() {
             })
     );
     assert!(
+        buildkit
+            .volume_mounts
+            .as_ref()
+            .unwrap()
+            .iter()
+            .any(|mount| {
+                mount.name == "buildkit-cache"
+                    && mount.mount_path == "/tmp"
+                    && mount.sub_path.as_deref() == Some("tmp")
+            })
+    );
+    assert!(
         !buildkit
             .volume_mounts
             .as_ref()

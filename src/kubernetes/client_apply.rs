@@ -205,7 +205,11 @@ impl KubernetesCoordinator {
                 )
                 .await?;
         }
-        if workspace.state == crate::workspaces::WorkspaceState::Restarting {
+        if matches!(
+            workspace.state,
+            crate::workspaces::WorkspaceState::Starting
+                | crate::workspaces::WorkspaceState::Restarting
+        ) {
             let pods = Api::<Pod>::namespaced(self.client.clone(), namespace_name);
             if let Some(pod) = pods.get_opt("workspace-0").await? {
                 self.builder

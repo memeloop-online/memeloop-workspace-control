@@ -70,8 +70,18 @@ impl WorkspaceState {
 
         let next = match (self, action) {
             (State::Stopped | State::Failed, Action::Start) => State::Starting,
-            (State::Ready, Action::Stop) => State::Stopping,
-            (State::Ready, Action::Restart) => State::Restarting,
+            (
+                State::Provisioning
+                | State::Ready
+                | State::Starting
+                | State::Restarting
+                | State::Failed,
+                Action::Stop,
+            ) => State::Stopping,
+            (
+                State::Provisioning | State::Ready | State::Starting | State::Failed,
+                Action::Restart,
+            ) => State::Restarting,
             (
                 State::Provisioning
                 | State::Ready
@@ -228,6 +238,28 @@ mod tests {
                 .request(WorkspaceAction::Restart)
                 .unwrap(),
             WorkspaceState::Restarting
+        );
+    }
+
+    #[test]
+    fn provisioning_and_failed_workspaces_can_be_recovered() {
+        assert_eq!(
+            WorkspaceState::Provisioning
+                .request(WorkspaceAction::Restart)
+                .unwrap(),
+            WorkspaceState::Restarting
+        );
+        assert_eq!(
+            WorkspaceState::Provisioning
+                .request(WorkspaceAction::Stop)
+                .unwrap(),
+            WorkspaceState::Stopping
+        );
+        assert_eq!(
+            WorkspaceState::Failed
+                .request(WorkspaceAction::Stop)
+                .unwrap(),
+            WorkspaceState::Stopping
         );
     }
 
