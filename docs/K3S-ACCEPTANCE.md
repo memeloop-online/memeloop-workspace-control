@@ -7,12 +7,23 @@ Kubernetes/K3s version matrix.
 
 The currently accepted amd64 images are pinned by registry digest:
 
-- control plane: `ghcr.io/memeloop-online/memeloop-workspace-control@sha256:8215db4d5e350734cdbf23559bfd8722e8b73c511c5ccb1afbc2f59e99f2f51e`
+- control plane: `ghcr.io/memeloop-online/memeloop-workspace-control@sha256:d17e98bc7b37d3af51d856e034b34c9c6a6561a2be5c3c6107db3c6dd18c0965`
 - workspace Contract v1: `ghcr.io/memeloop-online/memeloop-workspace-control-workspace@sha256:66c2cb29d2d9c6c17c3d80113cea4ea024cc3e95f4f1ededb1e79645f45164cc`
 - stock ttyd/OpenSSH client: `ghcr.io/memeloop-online/memeloop-workspace-control-ttyd@sha256:c763b36e61f12bf993a5b24da76c4b4b46cc0ed9a255b238d7ac2d24f01143bb`
 - OpenSSH jump: `ghcr.io/memeloop-online/memeloop-workspace-control-ssh-jump@sha256:ccfa8d6155fab13dafab576bd37746ee9f927b1e43c8fefa7a7659516ac599b0`
 
-These are the outputs of CI run `33322237208`; do not substitute a mutable tag during acceptance.
+The control plane is the output of CI run `33334763871`; the unchanged workspace, ttyd and jump
+images retain their accepted run `33322237208` digests. Do not substitute a mutable tag during
+acceptance.
+
+The internal K3s installation accepted source revision
+`d69f180f8f39e90674b72b633c6a3badda69509d` through GitOps. Argo CD reported `Synced/Healthy`,
+the Pod image ID matched the control-plane digest above, and the container remained Ready with
+zero restarts. Prometheus discovered the internal `auth` endpoint with `up=1` and returned the new
+RSS, durable-queue and component-memory series. A controlled diagnostics rollout proved that a
+Bearer token is required, CPU and heap pprof captures are usable, and all diagnostic paths return
+`404` through Higress. GitOps then disabled diagnostics; the final Pod has no profiling flag or
+temporary volume while `/livez`, `/readyz` and `/metrics` remain healthy.
 
 Run the read-only preflight before Helm changes. All target-identifying values are mandatory:
 
