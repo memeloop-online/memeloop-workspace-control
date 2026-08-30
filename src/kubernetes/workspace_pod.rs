@@ -180,6 +180,10 @@ impl<'a> WorkspacePod<'a> {
         )
     }
 
+    pub fn buildkit_bootstrap_container(&self) -> Option<Container> {
+        buildkit::bootstrap_container(self.has_buildkit())
+    }
+
     pub fn affinity(&self) -> Option<Affinity> {
         if self.template.required_node_names.is_empty()
             && self.template.preferred_node_names.is_empty()

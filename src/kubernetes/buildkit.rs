@@ -12,6 +12,27 @@ use super::resource_helpers::mount;
 
 pub(super) const IMAGE: &str = "harbor.k3s.onetwo.website/docker-io/moby/buildkit:v0.32.2-rootless@sha256:504731e577c20559c00f968f33219f30115e70be29ab96728d1d06e963fc494b";
 
+pub(super) fn bootstrap_container(enabled: bool) -> Option<Container> {
+    enabled.then(|| Container {
+        name: "buildkit-bootstrap".to_owned(),
+        image: Some(IMAGE.to_owned()),
+        command: Some(vec!["sh".to_owned(), "-c".to_owned()]),
+        args: Some(vec![setup_script().to_owned()]),
+        resources: Some(ResourceRequirements {
+            requests: Some(quantities("10m", "16Mi", "32Mi")),
+            limits: Some(quantities("100m", "128Mi", "128Mi")),
+            ..ResourceRequirements::default()
+        }),
+        volume_mounts: Some(vec![mount(
+            "buildkit-cache",
+            "/var/lib/mwc-buildkit",
+            false,
+        )]),
+        security_context: Some(non_root_security_context(false, false)),
+        ..Container::default()
+    })
+}
+
 pub(super) fn container(enabled: bool, cache_limit_gib: u64) -> Option<Container> {
     if !enabled {
         return None;
@@ -31,11 +52,19 @@ pub(super) fn container(enabled: bool, cache_limit_gib: u64) -> Option<Container
     Some(Container {
         name: "buildkitd".to_owned(),
         image: Some(IMAGE.to_owned()),
-        command: Some(vec!["sh".to_owned(), "-c".to_owned()]),
-        args: Some(vec![sidecar_script().to_owned()]),
+        // Keep the rootless image entrypoint. It starts buildkitd through RootlessKit and creates
+        // the user namespace required by the OCI worker.
+        args: Some(vec![
+            "--config".to_owned(),
+            "/var/lib/mwc-buildkit/config/buildkitd.toml".to_owned(),
+        ]),
         env: Some(vec![
             env("TMPDIR", "/var/lib/mwc-buildkit/tmp"),
             env("XDG_RUNTIME_DIR", "/var/lib/mwc-buildkit/runtime"),
+            env(
+                "BUILDKIT_HOST",
+                "unix:///var/lib/mwc-buildkit/runtime/buildkit/buildkitd.sock",
+            ),
         ]),
         readiness_probe: Some(probe.clone()),
         liveness_probe: Some(Probe {
@@ -107,10 +136,11 @@ fn non_root_security_context(
     }
 }
 
-fn sidecar_script() -> &'static str {
+fn setup_script() -> &'static str {
     r#"set -eu
 mkdir -p /var/lib/mwc-buildkit/bin /var/lib/mwc-buildkit/config \
   /var/lib/mwc-buildkit/runtime /var/lib/mwc-buildkit/state /var/lib/mwc-buildkit/tmp
+chmod 0700 /var/lib/mwc-buildkit/runtime
 cp /usr/bin/buildctl /var/lib/mwc-buildkit/bin/buildctl
 chmod 0555 /var/lib/mwc-buildkit/bin/buildctl
 cat > /var/lib/mwc-buildkit/config/buildkitd.toml <<'CONFIG'
@@ -132,6 +162,5 @@ root = "/var/lib/mwc-buildkit/state"
 [worker.containerd]
   enabled = false
 CONFIG
-exec buildkitd --config /var/lib/mwc-buildkit/config/buildkitd.toml
 "#
 }

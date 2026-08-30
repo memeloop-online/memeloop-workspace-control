@@ -78,7 +78,10 @@ fn containers(
 }
 
 fn pod_spec(pod: WorkspacePod<'_>, workspace: &Workspace, containers: Vec<Container>) -> PodSpec {
-    let init_containers = vec![pod.workspace_init_container(&workspace.template.image)];
+    let mut init_containers = vec![pod.workspace_init_container(&workspace.template.image)];
+    if let Some(buildkit_bootstrap) = pod.buildkit_bootstrap_container() {
+        init_containers.push(buildkit_bootstrap);
+    }
     let cluster_access = workspace.template.cluster_access;
     PodSpec {
         automount_service_account_token: Some(cluster_access),

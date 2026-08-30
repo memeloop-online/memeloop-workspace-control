@@ -651,7 +651,24 @@ fn node_template_reuses_the_existing_image_with_platform_bootstrap() {
             .type_,
         "Unconfined"
     );
-    assert_eq!(pod.init_containers.as_ref().unwrap().len(), 1);
+    let init_containers = pod.init_containers.as_ref().unwrap();
+    assert_eq!(init_containers.len(), 2);
+    assert_eq!(init_containers[1].name, "buildkit-bootstrap");
+    assert!(
+        init_containers[1].args.as_ref().unwrap()[0]
+            .contains("cp /usr/bin/buildctl /var/lib/mwc-buildkit/bin/buildctl")
+    );
+    assert!(buildkit.command.is_none());
+    assert_eq!(
+        buildkit.args.as_deref(),
+        Some(
+            [
+                "--config".to_owned(),
+                "/var/lib/mwc-buildkit/config/buildkitd.toml".to_owned()
+            ]
+            .as_slice()
+        )
+    );
     assert!(
         resources.workspace_config.data.as_ref().unwrap()["sshd_config"]
             .contains("AllowUsers node-dev")
