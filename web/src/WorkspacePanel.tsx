@@ -170,7 +170,12 @@ export function WorkspacePanel(props: Props) {
   }
 
   async function openShell(workspaceId: string) {
-    const target = window.open("about:blank", "_blank", "noopener,noreferrer");
+    // Open synchronously so browser popup protection permits the terminal tab. Passing the
+    // `noopener` feature makes Chromium return null even when it created a tab, which leaves an
+    // unreachable blank tab and forces the fallback navigation in this page. Clear opener before
+    // awaiting the ticket instead.
+    const target = window.open("about:blank", "_blank");
+    if (target) target.opener = null;
     try {
       const ticket = await props.api.issueWebShellTicket(workspaceId);
       if (target) target.location.href = ticket.web_shell_url;
