@@ -27,8 +27,8 @@ kubectl() {
   if [[ $1 == get && $2 == deployment ]]; then
     return 1
   fi
-  if [[ $1 == get && $2 == endpoints ]]; then
-    printf '{"subsets":[{"addresses":[{}]}]}'
+  if [[ $1 == get && $2 == endpointslices.discovery.k8s.io ]]; then
+    printf '{"items":[{"endpoints":[{"conditions":{"ready":true},"addresses":["10.42.0.10"]}]}]}'
     return
   fi
   if [[ $1 == get && $2 == namespace ]]; then
