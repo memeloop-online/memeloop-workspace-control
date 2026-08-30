@@ -616,9 +616,18 @@ fn node_template_reuses_the_existing_image_with_platform_bootstrap() {
     assert_eq!(dev.args.as_deref(), Some(["serve".to_owned()].as_slice()));
     let readiness = dev.readiness_probe.as_ref().unwrap();
     assert_eq!(
-        readiness.tcp_socket.as_ref().unwrap().port,
-        k8s_openapi::apimachinery::pkg::util::intstr::IntOrString::Int(2222)
+        readiness.exec.as_ref().unwrap().command.as_deref(),
+        Some(
+            [
+                "sh".to_owned(),
+                "-c".to_owned(),
+                "test -s /run/mwc-ssh/sshd.pid && kill -0 \"$(cat /run/mwc-ssh/sshd.pid)\""
+                    .to_owned()
+            ]
+            .as_slice()
+        )
     );
+    assert_eq!(readiness.period_seconds, Some(10));
     assert!(
         dev.volume_mounts.as_ref().unwrap().iter().any(|mount| {
             mount.name == "workspace-data" && mount.mount_path == "/home/node-dev"

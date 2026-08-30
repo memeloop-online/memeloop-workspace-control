@@ -2,11 +2,11 @@ use std::collections::BTreeMap;
 
 use k8s_openapi::{
     api::core::v1::{
-        Affinity, Container, ContainerPort, EnvVar, LocalObjectReference, NodeAffinity,
+        Affinity, Container, ContainerPort, EnvVar, ExecAction, LocalObjectReference, NodeAffinity,
         NodeSelector, PodSecurityContext, PreferredSchedulingTerm, Probe, ResourceRequirements,
-        SeccompProfile, TCPSocketAction, VolumeMount,
+        SeccompProfile, VolumeMount,
     },
-    apimachinery::pkg::{api::resource::Quantity, util::intstr::IntOrString},
+    apimachinery::pkg::api::resource::Quantity,
 };
 
 use crate::templates::WorkspaceTemplateSpec;
@@ -153,12 +153,16 @@ impl<'a> WorkspacePod<'a> {
                 ..ContainerPort::default()
             }]),
             readiness_probe: Some(Probe {
-                tcp_socket: Some(TCPSocketAction {
-                    port: IntOrString::Int(2222),
-                    host: None,
+                exec: Some(ExecAction {
+                    command: Some(vec![
+                        "sh".to_owned(),
+                        "-c".to_owned(),
+                        "test -s /run/mwc-ssh/sshd.pid && kill -0 \"$(cat /run/mwc-ssh/sshd.pid)\""
+                            .to_owned(),
+                    ]),
                 }),
                 initial_delay_seconds: Some(1),
-                period_seconds: Some(2),
+                period_seconds: Some(10),
                 timeout_seconds: Some(1),
                 success_threshold: Some(1),
                 failure_threshold: Some(3),
