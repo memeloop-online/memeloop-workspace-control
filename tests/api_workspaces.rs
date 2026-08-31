@@ -183,6 +183,12 @@ async fn authenticated_workspace_api_enforces_rbac_and_exact_idempotent_replay()
         "owner_id": admin_id,
         "name": "primary",
         "template_id": template.id,
+        "resources": {
+            "cpu_millis": 1500,
+            "memory_mib": 3072,
+            "gpu_count": 0,
+            "disk_gib": 30
+        },
         "inline_workspace_injections": [{
             "key": "multiline-config",
             "kind": "config_file",
@@ -249,6 +255,11 @@ async fn authenticated_workspace_api_enforces_rbac_and_exact_idempotent_replay()
         String::from_utf8_lossy(&first_workspace_body)
     );
     let workspace_response: Value = serde_json::from_slice(&first_workspace_body).unwrap();
+    assert_eq!(
+        workspace_response["workspace"]["resources"]["cpu_millis"],
+        1500
+    );
+    assert_eq!(workspace_response["workspace"]["resources"]["disk_gib"], 30);
     let workspace_id =
         Uuid::parse_str(workspace_response["workspace"]["id"].as_str().unwrap()).unwrap();
     assert_eq!(

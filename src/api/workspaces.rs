@@ -176,6 +176,13 @@ async fn create_admitted_workspace(
     now: i64,
 ) -> Result<Workspace, ApiError> {
     let command = &request.workspace;
+    let mut final_template = template.template.clone();
+    if let Some(resources) = command.resources {
+        final_template.resources = resources;
+        final_template
+            .validate()
+            .map_err(|_| crate::storage::StorageError::InvalidWorkspace)?;
+    }
     validate_inline_injections(
         state,
         command,
@@ -193,7 +200,7 @@ async fn create_admitted_workspace(
                 owner_id: command.owner_id,
                 template_id: command.template_id,
             },
-            WorkspaceCreatePlan::from_template(&command.name, &template.template),
+            WorkspaceCreatePlan::from_template(&command.name, &final_template),
         )
         .await?;
     let inline = if request.inline_workspace_injections.is_empty() {

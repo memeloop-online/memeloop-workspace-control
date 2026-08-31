@@ -92,6 +92,9 @@ textarea { resize: vertical; font-family: "DM Mono", monospace; line-height: 1.5
 .template-summary dt { color: #7d8c87; font-size: .7rem; margin-bottom: 5px; }
 .template-summary dd { color: #b5c5bf; font-size: .75rem; margin: 0; overflow: hidden; text-overflow: ellipsis; }
 .template-summary code { white-space: nowrap; }
+.workspace-resource-editor { margin: 0; padding: 12px; border: 1px solid #294036; border-radius: 10px; }
+.workspace-resource-editor legend { padding: 0 6px; color: #aab4c7; font-size: .78rem; font-weight: 600; }
+.workspace-resource-fields { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
 .profile-note, .risk-note { margin: 0; border-radius: 9px; padding: 11px 12px; font-size: .7rem; line-height: 1.55; }
 .profile-note { color: #9fb4ad; border: 1px solid #294036; background: #0a1312; }
 .risk-note { color: #ffc2c9; border: 1px solid #71323c; background: #371a20; }
@@ -593,6 +596,7 @@ textarea { resize: vertical; font-family: "DM Mono", monospace; line-height: 1.5
 :root[data-theme="light"] .selectable-list > button:hover { background: var(--surface-2); }
 :root[data-theme="light"] .selectable-list > button.selected { background: #e4f5ee; }
 :root[data-theme="light"] .template-summary > div { background: #f0faf6; border-color: #c7e2d7; }
+:root[data-theme="light"] .workspace-resource-editor { border-color: #c7e2d7; }
 
 @media (max-width: 960px) {
   .app-shell { grid-template-columns: 72px 1fr; }.sidebar .brand > div:last-child,.sidebar nav button:not(.active) { font-size: 0; }.sidebar nav button { justify-content: center; }.sidebar nav button span { width: auto; }.sidebar-foot { display: none; }.stat-grid { grid-template-columns: 1fr 1fr; }.create-card,.template-form { grid-template-columns: 1fr 1fr; }.injection-layout,.template-manager-layout { grid-template-columns: 1fr; }.selectable-list { border-right: 0; border-bottom: 1px solid var(--line); max-height: 260px; }.template-summary { grid-template-columns: 1fr 1fr; }
@@ -602,6 +606,7 @@ textarea { resize: vertical; font-family: "DM Mono", monospace; line-height: 1.5
 }
 
 @media (max-width: 650px) {
+  .workspace-resource-fields { grid-template-columns: 1fr; }
   .content { min-height: 100dvh; padding-bottom: calc(64px + env(safe-area-inset-bottom, 0px)); }
   .sidebar { height: calc(64px + env(safe-area-inset-bottom, 0px)); padding: 5px 4px calc(5px + env(safe-area-inset-bottom, 0px)); }
   .sidebar nav { height: 100%; align-items: stretch; }

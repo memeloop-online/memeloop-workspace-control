@@ -98,6 +98,7 @@ async fn unconfigured_image_allowlist_defaults_to_deny() {
                 owner_id: admin.user_id,
                 name: "must-be-rejected".to_owned(),
                 template_id,
+                resources: None,
                 organization_injection_refs: None,
                 user_injection_refs: None,
             },
@@ -150,6 +151,7 @@ async fn inline_injection_failure_rolls_back_workspace_and_first_job() {
                 owner_id: admin.user_id,
                 name: "must-roll-back".to_owned(),
                 template_id,
+                resources: None,
                 organization_injection_refs: None,
                 user_injection_refs: None,
             },
@@ -250,6 +252,7 @@ async fn admitted_template_must_match_the_transactional_workspace_snapshot() {
                 owner_id: admin.user_id,
                 name: "rejected-race".to_owned(),
                 template_id,
+                resources: None,
                 organization_injection_refs: None,
                 user_injection_refs: None,
             },
@@ -314,6 +317,7 @@ async fn template_deletion_requires_disabled_unreferenced_template() {
                 owner_id: admin.user_id,
                 name: "keeps-snapshot".to_owned(),
                 template_id,
+                resources: None,
                 organization_injection_refs: None,
                 user_injection_refs: None,
             },
@@ -354,6 +358,96 @@ async fn template_deletion_requires_disabled_unreferenced_template() {
         database.get_workspace_template(unused_id).await,
         Err(StorageError::TemplateNotFound)
     ));
+}
+
+#[tokio::test]
+async fn workspace_resource_override_is_validated_and_snapshotted() {
+    let database = database().await;
+    let admin = database
+        .create_user("Admin", ADMIN_TOKEN, true, 100)
+        .await
+        .unwrap();
+    let organization = database
+        .create_organization(
+            CreateOrganization {
+                name: "Resource override".to_owned(),
+                owner_user_id: admin.user_id,
+            },
+            101,
+        )
+        .await
+        .unwrap();
+    let template_id = create_template(
+        &database,
+        organization.id,
+        "Resource defaults",
+        "registry.example/workspace:1",
+        AccessMode::Internal,
+        Resources {
+            cpu_millis: 1_000,
+            memory_mib: 2_048,
+            gpu_count: 0,
+            disk_gib: 20,
+        },
+        102,
+    )
+    .await;
+    let overridden = Resources {
+        cpu_millis: 10_000,
+        memory_mib: 10_240,
+        gpu_count: 0,
+        disk_gib: 100,
+    };
+    let workspace = database
+        .create_workspace(
+            CreateWorkspace {
+                organization_id: organization.id,
+                owner_id: admin.user_id,
+                name: "large-workspace".to_owned(),
+                template_id,
+                resources: Some(overridden),
+                organization_injection_refs: None,
+                user_injection_refs: None,
+            },
+            true,
+            admin.user_id,
+            103,
+        )
+        .await
+        .unwrap();
+    assert_eq!(workspace.template.resources, overridden);
+    assert_eq!(
+        database
+            .get_workspace(workspace.id)
+            .await
+            .unwrap()
+            .template
+            .resources,
+        overridden
+    );
+
+    let invalid = database
+        .create_workspace(
+            CreateWorkspace {
+                organization_id: organization.id,
+                owner_id: admin.user_id,
+                name: "below-pod-request".to_owned(),
+                template_id,
+                resources: Some(Resources {
+                    cpu_millis: 500,
+                    memory_mib: 1_024,
+                    gpu_count: 0,
+                    disk_gib: 20,
+                }),
+                organization_injection_refs: None,
+                user_injection_refs: None,
+            },
+            true,
+            admin.user_id,
+            104,
+        )
+        .await;
+    assert!(matches!(invalid, Err(StorageError::InvalidWorkspace)));
 }
 
 #[tokio::test]
@@ -423,6 +517,7 @@ async fn image_allowlist_and_template_contract_are_admitted_atomically() {
         owner_id: admin.user_id,
         name: "contract-ok".to_owned(),
         template_id: template.id,
+        resources: None,
         organization_injection_refs: Some(vec!["org-key".to_owned()]),
         user_injection_refs: Some(Vec::new()),
     };
@@ -485,6 +580,7 @@ async fn image_allowlist_and_template_contract_are_admitted_atomically() {
         owner_id: admin.user_id,
         name: "image-rejected".to_owned(),
         template_id: unapproved_template,
+        resources: None,
         organization_injection_refs: None,
         user_injection_refs: None,
     };
@@ -605,6 +701,7 @@ async fn workspace_creation_enforces_quota_and_enqueues_lifecycle_actions() {
         owner_id: admin.user_id,
         name: name.to_owned(),
         template_id,
+        resources: None,
         organization_injection_refs: None,
         user_injection_refs: None,
     };
@@ -757,6 +854,7 @@ async fn confirmed_deletion_scrubs_sensitive_workspace_state_and_keeps_a_tombsto
                 owner_id: admin.user_id,
                 name: "sensitive-name".to_owned(),
                 template_id,
+                resources: None,
                 organization_injection_refs: None,
                 user_injection_refs: None,
             },
@@ -907,6 +1005,7 @@ async fn user_injection_change_reconciles_every_workspace_the_user_can_access() 
                 owner_id: admin.user_id,
                 name: "shared".to_owned(),
                 template_id,
+                resources: None,
                 organization_injection_refs: None,
                 user_injection_refs: None,
             },

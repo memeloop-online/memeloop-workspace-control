@@ -4,6 +4,7 @@ use uuid::Uuid;
 use crate::{
     crypto::EnvelopeCipher,
     injections::InjectionItem,
+    templates::WorkspaceTemplateDocument,
     workspaces::{Workspace, WorkspaceState},
 };
 
@@ -26,7 +27,7 @@ pub(super) async fn create_sqlite(
     creation: &WorkspaceCreation<'_>,
 ) -> Result<Workspace, StorageError> {
     let command = creation.command;
-    let snapshot = crate::storage::template_store::resolve_template_sqlite(
+    let mut snapshot = crate::storage::template_store::resolve_template_sqlite(
         connection,
         installation_id,
         command.template_id,
@@ -35,7 +36,7 @@ pub(super) async fn create_sqlite(
     )
     .await?;
     verify_admitted_template(creation, &snapshot)?;
-    let yaml = snapshot.yaml.clone();
+    let yaml = apply_resource_override(command, &mut snapshot)?;
     let workspace = build_workspace(command, snapshot, creation.now);
     crate::storage::workspace_admission::admit_sqlite(connection, installation_id, &workspace)
         .await?;
@@ -51,7 +52,7 @@ pub(super) async fn create_postgres(
     creation: &WorkspaceCreation<'_>,
 ) -> Result<Workspace, StorageError> {
     let command = creation.command;
-    let snapshot = crate::storage::template_store::resolve_template_postgres(
+    let mut snapshot = crate::storage::template_store::resolve_template_postgres(
         connection,
         installation_id,
         command.template_id,
@@ -60,7 +61,7 @@ pub(super) async fn create_postgres(
     )
     .await?;
     verify_admitted_template(creation, &snapshot)?;
-    let yaml = snapshot.yaml.clone();
+    let yaml = apply_resource_override(command, &mut snapshot)?;
     let workspace = build_workspace(command, snapshot, creation.now);
     crate::storage::workspace_admission::admit_postgres(connection, installation_id, &workspace)
         .await?;
@@ -68,6 +69,26 @@ pub(super) async fn create_postgres(
     insert_injections_postgres(connection, installation_id, &workspace, creation).await?;
     enqueue_and_audit_postgres(connection, installation_id, &workspace, creation).await?;
     Ok(workspace)
+}
+
+fn apply_resource_override(
+    command: &CreateWorkspace,
+    snapshot: &mut crate::storage::template_store::ResolvedTemplateSnapshot,
+) -> Result<String, StorageError> {
+    let Some(resources) = command.resources else {
+        return Ok(snapshot.yaml.clone());
+    };
+    snapshot.spec.resources = resources;
+    snapshot
+        .spec
+        .validate()
+        .map_err(|_| StorageError::InvalidWorkspace)?;
+    let mut document = WorkspaceTemplateDocument::parse(&snapshot.yaml)
+        .map_err(|_| StorageError::InvalidTemplate)?;
+    document.spec = snapshot.spec.clone();
+    document
+        .to_yaml()
+        .map_err(|_| StorageError::InvalidWorkspace)
 }
 
 fn build_workspace(
@@ -197,7 +218,7 @@ async fn enqueue_and_audit_sqlite(
     creation: &WorkspaceCreation<'_>,
 ) -> Result<(), StorageError> {
     sqlx::query("INSERT INTO jobs (id, installation_id, kind, workspace_id, payload_json, status, available_at, lease_owner, lease_expires_at, attempts, created_at, updated_at) VALUES (?1,?2,'reconcile_workspace',?3,?4,'pending',?5,NULL,NULL,0,?5,?5)").bind(Uuid::now_v7().to_string()).bind(installation_id).bind(workspace.id.to_string()).bind(serde_json::json!({"generation": workspace.generation}).to_string()).bind(creation.now).execute(&mut *connection).await?;
-    sqlx::query("INSERT INTO audit_log (id, installation_id, actor_user_id, organization_id, workspace_id, action, metadata_json, created_at) VALUES (?1,?2,?3,?4,?5,'workspace.create',?6,?7)").bind(Uuid::now_v7().to_string()).bind(installation_id).bind(creation.actor_user_id.to_string()).bind(workspace.organization_id.to_string()).bind(workspace.id.to_string()).bind(serde_json::json!({"name": workspace.name, "image": workspace.template.image}).to_string()).bind(creation.now).execute(&mut *connection).await?;
+    sqlx::query("INSERT INTO audit_log (id, installation_id, actor_user_id, organization_id, workspace_id, action, metadata_json, created_at) VALUES (?1,?2,?3,?4,?5,'workspace.create',?6,?7)").bind(Uuid::now_v7().to_string()).bind(installation_id).bind(creation.actor_user_id.to_string()).bind(workspace.organization_id.to_string()).bind(workspace.id.to_string()).bind(serde_json::json!({"name": workspace.name, "image": workspace.template.image, "template_id": workspace.template_id, "resources": workspace.template.resources}).to_string()).bind(creation.now).execute(&mut *connection).await?;
     crate::storage::workspace_events::insert_sqlite(
         connection,
         installation_id,
@@ -215,7 +236,7 @@ async fn enqueue_and_audit_postgres(
     creation: &WorkspaceCreation<'_>,
 ) -> Result<(), StorageError> {
     sqlx::query("INSERT INTO jobs (id, installation_id, kind, workspace_id, payload_json, status, available_at, lease_owner, lease_expires_at, attempts, created_at, updated_at) VALUES ($1,$2,'reconcile_workspace',$3,$4,'pending',$5,NULL,NULL,0,$5,$5)").bind(Uuid::now_v7().to_string()).bind(installation_id).bind(workspace.id.to_string()).bind(serde_json::json!({"generation": workspace.generation}).to_string()).bind(creation.now).execute(&mut *connection).await?;
-    sqlx::query("INSERT INTO audit_log (id, installation_id, actor_user_id, organization_id, workspace_id, action, metadata_json, created_at) VALUES ($1,$2,$3,$4,$5,'workspace.create',$6,$7)").bind(Uuid::now_v7().to_string()).bind(installation_id).bind(creation.actor_user_id.to_string()).bind(workspace.organization_id.to_string()).bind(workspace.id.to_string()).bind(serde_json::json!({"name": workspace.name, "image": workspace.template.image}).to_string()).bind(creation.now).execute(&mut *connection).await?;
+    sqlx::query("INSERT INTO audit_log (id, installation_id, actor_user_id, organization_id, workspace_id, action, metadata_json, created_at) VALUES ($1,$2,$3,$4,$5,'workspace.create',$6,$7)").bind(Uuid::now_v7().to_string()).bind(installation_id).bind(creation.actor_user_id.to_string()).bind(workspace.organization_id.to_string()).bind(workspace.id.to_string()).bind(serde_json::json!({"name": workspace.name, "image": workspace.template.image, "template_id": workspace.template_id, "resources": workspace.template.resources}).to_string()).bind(creation.now).execute(&mut *connection).await?;
     crate::storage::workspace_events::insert_postgres(
         connection,
         installation_id,

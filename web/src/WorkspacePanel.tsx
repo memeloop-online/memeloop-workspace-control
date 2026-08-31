@@ -8,6 +8,7 @@ import { reserveWebShellWindow } from "./workspaceShell";
 import type {
   CreateWorkspace,
   Principal,
+  Resources,
   StoredInjection,
   WorkspaceResponse,
   WorkspaceRuntime,
@@ -30,6 +31,7 @@ export function WorkspacePanel(props: Props) {
   const [templates, setTemplates] = useState<WorkspaceTemplate[]>([]);
   const [templateId, setTemplateId] = useState("");
   const [name, setName] = useState("");
+  const [resourceDraft, setResourceDraft] = useState<Resources | null>(null);
   const [organizationInjections, setOrganizationInjections] = useState<StoredInjection[]>([]);
   const [userInjections, setUserInjections] = useState<StoredInjection[]>([]);
   const [explicitInjectionRefs, setExplicitInjectionRefs] = useState(false);
@@ -126,6 +128,9 @@ export function WorkspacePanel(props: Props) {
       owner_id: props.principal.user_id,
       name,
       template_id: templateId,
+      resources: resourceDraft && selectedTemplate && !sameResources(resourceDraft, selectedTemplate.resources)
+        ? resourceDraft
+        : null,
       organization_injection_refs: explicitInjectionRefs
         ? organizationInjections
             .filter((item) => item.locked || organizationRefs.includes(item.key))
@@ -138,6 +143,7 @@ export function WorkspacePanel(props: Props) {
       await props.api.createWorkspace(command);
       setName("");
       setTemplateId("");
+      setResourceDraft(null);
       setShowCreate(false);
       await props.onRefresh();
     } catch (error) {
@@ -145,6 +151,20 @@ export function WorkspacePanel(props: Props) {
     } finally {
       setSubmitting(false);
     }
+  }
+
+  function chooseTemplate(id: string) {
+    setTemplateId(id);
+    const template = templates.find((item) => item.id === id);
+    setResourceDraft(template ? { ...template.resources } : null);
+  }
+
+  function updateResource(key: keyof Resources, value: string) {
+    const parsed = Number(value);
+    setResourceDraft((current) => current ? {
+      ...current,
+      [key]: Number.isFinite(parsed) ? Math.max(0, Math.trunc(parsed)) : 0,
+    } : current);
   }
 
   function setReferenceMode(explicit: boolean) {
@@ -213,8 +233,9 @@ export function WorkspacePanel(props: Props) {
       {showCreate && (
         <form className="create-card" onSubmit={create}>
           <label>{t("name")}<input required value={name} onChange={(e) => setName(e.target.value)} /></label>
-          <label><FieldTitle label={t("template")} help={t("templatePersistenceHelp")} /><select required value={templateId} onChange={(e) => setTemplateId(e.target.value)}><option value="">{t("chooseTemplate")}</option>{templates.map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}</select></label>
+          <label><FieldTitle label={t("template")} help={t("templatePersistenceHelp")} /><select required value={templateId} onChange={(e) => chooseTemplate(e.target.value)}><option value="">{t("chooseTemplate")}</option>{templates.map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}</select></label>
           {selectedTemplate && <dl className="template-summary wide"><div><dt>{t("image")}</dt><dd><code>{selectedTemplate.image}</code></dd></div><div><dt><FieldTitle label={t("accessMode")} help={selectedTemplate.access_mode === "internal" ? t("internalHelp") : t("publicHelp")} /></dt><dd>{selectedTemplate.access_mode === "internal" ? t("internal") : t("public")}</dd></div><div><dt>{t("resources")}</dt><dd>{selectedTemplate.resources.cpu_millis}m CPU · {selectedTemplate.resources.memory_mib} MiB · {selectedTemplate.resources.disk_gib} GiB · {selectedTemplate.resources.gpu_count} GPU</dd></div><div><dt>{t("workspaceUser")}</dt><dd><code>{selectedTemplate.workspace_user} · {selectedTemplate.workspace_home}</code></dd></div></dl>}
+          {selectedTemplate && resourceDraft && <fieldset className="workspace-resource-editor wide"><legend><FieldTitle label={t("workspaceResources")} help={t("workspaceResourcesHelp")} /></legend><div className="workspace-resource-fields"><label>{t("cpuLimitMillis")}<input type="number" min={selectedTemplate.pod_requests.cpu_millis} step="100" required value={resourceDraft.cpu_millis} onChange={(event) => updateResource("cpu_millis", event.target.value)} /></label><label>{t("memoryLimitMib")}<input type="number" min={selectedTemplate.pod_requests.memory_mib} step="256" required value={resourceDraft.memory_mib} onChange={(event) => updateResource("memory_mib", event.target.value)} /></label><label>{t("diskSizeGib")}<input type="number" min="1" step="1" required value={resourceDraft.disk_gib} onChange={(event) => updateResource("disk_gib", event.target.value)} /></label><label>{t("gpuCount")}<input type="number" min="0" step="1" required value={resourceDraft.gpu_count} onChange={(event) => updateResource("gpu_count", event.target.value)} /></label></div></fieldset>}
           <label>{t("injectionReferences")}<select value={explicitInjectionRefs ? "selected" : "all"} onChange={(e) => setReferenceMode(e.target.value === "selected")}><option value="all">{t("allMatching")}</option><option value="selected">{t("selectedReferences")}</option></select></label>
           {explicitInjectionRefs && (
             <CredentialReferencePicker organizationItems={organizationInjections} userItems={userInjections} organizationSelected={organizationRefs} userSelected={userRefs} onOrganizationSelected={setOrganizationRefs} onUserSelected={setUserRefs} />
@@ -240,6 +261,13 @@ function Stat({ label, value, hint }: { label: string; value: string; hint: stri
 
 function formatGiB(mib: number) {
   return (mib / 1024).toFixed(mib % 1024 === 0 ? 0 : 1);
+}
+
+function sameResources(left: Resources, right: Resources) {
+  return left.cpu_millis === right.cpu_millis
+    && left.memory_mib === right.memory_mib
+    && left.disk_gib === right.disk_gib
+    && left.gpu_count === right.gpu_count;
 }
 
 function message(error: unknown) {

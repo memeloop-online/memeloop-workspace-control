@@ -2,7 +2,9 @@ use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
-use crate::{crypto::EnvelopeCipher, injections::InjectionItem, workspaces::Workspace};
+use crate::{
+    crypto::EnvelopeCipher, injections::InjectionItem, quota::Resources, workspaces::Workspace,
+};
 
 use super::{Database, StorageError, WorkspaceInjectionRefs};
 
@@ -19,6 +21,10 @@ pub struct CreateWorkspace {
     pub owner_id: Uuid,
     pub name: String,
     pub template_id: Uuid,
+    /// Optional per-workspace resource limits. The selected template remains the source of every
+    /// other setting, while these final values are copied into the immutable workspace snapshot.
+    #[serde(default)]
+    pub resources: Option<Resources>,
     #[serde(default)]
     pub organization_injection_refs: Option<Vec<String>>,
     #[serde(default)]

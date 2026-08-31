@@ -80,6 +80,7 @@ async fn authorized_keys_command_returns_only_restricted_workspace_target() {
                 owner_id: user.user_id,
                 name: "ssh".to_owned(),
                 template_id: template.id,
+                resources: None,
                 organization_injection_refs: None,
                 user_injection_refs: None,
             },

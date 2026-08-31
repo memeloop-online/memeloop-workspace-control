@@ -76,6 +76,7 @@ async fn web_shell_ticket_is_ready_only_scoped_and_consumed_once() {
                 owner_id: user.user_id,
                 name: "shell".to_owned(),
                 template_id: template.id,
+                resources: None,
                 organization_injection_refs: None,
                 user_injection_refs: None,
             },

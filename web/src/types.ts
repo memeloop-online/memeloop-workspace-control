@@ -232,6 +232,7 @@ export interface CreateWorkspace {
   owner_id: string;
   name: string;
   template_id: string;
+  resources: Resources | null;
   organization_injection_refs: string[] | null;
   user_injection_refs: string[] | null;
 }

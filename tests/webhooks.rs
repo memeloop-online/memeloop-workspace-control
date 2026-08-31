@@ -91,6 +91,7 @@ async fn webhook_secret_is_encrypted_and_workspace_events_enqueue_durable_delive
                 owner_id: admin.user_id,
                 name: "delivery-source".to_owned(),
                 template_id: template.id,
+                resources: None,
                 organization_injection_refs: None,
                 user_injection_refs: None,
             },
