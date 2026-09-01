@@ -223,12 +223,19 @@ async fn api_keys_rotate_without_ever_returning_stored_tokens() {
     assert!(!serialized_list.contains(PRIMARY_TOKEN));
 
     let first_last_used = key_last_used(&database, created["id"].as_str().unwrap()).await;
-    let repeated_login = app
-        .clone()
-        .oneshot(request(Method::GET, "/api/v1/me", &rotated_token, None))
-        .await
-        .unwrap();
-    assert_eq!(repeated_login.status(), StatusCode::OK);
+    let repeated_login = json_response(
+        app.clone()
+            .oneshot(request(Method::GET, "/api/v1/me", &rotated_token, None))
+            .await
+            .unwrap(),
+        StatusCode::OK,
+    )
+    .await;
+    assert_eq!(
+        repeated_login["api_key_scopes"],
+        json!(["manage_api_keys", "read_workspace"])
+    );
+    assert_eq!(repeated_login["api_key_expires_at"], 1_800_000_000i64);
     assert_eq!(
         key_last_used(&database, created["id"].as_str().unwrap()).await,
         first_last_used,

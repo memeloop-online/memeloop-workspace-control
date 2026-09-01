@@ -445,7 +445,7 @@ async fn management_api_enforces_system_and_organization_boundaries() {
 
 #[tokio::test]
 async fn user_and_organization_management_are_paginated_and_safe() {
-    let installation_id: InstallationId = "admin-pagination-test".parse().unwrap();
+    let installation_id: InstallationId = "admin-page-test".parse().unwrap();
     let database = Database::connect("sqlite::memory:", installation_id.clone())
         .await
         .unwrap();
