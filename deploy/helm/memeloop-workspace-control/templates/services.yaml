@@ -11,11 +11,11 @@ spec:
     - name: api
       port: 8080
       targetPort: api
-    {{- if .Values.public.webShellDomain }}
+    {{- if or .Values.public.webShellDomain .Values.public.portMappingDomain }}
     # Higress only creates outbound clusters for ports on Services referenced by an Ingress.
     # Keep the auth listener off the public Ingress while making its 8081 cluster discoverable
     # to the fail-closed ext-auth Wasm plugin.
-    - name: web-shell-auth
+    - name: external-auth
       port: 8081
       targetPort: internal-auth
     {{- end }}

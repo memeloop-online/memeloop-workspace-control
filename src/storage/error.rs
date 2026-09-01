@@ -28,7 +28,7 @@ pub enum StorageError {
     TokenTooShort,
     #[error("authenticated user was not found")]
     UserNotFound,
-    #[error("display name or avatar URL is invalid")]
+    #[error("display name or avatar upload is invalid")]
     InvalidUserProfile,
     #[error("API key name is invalid")]
     InvalidApiKey,
@@ -42,6 +42,10 @@ pub enum StorageError {
     InvalidAuditQuery,
     #[error("organization was not found")]
     OrganizationNotFound,
+    #[error("the last active system administrator cannot be disabled or demoted")]
+    LastSystemAdmin,
+    #[error("organization still has dependent workspaces or templates")]
+    OrganizationInUse,
     #[error("database contains unknown role {0}")]
     UnknownRole(String),
     #[error("database contains unknown workspace state {0}")]
@@ -50,6 +54,12 @@ pub enum StorageError {
     UnknownAccessMode(String),
     #[error("workspace was not found")]
     WorkspaceNotFound,
+    #[error("workspace HTTP port must be allowed and between 1 and 65535")]
+    InvalidPortMappingPort,
+    #[error("workspace port mapping display name is invalid")]
+    InvalidPortMappingDisplayName,
+    #[error("workspace port mapping was not found")]
+    PortMappingNotFound,
     #[error("workspace name and image must not be empty")]
     InvalidWorkspace,
     #[error("workspace injection references are invalid or duplicated")]

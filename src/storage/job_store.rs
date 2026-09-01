@@ -164,6 +164,50 @@ impl Database {
         Ok(())
     }
 
+    pub async fn fail_job(
+        &self,
+        job_id: Uuid,
+        lease_owner: &str,
+        now: i64,
+    ) -> Result<(), StorageError> {
+        let rows_affected = match self {
+            Self::Sqlite {
+                pool,
+                installation_id,
+            } => sqlx::query(
+                "UPDATE jobs SET status = 'failed', lease_owner = NULL, \
+                lease_expires_at = NULL, updated_at = ?1 WHERE id = ?2 AND \
+                installation_id = ?3 AND status = 'running' AND lease_owner = ?4",
+            )
+            .bind(now)
+            .bind(job_id.to_string())
+            .bind(installation_id.as_str())
+            .bind(lease_owner)
+            .execute(pool)
+            .await?
+            .rows_affected(),
+            Self::Postgres {
+                pool,
+                installation_id,
+            } => sqlx::query(
+                "UPDATE jobs SET status = 'failed', lease_owner = NULL, \
+                lease_expires_at = NULL, updated_at = $1 WHERE id = $2 AND \
+                installation_id = $3 AND status = 'running' AND lease_owner = $4",
+            )
+            .bind(now)
+            .bind(job_id.to_string())
+            .bind(installation_id.as_str())
+            .bind(lease_owner)
+            .execute(pool)
+            .await?
+            .rows_affected(),
+        };
+        if rows_affected != 1 {
+            return Err(StorageError::LeaseNotOwned(job_id));
+        }
+        Ok(())
+    }
+
     pub async fn renew_job_lease(
         &self,
         job_id: Uuid,

@@ -1,8 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
 import type { ApiClient } from "./api";
-import { useI18n } from "./i18n";
-import type { ApiKeySummary, CreatedApiKey, Organization, Principal, UserProfile } from "./types";
+import { useI18n, type MessageKey } from "./i18n";
+import type { ApiKeyScope, ApiKeySummary, CreatedApiKey, Organization, Principal, UserProfile } from "./types";
 import { UserAvatar } from "./UserAvatar";
 
 interface Props {
@@ -21,22 +21,62 @@ export function SettingsPanel({ api, principal, organizations, organizationId, o
   const [avatarDraft, setAvatarDraft] = useState(customAvatarUrl(principal.avatar_url));
   const [keys, setKeys] = useState<ApiKeySummary[]>([]);
   const [keyName, setKeyName] = useState("");
+  const [keyScopes, setKeyScopes] = useState<ApiKeyScope[]>(["read_workspace"]);
+  const [keyExpires, setKeyExpires] = useState(() => defaultExpiry());
   const [createdKey, setCreatedKey] = useState<CreatedApiKey | null>(null);
+  const [apiKeyAccess, setApiKeyAccess] = useState<"loading" | "available" | "unavailable">("loading");
   const [saving, setSaving] = useState(false);
   const [profileSaved, setProfileSaved] = useState(false);
   const [creatingKey, setCreatingKey] = useState(false);
+  const grantableScopes = useMemo(
+    () => principal.api_key_scopes.includes("*")
+      ? API_KEY_SCOPES
+      : API_KEY_SCOPES.filter(({ scope }) => principal.api_key_scopes.includes(scope)),
+    [principal.api_key_scopes],
+  );
+
+  useEffect(() => {
+    setKeyScopes((current) => {
+      const allowed = current.filter((scope) => grantableScopes.some((item) => item.scope === scope));
+      return allowed.length > 0 ? allowed : grantableScopes[0] ? [grantableScopes[0].scope] : [];
+    });
+  }, [grantableScopes]);
 
   useEffect(() => {
     let active = true;
-    Promise.all([api.profile(), api.apiKeys()])
-      .then(([nextProfile, nextKeys]) => {
+    setApiKeyAccess("loading");
+    setKeys([]);
+    setCreatedKey(null);
+
+    // Profile access is independent of API-key management. In particular, a
+    // read-only token may receive 403 for the key endpoint but must still be
+    // able to load and edit its own profile.
+    void api.profile()
+      .then((nextProfile) => {
         if (!active) return;
         setProfile(nextProfile);
         setAvatarDraft(customAvatarUrl(nextProfile.avatar_url));
-        setKeys(nextKeys);
         onProfileChanged(nextProfile);
       })
-      .catch((error) => onError(message(error, t("requestFailed"))));
+      .catch((error) => {
+        if (active) onError(message(error, t("requestFailed")));
+      });
+
+    void api.apiKeys()
+      .then((nextKeys) => {
+        if (!active) return;
+        setKeys(nextKeys);
+        setApiKeyAccess("available");
+      })
+      .catch((error) => {
+        if (!active) return;
+        if (isForbidden(error)) {
+          setApiKeyAccess("unavailable");
+          return;
+        }
+        onError(message(error, t("requestFailed")));
+        setApiKeyAccess("available");
+      });
     return () => { active = false; };
   }, [api]);
 
@@ -45,7 +85,7 @@ export function SettingsPanel({ api, principal, organizations, organizationId, o
     setSaving(true);
     setProfileSaved(false);
     try {
-      const saved = await api.updateProfile({ display_name: profile.display_name.trim(), avatar_url: avatarDraft.trim() || null });
+      const saved = await api.updateProfile({ display_name: profile.display_name.trim(), avatar_url: avatarDraft || null });
       setProfile(saved);
       setAvatarDraft(customAvatarUrl(saved.avatar_url));
       onProfileChanged(saved);
@@ -62,11 +102,18 @@ export function SettingsPanel({ api, principal, organizations, organizationId, o
     if (!keyName.trim()) return;
     setCreatingKey(true);
     try {
-      const created = await api.createApiKey(keyName.trim());
+      // Kept structurally compatible while the API client evolves its typed input.
+      const created = await api.createApiKey({ name: keyName.trim(), scopes: keyScopes, expires_at: Math.floor(new Date(keyExpires).getTime() / 1000) });
       setCreatedKey(created);
       setKeyName("");
+      setKeyScopes(grantableScopes[0] ? [grantableScopes[0].scope] : []);
+      setKeyExpires(defaultExpiry());
       setKeys(await api.apiKeys());
     } catch (error) {
+      if (isForbidden(error)) {
+        setApiKeyAccess("unavailable");
+        return;
+      }
       onError(message(error, t("requestFailed")));
     } finally {
       setCreatingKey(false);
@@ -80,6 +127,10 @@ export function SettingsPanel({ api, principal, organizations, organizationId, o
       setKeys((current) => current.filter((item) => item.id !== key.id));
       if (createdKey?.id === key.id) setCreatedKey(null);
     } catch (error) {
+      if (isForbidden(error)) {
+        setApiKeyAccess("unavailable");
+        return;
+      }
       onError(message(error, t("requestFailed")));
     }
   }
@@ -90,9 +141,8 @@ export function SettingsPanel({ api, principal, organizations, organizationId, o
       <section className="settings-card">
         <div className="settings-card-heading"><UserAvatar displayName={profile.display_name} userId={principal.user_id} avatarUrl={profile.avatar_url} size="large" /><div><h3>{t("profileSettings")}</h3><p>{t("profileSettingsHelp")}</p></div></div>
         <form className="settings-form" onSubmit={saveProfile}>
-          <label>{t("displayName")}<input required minLength={1} maxLength={100} value={profile.display_name} onChange={(event) => { setProfileSaved(false); setProfile({ ...profile, display_name: event.target.value }); }} /></label>
-          <label>{t("avatarUrl")}<input type="url" inputMode="url" value={avatarDraft} onChange={(event) => { setProfileSaved(false); setAvatarDraft(event.target.value); setProfile({ ...profile, avatar_url: event.target.value || null }); }} placeholder="https://…" /></label>
-          <p className="field-help">{t("avatarUrlHelp")}</p>
+          <label>{t("displayName")}<input required minLength={1} maxLength={80} value={profile.display_name} onChange={(event) => { setProfileSaved(false); setProfile({ ...profile, display_name: event.target.value }); }} /></label>
+          <div className="avatar-editor"><UserAvatar displayName={profile.display_name} userId={principal.user_id} avatarUrl={avatarDraft || null} size="large" onChange={(value) => { setProfileSaved(false); setAvatarDraft(value ?? ""); setProfile({ ...profile, avatar_url: value }); }} disabled={saving} /></div>
           <button className="button primary" disabled={saving || !profile.display_name.trim()}>{saving ? t("saving") : t("saveProfile")}</button>
           {profileSaved && <p className="success-inline" role="status">{t("profileSaved")}</p>}
         </form>
@@ -101,14 +151,16 @@ export function SettingsPanel({ api, principal, organizations, organizationId, o
       <section className="settings-card">
         <h3>{t("organizationSettings")}</h3>
         <p>{t("organizationSwitchHelp")}</p>
-        <label className="settings-form">{t("currentOrganization")}<select value={organizationId} onChange={(event) => onOrganizationChange(event.target.value)}><option value="">{t("chooseOrganization")}</option>{organizations.map((organization) => <option key={organization.id} value={organization.id}>{organization.name}</option>)}</select></label>
+        <label className="settings-form">{t("currentOrganization")}<select value={organizationId} onChange={(event) => { if (event.target.value) onOrganizationChange(event.target.value); }}><option value="" disabled>{t("chooseOrganization")}</option>{organizations.map((organization) => <option key={organization.id} value={organization.id}>{organization.name}</option>)}</select></label>
       </section>
 
       <section className="settings-card wide">
         <div className="card-heading"><div><h3>{t("apiKeys")}</h3><p>{t("apiKeysHelp")}</p></div></div>
-        {createdKey && <div className="new-api-key" role="status"><strong>{t("apiKeyCreated")}</strong><p>{t("apiKeyCreatedHelp")}</p><div><code>{createdKey.token}</code><button className="button" onClick={() => void navigator.clipboard.writeText(createdKey.token)}>{t("copy")}</button></div><button className="text-button" onClick={() => setCreatedKey(null)}>{t("hideApiKey")}</button></div>}
-        <form className="api-key-create" onSubmit={createKey}><label>{t("apiKeyName")}<input maxLength={80} value={keyName} onChange={(event) => setKeyName(event.target.value)} placeholder={t("apiKeyNamePlaceholder")} /></label><button className="button primary" disabled={creatingKey || !keyName.trim()}>{creatingKey ? t("saving") : t("createApiKey")}</button></form>
-        {keys.length === 0 ? <p>{t("noApiKeys")}</p> : <div className="api-key-list">{keys.map((key) => <article key={key.id}><div><strong>{key.name}</strong><code>{key.prefix}</code></div><dl><dt>{t("createdAt")}</dt><dd>{formatTime(key.created_at, locale)}</dd><dt>{t("lastUsedAt")}</dt><dd>{key.last_used_at ? formatTime(key.last_used_at, locale) : t("never")}</dd></dl><button className="button danger" onClick={() => void revokeKey(key)}>{t("revokeApiKey")}</button></article>)}</div>}
+        {apiKeyAccess === "unavailable" ? <p className="settings-unavailable" role="status">{t("apiKeysUnavailable")}</p> : apiKeyAccess === "loading" ? <p role="status">{t("loading")}</p> : <>
+          {createdKey && <div className="new-api-key" role="status"><strong>{t("apiKeyCreated")}</strong><p>{t("apiKeyCreatedHelp")}</p><div><code>{createdKey.token}</code><button className="button" onClick={() => void navigator.clipboard.writeText(createdKey.token)}>{t("copy")}</button></div><button className="text-button" onClick={() => setCreatedKey(null)}>{t("hideApiKey")}</button></div>}
+          <form className="api-key-create" onSubmit={createKey}><label>{t("apiKeyName")}<input maxLength={80} value={keyName} onChange={(event) => setKeyName(event.target.value)} placeholder={t("apiKeyNamePlaceholder")} /></label><fieldset><legend>{t("apiKeyPermissions")}</legend>{grantableScopes.map(({ scope, label }) => <label key={scope}><input type="checkbox" checked={keyScopes.includes(scope)} onChange={() => setKeyScopes((current) => current.includes(scope) ? current.filter((item) => item !== scope) : [...current, scope])} />{t(label)}</label>)}</fieldset><label>{t("apiKeyExpires")}<input required type="datetime-local" min={localDateTime(new Date())} max={localDateTime(new Date(Date.now() + 365 * 86_400_000))} value={keyExpires} onChange={(event) => setKeyExpires(event.target.value)} /></label><button className="button primary" disabled={creatingKey || !keyName.trim() || !keyExpires || keyScopes.length === 0}>{creatingKey ? t("saving") : t("createApiKey")}</button></form>
+          {keys.length === 0 ? <p>{t("noApiKeys")}</p> : <div className="api-key-list">{keys.map((key) => <article key={key.id}><div><strong>{key.name}</strong><code>{key.prefix}</code><small>{formatScopes(key, t) ?? t("apiKeyScopesUnavailable")}</small></div><dl><dt>{t("createdAt")}</dt><dd>{formatTime(key.created_at, locale)}</dd><dt>{t("lastUsedAt")}</dt><dd>{key.last_used_at ? formatTime(key.last_used_at, locale) : t("never")}</dd><dt>{t("apiKeyExpires")}</dt><dd>{formatExpiry(key, locale, t)}</dd></dl><button className="button danger" onClick={() => void revokeKey(key)}>{t("revokeApiKey")}</button></article>)}</div>}
+        </>}
       </section>
     </div>
   </section>;
@@ -122,6 +174,69 @@ function message(error: unknown, fallback: string) {
   return error instanceof Error ? error.message : fallback;
 }
 
+function isForbidden(error: unknown): boolean {
+  if (!error) return false;
+  const status = typeof error === "object" && error !== null && "status" in error ? (error as { status?: unknown }).status : undefined;
+  if (status === 403) return true;
+  if (!(error instanceof Error)) return false;
+  return /\b403\b|forbidden|not allowed/i.test(error.message);
+}
+
+function formatScopes(key: ApiKeySummary, t: (key: MessageKey) => string): string | null {
+  const scopes = (key as ApiKeySummary & { scopes?: unknown }).scopes;
+  if (!Array.isArray(scopes) || scopes.length === 0) return null;
+  const labels = scopes.map((scope) => {
+    if (typeof scope !== "string") return null;
+    return API_KEY_SCOPE_LABELS[scope] ? t(API_KEY_SCOPE_LABELS[scope]) : t("scopeUnknown");
+  }).filter((label): label is string => Boolean(label));
+  return labels.length > 0 ? labels.join(" · ") : null;
+}
+
+function formatExpiry(key: ApiKeySummary, locale: string, t: (key: MessageKey) => string): string {
+  const expiresAt = (key as ApiKeySummary & { expires_at?: unknown }).expires_at;
+  if (typeof expiresAt === "number") return formatTime(expiresAt, locale);
+  if (expiresAt === null) return t("never");
+  return t("apiKeyExpiryUnavailable");
+}
+
 function customAvatarUrl(value: string | null | undefined): string {
-  return value?.startsWith("data:image/svg+xml") ? "" : value ?? "";
+  // Profile avatars are deliberately local data URLs; never put an arbitrary
+  // network URL back into the editor or send it back to the API.
+  return value && /^(data:image\/(png|jpeg|webp);base64,)/i.test(value) ? value : "";
+}
+
+const API_KEY_SCOPES = [
+  { scope: "manage_api_keys", label: "scope_manage_api_keys" },
+  { scope: "manage_system", label: "scope_manage_system" },
+  { scope: "manage_organization", label: "scope_manage_organization" },
+  { scope: "manage_members", label: "scope_manage_members" },
+  { scope: "manage_locked_injections", label: "scope_manage_locked_injections" },
+  { scope: "create_workspace", label: "scope_create_workspace" },
+  { scope: "read_workspace", label: "scope_read_workspace" },
+  { scope: "connect_workspace", label: "scope_connect_workspace" },
+  { scope: "change_workspace_state", label: "scope_change_workspace_state" },
+  { scope: "delete_workspace", label: "scope_delete_workspace" },
+] as const satisfies ReadonlyArray<{ scope: ApiKeyScope; label: Parameters<ReturnType<typeof useI18n>["t"]>[0] }>;
+
+const API_KEY_SCOPE_LABELS: Record<string, MessageKey> = {
+  "*": "scope_wildcard",
+  manage_api_keys: "scope_manage_api_keys",
+  manage_system: "scope_manage_system",
+  manage_organization: "scope_manage_organization",
+  manage_members: "scope_manage_members",
+  manage_locked_injections: "scope_manage_locked_injections",
+  create_workspace: "scope_create_workspace",
+  read_workspace: "scope_read_workspace",
+  connect_workspace: "scope_connect_workspace",
+  change_workspace_state: "scope_change_workspace_state",
+  delete_workspace: "scope_delete_workspace",
+};
+
+function localDateTime(value: Date): string {
+  const offset = value.getTimezoneOffset() * 60_000;
+  return new Date(value.getTime() - offset).toISOString().slice(0, 16);
+}
+
+function defaultExpiry(): string {
+  return localDateTime(new Date(Date.now() + 30 * 86_400_000));
 }

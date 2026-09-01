@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { ApiClient } from "./api";
 import { BrandIcon } from "./BrandIcon";
@@ -8,6 +8,12 @@ import { useI18n } from "./i18n";
 import type { Organization, Principal, WorkspaceResponse } from "./types";
 
 type View = "workspaces" | "injections" | "plugins" | "administration" | "audit" | "settings";
+
+// The workspace list is owned by WorkspacePanel. App only keeps a small first
+// page as a preview for views that need a selected workspace or a lightweight
+// status hint; it must never turn into an unbounded global workspace load.
+const GLOBAL_WORKSPACE_PREVIEW_LIMIT = 30;
+const GLOBAL_ORGANIZATION_PREVIEW_LIMIT = 50;
 
 const AdminPanel = lazy(() => import("./OperationsPanel").then(({ AdminPanel: component }) => ({ default: component })));
 const AuditPanel = lazy(() => import("./AuditPanel").then(({ AuditPanel: component }) => ({ default: component })));
@@ -28,6 +34,8 @@ export default function App() {
   const [organizationId, setOrganizationId] = useState("");
   const [organizations, setOrganizations] = useState<Organization[]>([]);
   const [workspaces, setWorkspaces] = useState<WorkspaceResponse[]>([]);
+  const [workspaceScope, setWorkspaceScope] = useState<{ api: ApiClient; organizationId: string } | null>(null);
+  const workspaceRequestGeneration = useRef(0);
   const [view, setView] = useState<View>("workspaces");
   const [loading, setLoading] = useState(Boolean(token));
   const [notice, setNotice] = useState("");
@@ -43,25 +51,64 @@ export default function App() {
     localStorage.setItem("mwc.theme", theme);
   }, [theme]);
 
+  // Invalidate an in-flight preview before fetching for the new scope. The
+  // scope check below also prevents one render of an old organization from
+  // leaking into the newly selected organization.
+  useEffect(() => {
+    workspaceRequestGeneration.current += 1;
+    setWorkspaceScope(null);
+    setWorkspaces([]);
+  }, [api, organizationId]);
+
   const refresh = useCallback(async () => {
-    if (!organizationId) return;
+    const requestedOrganizationId = organizationId;
+    const requestGeneration = ++workspaceRequestGeneration.current;
+    if (!requestedOrganizationId) {
+      setWorkspaceScope(null);
+      setWorkspaces([]);
+      return;
+    }
     setLoading(true);
     try {
-      setWorkspaces(await api.workspaces(organizationId));
+      const page = await api.workspacesPage(requestedOrganizationId, { limit: GLOBAL_WORKSPACE_PREVIEW_LIMIT });
+      if (requestGeneration !== workspaceRequestGeneration.current) return;
+      setWorkspaces(page.items);
+      setWorkspaceScope({ api, organizationId: requestedOrganizationId });
     } catch (error) {
-      setNotice(message(error));
+      if (requestGeneration === workspaceRequestGeneration.current) setNotice(message(error));
     } finally {
-      setLoading(false);
+      if (requestGeneration === workspaceRequestGeneration.current) setLoading(false);
     }
   }, [api, organizationId]);
+
+  const refreshOrganizations = useCallback(async (preferredOrganizationId?: string) => {
+    const [nextPrincipal, organizationPage] = await Promise.all([
+      api.me(),
+      api.organizationsPage({ limit: GLOBAL_ORGANIZATION_PREVIEW_LIMIT }),
+    ]);
+    const visibleOrganizations = organizationPage.items;
+    setPrincipal(nextPrincipal);
+    setOrganizations(visibleOrganizations);
+    setOrganizationId((current) => {
+      const next = preferredOrganizationId && visibleOrganizations.some((organization) => organization.id === preferredOrganizationId)
+        ? preferredOrganizationId
+        : visibleOrganizations.some((organization) => organization.id === current)
+          ? current
+          : visibleOrganizations[0]?.id ?? "";
+      if (next) localStorage.setItem("mwc.organization-id", next);
+      else localStorage.removeItem("mwc.organization-id");
+      return next;
+    });
+  }, [api]);
 
   useEffect(() => {
     if (!token) return;
     let active = true;
     setLoading(true);
-    Promise.all([api.me(), api.organizations()])
-      .then(([value, visibleOrganizations]) => {
+    Promise.all([api.me(), api.organizationsPage({ limit: GLOBAL_ORGANIZATION_PREVIEW_LIMIT })])
+      .then(([value, organizationPage]) => {
         if (!active) return;
+        const visibleOrganizations = organizationPage.items;
         setPrincipal(value);
         setOrganizations(visibleOrganizations);
         setOrganizationId((current) => {
@@ -111,16 +158,29 @@ export default function App() {
 
   function logout() {
     ApiClient.forgetToken();
+    workspaceRequestGeneration.current += 1;
     setToken("");
     setTokenDraft("");
     setPrincipal(null);
+    setOrganizations([]);
+    setOrganizationId("");
+    setWorkspaceScope(null);
     setWorkspaces([]);
   }
 
+  const scopedWorkspaces = workspaceScope?.api === api && workspaceScope.organizationId === organizationId
+    ? workspaces
+    : [];
+
   function selectOrganization(next: string) {
+    // Settings may expose a placeholder option; never transition into an
+    // organization-less state from an invalid selection.
+    if (!organizations.some((organization) => organization.id === next)) return;
+    workspaceRequestGeneration.current += 1;
+    setWorkspaceScope(null);
+    setWorkspaces([]);
     setOrganizationId(next);
-    if (next) localStorage.setItem("mwc.organization-id", next);
-    else localStorage.removeItem("mwc.organization-id");
+    localStorage.setItem("mwc.organization-id", next);
   }
 
   if (!token || !principal) {
@@ -165,25 +225,33 @@ export default function App() {
           <div className="topbar-actions"><LanguagePicker locale={locale} setLocale={setLocale} className="utility-select" /><button className="utility-button" onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>{theme === "dark" ? t("themeLight") : t("themeDark")}</button><div className="user-menu"><button className="user-menu-trigger" onClick={() => setView("settings")}><UserAvatar displayName={principal.display_name} userId={principal.user_id} avatarUrl={principal.avatar_url} /><span><strong>{principal.display_name}</strong><small>{principal.system_admin ? t("systemAdmin") : organizationRole === "organization_admin" ? t("organizationAdmin") : t("organizationMember")}</small></span></button><button className="logout-button" onClick={logout}>{t("logout")}</button></div></div>
         </header>
 
-        <Suspense fallback={<div className="empty" role="status">{t("loading")}</div>}>
+        <Suspense fallback={<LoadingPanel label={t("loading")} />}>
           {view === "settings" ? (
             <SettingsPanel api={api} principal={principal} organizations={organizations} organizationId={organizationId} onOrganizationChange={selectOrganization} onProfileChanged={(profile) => setPrincipal((current) => current ? { ...current, ...profile } : current)} onError={setNotice} />
           ) : view === "audit" ? (
             <AuditPanel api={api} organizationId={organizationId} systemAdmin={principal.system_admin} onError={setNotice} />
           ) : !organizationId ? <EmptyOrganization systemAdmin={principal.system_admin} /> : view === "workspaces" ? (
-            <WorkspacePanel api={api} principal={principal} organizationId={organizationId} workspaces={workspaces} busy={loading} onRefresh={refresh} onError={setNotice} />
+            <WorkspacePanel api={api} principal={principal} organizationId={organizationId} workspaces={scopedWorkspaces} busy={loading} onRefresh={refresh} onError={setNotice} />
           ) : view === "injections" ? (
-            <InjectionPanel api={api} principal={principal} organizationId={organizationId} workspaces={workspaces} onError={setNotice} />
+            <InjectionPanel api={api} principal={principal} organizationId={organizationId} workspaces={scopedWorkspaces} onError={setNotice} />
           ) : view === "plugins" ? (
             <PluginPanel token={token} organizationId={organizationId} systemAdmin={principal.system_admin} onOpenCredentials={() => setView("injections")} />
           ) : (
-            <AdminPanel api={api} principal={principal} organizationId={organizationId} workspaces={workspaces} onError={setNotice} />
+            <AdminPanel api={api} principal={principal} organizationId={organizationId} workspaces={scopedWorkspaces} onError={setNotice} onOrganizationsChanged={refreshOrganizations} />
           )}
         </Suspense>
       </main>
       {notice && <div className="toast" role="status" aria-live="polite" aria-atomic="true">{notice}</div>}
     </div>
   );
+}
+
+function LoadingPanel({ label }: { label: string }) {
+  return <div className="loading-panel" role="status" aria-label={label}>
+    <div className="loading-skeleton loading-skeleton-heading" />
+    <div className="loading-skeleton-grid"><div className="loading-skeleton" /><div className="loading-skeleton" /><div className="loading-skeleton" /></div>
+    <span className="loading-label">{label}</span>
+  </div>;
 }
 
 function LanguagePicker({ locale, setLocale, className }: { locale: "zh-CN" | "en" | "ru"; setLocale: (locale: "zh-CN" | "en" | "ru") => void; className?: string }) {

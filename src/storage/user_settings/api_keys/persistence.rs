@@ -86,9 +86,9 @@ pub(in crate::storage) async fn insert_key_sqlite(
     key: &ApiKeySummary,
     token_hash: &str,
 ) -> Result<(), StorageError> {
-    sqlx::query("INSERT INTO user_api_keys (id, installation_id, user_id, name, token_prefix, token_hash, last_used_at, created_at, revoked_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, ?7, NULL)")
+    sqlx::query("INSERT INTO user_api_keys (id, installation_id, user_id, name, token_prefix, token_hash, last_used_at, created_at, revoked_at, scopes_json, expires_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, ?7, NULL, ?8, ?9)")
         .bind(key.id.to_string()).bind(installation).bind(user_id.to_string()).bind(&key.name)
-        .bind(&key.prefix).bind(token_hash).bind(key.created_at).execute(connection).await?;
+        .bind(&key.prefix).bind(token_hash).bind(key.created_at).bind(serde_json::to_string(&key.scopes)?).bind(key.expires_at).execute(connection).await?;
     Ok(())
 }
 
@@ -99,9 +99,9 @@ pub(in crate::storage) async fn insert_key_postgres(
     key: &ApiKeySummary,
     token_hash: &str,
 ) -> Result<(), StorageError> {
-    sqlx::query("INSERT INTO user_api_keys (id, installation_id, user_id, name, token_prefix, token_hash, last_used_at, created_at, revoked_at) VALUES ($1, $2, $3, $4, $5, $6, NULL, $7, NULL)")
+    sqlx::query("INSERT INTO user_api_keys (id, installation_id, user_id, name, token_prefix, token_hash, last_used_at, created_at, revoked_at, scopes_json, expires_at) VALUES ($1, $2, $3, $4, $5, $6, NULL, $7, NULL, $8, $9)")
         .bind(key.id.to_string()).bind(installation).bind(user_id.to_string()).bind(&key.name)
-        .bind(&key.prefix).bind(token_hash).bind(key.created_at).execute(connection).await?;
+        .bind(&key.prefix).bind(token_hash).bind(key.created_at).bind(serde_json::to_string(&key.scopes)?).bind(key.expires_at).execute(connection).await?;
     Ok(())
 }
 

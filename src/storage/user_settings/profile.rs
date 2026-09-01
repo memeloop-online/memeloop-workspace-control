@@ -1,3 +1,4 @@
+use base64::{Engine, engine::general_purpose::STANDARD};
 use sqlx::Row;
 use uuid::Uuid;
 
@@ -123,24 +124,65 @@ fn validate_profile(
     let avatar_url = avatar_url
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .map(validate_avatar_url)
+        .map(validate_avatar_data_url)
         .transpose()?;
     Ok((display_name.to_owned(), avatar_url))
 }
 
-fn validate_avatar_url(value: &str) -> Result<String, StorageError> {
-    if value.len() > 2_048 || value.chars().any(char::is_control) {
+const MAX_AVATAR_BYTES: usize = 512 * 1024;
+
+fn validate_avatar_data_url(value: &str) -> Result<String, StorageError> {
+    if value.len() > 4 * MAX_AVATAR_BYTES.div_ceil(3) + 32 || value.chars().any(char::is_control) {
         return Err(StorageError::InvalidUserProfile);
     }
-    let url = url::Url::parse(value).map_err(|_| StorageError::InvalidUserProfile)?;
-    if url.scheme() != "https"
-        || url.host_str().is_none()
-        || !url.username().is_empty()
-        || url.password().is_some()
-        || url.query().is_some()
-        || url.fragment().is_some()
-    {
+    let (media_type, payload) = value
+        .strip_prefix("data:")
+        .and_then(|value| value.split_once(";base64,"))
+        .ok_or(StorageError::InvalidUserProfile)?;
+    if !matches!(media_type, "image/png" | "image/jpeg" | "image/webp") || payload.is_empty() {
         return Err(StorageError::InvalidUserProfile);
     }
-    Ok(url.to_string())
+    let bytes = STANDARD
+        .decode(payload)
+        .map_err(|_| StorageError::InvalidUserProfile)?;
+    if bytes.len() > MAX_AVATAR_BYTES || !matches_magic(media_type, &bytes) {
+        return Err(StorageError::InvalidUserProfile);
+    }
+    // Canonical base64 prevents alternate spellings and keeps the stored payload stable.
+    Ok(format!(
+        "data:{media_type};base64,{}",
+        STANDARD.encode(bytes)
+    ))
+}
+
+fn matches_magic(media_type: &str, bytes: &[u8]) -> bool {
+    match media_type {
+        "image/png" => bytes.starts_with(b"\x89PNG\r\n\x1a\n"),
+        "image/jpeg" => bytes.starts_with(&[0xff, 0xd8, 0xff]),
+        "image/webp" => bytes.len() >= 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP",
+        _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_avatar_data_url;
+    use base64::{Engine, engine::general_purpose::STANDARD};
+
+    #[test]
+    fn only_local_raster_data_urls_are_accepted() {
+        let png = format!(
+            "data:image/png;base64,{}",
+            STANDARD.encode(b"\x89PNG\r\n\x1a\nbody")
+        );
+        assert_eq!(validate_avatar_data_url(&png).unwrap(), png);
+        for invalid in [
+            "https://example.test/a.png",
+            "data:image/svg+xml;base64,PHN2Zy8+",
+            "data:image/png;base64,not base64",
+            "data:image/jpeg;base64,iVBORw0KGgo=",
+        ] {
+            assert!(validate_avatar_data_url(invalid).is_err(), "{invalid}");
+        }
+    }
 }

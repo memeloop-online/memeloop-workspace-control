@@ -91,6 +91,7 @@ async fn plugin_configuration_is_scoped_versioned_and_removable() {
             ssh_public_host: None,
             internal_ssh_host: None,
             web_shell_public_origin: None,
+            port_mapping_public_domain: None,
             prometheus_url: None,
             plugin_dir: None,
         },

@@ -15,6 +15,47 @@ spec:
         - name: {{ include "mwc.name" . }}-ssh-jump
           port: 22
 {{- end }}
+{{- if and .Values.public.portMappingDomain .Values.higress.extAuthPluginUrl }}
+---
+apiVersion: extensions.higress.io/v1alpha1
+kind: WasmPlugin
+metadata:
+  name: {{ include "mwc.name" . }}-port-mapping-auth
+  namespace: {{ .Values.higress.namespace }}
+  labels:
+    {{- include "mwc.labels" . | nindent 4 }}
+spec:
+  url: {{ .Values.higress.extAuthPluginUrl | quote }}
+  imagePullPolicy: IfNotPresent
+  phase: AUTHN
+  priority: 361
+  failStrategy: FAIL_CLOSE
+  defaultConfigDisable: true
+  matchRules:
+    - domain:
+        - {{ printf "p-*.%s" .Values.public.portMappingDomain | quote }}
+      config:
+        match_type: blacklist
+        match_list:
+          - match_rule_domain: {{ printf "p-*.%s" .Values.public.portMappingDomain | quote }}
+            match_rule_path: /
+            match_rule_type: prefix
+        failure_mode_allow: false
+        status_on_error: 503
+        http_service:
+          endpoint_mode: forward_auth
+          endpoint:
+            service_name: {{ include "mwc.name" . }}.{{ .Release.Namespace }}.svc.cluster.local
+            service_port: 8081
+            path: /api/v1/internal/port-mappings/authorize
+            request_method: GET
+          timeout: 1000
+          authorization_request:
+            with_request_body: false
+          authorization_response:
+            allowed_client_headers:
+              - exact: content-type
+{{- end }}
 {{- if .Values.public.apiDomain }}
 ---
 apiVersion: gateway.networking.k8s.io/v1

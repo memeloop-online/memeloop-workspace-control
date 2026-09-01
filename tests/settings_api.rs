@@ -5,6 +5,7 @@ use axum::{
     body::Body,
     http::{Method, Request, StatusCode},
 };
+use base64::{Engine, engine::general_purpose::STANDARD};
 use http_body_util::BodyExt;
 use memeloop_workspace_control::{
     api::{AppState, router},
@@ -40,6 +41,7 @@ async fn app() -> (Router, Database) {
         ssh_public_host: None,
         internal_ssh_host: None,
         web_shell_public_origin: None,
+        port_mapping_public_domain: None,
         prometheus_url: None,
         plugin_dir: None,
     };
@@ -88,6 +90,10 @@ async fn profile_is_self_scoped_persistent_and_uses_a_stable_generated_avatar() 
     assert_eq!(updated["display_name"], "主要用户");
     assert_eq!(updated["avatar_url"], generated);
 
+    let uploaded_avatar = format!(
+        "data:image/png;base64,{}",
+        STANDARD.encode(b"\x89PNG\r\n\x1a\nuploaded-avatar")
+    );
     let custom = json_response(
         app.clone()
             .oneshot(request(
@@ -96,7 +102,7 @@ async fn profile_is_self_scoped_persistent_and_uses_a_stable_generated_avatar() 
                 PRIMARY_TOKEN,
                 Some(json!({
                     "display_name": "主要用户",
-                    "avatar_url": "https://cdn.example.test/avatars/me.png"
+                    "avatar_url": uploaded_avatar
                 })),
             ))
             .await
@@ -104,10 +110,7 @@ async fn profile_is_self_scoped_persistent_and_uses_a_stable_generated_avatar() 
         StatusCode::OK,
     )
     .await;
-    assert_eq!(
-        custom["avatar_url"],
-        "https://cdn.example.test/avatars/me.png"
-    );
+    assert_eq!(custom["avatar_url"], uploaded_avatar);
 
     let invalid = app
         .clone()
@@ -117,7 +120,7 @@ async fn profile_is_self_scoped_persistent_and_uses_a_stable_generated_avatar() 
             PRIMARY_TOKEN,
             Some(json!({
                 "display_name": "主要用户",
-                "avatar_url": "http://insecure.example.test/avatar.png"
+                "avatar_url": "https://remote.example.test/avatar.png"
             })),
         ))
         .await
@@ -180,7 +183,11 @@ async fn api_keys_rotate_without_ever_returning_stored_tokens() {
                 Method::POST,
                 "/api/v1/me/api-keys",
                 PRIMARY_TOKEN,
-                Some(json!({"name": "Windows workstation"})),
+                Some(json!({
+                    "name": "Windows workstation",
+                    "scopes": ["read_workspace", "manage_api_keys"],
+                    "expires_at": 1_800_000_000i64
+                })),
             ))
             .await
             .unwrap(),
@@ -190,6 +197,11 @@ async fn api_keys_rotate_without_ever_returning_stored_tokens() {
     let rotated_token = created["token"].as_str().unwrap().to_owned();
     assert!(rotated_token.starts_with("mwc_"));
     assert_eq!(created["name"], "Windows workstation");
+    assert_eq!(
+        created["scopes"],
+        json!(["manage_api_keys", "read_workspace"])
+    );
+    assert_eq!(created["expires_at"], 1_800_000_000i64);
     assert!(created["prefix"].as_str().unwrap().ends_with('…'));
 
     let listed = json_response(

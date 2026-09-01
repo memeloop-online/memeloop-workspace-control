@@ -101,6 +101,7 @@ async fn web_shell_ticket_is_ready_only_scoped_and_consumed_once() {
             ssh_public_host: None,
             internal_ssh_host: None,
             web_shell_public_origin: Some("https://shell.example.com".to_owned()),
+            port_mapping_public_domain: None,
             prometheus_url: None,
             plugin_dir: None,
         },

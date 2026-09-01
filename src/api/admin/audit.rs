@@ -45,7 +45,7 @@ pub(in crate::api) async fn audit(
     let actor = principal(&state, &headers).await?;
     match query.organization_id {
         Some(organization_id) if actor.allows(Permission::ManageOrganization, organization_id) => {}
-        None if actor.system_admin => {}
+        None if actor.may_manage_system() => {}
         _ => return Err(ApiError::Forbidden),
     }
     Ok(Json(

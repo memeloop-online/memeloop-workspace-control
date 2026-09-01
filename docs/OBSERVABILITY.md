@@ -29,7 +29,11 @@ Stable metric families include:
   `mwc_http_body_declared_bytes_total` for active work, long-lived streams and bounded body volume.
 - `mwc_upstream_requests_active{upstream}`, `mwc_upstream_requests_total{upstream,result}`, and
   `mwc_upstream_configured{upstream}` for Kubernetes, Prometheus and Webhook state.
-- `mwc_jobs{status}` and `mwc_jobs_pending` for the durable background queue.
+- `mwc_jobs{status}` and `mwc_jobs_pending` for the durable background queue. The `status` values
+  are `pending`, `running`, `completed`, and `failed`; a job enters `failed` after the ten-attempt
+  retry limit and remains visible for operator review.
+- `mwc_jobs_oldest_pending_age_seconds` and `mwc_jobs_max_active_attempts` for queue wait time
+  and retry pressure. The first gauge is zero when the queue is empty.
 - `mwc_process_resident_memory_bytes`, `mwc_process_virtual_memory_bytes`,
   `mwc_process_threads`, and `mwc_process_uptime_seconds` for process state.
 - `mwc_allocator_bytes{state}` for jemalloc allocated, active, resident, mapped, metadata and
@@ -49,6 +53,14 @@ unmatched API paths, UI assets, status classes, upstream names, plugin states an
 all collapse into fixed vocabularies. User display names, workspace names, URLs, plugin IDs, error
 messages and credential values are excluded. Per-owner series use stable user UUIDs because the
 product explicitly supports Grafana aggregation per user.
+
+The chart's optional `PrometheusRule` turns these signals into operational alerts. Workspace Home
+PVC usage and node ephemeral-storage requests use warning/critical bands at 80%/90%. A sustained
+oldest pending job age above 15 minutes raises `MwcJobsPendingTooOld`; one or more failed jobs
+raises `MwcJobsFailed` after 10 minutes. The `monitoring.prometheusRule.warningFor` and
+`monitoring.prometheusRule.criticalFor` values control storage alert duration (15 minutes and
+5 minutes by default). Alert labels and routing remain under the existing Prometheus Operator
+and Alertmanager configuration.
 
 Actual workspace CPU and memory remain Kubernetes runtime telemetry. Managed Namespaces, Pods,
 PVCs and workloads carry installation, organization, owner and workspace labels. Grafana can join

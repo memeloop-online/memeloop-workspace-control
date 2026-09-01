@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import type { ApiClient } from "./api";
 import { WorkspaceCombobox } from "./forms/WorkspaceCombobox";
@@ -33,7 +33,10 @@ export function InjectionPanel(props: Props) {
   const canManageOrganization = props.principal.system_admin || props.principal.memberships.some((membership) => membership.organization_id === props.organizationId && membership.role === "organization_admin");
   const scopeValues: InjectionScope[] = [...(canManageOrganization ? ["organization" as const] : []), "user", "workspace"];
   const [scope, setScope] = useState<InjectionScope>("user");
-  const [workspaceId, setWorkspaceId] = useState(props.workspaces[0]?.workspace.id ?? "");
+  const [workspaceId, setWorkspaceId] = useState(() => props.workspaces.find((item) => !item.workspace.organization_id || item.workspace.organization_id === props.organizationId)?.workspace.id ?? "");
+  const workspaceSelectionTouchedRef = useRef(false);
+  const previousOrganizationIdRef = useRef(props.organizationId);
+  const injectionLoadRequestRef = useRef(0);
   const [items, setItems] = useState<StoredInjection[]>([]);
   const [templates, setTemplates] = useState<WorkspaceTemplate[]>([]);
   const [draft, setDraft] = useState(emptyInjectionDraft);
@@ -55,36 +58,62 @@ export function InjectionPanel(props: Props) {
     if (scope === "user") return props.principal.user_id;
     return workspaceId;
   }, [scope, workspaceId, props.organizationId, props.principal.user_id]);
+  const workspaceItems = useMemo(
+    () => props.workspaces.filter((item) => !item.workspace.organization_id || item.workspace.organization_id === props.organizationId),
+    [props.workspaces, props.organizationId],
+  );
+  const searchWorkspaces = useCallback(
+    (query: string) => props.api
+      .workspacesPage(props.organizationId, { limit: 30, search: query.trim() || undefined })
+      .then((page) => page.items),
+    [props.api, props.organizationId],
+  );
 
-  async function load() {
+  const load = useCallback(async () => {
+    const requestId = ++injectionLoadRequestRef.current;
     if (!scopeId) {
       setItems([]);
       return;
     }
     try {
-      setItems(await props.api.injections(scope, scopeId));
+      const next = await props.api.injections(scope, scopeId);
+      if (injectionLoadRequestRef.current === requestId) setItems(next);
     } catch (error) {
-      props.onError(message(error));
+      if (injectionLoadRequestRef.current === requestId) props.onError(message(error));
     }
-  }
+  }, [props.api, props.onError, scope, scopeId, props.organizationId]);
+
+  useEffect(() => {
+    if (previousOrganizationIdRef.current === props.organizationId) return;
+    previousOrganizationIdRef.current = props.organizationId;
+    workspaceSelectionTouchedRef.current = false;
+    setScope("user");
+    setWorkspaceId("");
+    setItems([]);
+    setTemplates([]);
+    setDraft(emptyInjectionDraft());
+    setSelectedKey(null);
+    setPreview([]);
+    setSearch("");
+    setMobilePane("list");
+  }, [props.organizationId]);
+
+  useEffect(() => {
+    if (workspaceId || workspaceSelectionTouchedRef.current || workspaceItems.length === 0) return;
+    setWorkspaceId(workspaceItems[0].workspace.id);
+  }, [workspaceId, workspaceItems]);
 
   useEffect(() => {
     void load();
-  }, [scopeId]);
+  }, [load]);
 
   useEffect(() => {
     let active = true;
     props.api.templates(props.organizationId)
       .then((value) => { if (active) setTemplates(value.filter((item) => item.enabled)); })
-      .catch((error) => props.onError(message(error)));
+      .catch((error) => active && props.onError(message(error)));
     return () => { active = false; };
   }, [props.api, props.organizationId]);
-
-  useEffect(() => {
-    if (!workspaceId && props.workspaces[0]) {
-      setWorkspaceId(props.workspaces[0].workspace.id);
-    }
-  }, [props.workspaces, workspaceId]);
 
   function resetDraft() {
     setSelectedKey(null);
@@ -191,7 +220,16 @@ export function InjectionPanel(props: Props) {
       </div>
       <div id={`${scopeTabsId}-panel`} role="tabpanel" aria-labelledby={`${scopeTabsId}-${scope}`} className="injection-scope-panel">
         {scope === "workspace" && (
-          <WorkspaceCombobox items={props.workspaces} selectedId={workspaceId} onChange={setWorkspaceId} />
+          <WorkspaceCombobox
+            key={props.organizationId}
+            items={workspaceItems}
+            loadItems={searchWorkspaces}
+            selectedId={workspaceId}
+            onChange={(id) => {
+              workspaceSelectionTouchedRef.current = id === "";
+              setWorkspaceId(id);
+            }}
+          />
         )}
         <div className="mobile-master-detail" aria-label={t("credentials")}>
           <button type="button" aria-pressed={mobilePane === "list"} onClick={() => setMobilePane("list")}>{t("savedCredentials")}</button>

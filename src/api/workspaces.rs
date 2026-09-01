@@ -13,10 +13,11 @@ use uuid::Uuid;
 use crate::{
     auth::Permission,
     injections::{InjectionItem, ResolvedInjectionSummary},
-    plugins::{WorkspaceCreateContext, WorkspaceCreatePlan},
-    storage::{CreateWorkspace, IdempotencyDecision, WorkspaceTemplate},
+    storage::{CreateWorkspace, IdempotencyDecision},
     workspaces::{Workspace, WorkspaceAction},
 };
+
+mod creation;
 
 use super::{
     ApiError, AppState,
@@ -24,9 +25,11 @@ use super::{
     idempotency::{
         IDEMPOTENCY_TTL_SECONDS, hash, idempotency_key, replay_response, unix_timestamp,
     },
-    workspace_creation::{validate_inline_injections, wait_until_ready},
+    workspace_creation::wait_until_ready,
     workspace_response::{complete_workspace_response, workspace_response},
 };
+
+use creation::{authorize_creation, create_admitted_workspace};
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub(super) struct CreateWorkspaceRequest {
@@ -86,6 +89,15 @@ pub(super) enum SshPortStrategy {
 #[derive(Debug, Deserialize, IntoParams)]
 pub(super) struct WorkspaceListQuery {
     pub organization_id: Uuid,
+    pub limit: Option<u32>,
+    pub cursor: Option<String>,
+    pub search: Option<String>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub(super) struct WorkspaceResponsePage {
+    pub items: Vec<WorkspaceResponse>,
+    pub next_cursor: Option<String>,
 }
 
 #[utoipa::path(
@@ -168,101 +180,12 @@ pub(super) async fn create(
     .await
 }
 
-async fn create_admitted_workspace(
-    state: &AppState,
-    actor: &crate::storage::Principal,
-    request: &CreateWorkspaceRequest,
-    template: &WorkspaceTemplate,
-    now: i64,
-) -> Result<Workspace, ApiError> {
-    let command = &request.workspace;
-    let mut final_template = template.template.clone();
-    if let Some(resources) = command.resources {
-        final_template.resources = resources;
-        final_template
-            .validate()
-            .map_err(|_| crate::storage::StorageError::InvalidWorkspace)?;
-    }
-    validate_inline_injections(
-        state,
-        command,
-        template,
-        &request.inline_workspace_injections,
-    )
-    .await?;
-    state
-        .plugins
-        .admit_workspace_create(
-            WorkspaceCreateContext {
-                installation_id: state.config.installation_id.to_string(),
-                actor_user_id: actor.user_id,
-                organization_id: command.organization_id,
-                owner_id: command.owner_id,
-                template_id: command.template_id,
-            },
-            WorkspaceCreatePlan::from_template(&command.name, &final_template),
-        )
-        .await?;
-    let inline = if request.inline_workspace_injections.is_empty() {
-        None
-    } else {
-        Some((
-            state
-                .cipher
-                .as_ref()
-                .ok_or(ApiError::EncryptionUnavailable)?,
-            request.inline_workspace_injections.as_slice(),
-        ))
-    };
-    Ok(state
-        .database
-        .create_workspace_with_admitted_template(
-            command.clone(),
-            inline,
-            &template.yaml,
-            actor.system_admin,
-            actor.user_id,
-            now,
-        )
-        .await?)
-}
-
-async fn authorize_creation(
-    state: &AppState,
-    actor: &crate::storage::Principal,
-    command: &CreateWorkspace,
-) -> Result<WorkspaceTemplate, ApiError> {
-    if !actor.allows(Permission::CreateWorkspace, command.organization_id) {
-        return Err(ApiError::Forbidden);
-    }
-    if command.owner_id != actor.user_id
-        && !actor.allows(Permission::ManageMembers, command.organization_id)
-    {
-        return Err(ApiError::Forbidden);
-    }
-    let template = state
-        .database
-        .get_workspace_template(command.template_id)
-        .await?;
-    if !template.enabled
-        || template
-            .organization_id
-            .is_some_and(|id| id != command.organization_id)
-    {
-        return Err(crate::storage::StorageError::TemplateNotFound.into());
-    }
-    if template.template.cluster_access && !actor.system_admin {
-        return Err(ApiError::Forbidden);
-    }
-    Ok(template)
-}
-
 #[utoipa::path(
     get,
     path = "/api/v1/workspaces",
     params(WorkspaceListQuery),
     responses(
-        (status = 200, description = "Visible workspaces", body = [WorkspaceResponse]),
+        (status = 200, description = "Visible workspaces", body = WorkspaceResponsePage),
         (status = 401, body = super::ErrorEnvelope),
         (status = 403, body = super::ErrorEnvelope)
     )
@@ -271,20 +194,28 @@ pub(super) async fn list(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Query(query): Query<WorkspaceListQuery>,
-) -> Result<Json<Vec<WorkspaceResponse>>, ApiError> {
+) -> Result<Json<WorkspaceResponsePage>, ApiError> {
     let actor = principal(&state, &headers).await?;
     if !actor.allows(Permission::ReadWorkspace, query.organization_id) {
         return Err(ApiError::Forbidden);
     }
     let workspaces = state
         .database
-        .list_workspaces(query.organization_id)
+        .list_workspaces_page(
+            query.organization_id,
+            query.limit,
+            query.cursor.as_deref(),
+            query.search.as_deref(),
+        )
         .await?;
-    let mut responses = Vec::with_capacity(workspaces.len());
-    for workspace in workspaces {
+    let mut responses = Vec::with_capacity(workspaces.items.len());
+    for workspace in workspaces.items {
         responses.push(workspace_response(&state, workspace).await?);
     }
-    Ok(Json(responses))
+    Ok(Json(WorkspaceResponsePage {
+        items: responses,
+        next_cursor: workspaces.next_cursor,
+    }))
 }
 
 #[utoipa::path(

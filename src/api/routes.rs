@@ -7,8 +7,8 @@ use axum::{
 
 use super::{
     AppState, admin, auth, catalog, diagnostics, events, health, injections, metrics, openapi,
-    organizations, plugins, ready, runtime, ssh, system_info, ui, user_quota, web_shell, webhooks,
-    workspaces,
+    organizations, plugins, port_mappings, ready, runtime, ssh, system_info, ui, user_quota,
+    web_shell, webhooks, workspaces,
 };
 
 pub(super) fn router(state: Arc<AppState>) -> Router {
@@ -68,11 +68,23 @@ fn organization_routes(router: ApiRouter) -> ApiRouter {
     router
         .route(
             "/api/v1/organizations",
-            get(organizations::list).post(organizations::create),
+            get(organizations::list_page).post(organizations::create),
+        )
+        .route(
+            "/api/v1/organizations/{organization_id}",
+            axum::routing::put(organizations::update).delete(organizations::delete),
         )
         .route(
             "/api/v1/admin/users",
-            get(admin::list_users).post(admin::create_user),
+            get(admin::list_users_page).post(admin::create_user),
+        )
+        .route(
+            "/api/v1/admin/users/{user_id}",
+            axum::routing::put(admin::update_user),
+        )
+        .route(
+            "/api/v1/organizations/{organization_id}/members",
+            get(admin::list_members),
         )
         .route(
             "/api/v1/organizations/{organization_id}/members/{user_id}",
@@ -182,6 +194,18 @@ fn workspace_routes(router: ApiRouter) -> ApiRouter {
             "/api/v1/workspaces/{workspace_id}/web-shell-tickets",
             post(web_shell::issue),
         )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/port-mappings",
+            get(port_mappings::list).post(port_mappings::create),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/port-mappings/{mapping_id}",
+            axum::routing::delete(port_mappings::delete),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/port-mappings/{mapping_id}/open",
+            post(port_mappings::open),
+        )
 }
 
 pub(super) fn internal_router(state: Arc<AppState>) -> Router {
@@ -196,6 +220,11 @@ pub(super) fn internal_router(state: Arc<AppState>) -> Router {
             "/api/v1/internal/web-shell/authorize",
             get(web_shell::authorize),
         )
+        .route(
+            "/api/v1/internal/port-mappings/authorize",
+            get(port_mappings::authorize),
+        )
+        .route("/_mwc/bootstrap", get(port_mappings::bootstrap))
         .route(
             "/api/v1/internal/ssh/authorized-key",
             get(ssh::authorized_key),

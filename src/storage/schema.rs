@@ -1,4 +1,4 @@
-pub(super) const SCHEMA_VERSION: i64 = 14;
+pub(super) const SCHEMA_VERSION: i64 = 15;
 pub(super) const MIGRATION_TABLE: &str = "CREATE TABLE IF NOT EXISTS schema_migrations (\
     version BIGINT PRIMARY KEY, applied_at BIGINT NOT NULL\
 )";
@@ -243,4 +243,41 @@ pub(super) const USER_SETTINGS_MIGRATIONS: &[&str] = &[
         last_used_at, created_at, revoked_at) \
         SELECT id, installation_id, id, 'Legacy key', 'legacy', token_hash, NULL, created_at, NULL \
         FROM users WHERE true ON CONFLICT (installation_id, token_hash) DO NOTHING",
+];
+
+pub(super) const V15_MIGRATIONS: &[&str] = &[
+    "CREATE INDEX IF NOT EXISTS users_page_idx ON users \
+        (installation_id, created_at, id)",
+    "CREATE INDEX IF NOT EXISTS organizations_page_idx ON organizations \
+        (installation_id, created_at, id)",
+    "CREATE INDEX IF NOT EXISTS workspaces_page_idx ON workspaces \
+        (installation_id, organization_id, state, created_at, id)",
+    "CREATE TABLE IF NOT EXISTS workspace_port_mappings (\
+        id TEXT PRIMARY KEY, installation_id TEXT NOT NULL, organization_id TEXT NOT NULL, \
+        workspace_id TEXT NOT NULL, internal_port BIGINT NOT NULL CHECK (internal_port BETWEEN 1 AND 65535), \
+        display_name TEXT, created_by TEXT NOT NULL, created_at BIGINT NOT NULL, \
+        UNIQUE (installation_id, workspace_id, internal_port), \
+        FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE, \
+        FOREIGN KEY (created_by) REFERENCES users(id)\
+    )",
+    "CREATE INDEX IF NOT EXISTS workspace_port_mappings_workspace_idx ON workspace_port_mappings \
+        (installation_id, workspace_id, created_at, id)",
+    "CREATE TABLE IF NOT EXISTS workspace_port_mapping_tickets (\
+        id TEXT PRIMARY KEY, installation_id TEXT NOT NULL, mapping_id TEXT NOT NULL, \
+        user_id TEXT NOT NULL, ticket_hash TEXT NOT NULL, expires_at BIGINT NOT NULL, \
+        consumed_at BIGINT, created_at BIGINT NOT NULL, UNIQUE (installation_id, ticket_hash), \
+        FOREIGN KEY (mapping_id) REFERENCES workspace_port_mappings(id) ON DELETE CASCADE, \
+        FOREIGN KEY (user_id) REFERENCES users(id)\
+    )",
+    "CREATE INDEX IF NOT EXISTS workspace_port_mapping_tickets_expiry_idx \
+        ON workspace_port_mapping_tickets (installation_id, expires_at, consumed_at)",
+    "CREATE TABLE IF NOT EXISTS workspace_port_mapping_sessions (\
+        id TEXT PRIMARY KEY, installation_id TEXT NOT NULL, mapping_id TEXT NOT NULL, \
+        user_id TEXT NOT NULL, session_hash TEXT NOT NULL, expires_at BIGINT NOT NULL, \
+        revoked_at BIGINT, created_at BIGINT NOT NULL, UNIQUE (installation_id, session_hash), \
+        FOREIGN KEY (mapping_id) REFERENCES workspace_port_mappings(id) ON DELETE CASCADE, \
+        FOREIGN KEY (user_id) REFERENCES users(id)\
+    )",
+    "CREATE INDEX IF NOT EXISTS workspace_port_mapping_sessions_expiry_idx \
+        ON workspace_port_mapping_sessions (installation_id, expires_at, revoked_at)",
 ];

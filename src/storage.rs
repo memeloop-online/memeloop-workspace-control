@@ -23,6 +23,7 @@ mod leases;
 mod metrics_store;
 mod plugin_package_store;
 mod plugin_store;
+mod port_mappings;
 mod schema;
 mod ssh_access;
 mod ssh_identity;
@@ -38,7 +39,9 @@ mod workspace_events;
 mod workspace_injection_refs;
 mod workspace_store;
 
-pub use admin_store::{AuditRecord, UserSummary};
+pub use admin_store::{
+    AuditRecord, MembershipPage, MembershipSummary, OrganizationPage, UserPage, UserSummary,
+};
 pub use audit_store::{AuditFilter, AuditPage};
 pub use error::StorageError;
 pub use event_store::{EventNotifier, EventRecord};
@@ -53,6 +56,7 @@ pub use plugin_package_store::{
     PluginPackageRecord, PluginUiSession, StorePluginInspection,
 };
 pub use plugin_store::{PluginConfigurationWrite, StoredPluginConfiguration};
+pub use port_mappings::{IssuedPortMappingTicket, PortMapping, hash_secret, validate_http_port};
 pub use ssh_access::SshAccessCandidate;
 pub use ssh_identity::{WorkspaceSshIdentity, WorkspaceSshPublicIdentity};
 pub use template_store::{CreateWorkspaceTemplate, WorkspaceTemplate};
@@ -61,7 +65,7 @@ pub use user_settings::{ApiKeySummary, CreatedApiKey, StoredUserProfile};
 pub use web_shell::{IssuedWebShellTicket, WebShellIdentity};
 pub use webhook_store::{CreateWebhookSubscription, WebhookDelivery, WebhookSubscriptionSummary};
 pub use workspace_injection_refs::WorkspaceInjectionRefs;
-pub use workspace_store::CreateWorkspace;
+pub use workspace_store::{CreateWorkspace, WorkspacePage};
 
 #[derive(Debug, Clone)]
 pub enum Database {
@@ -175,34 +179,28 @@ async fn migrate_sqlite(pool: &SqlitePool, applied_at: i64) -> Result<(), Storag
             .fetch_one(&mut *transaction)
             .await?;
     if version < 8 {
-        for migration in schema::MIGRATIONS {
-            sqlx::query(migration).execute(&mut *transaction).await?;
-        }
+        apply_sqlite_migration_group(&mut transaction, schema::MIGRATIONS).await?;
     }
     if version < 9 {
-        for migration in schema::PROFILE_RENAME_MIGRATIONS {
-            sqlx::query(migration).execute(&mut *transaction).await?;
-        }
+        apply_sqlite_migration_group(&mut transaction, schema::PROFILE_RENAME_MIGRATIONS).await?;
     }
     if version < 10 {
-        for migration in schema::TEMPLATE_YAML_MIGRATIONS {
-            sqlx::query(migration).execute(&mut *transaction).await?;
-        }
+        apply_sqlite_migration_group(&mut transaction, schema::TEMPLATE_YAML_MIGRATIONS).await?;
     }
     if version < 11 {
-        for migration in schema::PLUGIN_CONFIGURATION_MIGRATIONS {
-            sqlx::query(migration).execute(&mut *transaction).await?;
-        }
+        apply_sqlite_migration_group(&mut transaction, schema::PLUGIN_CONFIGURATION_MIGRATIONS)
+            .await?;
     }
     if version < 13 {
-        for migration in schema::DYNAMIC_PLUGIN_MIGRATIONS {
-            sqlx::query(migration).execute(&mut *transaction).await?;
-        }
+        apply_sqlite_migration_group(&mut transaction, schema::DYNAMIC_PLUGIN_MIGRATIONS).await?;
     }
     if version < 14 {
-        for migration in schema::USER_SETTINGS_MIGRATIONS {
-            sqlx::query(migration).execute(&mut *transaction).await?;
-        }
+        apply_sqlite_migration_group(&mut transaction, schema::USER_SETTINGS_MIGRATIONS).await?;
+    }
+    if version < 15 {
+        apply_sqlite_migration_group(&mut transaction, user_settings::API_KEY_SCOPE_MIGRATIONS)
+            .await?;
+        apply_sqlite_migration_group(&mut transaction, schema::V15_MIGRATIONS).await?;
     }
     if version < schema::SCHEMA_VERSION {
         sqlx::query("INSERT INTO schema_migrations (version, applied_at) VALUES (?1, ?2)")
@@ -212,6 +210,16 @@ async fn migrate_sqlite(pool: &SqlitePool, applied_at: i64) -> Result<(), Storag
             .await?;
     }
     transaction.commit().await?;
+    Ok(())
+}
+
+async fn apply_sqlite_migration_group(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    migrations: &[&str],
+) -> Result<(), StorageError> {
+    for migration in migrations {
+        sqlx::query(migration).execute(&mut **transaction).await?;
+    }
     Ok(())
 }
 
@@ -250,6 +258,11 @@ async fn migrate_postgres(
     }
     if version < 14 {
         apply_postgres_migration_group(&mut transaction, schema::USER_SETTINGS_MIGRATIONS).await?;
+    }
+    if version < 15 {
+        apply_postgres_migration_group(&mut transaction, user_settings::API_KEY_SCOPE_MIGRATIONS)
+            .await?;
+        apply_postgres_migration_group(&mut transaction, schema::V15_MIGRATIONS).await?;
     }
     if version < schema::SCHEMA_VERSION {
         sqlx::query("INSERT INTO schema_migrations (version, applied_at) VALUES ($1, $2)")

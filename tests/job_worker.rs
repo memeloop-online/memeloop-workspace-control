@@ -85,3 +85,35 @@ async fn failed_worker_execution_is_deferred_with_bounded_retry() {
     assert!(worker.run_once(102).await.unwrap());
     assert_eq!(handler.calls.load(Ordering::SeqCst), 2);
 }
+
+#[tokio::test]
+async fn permanently_failing_job_reaches_failed_terminal_state() {
+    let database = database().await;
+    database
+        .enqueue_job(
+            NewJob {
+                kind: "test".to_owned(),
+                workspace_id: None,
+                payload: json!({}),
+                available_at: 100,
+            },
+            100,
+        )
+        .await
+        .unwrap();
+    let handler = Arc::new(CountingHandler {
+        calls: AtomicUsize::new(0),
+        fail: true,
+    });
+    let worker = JobWorker::new(database.clone(), handler.clone(), "replica-a".to_owned());
+
+    for attempt in 0..10 {
+        assert!(worker.run_once(100 + attempt * 1_000).await.unwrap());
+    }
+    assert!(!worker.run_once(20_000).await.unwrap());
+    assert_eq!(handler.calls.load(Ordering::SeqCst), 10);
+    let counts = database.job_counts().await.unwrap();
+    assert_eq!(counts.pending, 0);
+    assert_eq!(counts.running, 0);
+    assert_eq!(counts.failed, 1);
+}

@@ -28,6 +28,8 @@ export interface Principal {
   avatar_url?: string | null;
   system_admin: boolean;
   memberships: Membership[];
+  api_key_scopes: Array<ApiKeyScope | "*">;
+  api_key_expires_at: number | null;
 }
 
 export interface UserProfile {
@@ -41,7 +43,21 @@ export interface ApiKeySummary {
   prefix: string;
   last_used_at: number | null;
   created_at: number;
+  scopes: ApiKeyScope[];
+  expires_at: number | null;
 }
+
+export type ApiKeyScope =
+  | "manage_api_keys"
+  | "manage_system"
+  | "manage_organization"
+  | "manage_members"
+  | "manage_locked_injections"
+  | "create_workspace"
+  | "read_workspace"
+  | "connect_workspace"
+  | "change_workspace_state"
+  | "delete_workspace";
 
 export type CreatedApiKey = ApiKeySummary & { token: string };
 
@@ -51,12 +67,37 @@ export interface Organization {
   created_at: number;
 }
 
+export interface OrganizationPage {
+  items: Organization[];
+  next_cursor: string | null;
+}
+
 export interface UserSummary {
   id: string;
   display_name: string;
   system_admin: boolean;
   disabled: boolean;
   created_at: number;
+}
+
+export interface UserPage {
+  items: UserSummary[];
+  next_cursor: string | null;
+}
+
+export interface MembershipSummary {
+  user: UserSummary;
+  role: Role;
+}
+
+export interface MembershipPage {
+  items: MembershipSummary[];
+  next_cursor: string | null;
+}
+
+export interface WorkspacePage {
+  items: WorkspaceResponse[];
+  next_cursor: string | null;
 }
 
 export interface ImagePolicy {
@@ -126,7 +167,7 @@ export interface ScalingStatus {
   database_mode: "sqlite" | "postgres";
   configured_replicas: number;
   schema_version: number;
-  jobs: { pending: number; running: number; completed: number };
+  jobs: { pending: number; running: number; completed: number; failed: number };
 }
 
 export interface WebhookSubscription {

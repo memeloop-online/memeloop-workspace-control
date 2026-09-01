@@ -1,13 +1,16 @@
 import type {
   ApiFailure,
   ApiKeySummary,
+  ApiKeyScope,
   AuditPage,
   CreatedApiKey,
   CreateWorkspace,
   InjectionDraft,
   InjectionScope,
   ImagePolicy,
+  MembershipPage,
   Organization,
+  OrganizationPage,
   Principal,
   Resources,
   ResolvedInjection,
@@ -16,15 +19,33 @@ import type {
   StoredInjection,
   UserProfile,
   UserSummary,
+  UserPage,
   WebShellTicket,
   WebhookSubscription,
   WorkspaceResponse,
+  WorkspacePage,
   WorkspaceRuntime,
   WorkspaceRuntimeEntry,
   WorkspaceTemplate,
 } from "./types";
+import type { CreatePortMappingInput, PortMapping } from "./portMappings";
 
 const TOKEN_KEY = "mwc.api-token";
+
+/** Options shared by the keyset-paginated list endpoints. */
+export interface PageOptions {
+  limit?: number;
+  cursor?: string;
+  search?: string;
+}
+
+function queryString(values: object): string {
+  const query = new URLSearchParams();
+  for (const [key, value] of Object.entries(values as Record<string, string | number | undefined>)) {
+    if (value !== undefined && value !== "") query.set(key, String(value));
+  }
+  return query.toString();
+}
 
 export class ApiClient {
   constructor(readonly token: string) {}
@@ -59,9 +80,9 @@ export class ApiClient {
     return this.request("/api/v1/me/api-keys");
   }
 
-  createApiKey(name: string): Promise<CreatedApiKey> {
+  createApiKey(input: { name: string; scopes: ApiKeyScope[]; expires_at: number }): Promise<CreatedApiKey> {
     return this.request("/api/v1/me/api-keys", {
-      method: "POST", body: JSON.stringify({ name }),
+      method: "POST", body: JSON.stringify(input),
     });
   }
 
@@ -69,8 +90,16 @@ export class ApiClient {
     return this.request(`/api/v1/me/api-keys/${encodeURIComponent(id)}`, { method: "DELETE" });
   }
 
-  organizations(): Promise<Organization[]> {
-    return this.request("/api/v1/organizations");
+  /**
+   * Return only the requested page's items. Call organizationsPage when the
+   * caller needs to continue past this page or distinguish a complete list.
+   */
+  organizations(options: PageOptions = {}): Promise<Organization[]> {
+    return this.organizationsPage(options).then((page) => page.items);
+  }
+
+  organizationsPage(options: PageOptions = {}): Promise<OrganizationPage> {
+    return this.request(`/api/v1/organizations?${queryString(options)}`);
   }
 
   createOrganization(name: string): Promise<Organization> {
@@ -81,13 +110,34 @@ export class ApiClient {
     });
   }
 
-  users(): Promise<UserSummary[]> {
-    return this.request("/api/v1/admin/users");
+  updateOrganization(id: string, name: string): Promise<Organization> {
+    return this.request(`/api/v1/organizations/${id}`, {
+      method: "PUT", body: JSON.stringify({ name }),
+    });
+  }
+
+  deleteOrganization(id: string): Promise<void> {
+    return this.request(`/api/v1/organizations/${id}`, { method: "DELETE" });
+  }
+
+  /** Return only one page; use usersPage for cursor metadata. */
+  users(options: PageOptions = {}): Promise<UserSummary[]> {
+    return this.usersPage(options).then((page) => page.items);
+  }
+
+  usersPage(options: PageOptions = {}): Promise<UserPage> {
+    return this.request(`/api/v1/admin/users?${queryString(options)}`);
   }
 
   createUser(displayName: string, token: string): Promise<UserSummary> {
     return this.request("/api/v1/admin/users", {
       method: "POST", body: JSON.stringify({ display_name: displayName, token, system_admin: false }), idempotent: true,
+    });
+  }
+
+  updateUser(id: string, input: { display_name?: string; system_admin?: boolean; disabled?: boolean }): Promise<UserSummary> {
+    return this.request(`/api/v1/admin/users/${id}`, {
+      method: "PUT", body: JSON.stringify(input),
     });
   }
 
@@ -101,6 +151,10 @@ export class ApiClient {
     return this.request(`/api/v1/organizations/${organizationId}/members/${userId}`, {
       method: "DELETE", idempotent: true,
     });
+  }
+
+  membersPage(organizationId: string, options: PageOptions = {}): Promise<MembershipPage> {
+    return this.request(`/api/v1/organizations/${encodeURIComponent(organizationId)}/members?${queryString(options)}`);
   }
 
   quota(organizationId: string): Promise<Resources | null> {
@@ -182,10 +236,17 @@ export class ApiClient {
     });
   }
 
-  workspaces(organizationId: string): Promise<WorkspaceResponse[]> {
-    return this.request(
-      `/api/v1/workspaces?organization_id=${encodeURIComponent(organizationId)}`,
-    );
+  /**
+   * Return only one organization-scoped page. WorkspacePanel owns loading
+   * additional pages; callers such as the workspace combobox should use
+   * workspacesPage with a search and bounded limit.
+   */
+  workspaces(organizationId: string, options: PageOptions = {}): Promise<WorkspaceResponse[]> {
+    return this.workspacesPage(organizationId, options).then((page) => page.items);
+  }
+
+  workspacesPage(organizationId: string, options: PageOptions = {}): Promise<WorkspacePage> {
+    return this.request(`/api/v1/workspaces?${queryString({ organization_id: organizationId, ...options })}`);
   }
 
   createWorkspace(command: CreateWorkspace): Promise<WorkspaceResponse> {
@@ -210,8 +271,8 @@ export class ApiClient {
     return this.request(`/api/v1/workspaces/${workspaceId}/runtime`);
   }
 
-  workspaceRuntimes(organizationId: string): Promise<WorkspaceRuntimeEntry[]> {
-    return this.request(`/api/v1/workspace-runtimes?organization_id=${encodeURIComponent(organizationId)}`);
+  workspaceRuntimes(organizationId: string, workspaceIds: string[]): Promise<WorkspaceRuntimeEntry[]> {
+    return this.request(`/api/v1/workspace-runtimes?${queryString({ organization_id: organizationId, workspace_ids: workspaceIds.join(",") })}`);
   }
 
   issueWebShellTicket(workspaceId: string): Promise<WebShellTicket> {
@@ -219,6 +280,28 @@ export class ApiClient {
       `/api/v1/workspaces/${workspaceId}/web-shell-tickets`,
       { method: "POST" },
     );
+  }
+
+  portMappings(workspaceId: string): Promise<PortMapping[]> {
+    return this.request(`/api/v1/workspaces/${workspaceId}/port-mappings`);
+  }
+
+  createPortMapping(workspaceId: string, input: CreatePortMappingInput): Promise<PortMapping> {
+    return this.request(`/api/v1/workspaces/${workspaceId}/port-mappings`, {
+      method: "POST", body: JSON.stringify(input), idempotent: true,
+    });
+  }
+
+  deletePortMapping(workspaceId: string, mappingId: string): Promise<void> {
+    return this.request(`/api/v1/workspaces/${workspaceId}/port-mappings/${mappingId}`, {
+      method: "DELETE", idempotent: true,
+    });
+  }
+
+  bootstrapPortMapping(workspaceId: string, mappingId: string): Promise<{ bootstrap_url: string }> {
+    return this.request(`/api/v1/workspaces/${workspaceId}/port-mappings/${mappingId}/open`, {
+      method: "POST",
+    });
   }
 
   injections(scope: InjectionScope, scopeId: string): Promise<StoredInjection[]> {
@@ -273,9 +356,12 @@ export class ApiClient {
       } catch {
         // Keep the stable HTTP fallback below.
       }
-      throw new Error(
+      const error = new Error(
         failure.error?.message ?? `请求失败（HTTP ${response.status}）`,
-      );
+      ) as Error & { status: number; code?: string };
+      error.status = response.status;
+      error.code = failure.error?.code;
+      throw error;
     }
     if (response.status === 204) return undefined as T;
     return (await response.json()) as T;

@@ -25,7 +25,7 @@ pub(super) async fn get(
     Path(user_id): Path<Uuid>,
 ) -> Result<Json<Option<Resources>>, ApiError> {
     let actor = principal(&state, &headers).await?;
-    if !actor.system_admin && actor.user_id != user_id {
+    if !actor.may_manage_system() && actor.user_id != user_id {
         return Err(ApiError::Forbidden);
     }
     Ok(Json(state.database.get_user_quota(user_id).await?))
@@ -39,7 +39,7 @@ pub(super) async fn set(
     Json(resources): Json<Resources>,
 ) -> Result<Response, ApiError> {
     let actor = principal(&state, &headers).await?;
-    if !actor.system_admin {
+    if !actor.may_manage_system() {
         return Err(ApiError::Forbidden);
     }
     let key = idempotency_key(&headers)?;

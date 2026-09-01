@@ -119,6 +119,7 @@ async fn authorized_keys_command_returns_only_restricted_workspace_target() {
             ssh_public_host: None,
             internal_ssh_host: None,
             web_shell_public_origin: None,
+            port_mapping_public_domain: None,
             prometheus_url: None,
             plugin_dir: None,
         },

@@ -53,7 +53,7 @@ pub(super) async fn list_images(
     headers: HeaderMap,
 ) -> Result<Json<Vec<ImagePolicy>>, ApiError> {
     let actor = principal(&state, &headers).await?;
-    if !actor.system_admin {
+    if !actor.may_manage_system() {
         return Err(ApiError::Forbidden);
     }
     Ok(Json(state.database.list_image_policies().await?))
@@ -66,7 +66,7 @@ pub(super) async fn put_image(
     Json(request): Json<PutImageRequest>,
 ) -> Result<Response, ApiError> {
     let actor = principal(&state, &headers).await?;
-    if !actor.system_admin {
+    if !actor.may_manage_system() {
         return Err(ApiError::Forbidden);
     }
     let key = idempotency_key(&headers)?;
@@ -123,14 +123,14 @@ pub(super) async fn create_template(
     let actor = principal(&state, &headers).await?;
     let allowed = command
         .organization_id
-        .map_or(actor.system_admin, |organization_id| {
+        .map_or(actor.may_manage_system(), |organization_id| {
             actor.allows(Permission::ManageOrganization, organization_id)
         });
     if !allowed {
         return Err(ApiError::Forbidden);
     }
     let document = parse_template_yaml(&command.yaml)?;
-    if document.spec.cluster_access && !actor.system_admin {
+    if document.spec.cluster_access && !actor.may_manage_system() {
         return Err(ApiError::Forbidden);
     }
     let key = idempotency_key(&headers)?;
@@ -142,7 +142,7 @@ pub(super) async fn create_template(
     }
     let template = match state
         .database
-        .create_workspace_template(command, actor.system_admin, now)
+        .create_workspace_template(command, actor.may_manage_system(), now)
         .await
     {
         Ok(template) => template,
@@ -177,14 +177,14 @@ pub(super) async fn replace_template(
     let current = state.database.get_workspace_template(template_id).await?;
     let allowed = current
         .organization_id
-        .map_or(actor.system_admin, |organization_id| {
+        .map_or(actor.may_manage_system(), |organization_id| {
             actor.allows(Permission::ManageOrganization, organization_id)
         });
     if !allowed {
         return Err(ApiError::Forbidden);
     }
     let document = parse_template_yaml(&request.yaml)?;
-    if document.spec.cluster_access && !actor.system_admin {
+    if document.spec.cluster_access && !actor.may_manage_system() {
         return Err(ApiError::Forbidden);
     }
     let key = idempotency_key(&headers)?;
@@ -196,7 +196,7 @@ pub(super) async fn replace_template(
     }
     let template = match state
         .database
-        .replace_workspace_template(template_id, &request.yaml, actor.system_admin, now)
+        .replace_workspace_template(template_id, &request.yaml, actor.may_manage_system(), now)
         .await
     {
         Ok(template) => template,
@@ -231,13 +231,13 @@ pub(super) async fn set_template_enabled(
     let current = state.database.get_workspace_template(template_id).await?;
     let allowed = current
         .organization_id
-        .map_or(actor.system_admin, |organization_id| {
+        .map_or(actor.may_manage_system(), |organization_id| {
             actor.allows(Permission::ManageOrganization, organization_id)
         });
     if !allowed {
         return Err(ApiError::Forbidden);
     }
-    if current.template.cluster_access && !actor.system_admin {
+    if current.template.cluster_access && !actor.may_manage_system() {
         return Err(ApiError::Forbidden);
     }
     let key = idempotency_key(&headers)?;
@@ -249,7 +249,12 @@ pub(super) async fn set_template_enabled(
     }
     let template = match state
         .database
-        .set_workspace_template_enabled(template_id, request.enabled, actor.system_admin, now)
+        .set_workspace_template_enabled(
+            template_id,
+            request.enabled,
+            actor.may_manage_system(),
+            now,
+        )
         .await
     {
         Ok(template) => template,
@@ -293,15 +298,15 @@ pub(super) async fn delete_template(
     let current = state.database.get_workspace_template(template_id).await?;
     let allowed = current
         .organization_id
-        .map_or(actor.system_admin, |organization_id| {
+        .map_or(actor.may_manage_system(), |organization_id| {
             actor.allows(Permission::ManageOrganization, organization_id)
         });
-    if !allowed || current.template.cluster_access && !actor.system_admin {
+    if !allowed || current.template.cluster_access && !actor.may_manage_system() {
         return Err(ApiError::Forbidden);
     }
     let deleted = state
         .database
-        .delete_workspace_template(template_id, actor.system_admin)
+        .delete_workspace_template(template_id, actor.may_manage_system())
         .await?;
     state
         .database

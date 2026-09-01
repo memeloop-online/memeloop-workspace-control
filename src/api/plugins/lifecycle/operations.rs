@@ -16,7 +16,7 @@ pub(super) async fn system_admin(
     headers: &HeaderMap,
 ) -> Result<crate::storage::Principal, ApiError> {
     let actor = principal(state, headers).await?;
-    if !actor.system_admin {
+    if !actor.may_manage_system() {
         return Err(ApiError::Forbidden);
     }
     Ok(actor)

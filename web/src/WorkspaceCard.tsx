@@ -3,6 +3,8 @@ import { useI18n } from "./i18n";
 import type { Locale } from "./i18n";
 import type { WorkspaceResponse, WorkspaceRuntime } from "./types";
 import { WorkspaceConnectionDialog } from "./WorkspaceConnectionDialog";
+import { WorkspacePortMappings } from "./WorkspacePortMappings";
+import type { ApiClient } from "./api";
 import {
   aggregateRuntimeUsage,
   formatCpuMillis,
@@ -17,14 +19,16 @@ type WorkspaceAction = "start" | "stop" | "restart" | "delete";
 type DetailView = "status" | "events";
 
 interface Props {
+  api: ApiClient;
   item: WorkspaceResponse;
   runtime?: WorkspaceRuntime;
   onAction: (id: string, action: WorkspaceAction) => Promise<void>;
   onOpenShell: (id: string) => Promise<void>;
   onRequestRuntime: (id: string) => Promise<void>;
+  onError: (message: string) => void;
 }
 
-export function WorkspaceCard({ item, runtime, onAction, onOpenShell, onRequestRuntime }: Props) {
+export function WorkspaceCard({ api, item, runtime, onAction, onOpenShell, onRequestRuntime, onError }: Props) {
   const { locale, t } = useI18n();
   const [detailView, setDetailView] = useState<DetailView | null>(null);
   const workspace = item.workspace;
@@ -54,6 +58,7 @@ export function WorkspaceCard({ item, runtime, onAction, onOpenShell, onRequestR
       <div className="workspace-toolbar">
         <div className="primary-actions">
           {workspace.state === "ready" && <button className="terminal-action" onClick={() => void onOpenShell(workspace.id)}>{t("webShell")}</button>}
+          <WorkspacePortMappings api={api} workspaceId={workspace.id} workspaceReady={workspace.state === "ready"} onError={onError} />
           {workspace.state === "ready" && <button onClick={() => void onAction(workspace.id, "stop")}>{t("stop")}</button>}
           {workspace.state === "ready" && <button onClick={() => void onAction(workspace.id, "restart")}>{t("restart")}</button>}
           {(workspace.state === "stopped" || workspace.state === "failed") && <button onClick={() => void onAction(workspace.id, "start")}>{t("start")}</button>}
@@ -96,7 +101,7 @@ function ResourceMeter({ label, actual, requested, percent }: { label: string; a
 }
 
 function DiskMeter({ runtime, configuredGiB }: { runtime?: WorkspaceRuntime; configuredGiB: number }) {
-  const { t } = useI18n();
+  const { locale, t } = useI18n();
   const telemetry = runtime?.storage;
   const usable = telemetry?.status === "available" || telemetry?.status === "stale";
   const used = usable ? telemetry.used_bytes : null;
@@ -106,10 +111,12 @@ function DiskMeter({ runtime, configuredGiB }: { runtime?: WorkspaceRuntime; con
   const actual = used === null ? "—" : formatBytes(used);
   const status = telemetry?.status === "stale" ? t("storageTelemetryStale") : telemetry?.status === "disabled" ? t("storageTelemetryDisabled") : telemetry?.status === "available" ? t("storageTelemetryAvailable") : t("storageTelemetryUnavailable");
   const valueText = percent === null ? `${t("disk")}: ${status}` : `${actual} / ${formatBytes(capacity ?? 0)}, ${formatPercent(percent)}`;
-  return <div className="resource-meter disk-meter">
+  const observedTitle = telemetry?.observed_at ? `${t("observedAt")} ${new Date(telemetry.observed_at * 1_000).toLocaleString(locale)}` : undefined;
+  return <div className="resource-meter disk-meter" title={observedTitle}>
     <div className="resource-meter-heading"><span>{t("disk")}</span><strong>{actual} <small>/ {configured}</small></strong></div>
     <div className="resource-track" role="progressbar" aria-label={`${t("disk")} ${t("storageUsage")}`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent ?? undefined} aria-valuetext={valueText}><span className={percent !== null && percent > 0 ? "has-value" : ""} style={{ width: percent === null ? "0" : `${percent}%` }} /></div>
-    <small>{status}{telemetry?.observed_at ? ` · ${t("observedAt")} ${new Date(telemetry.observed_at * 1_000).toLocaleString()}` : ""}</small>
+    <small>{t("usageOfLimit")} · {formatPercent(percent)}</small>
+    {telemetry?.status !== "available" && <small className="telemetry-status">{status}</small>}
   </div>;
 }
 

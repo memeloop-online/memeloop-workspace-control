@@ -12,7 +12,10 @@ use sha2::{Digest, Sha256};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
-use crate::storage::{ApiKeySummary, StoredUserProfile};
+use crate::{
+    auth::ApiKeyScope,
+    storage::{ApiKeySummary, StoredUserProfile},
+};
 
 use crate::api::{ApiError, AppState, auth::principal, idempotency::unix_timestamp};
 
@@ -33,6 +36,8 @@ pub(in crate::api) struct UpdateUserProfileRequest {
 #[derive(Debug, Clone, Deserialize, ToSchema)]
 pub(in crate::api) struct CreateApiKeyRequest {
     pub name: String,
+    pub scopes: Vec<ApiKeyScope>,
+    pub expires_at: Option<i64>,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -112,6 +117,9 @@ pub(in crate::api) async fn list_api_keys(
     headers: HeaderMap,
 ) -> Result<Json<Vec<ApiKeySummary>>, ApiError> {
     let actor = principal(&state, &headers).await?;
+    if !actor.may_manage_api_keys() {
+        return Err(ApiError::Forbidden);
+    }
     Ok(Json(state.database.list_api_keys(actor.user_id).await?))
 }
 
@@ -133,9 +141,23 @@ pub(in crate::api) async fn create_api_key(
     Json(request): Json<CreateApiKeyRequest>,
 ) -> Result<(StatusCode, Json<CreatedApiKeyResponse>), ApiError> {
     let actor = principal(&state, &headers).await?;
+    if !actor.may_manage_api_keys()
+        || !actor_may_grant(&actor.api_key_scopes, &request.scopes)
+        || actor
+            .api_key_expires_at
+            .is_some_and(|limit| request.expires_at.is_none_or(|requested| requested > limit))
+    {
+        return Err(ApiError::Forbidden);
+    }
     let created = state
         .database
-        .create_api_key(actor.user_id, &request.name, unix_timestamp()?)
+        .create_api_key(
+            actor.user_id,
+            &request.name,
+            request.scopes,
+            request.expires_at,
+            unix_timestamp()?,
+        )
         .await?;
     Ok((
         StatusCode::CREATED,
@@ -144,6 +166,15 @@ pub(in crate::api) async fn create_api_key(
             token: created.token,
         }),
     ))
+}
+
+fn actor_may_grant(actor_scopes: &[ApiKeyScope], requested: &[ApiKeyScope]) -> bool {
+    actor_scopes
+        .iter()
+        .any(|scope| matches!(scope, ApiKeyScope::Wildcard))
+        || requested
+            .iter()
+            .all(|requested_scope| actor_scopes.contains(requested_scope))
 }
 
 #[utoipa::path(
@@ -163,6 +194,9 @@ pub(in crate::api) async fn delete_api_key(
     Path(key_id): Path<Uuid>,
 ) -> Result<Response, ApiError> {
     let actor = principal(&state, &headers).await?;
+    if !actor.may_manage_api_keys() {
+        return Err(ApiError::Forbidden);
+    }
     state
         .database
         .revoke_api_key(actor.user_id, key_id, unix_timestamp()?)

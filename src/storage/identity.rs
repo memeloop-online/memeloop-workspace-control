@@ -5,7 +5,7 @@ use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::{
-    auth::{Permission, Role, RoleBinding},
+    auth::{ApiKeyScope, Permission, Role, RoleBinding},
     quota::Resources,
 };
 
@@ -22,10 +22,21 @@ pub struct Principal {
     pub display_name: String,
     pub system_admin: bool,
     pub memberships: Vec<Membership>,
+    /// The authenticating key's grants. Legacy keys carry `Wildcard`.
+    pub api_key_scopes: Vec<ApiKeyScope>,
+    /// `None` is the intentionally unbounded legacy-key case.
+    pub api_key_expires_at: Option<i64>,
 }
 
 impl Principal {
     pub fn allows(&self, permission: Permission, organization_id: Uuid) -> bool {
+        if !self
+            .api_key_scopes
+            .iter()
+            .any(|scope| scope.permits(permission))
+        {
+            return false;
+        }
         if self.system_admin {
             return true;
         }
@@ -36,6 +47,16 @@ impl Principal {
             }
             .allows(permission, organization_id)
         })
+    }
+
+    pub fn may_manage_api_keys(&self) -> bool {
+        self.api_key_scopes
+            .iter()
+            .any(|scope| matches!(scope, ApiKeyScope::Wildcard | ApiKeyScope::ManageApiKeys))
+    }
+
+    pub fn may_manage_system(&self) -> bool {
+        self.system_admin && self.allows(Permission::ManageSystem, Uuid::nil())
     }
 }
 
@@ -75,6 +96,8 @@ impl Database {
             prefix: token_prefix(token),
             last_used_at: None,
             created_at: now,
+            scopes: vec![ApiKeyScope::Wildcard],
+            expires_at: None,
         };
         match self {
             Self::Sqlite {
@@ -137,6 +160,8 @@ impl Database {
             display_name: display_name.to_owned(),
             system_admin,
             memberships: Vec::new(),
+            api_key_scopes: vec![ApiKeyScope::Wildcard],
+            api_key_expires_at: None,
         })
     }
 
@@ -152,9 +177,10 @@ impl Database {
             } => {
                 let row = sqlx::query(
                     "SELECT u.id, u.display_name, u.system_admin, k.id AS key_id, \
-                    k.last_used_at FROM users u \
+                    k.last_used_at, k.scopes_json, k.expires_at FROM users u \
                     JOIN user_api_keys k ON k.installation_id = u.installation_id AND k.user_id = u.id \
-                    WHERE u.installation_id = ?1 AND k.token_hash = ?2 AND k.revoked_at IS NULL AND u.disabled = 0",
+                    WHERE u.installation_id = ?1 AND k.token_hash = ?2 AND k.revoked_at IS NULL \
+                    AND (k.expires_at IS NULL OR k.expires_at > unixepoch()) AND u.disabled = 0",
                 )
                 .bind(installation_id.as_str())
                 .bind(token_hash)
@@ -177,6 +203,8 @@ impl Database {
                     display_name: row.try_get("display_name")?,
                     system_admin: row.try_get::<i64, _>("system_admin")? != 0,
                     memberships,
+                    api_key_scopes: decode_scopes(row.try_get("scopes_json")?)?,
+                    api_key_expires_at: row.try_get("expires_at")?,
                 }))
             }
             Self::Postgres {
@@ -185,9 +213,10 @@ impl Database {
             } => {
                 let row = sqlx::query(
                     "SELECT u.id, u.display_name, u.system_admin, k.id AS key_id, \
-                    k.last_used_at FROM users u \
+                    k.last_used_at, k.scopes_json, k.expires_at FROM users u \
                     JOIN user_api_keys k ON k.installation_id = u.installation_id AND k.user_id = u.id \
-                    WHERE u.installation_id = $1 AND k.token_hash = $2 AND k.revoked_at IS NULL AND u.disabled = 0",
+                    WHERE u.installation_id = $1 AND k.token_hash = $2 AND k.revoked_at IS NULL \
+                    AND (k.expires_at IS NULL OR k.expires_at > EXTRACT(EPOCH FROM CURRENT_TIMESTAMP)::BIGINT) AND u.disabled = 0",
                 )
                 .bind(installation_id.as_str())
                 .bind(token_hash)
@@ -210,6 +239,8 @@ impl Database {
                     display_name: row.try_get("display_name")?,
                     system_admin: row.try_get::<i64, _>("system_admin")? != 0,
                     memberships,
+                    api_key_scopes: decode_scopes(row.try_get("scopes_json")?)?,
+                    api_key_expires_at: row.try_get("expires_at")?,
                 }))
             }
         }
@@ -305,6 +336,14 @@ impl Database {
         };
         Ok(())
     }
+}
+
+fn decode_scopes(value: String) -> Result<Vec<ApiKeyScope>, StorageError> {
+    let scopes: Vec<ApiKeyScope> = serde_json::from_str(&value)?;
+    if scopes.is_empty() {
+        return Err(StorageError::InvalidApiKey);
+    }
+    Ok(scopes)
 }
 
 pub(super) fn hash_token(token: &str) -> String {

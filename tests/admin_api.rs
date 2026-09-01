@@ -55,6 +55,7 @@ async fn management_api_enforces_system_and_organization_boundaries() {
             ssh_public_host: None,
             internal_ssh_host: None,
             web_shell_public_origin: None,
+            port_mapping_public_domain: None,
             prometheus_url: None,
             plugin_dir: None,
         },
@@ -169,7 +170,7 @@ async fn management_api_enforces_system_and_organization_boundaries() {
         .unwrap();
     assert_eq!(organizations.status(), StatusCode::OK);
     let organizations: Value = body_json(organizations).await;
-    assert_eq!(organizations[0]["id"], organization.id.to_string());
+    assert_eq!(organizations["items"][0]["id"], organization.id.to_string());
 
     let image = "registry.example/workspace@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     let image_policy = app
@@ -401,7 +402,10 @@ async fn management_api_enforces_system_and_organization_boundaries() {
         )
         .await
         .unwrap();
-    assert_eq!(body_json(organizations).await, json!([]));
+    assert_eq!(
+        body_json(organizations).await,
+        json!({"items": [], "next_cursor": null})
+    );
 
     let audit = app
         .clone()
@@ -436,7 +440,151 @@ async fn management_api_enforces_system_and_organization_boundaries() {
     let scaling: Value = body_json(scaling).await;
     assert_eq!(scaling["database_mode"], "sqlite");
     assert_eq!(scaling["configured_replicas"], 1);
-    assert_eq!(scaling["schema_version"], 14);
+    assert_eq!(scaling["schema_version"], 15);
+}
+
+#[tokio::test]
+async fn user_and_organization_management_are_paginated_and_safe() {
+    let installation_id: InstallationId = "admin-pagination-test".parse().unwrap();
+    let database = Database::connect("sqlite::memory:", installation_id.clone())
+        .await
+        .unwrap();
+    database.migrate().await.unwrap();
+    let admin = database
+        .create_user("Admin", ADMIN_TOKEN, true, 1)
+        .await
+        .unwrap();
+    let organization = database
+        .create_organization(
+            CreateOrganization {
+                name: "Original".to_owned(),
+                owner_user_id: admin.user_id,
+            },
+            2,
+        )
+        .await
+        .unwrap();
+    let storage = database.clone();
+    let app = router(Arc::new(AppState::new(
+        AppConfig {
+            installation_id,
+            listen_address: SocketAddr::from(([127, 0, 0, 1], 0)),
+            database_url: "sqlite::memory:".to_owned(),
+            replica_count: 1,
+            instance_id: "test".to_owned(),
+            ssh_public_host: None,
+            internal_ssh_host: None,
+            web_shell_public_origin: None,
+            port_mapping_public_domain: None,
+            prometheus_url: None,
+            plugin_dir: None,
+        },
+        database,
+    )));
+
+    storage
+        .create_user(
+            "Admin Two",
+            "admin-two-api-token-0000000000000000000000000",
+            false,
+            3,
+        )
+        .await
+        .unwrap();
+
+    let page = app
+        .clone()
+        .oneshot(
+            authenticated(
+                Request::get("/api/v1/admin/users?limit=1&search=adm"),
+                ADMIN_TOKEN,
+            )
+            .body(Body::empty())
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(page.status(), StatusCode::OK);
+    let page = body_json(page).await;
+    assert_eq!(page["items"][0]["id"], admin.user_id.to_string());
+    let cursor = page["next_cursor"].as_str().unwrap();
+    let second_page = app
+        .clone()
+        .oneshot(
+            authenticated(
+                Request::get(format!(
+                    "/api/v1/admin/users?limit=1&search=adm&cursor={cursor}"
+                )),
+                ADMIN_TOKEN,
+            )
+            .body(Body::empty())
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(second_page.status(), StatusCode::OK);
+    assert_eq!(
+        body_json(second_page).await["items"][0]["display_name"],
+        "Admin Two"
+    );
+
+    let self_lockout = app
+        .clone()
+        .oneshot(
+            authenticated(
+                Request::put(format!("/api/v1/admin/users/{}", admin.user_id)),
+                ADMIN_TOKEN,
+            )
+            .header("content-type", "application/json")
+            .body(Body::from(json!({"disabled": true}).to_string()))
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(self_lockout.status(), StatusCode::BAD_REQUEST);
+
+    assert!(matches!(
+        storage
+            .update_user(admin.user_id, None, Some(false), None)
+            .await,
+        Err(memeloop_workspace_control::storage::StorageError::LastSystemAdmin)
+    ));
+
+    let rename = app
+        .clone()
+        .oneshot(
+            authenticated(
+                Request::put(format!("/api/v1/organizations/{}", organization.id)),
+                ADMIN_TOKEN,
+            )
+            .header("content-type", "application/json")
+            .body(Body::from(json!({"name":"Renamed"}).to_string()))
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(rename.status(), StatusCode::OK);
+    assert_eq!(body_json(rename).await["name"], "Renamed");
+    let members = app
+        .clone()
+        .oneshot(
+            authenticated(
+                Request::get(format!(
+                    "/api/v1/organizations/{}/members?limit=1",
+                    organization.id
+                )),
+                ADMIN_TOKEN,
+            )
+            .body(Body::empty())
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(members.status(), StatusCode::OK);
+    assert_eq!(
+        body_json(members).await["items"][0]["user"]["id"],
+        admin.user_id.to_string()
+    );
 }
 
 fn authenticated(

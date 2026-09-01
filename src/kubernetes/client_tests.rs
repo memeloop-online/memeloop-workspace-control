@@ -273,6 +273,9 @@ mod coordinator_tests {
                 jump_host_pod_labels: BTreeMap::new(),
                 storage_class_name: None,
                 web_shell_domain: None,
+                port_mapping_domain: None,
+                control_plane_internal_service_dns: "mwc-internal.control.svc.cluster.local"
+                    .to_owned(),
                 higress_gateway_name: "higress".to_owned(),
                 higress_https_section_name: "https".to_owned(),
                 internal_ssh_node_port_enabled: false,

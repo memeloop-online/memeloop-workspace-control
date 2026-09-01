@@ -74,6 +74,7 @@ async fn sse_resumes_after_durable_last_event_id_and_filters_organization() {
         ssh_public_host: None,
         internal_ssh_host: None,
         web_shell_public_origin: None,
+        port_mapping_public_domain: None,
         prometheus_url: None,
         plugin_dir: None,
     };

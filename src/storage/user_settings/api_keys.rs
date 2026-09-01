@@ -5,6 +5,7 @@ use utoipa::ToSchema;
 use uuid::Uuid;
 
 use super::super::{Database, StorageError, identity::hash_token};
+use crate::auth::ApiKeyScope;
 
 mod persistence;
 
@@ -22,6 +23,8 @@ pub struct ApiKeySummary {
     pub prefix: String,
     pub last_used_at: Option<i64>,
     pub created_at: i64,
+    pub scopes: Vec<ApiKeyScope>,
+    pub expires_at: Option<i64>,
 }
 
 pub struct CreatedApiKey {
@@ -36,7 +39,7 @@ impl Database {
                 pool,
                 installation_id,
             } => sqlx::query(
-                "SELECT id, name, token_prefix, last_used_at, created_at FROM user_api_keys WHERE installation_id = ?1 AND user_id = ?2 AND revoked_at IS NULL ORDER BY created_at, id",
+                "SELECT id, name, token_prefix, last_used_at, created_at, scopes_json, expires_at FROM user_api_keys WHERE installation_id = ?1 AND user_id = ?2 AND revoked_at IS NULL ORDER BY created_at, id",
             )
             .bind(installation_id.as_str())
             .bind(user_id.to_string())
@@ -49,7 +52,7 @@ impl Database {
                 pool,
                 installation_id,
             } => sqlx::query(
-                "SELECT id, name, token_prefix, last_used_at, created_at FROM user_api_keys WHERE installation_id = $1 AND user_id = $2 AND revoked_at IS NULL ORDER BY created_at, id",
+                "SELECT id, name, token_prefix, last_used_at, created_at, scopes_json, expires_at FROM user_api_keys WHERE installation_id = $1 AND user_id = $2 AND revoked_at IS NULL ORDER BY created_at, id",
             )
             .bind(installation_id.as_str())
             .bind(user_id.to_string())
@@ -65,9 +68,13 @@ impl Database {
         &self,
         user_id: Uuid,
         name: &str,
+        scopes: Vec<ApiKeyScope>,
+        expires_at: Option<i64>,
         now: i64,
     ) -> Result<CreatedApiKey, StorageError> {
         let name = validate_api_key_name(name)?;
+        let scopes = validate_scopes(scopes)?;
+        validate_expiration(expires_at, now)?;
         let token = generate_token()?;
         let summary = ApiKeySummary {
             id: Uuid::now_v7(),
@@ -75,6 +82,8 @@ impl Database {
             prefix: token_prefix(&token),
             last_used_at: None,
             created_at: now,
+            scopes,
+            expires_at,
         };
         let token_hash = hash_token(&token);
         match self {
@@ -210,7 +219,35 @@ where
         prefix: row.try_get("token_prefix")?,
         last_used_at: row.try_get("last_used_at")?,
         created_at: row.try_get("created_at")?,
+        scopes: serde_json::from_str(&row.try_get::<String, _>("scopes_json")?)?,
+        expires_at: row.try_get("expires_at")?,
     })
+}
+
+fn validate_scopes(scopes: Vec<ApiKeyScope>) -> Result<Vec<ApiKeyScope>, StorageError> {
+    if scopes.is_empty()
+        || scopes
+            .iter()
+            .any(|scope| matches!(scope, ApiKeyScope::Wildcard))
+    {
+        return Err(StorageError::InvalidApiKey);
+    }
+    let mut scopes = scopes;
+    scopes.sort_by_key(|scope| *scope as u8);
+    scopes.dedup();
+    Ok(scopes)
+}
+
+const MAX_API_KEY_LIFETIME_SECONDS: i64 = 365 * 24 * 60 * 60;
+
+fn validate_expiration(expires_at: Option<i64>, now: i64) -> Result<(), StorageError> {
+    let Some(expires_at) = expires_at else {
+        return Err(StorageError::InvalidApiKey);
+    };
+    if expires_at <= now || expires_at.saturating_sub(now) > MAX_API_KEY_LIFETIME_SECONDS {
+        return Err(StorageError::InvalidApiKey);
+    }
+    Ok(())
 }
 
 fn validate_api_key_name(name: &str) -> Result<String, StorageError> {

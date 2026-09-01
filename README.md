@@ -58,6 +58,34 @@ SQLite 模式会强制 `--replica-count 1` 并启用 WAL；PostgreSQL URL 可用
 
 创建请求中的 `organization_injection_refs` 与 `user_injection_refs` 支持显式选择注入项：省略或传 `null` 表示使用全部经过模板/标签选择器匹配的项，传空数组表示不引用该级别，传键数组表示只引用指定项。组织管理员锁定的组织项始终强制注入，不能通过空数组或自选列表绕过。选择会随工作区原子持久化，并用于预览、后续协调、响应来源和 SQLite→PostgreSQL 快照迁移。
 
+## 用户设置与 API 密钥
+
+用户资料通过 `/api/v1/me/profile` 更新。头像使用本地上传内容保存为受校验的 PNG、JPEG 或 WebP 数据，单个头像最大 512 KiB；远程图片地址不作为头像来源。未上传头像时，界面使用用户 ID 生成的默认图案。
+
+API 密钥通过 `/api/v1/me/api-keys` 管理。新建密钥必须指定至少一个细粒度 scope，并以 Unix 秒设置未来 365 天以内的过期时间；密钥明文只在创建响应中出现一次。可用 scope 为 `create_workspace`、`read_workspace`、`connect_workspace`、`change_workspace_state`、`delete_workspace`、`manage_organization`、`manage_members`、`manage_locked_injections`、`manage_system` 和 `manage_api_keys`。迁移前创建的通配权限密钥保留兼容性，但新密钥不能再申请通配权限。
+
+## 分页接口
+
+面向规模化部署的列表接口使用游标分页。请求可以携带 `limit`、`cursor` 和 `search`，响应统一返回 `items` 与可选的 `next_cursor`；服务端限制单页大小，客户端使用返回的游标继续加载：
+
+- `GET /api/v1/workspaces?organization_id=<id>`：按组织检索工作区。
+- `GET /api/v1/organizations`：检索当前用户可见的组织。
+- `GET /api/v1/admin/users`：系统管理员检索用户。
+- `GET /api/v1/organizations/<id>/members`：检索组织成员。
+
+游标由服务端生成，客户端按原值回传，不依赖数据库 offset。`search` 用于服务端筛选，适合管理界面中的搜索框和逐页加载。
+
+## 工作区端口映射
+
+工作区就绪后，可以为应用端口创建 HTTP 映射：
+
+- `POST /api/v1/workspaces/<workspace_id>/port-mappings` 创建映射，提交 `internal_port` 和可选的 `display_name`。
+- `GET /api/v1/workspaces/<workspace_id>/port-mappings` 返回映射状态和稳定的 `https_url`。
+- `POST /api/v1/workspaces/<workspace_id>/port-mappings/<mapping_id>/open` 签发一次性浏览器启动地址。
+- `DELETE /api/v1/workspaces/<workspace_id>/port-mappings/<mapping_id>` 删除映射并立即使已有票据和会话失效。
+
+映射使用 `p-<mapping-id>.<portMappingDomain>` 独立主机名，经 Higress 的精确 `p-*` 主机匹配和 external-auth 鉴权后转发到工作区内的 ClusterIP Service。启动地址只用于一次浏览器跳转；交换成功后设置 `__Host-mwc-port-session` 的 `HttpOnly`、`Secure`、`SameSite=Lax` cookie。部署时需为 `*.<portMappingDomain>` 准备 DNS 与 TLS，端口映射不使用 NodePort 或 hostPort。
+
 ## 数据迁移
 
 SQLite 快照包含权威业务状态和加密密文，不包含一次性 ticket、幂等缓存或活动租约。目标 PostgreSQL 必须为空且使用同一个 installation ID。

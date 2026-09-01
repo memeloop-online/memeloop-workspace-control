@@ -8,6 +8,8 @@ use crate::storage::{ClaimedJob, Database, StorageError};
 mod kubernetes;
 mod webhook;
 
+const MAX_JOB_ATTEMPTS: i64 = 10;
+
 pub use kubernetes::WorkspaceReconcileHandler;
 pub use webhook::{ControlPlaneJobHandler, WebhookDeliveryHandler};
 
@@ -71,10 +73,15 @@ impl<H: JobHandler> JobWorker<H> {
             }
             Err(error) => {
                 tracing::warn!(job_id = %job.id, attempts = job.attempts, error = %error, "job execution failed");
-                let delay = retry_delay(job.attempts);
-                self.database
-                    .defer_job(job.id, &self.lease_owner, now.saturating_add(delay), now)
-                    .await
+                if job.attempts >= MAX_JOB_ATTEMPTS {
+                    tracing::error!(job_id = %job.id, attempts = job.attempts, "job reached the retry limit");
+                    self.database.fail_job(job.id, &self.lease_owner, now).await
+                } else {
+                    let delay = retry_delay(job.attempts);
+                    self.database
+                        .defer_job(job.id, &self.lease_owner, now.saturating_add(delay), now)
+                        .await
+                }
             }
         };
         if let Some(workspace_id) = job.workspace_id {

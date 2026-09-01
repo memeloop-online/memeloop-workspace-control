@@ -263,8 +263,8 @@ async fn configuration_view(
 }
 
 fn authorize_scope(actor: &Principal, organization_id: Option<Uuid>) -> Result<(), ApiError> {
-    let allowed = organization_id.map_or(actor.system_admin, |organization_id| {
-        actor.system_admin || actor.allows(Permission::ManageOrganization, organization_id)
+    let allowed = organization_id.map_or(actor.may_manage_system(), |organization_id| {
+        actor.allows(Permission::ManageOrganization, organization_id)
     });
     if !allowed {
         return Err(ApiError::Forbidden);

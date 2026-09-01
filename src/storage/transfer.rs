@@ -103,6 +103,7 @@ impl Database {
                     || (*table == "plugin_configurations" && snapshot.schema_version < 11)
                     || (plugin_state::is_plugin_table(table) && snapshot.schema_version < 13)
                     || (*table == "user_api_keys" && snapshot.schema_version < 14)
+                    || (*table == "workspace_port_mappings" && snapshot.schema_version < 15)
                 {
                     continue;
                 }
@@ -123,7 +124,7 @@ impl Database {
         }
         if snapshot.schema_version < 14 {
             sqlx::query(
-                "INSERT INTO user_api_keys (id, installation_id, user_id, name, token_prefix, token_hash, last_used_at, created_at, revoked_at) SELECT id, installation_id, id, 'Legacy key', 'legacy', token_hash, NULL, created_at, NULL FROM users WHERE true ON CONFLICT (installation_id, token_hash) DO NOTHING",
+                "INSERT INTO user_api_keys (id, installation_id, user_id, name, token_prefix, token_hash, last_used_at, created_at, revoked_at, scopes_json, expires_at) SELECT id, installation_id, id, 'Legacy key', 'legacy', token_hash, NULL, created_at, NULL, '[\"*\"]', NULL FROM users WHERE true ON CONFLICT (installation_id, token_hash) DO NOTHING",
             )
             .execute(&mut *transaction)
             .await?;
@@ -138,6 +139,22 @@ fn normalize_snapshot_rows(
     rows: &[serde_json::Value],
     schema_version: i64,
 ) -> Result<Vec<serde_json::Value>, StorageError> {
+    if table == "user_api_keys" && schema_version < 15 {
+        return Ok(rows
+            .iter()
+            .cloned()
+            .map(|mut row| {
+                if let Some(object) = row.as_object_mut() {
+                    object.insert(
+                        "scopes_json".to_owned(),
+                        serde_json::Value::String("[\"*\"]".to_owned()),
+                    );
+                    object.insert("expires_at".to_owned(), serde_json::Value::Null);
+                }
+                row
+            })
+            .collect());
+    }
     if !matches!(table, "workspace_templates" | "workspaces") {
         return Ok(rows.to_vec());
     }
@@ -227,6 +244,7 @@ const IMPORT_ORDER: &[&str] = &[
     "image_policies",
     "workspace_templates",
     "workspaces",
+    "workspace_port_mappings",
     "workspace_injection_refs",
     "audit_log",
     "injection_items",
@@ -244,7 +262,7 @@ const EXPORT_QUERIES: &[(&str, &str)] = &[
     ),
     (
         "user_api_keys",
-        "SELECT json_object('id', id, 'installation_id', installation_id, 'user_id', user_id, 'name', name, 'token_prefix', token_prefix, 'token_hash', token_hash, 'last_used_at', last_used_at, 'created_at', created_at, 'revoked_at', revoked_at) item FROM user_api_keys WHERE installation_id = ?1 ORDER BY user_id, created_at, id",
+        "SELECT json_object('id', id, 'installation_id', installation_id, 'user_id', user_id, 'name', name, 'token_prefix', token_prefix, 'token_hash', token_hash, 'last_used_at', last_used_at, 'created_at', created_at, 'revoked_at', revoked_at, 'scopes_json', scopes_json, 'expires_at', expires_at) item FROM user_api_keys WHERE installation_id = ?1 ORDER BY user_id, created_at, id",
     ),
     (
         "organizations",
@@ -277,6 +295,10 @@ const EXPORT_QUERIES: &[(&str, &str)] = &[
     (
         "workspaces",
         "SELECT json_object('id', id, 'installation_id', installation_id, 'short_id', short_id, 'organization_id', organization_id, 'owner_id', owner_id, 'name', name, 'template_id', template_id, 'image', image, 'access_mode', access_mode, 'state', state, 'cpu_millis', cpu_millis, 'memory_mib', memory_mib, 'gpu_count', gpu_count, 'disk_gib', disk_gib, 'generation', generation, 'created_at', created_at, 'updated_at', updated_at, 'deleted_at', deleted_at, 'runtime_profile', runtime_profile, 'template_snapshot_yaml', template_snapshot_yaml) item FROM workspaces WHERE installation_id = ?1 ORDER BY id",
+    ),
+    (
+        "workspace_port_mappings",
+        "SELECT json_object('id', id, 'installation_id', installation_id, 'organization_id', organization_id, 'workspace_id', workspace_id, 'internal_port', internal_port, 'display_name', display_name, 'created_by', created_by, 'created_at', created_at) item FROM workspace_port_mappings WHERE installation_id = ?1 ORDER BY workspace_id, created_at, id",
     ),
     (
         "workspace_injection_refs",
@@ -339,5 +361,17 @@ mod tests {
             );
             assert!(rows[0].get("runtime_profile").is_none());
         }
+    }
+
+    #[test]
+    fn v14_api_keys_receive_legacy_scope_and_no_expiry() {
+        let rows = vec![serde_json::json!({
+            "id": "key", "installation_id": "test", "user_id": "user",
+            "name": "Legacy", "token_prefix": "legacy", "token_hash": "hash",
+            "last_used_at": null, "created_at": 1, "revoked_at": null
+        })];
+        let normalized = normalize_snapshot_rows("user_api_keys", &rows, 14).unwrap();
+        assert_eq!(normalized[0]["scopes_json"], "[\"*\"]");
+        assert!(normalized[0]["expires_at"].is_null());
     }
 }

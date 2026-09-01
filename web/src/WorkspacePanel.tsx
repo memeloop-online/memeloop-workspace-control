@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import type { ApiClient } from "./api";
 import { CredentialReferencePicker } from "./forms/CredentialReferencePicker";
@@ -14,6 +14,8 @@ import type {
   WorkspaceRuntime,
   WorkspaceTemplate,
 } from "./types";
+
+const EMPTY_WORKSPACE_PAGE: WorkspaceResponse[] = [];
 
 interface Props {
   api: ApiClient;
@@ -40,28 +42,82 @@ export function WorkspacePanel(props: Props) {
   const [submitting, setSubmitting] = useState(false);
   const [runtime, setRuntime] = useState<Record<string, WorkspaceRuntime>>({});
   const [workspaceSearch, setWorkspaceSearch] = useState("");
-  const runtimeKey = props.workspaces.map((item) => `${item.workspace.id}:${item.workspace.state}`).join(",");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [pagedWorkspaces, setPagedWorkspaces] = useState<WorkspaceResponse[]>([]);
+  const [nextWorkspaceCursor, setNextWorkspaceCursor] = useState<string | null>(null);
+  const [pageLoading, setPageLoading] = useState(false);
+  const [loadedWorkspaceScope, setLoadedWorkspaceScope] = useState<string | null>(null);
+  const [runtimeLoadFailed, setRuntimeLoadFailed] = useState(false);
+  const [runtimeRetryToken, setRuntimeRetryToken] = useState(0);
+  const pageRequestGeneration = useRef(0);
+  const pageRequestActive = useRef(false);
+  const runtimeRequestGeneration = useRef(0);
+  const runtimeKey = pagedWorkspaces.map((item) => `${item.workspace.id}:${item.workspace.state}`).join(",");
+  const externalRefreshKey = props.workspaces.map((item) => `${item.workspace.id}:${item.workspace.generation}:${item.workspace.state}`).join(",");
+  const workspaceScope = `${props.organizationId}\u0000${debouncedSearch.trim()}`;
+  const workspaceScopeRef = useRef(workspaceScope);
+  workspaceScopeRef.current = workspaceScope;
+  const showingCurrentWorkspaceScope = loadedWorkspaceScope === workspaceScope;
+  const currentPagedWorkspaces = showingCurrentWorkspaceScope ? pagedWorkspaces : EMPTY_WORKSPACE_PAGE;
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebouncedSearch(workspaceSearch), 250);
+    return () => window.clearTimeout(timer);
+  }, [workspaceSearch]);
+
+  useEffect(() => {
+    const generation = ++pageRequestGeneration.current;
+    pageRequestActive.current = true;
+    setPageLoading(true);
+    setPagedWorkspaces([]);
+    setNextWorkspaceCursor(null);
+    setLoadedWorkspaceScope(null);
+    setRuntime({});
+    setRuntimeLoadFailed(false);
+    props.api.workspacesPage(props.organizationId, { limit: 50, search: debouncedSearch.trim() || undefined })
+      .then((page) => {
+        if (pageRequestGeneration.current !== generation || workspaceScopeRef.current !== workspaceScope) return;
+        setPagedWorkspaces(page.items);
+        setNextWorkspaceCursor(page.next_cursor);
+        setLoadedWorkspaceScope(workspaceScope);
+      })
+      .catch((error) => {
+        if (pageRequestGeneration.current === generation && workspaceScopeRef.current === workspaceScope) props.onError(message(error));
+      })
+      .finally(() => {
+        if (pageRequestGeneration.current === generation && workspaceScopeRef.current === workspaceScope) {
+          pageRequestActive.current = false;
+          setPageLoading(false);
+        }
+      });
+  }, [props.api, props.organizationId, debouncedSearch, externalRefreshKey, props.onError]);
 
   useEffect(() => {
     let active = true;
+    const generation = ++runtimeRequestGeneration.current;
     const refreshRuntime = async () => {
-      if (document.visibilityState !== "visible" || props.workspaces.length === 0) return;
+      if (document.visibilityState !== "visible" || !showingCurrentWorkspaceScope || currentPagedWorkspaces.length === 0) return;
       try {
-        const entries = await props.api.workspaceRuntimes(props.organizationId);
-        if (!active) return;
-        setRuntime((current) => Object.fromEntries(entries.map((entry) => [
-          entry.workspace_id,
-          { ...entry.runtime, events: current[entry.workspace_id]?.events ?? [] },
-        ])));
+        const batches = workspaceIdBatches(currentPagedWorkspaces.map((item) => item.workspace.id));
+        const responses = await Promise.all(batches.map((workspaceIds) => props.api.workspaceRuntimes(props.organizationId, workspaceIds)));
+        if (!active || runtimeRequestGeneration.current !== generation) return;
+        const entries = responses.flat();
+        setRuntime((current) => ({
+          ...current,
+          ...Object.fromEntries(entries.map((entry) => [
+            entry.workspace_id,
+            { ...entry.runtime, events: current[entry.workspace_id]?.events ?? [] },
+          ])),
+        }));
+        setRuntimeLoadFailed(false);
       } catch {
-        // Runtime observations are supplemental. The workspace lifecycle list
-        // remains usable when metrics.k8s.io or Kubernetes is temporarily down.
+        if (active && runtimeRequestGeneration.current === generation) setRuntimeLoadFailed(true);
       }
     };
     void refreshRuntime();
     const timer = window.setInterval(() => void refreshRuntime(), 30000);
     return () => { active = false; window.clearInterval(timer); };
-  }, [props.api, props.organizationId, runtimeKey]);
+  }, [props.api, props.organizationId, runtimeKey, currentPagedWorkspaces, showingCurrentWorkspaceScope, runtimeRetryToken]);
 
   useEffect(() => {
     let active = true;
@@ -92,7 +148,7 @@ export function WorkspacePanel(props: Props) {
 
   const totals = useMemo(
     () =>
-      props.workspaces.reduce(
+        currentPagedWorkspaces.reduce(
         (sum, item) => ({
           cpu: sum.cpu + item.workspace.resources.cpu_millis,
           memory: sum.memory + item.workspace.resources.memory_mib,
@@ -101,20 +157,21 @@ export function WorkspacePanel(props: Props) {
         }),
         { cpu: 0, memory: 0, disk: 0, gpu: 0 },
       ),
-    [props.workspaces],
+    [currentPagedWorkspaces],
   );
   const selectedTemplate = templates.find((template) => template.id === templateId);
   const filteredWorkspaces = useMemo(() => {
-    const query = workspaceSearch.trim().toLocaleLowerCase();
-    if (!query) return props.workspaces;
-    return props.workspaces.filter(({ workspace }) => [
+    const query = debouncedSearch.trim().toLocaleLowerCase();
+    if (!query) return currentPagedWorkspaces;
+    return currentPagedWorkspaces.filter(({ workspace }) => [
       workspace.name,
       workspace.short_id,
       workspace.state,
       workspace.image,
       workspace.workspace_user,
     ].some((value) => value.toLocaleLowerCase().includes(query)));
-  }, [props.workspaces, workspaceSearch]);
+  }, [currentPagedWorkspaces, debouncedSearch]);
+  const visibleWorkspaces = filteredWorkspaces;
 
   async function create(event: FormEvent) {
     event.preventDefault();
@@ -203,18 +260,46 @@ export function WorkspacePanel(props: Props) {
   }
 
   async function refreshWorkspaceRuntime(workspaceId: string) {
+    const scope = workspaceScope;
     try {
       const observation = await props.api.workspaceRuntime(workspaceId);
+      if (workspaceScopeRef.current !== scope) return;
       setRuntime((current) => ({ ...current, [workspaceId]: observation }));
+      setRuntimeLoadFailed(false);
     } catch (error) {
-      props.onError(message(error));
+      if (workspaceScopeRef.current === scope) {
+        setRuntimeLoadFailed(true);
+        props.onError(message(error));
+      }
+    }
+  }
+
+  async function loadMoreWorkspaces() {
+    if (!nextWorkspaceCursor || pageLoading || pageRequestActive.current || !showingCurrentWorkspaceScope) return;
+    const generation = pageRequestGeneration.current;
+    const cursor = nextWorkspaceCursor;
+    const scope = workspaceScope;
+    pageRequestActive.current = true;
+    setPageLoading(true);
+    try {
+      const page = await props.api.workspacesPage(props.organizationId, { limit: 50, cursor, search: debouncedSearch.trim() || undefined });
+      if (pageRequestGeneration.current !== generation || scope !== workspaceScopeRef.current) return;
+      setPagedWorkspaces((items) => [...items, ...page.items]);
+      setNextWorkspaceCursor(page.next_cursor);
+    } catch (error) {
+      if (pageRequestGeneration.current === generation && scope === workspaceScopeRef.current) props.onError(message(error));
+    } finally {
+      if (pageRequestGeneration.current === generation && scope === workspaceScopeRef.current) {
+        pageRequestActive.current = false;
+        setPageLoading(false);
+      }
     }
   }
 
   return (
     <section className="panel-stack">
       <div className="stat-grid">
-        <Stat label={t("workspaceCount")} value={String(props.workspaces.length)} hint={t("currentOrganization")} />
+        <Stat label={t("workspaceLoadedCount")} value={String(currentPagedWorkspaces.length)} hint={t("workspaceLoadedCountHint")} />
         <Stat label="CPU" value={`${totals.cpu / 1000} ${t("cores")}`} hint={t("requestedTotal")} />
         <Stat label={t("memory")} value={`${formatGiB(totals.memory)} GiB`} hint={t("requestedTotal")} />
         <Stat label={t("persistentDisk")} value={`${totals.disk} GiB`} hint={`${totals.gpu} GPU`} />
@@ -246,10 +331,19 @@ export function WorkspacePanel(props: Props) {
 
       <label className="workspace-search">{t("searchWorkspaces")}<input type="search" value={workspaceSearch} onChange={(event) => setWorkspaceSearch(event.target.value)} placeholder={t("searchWorkspacesHint")} /></label>
 
-      <div className="workspace-list" aria-busy={props.busy}>
-        {props.workspaces.length === 0 && <div className="empty">{t("noWorkspaces")}</div>}
-        {props.workspaces.length > 0 && filteredWorkspaces.length === 0 && <div className="empty">{t("noMatchingWorkspaces")}</div>}
-        {filteredWorkspaces.map((item) => <WorkspaceCard key={item.workspace.id} item={item} runtime={runtime[item.workspace.id]} onAction={action} onOpenShell={openShell} onRequestRuntime={refreshWorkspaceRuntime} />)}
+      {runtimeLoadFailed && currentPagedWorkspaces.length > 0 && <div className="empty" role="status">
+        {t("runtimeDataUnavailable")} <button onClick={() => setRuntimeRetryToken((token) => token + 1)}>{t("retryRuntime")}</button>
+      </div>}
+
+      <div className="workspace-list" aria-busy={props.busy || pageLoading} style={{ maxHeight: "min(70vh, 820px)", overflowY: "auto", paddingRight: "6px" }} onScroll={(event) => {
+        const el = event.currentTarget;
+        if (el.scrollTop + el.clientHeight >= el.scrollHeight - 120) void loadMoreWorkspaces();
+      }}>
+        {currentPagedWorkspaces.length === 0 && pageLoading && <div className="empty" role="status">{t("loadingWorkspaces")}</div>}
+        {currentPagedWorkspaces.length === 0 && !pageLoading && showingCurrentWorkspaceScope && <div className="empty">{t("noWorkspaces")}</div>}
+        {currentPagedWorkspaces.length > 0 && filteredWorkspaces.length === 0 && <div className="empty">{t("noMatchingWorkspaces")}</div>}
+        {visibleWorkspaces.map((item) => <WorkspaceCard key={item.workspace.id} api={props.api} item={item} runtime={runtime[item.workspace.id]} onAction={action} onOpenShell={openShell} onRequestRuntime={refreshWorkspaceRuntime} onError={props.onError} />)}
+        {currentPagedWorkspaces.length > 0 && <div className="empty" role="status">{pageLoading ? t("loadingWorkspaces") : nextWorkspaceCursor ? t("scrollToLoadMoreWorkspaces") : t("allLoadedWorkspaces")}</div>}
       </div>
     </section>
   );
@@ -261,6 +355,12 @@ function Stat({ label, value, hint }: { label: string; value: string; hint: stri
 
 function formatGiB(mib: number) {
   return (mib / 1024).toFixed(mib % 1024 === 0 ? 0 : 1);
+}
+
+function workspaceIdBatches(workspaceIds: string[]): string[][] {
+  const batches: string[][] = [];
+  for (let index = 0; index < workspaceIds.length; index += 100) batches.push(workspaceIds.slice(index, index + 100));
+  return batches;
 }
 
 function sameResources(left: Resources, right: Resources) {

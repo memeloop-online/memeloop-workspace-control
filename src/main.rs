@@ -346,13 +346,21 @@ fn resource_builder(
         higress_namespace,
         higress_pod_labels,
         higress_source_cidrs,
-        jump_host_namespace,
+        jump_host_namespace: jump_host_namespace.clone(),
         jump_host_pod_labels: BTreeMap::from([(
             "app.kubernetes.io/name".to_owned(),
             "mwc-ssh-jump".to_owned(),
         )]),
         storage_class_name,
         web_shell_domain,
+        port_mapping_domain: config.port_mapping_public_domain.clone(),
+        control_plane_internal_service_dns: std::env::var("MWC_CONTROL_PLANE_INTERNAL_SERVICE_DNS")
+            .unwrap_or_else(|_| {
+                format!(
+                    "mwc-{}-internal.{}.svc.cluster.local",
+                    config.installation_id, jump_host_namespace
+                )
+            }),
         higress_gateway_name: std::env::var("MWC_HIGRESS_GATEWAY_NAME")
             .unwrap_or_else(|_| "higress-gateway".to_owned()),
         higress_https_section_name: std::env::var("MWC_HIGRESS_HTTPS_SECTION_NAME")

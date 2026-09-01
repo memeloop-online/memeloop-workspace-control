@@ -23,6 +23,7 @@ public:
   apiDomain: workspaces.example.com
   webShellDomain: shell.example.com
   webShellOrigin: https://shell.example.com
+  portMappingDomain: example.com
 
 higress:
   extAuthPluginUrl: oci://higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/ext-auth@sha256:7179a769128a6db8612242ae4ccc1486d0cf48eacacbf56445c85915d7c9c2bf

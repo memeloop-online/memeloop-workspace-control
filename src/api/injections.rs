@@ -293,7 +293,7 @@ async fn preview_target(
     request: &PreviewRequest,
 ) -> Result<Option<crate::workspaces::Workspace>, ApiError> {
     let Some(workspace_id) = request.workspace_id else {
-        if request.user_id != actor.user_id && !actor.system_admin {
+        if request.user_id != actor.user_id && !actor.may_manage_system() {
             return Err(ApiError::Forbidden);
         }
         return Ok(None);
@@ -343,7 +343,7 @@ async fn authorize(
             actor.allows(permission, scope_ref.scope_id)
                 && (!locked || actor.allows(Permission::ManageLockedInjections, scope_ref.scope_id))
         }
-        InjectionScope::User => actor.system_admin || actor.user_id == scope_ref.scope_id,
+        InjectionScope::User => actor.may_manage_system() || actor.user_id == scope_ref.scope_id,
         InjectionScope::Workspace => {
             let workspace = state.database.get_workspace(scope_ref.scope_id).await?;
             actor.allows(

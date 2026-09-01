@@ -51,7 +51,7 @@ pub(crate) async fn invoke_api_route(
         .find(|route| route.id == route_id)
         .ok_or(crate::plugins::PluginError::NotFound)?;
     if query.organization_id.is_some_and(|id| {
-        !actor.system_admin
+        !actor.may_manage_system()
             && !actor
                 .memberships
                 .iter()
@@ -61,10 +61,10 @@ pub(crate) async fn invoke_api_route(
     }
     let permitted = match route.permission {
         PluginRoutePermission::Authenticated => true,
-        PluginRoutePermission::OrganizationAdmin => query.organization_id.is_some_and(|id| {
-            actor.system_admin || actor.allows(crate::auth::Permission::ManageOrganization, id)
-        }),
-        PluginRoutePermission::SystemAdmin => actor.system_admin,
+        PluginRoutePermission::OrganizationAdmin => query
+            .organization_id
+            .is_some_and(|id| actor.allows(crate::auth::Permission::ManageOrganization, id)),
+        PluginRoutePermission::SystemAdmin => actor.may_manage_system(),
     };
     if !permitted {
         return Err(ApiError::Forbidden);
@@ -131,7 +131,7 @@ pub(crate) async fn api_middleware(
     });
     let organization_id = requested_organization.filter(|id| {
         actor.as_ref().is_some_and(|principal| {
-            principal.system_admin
+            principal.may_manage_system()
                 || principal
                     .memberships
                     .iter()

@@ -200,7 +200,7 @@ fn authorize_route(
     organization_id: Option<Uuid>,
 ) -> Result<(), ApiError> {
     if organization_id.is_some_and(|id| {
-        !actor.system_admin
+        !actor.may_manage_system()
             && !actor
                 .memberships
                 .iter()
@@ -210,10 +210,10 @@ fn authorize_route(
     }
     let permitted = match permission {
         PluginRoutePermission::Authenticated => true,
-        PluginRoutePermission::OrganizationAdmin => organization_id.is_some_and(|id| {
-            actor.system_admin || actor.allows(Permission::ManageOrganization, id)
-        }),
-        PluginRoutePermission::SystemAdmin => actor.system_admin,
+        PluginRoutePermission::OrganizationAdmin => {
+            organization_id.is_some_and(|id| actor.allows(Permission::ManageOrganization, id))
+        }
+        PluginRoutePermission::SystemAdmin => actor.may_manage_system(),
     };
     permitted.then_some(()).ok_or(ApiError::Forbidden)
 }

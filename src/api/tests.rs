@@ -26,6 +26,7 @@ async fn test_state() -> AppState {
             ssh_public_host: None,
             internal_ssh_host: None,
             web_shell_public_origin: None,
+            port_mapping_public_domain: None,
             prometheus_url: None,
             plugin_dir: None,
         },
@@ -238,6 +239,8 @@ async fn info_and_metrics_expose_only_operational_metadata() {
     assert!(text.contains("mwc_upstream_requests_active{upstream=\"prometheus\"}"));
     assert!(text.contains("mwc_plugins{state=\"loaded\"}"));
     assert!(text.contains("mwc_jobs{status=\"pending\"}"));
+    assert!(text.contains("mwc_jobs_oldest_pending_age_seconds"));
+    assert!(text.contains("mwc_jobs_max_active_attempts"));
     assert!(text.contains("# TYPE mwc_workspaces gauge"));
     assert!(text.contains("mwc_resource_requested{resource=\"cpu\",unit=\"millicores\"} 0"));
     assert!(text.ends_with("# EOF\n"));

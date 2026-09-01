@@ -50,6 +50,7 @@ async fn test_app() -> (Router, Database, Uuid) {
         ssh_public_host: None,
         internal_ssh_host: None,
         web_shell_public_origin: None,
+        port_mapping_public_domain: None,
         prometheus_url: None,
         plugin_dir: None,
     };
@@ -339,6 +340,27 @@ async fn authenticated_workspace_api_enforces_rbac_and_exact_idempotent_replay()
         .await
         .unwrap();
     assert_eq!(outsider.status(), StatusCode::FORBIDDEN);
+
+    let page = app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            &format!("/api/v1/workspaces?organization_id={organization_id}&limit=1&search=prim"),
+            Some(ADMIN_TOKEN),
+            None,
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(page.status(), StatusCode::OK);
+    let (_, page_body) = body(page).await;
+    let page: Value = serde_json::from_slice(&page_body).unwrap();
+    assert_eq!(page["items"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        page["items"][0]["workspace"]["id"],
+        workspace_id.to_string()
+    );
+    assert!(page["next_cursor"].is_null());
 
     database
         .record_workspace_observation(workspace_id, WorkspaceObservation::Ready, admin_id, 3)

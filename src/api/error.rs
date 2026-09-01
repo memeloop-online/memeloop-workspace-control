@@ -172,12 +172,10 @@ fn storage_response(error: StorageError) -> ErrorResponse {
     if let Some(response) = plugin_storage_response(&error) {
         return response;
     }
+    if let Some(response) = workspace_storage_response(&error) {
+        return response;
+    }
     match error {
-        StorageError::WorkspaceNotFound => response(
-            StatusCode::NOT_FOUND,
-            "workspace_not_found",
-            "workspace was not found",
-        ),
         StorageError::OrganizationNotFound => response(
             StatusCode::NOT_FOUND,
             "organization_not_found",
@@ -192,6 +190,54 @@ fn storage_response(error: StorageError) -> ErrorResponse {
             StatusCode::CONFLICT,
             "invalid_workspace_transition",
             error.to_string(),
+        ),
+        StorageError::InvalidWebhook => response(
+            StatusCode::BAD_REQUEST,
+            "invalid_webhook",
+            "webhook requires a public HTTPS URL, event prefix, and a signing secret of at least 32 bytes",
+        ),
+        StorageError::WebhookNotFound => response(
+            StatusCode::NOT_FOUND,
+            "webhook_not_found",
+            "webhook subscription or event was not found",
+        ),
+        StorageError::InvalidInjectionLock => response(
+            StatusCode::BAD_REQUEST,
+            "invalid_injection_lock",
+            "only organization injections may be locked",
+        ),
+        error => {
+            tracing::error!(error = %error, "API storage operation failed");
+            response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                "the request could not be completed",
+            )
+        }
+    }
+}
+
+fn workspace_storage_response(error: &StorageError) -> Option<ErrorResponse> {
+    Some(match error {
+        StorageError::WorkspaceNotFound => response(
+            StatusCode::NOT_FOUND,
+            "workspace_not_found",
+            "workspace was not found",
+        ),
+        StorageError::PortMappingNotFound => response(
+            StatusCode::NOT_FOUND,
+            "port_mapping_not_found",
+            "workspace port mapping was not found",
+        ),
+        StorageError::InvalidPortMappingPort => response(
+            StatusCode::BAD_REQUEST,
+            "invalid_port_mapping_port",
+            "choose port 80, 443, or an application port from 1024 through 65535",
+        ),
+        StorageError::InvalidPortMappingDisplayName => response(
+            StatusCode::BAD_REQUEST,
+            "invalid_port_mapping_display_name",
+            "port mapping display name must be at most 80 characters",
         ),
         StorageError::InvalidWorkspace => response(
             StatusCode::BAD_REQUEST,
@@ -233,30 +279,8 @@ fn storage_response(error: StorageError) -> ErrorResponse {
             "privileged_template_forbidden",
             "cluster-access templates require a system administrator",
         ),
-        StorageError::InvalidWebhook => response(
-            StatusCode::BAD_REQUEST,
-            "invalid_webhook",
-            "webhook requires a public HTTPS URL, event prefix, and a signing secret of at least 32 bytes",
-        ),
-        StorageError::WebhookNotFound => response(
-            StatusCode::NOT_FOUND,
-            "webhook_not_found",
-            "webhook subscription or event was not found",
-        ),
-        StorageError::InvalidInjectionLock => response(
-            StatusCode::BAD_REQUEST,
-            "invalid_injection_lock",
-            "only organization injections may be locked",
-        ),
-        error => {
-            tracing::error!(error = %error, "API storage operation failed");
-            response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "internal_error",
-                "the request could not be completed",
-            )
-        }
-    }
+        _ => return None,
+    })
 }
 
 fn identity_storage_response(error: &StorageError) -> Option<ErrorResponse> {
@@ -269,7 +293,7 @@ fn identity_storage_response(error: &StorageError) -> Option<ErrorResponse> {
         StorageError::InvalidUserProfile => response(
             StatusCode::BAD_REQUEST,
             "invalid_user_profile",
-            "display name must be 1-80 characters and custom avatars must use a plain HTTPS URL",
+            "display name must be 1-80 characters and custom avatars must be uploaded PNG, JPEG, or WebP images",
         ),
         StorageError::InvalidApiKey => response(
             StatusCode::BAD_REQUEST,
@@ -290,6 +314,16 @@ fn identity_storage_response(error: &StorageError) -> Option<ErrorResponse> {
             StatusCode::CONFLICT,
             "too_many_api_keys",
             "revoke an API key before creating another one",
+        ),
+        StorageError::LastSystemAdmin => response(
+            StatusCode::CONFLICT,
+            "last_system_admin",
+            "create or promote another active system administrator before disabling or demoting this user",
+        ),
+        StorageError::OrganizationInUse => response(
+            StatusCode::CONFLICT,
+            "organization_in_use",
+            "delete or move dependent workspaces and templates before deleting this organization",
         ),
         StorageError::InvalidAuditQuery => response(
             StatusCode::BAD_REQUEST,

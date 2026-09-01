@@ -23,9 +23,23 @@ jemalloc heap pprof capture on the existing internal listener. These endpoints r
 Bearer token and are never added to Higress. See `docs/OBSERVABILITY.md` for endpoint contracts,
 overhead, port-forward commands and retention guidance.
 
+Set `monitoring.prometheusRule.enabled=true` to install the storage and queue alerts. The rule
+covers Home PVC and node ephemeral-storage request bands at 80% (warning) and 90% (critical),
+failed jobs after 10 minutes, and a pending-job age above 15 minutes. The rule also records the
+workspace Home usage and node ephemeral-storage request percentages for Grafana. Alert duration
+for the storage bands follows `monitoring.prometheusRule.warningFor` and
+`monitoring.prometheusRule.criticalFor`.
+
 Set `monitoring.prometheusUrl` to an in-cluster Prometheus base URL to show PVC usage,
 capacity, and available bytes. The URL is optional; the control plane uses bounded,
 fixed queries and needs neither Kubernetes node proxy nor Pod exec permissions.
+
+The API-key and profile endpoints are available at `/api/v1/me/api-keys` and
+`/api/v1/me/profile`. New API keys carry explicit scopes and an expiry within 365 days; the
+plaintext token is returned once at creation. Profile avatars are local PNG, JPEG, or WebP
+uploads capped at 512 KiB. Workspace, organization, user, and membership list endpoints use
+`limit`, `cursor`, and `search` parameters and return `items` with an optional `next_cursor`, so
+administrative screens can load large installations incrementally.
 
 Every install requires an immutable `installationId`, a 32-byte envelope key,
 an independent internal-auth token, a pinned ttyd image, and a persistent
@@ -45,6 +59,20 @@ The chart refuses to render a Web Shell domain without that plugin and an exact
 `https://<webShellDomain>` public origin.
 Set `higress.podLabels` to the labels actually present on the K3S Higress gateway Pods. The same
 selector is used by both the control-plane and workspace NetworkPolicies.
+
+### Workspace HTTP port mappings
+
+Set `public.portMappingDomain` to a DNS suffix dedicated to workspace applications, such as
+`ports.example.com`. The deployment then uses `p-<mapping-id>.ports.example.com` hostnames. A
+wildcard DNS record and matching wildcard TLS certificate for `*.ports.example.com` are required.
+Higress applies an exact `p-*` host rule with fail-closed external authentication. The workspace
+application is reached through a ClusterIP Service; NodePort and hostPort are outside this path.
+
+The API returns a stable HTTPS URL for each mapping. The `open` action creates a one-use bootstrap
+URL valid for 60 seconds. After the bootstrap exchange, the browser receives the `__Host-mwc-port-session`
+HttpOnly, Secure, SameSite cookie, whose session lifetime is eight hours. Deleting a mapping
+revokes its tickets and sessions and queues reconciliation of the owned Ingress, Services, and
+NetworkPolicy. The mapping domain is passed to the control plane as `MWC_PORT_MAPPING_PUBLIC_DOMAIN`.
 
 For reproducible deployments set `image.digest` and `jumpHost.image.digest` to
 the verified `sha256:...` values published by CI. A digest takes precedence over

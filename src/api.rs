@@ -24,6 +24,7 @@ mod injections;
 mod metrics;
 mod organizations;
 mod plugins;
+mod port_mappings;
 mod routes;
 mod runtime;
 mod ssh;
@@ -217,9 +218,13 @@ async fn system_info(State(state): State<Arc<AppState>>) -> Json<SystemInfoRespo
         injections::delete,
         injections::preview,
         organizations::create,
-        organizations::list,
-        admin::list_users,
+        organizations::list_page,
+        organizations::update,
+        organizations::delete,
+        admin::list_users_page,
         admin::create_user,
+        admin::update_user,
+        admin::list_members,
         admin::upsert_membership,
         admin::remove_membership,
         admin::get_quota,
@@ -245,6 +250,10 @@ async fn system_info(State(state): State<Arc<AppState>>) -> Json<SystemInfoRespo
         runtime::list,
         runtime::get,
         workspaces::action
+        ,port_mappings::list
+        ,port_mappings::create
+        ,port_mappings::open
+        ,port_mappings::delete
         ,web_shell::issue,
         web_shell::authorize
         ,webhooks::list
@@ -259,11 +268,16 @@ async fn system_info(State(state): State<Arc<AppState>>) -> Json<SystemInfoRespo
         DatabaseMode,
         crate::storage::Principal,
         crate::storage::Organization,
+        crate::storage::OrganizationPage,
         crate::storage::UserSummary,
+        crate::storage::UserPage,
+        crate::storage::MembershipPage,
+        crate::storage::MembershipSummary,
         crate::storage::AuditRecord,
         crate::storage::AuditPage,
         crate::storage::ApiKeySummary,
         crate::storage::JobCounts,
+        crate::storage::PortMapping,
         crate::storage::ImagePolicy,
         crate::storage::WorkspaceTemplate,
         crate::storage::WorkspaceSshPublicIdentity,
@@ -292,6 +306,7 @@ async fn system_info(State(state): State<Arc<AppState>>) -> Json<SystemInfoRespo
         crate::injections::ResolvedInjectionSummary,
         injections::PreviewRequest,
         workspaces::WorkspaceResponse,
+        workspaces::WorkspaceResponsePage,
         workspaces::WorkspaceSshConnection,
         workspaces::WorkspaceAppSshConnection,
         workspaces::SshPortStrategy,
@@ -305,11 +320,13 @@ async fn system_info(State(state): State<Arc<AppState>>) -> Json<SystemInfoRespo
         runtime::PodEvent,
         web_shell::WebShellTicketResponse,
         admin::CreateUserRequest,
+        admin::UpdateUserRequest,
         admin::UserProfileResponse,
         admin::UpdateUserProfileRequest,
         admin::CreateApiKeyRequest,
         admin::CreatedApiKeyResponse,
         admin::MembershipRequest,
+        organizations::UpdateOrganizationRequest,
         admin::ScalingResponse,
         plugins::PluginManifestView,
         plugins::PluginConfigurationView,

@@ -6,7 +6,7 @@ use crate::{
     },
     jobs::{JobHandler, JobHandlerError},
     kubernetes::{DeleteProgress, KubernetesCoordinator, ResourceBuilder},
-    storage::{ClaimedJob, Database, InjectionScopeRef},
+    storage::{ClaimedJob, Database, InjectionScopeRef, StorageError},
     workspaces::{Workspace, WorkspaceObservation, WorkspaceState},
 };
 
@@ -56,6 +56,15 @@ impl WorkspaceReconcileHandler {
             .map_err(job_error)?;
         self.coordinator
             .reconcile_with_injections(workspace, materialization, ssh_identity)
+            .await
+            .map_err(job_error)?;
+        let port_mappings = self
+            .database
+            .list_port_mappings(workspace.id)
+            .await
+            .map_err(job_error)?;
+        self.coordinator
+            .reconcile_port_mappings(workspace, &port_mappings)
             .await
             .map_err(job_error)?;
 
@@ -290,11 +299,14 @@ impl JobHandler for WorkspaceReconcileHandler {
         let workspace_id = job
             .workspace_id
             .ok_or_else(|| JobHandlerError("workspace job has no workspace id".to_owned()))?;
-        let workspace = self
-            .database
-            .get_workspace(workspace_id)
-            .await
-            .map_err(job_error)?;
+        let workspace = match self.database.get_workspace(workspace_id).await {
+            Ok(workspace) => workspace,
+            Err(StorageError::WorkspaceNotFound) => {
+                tracing::info!(%workspace_id, %job.id, "discarding obsolete workspace job");
+                return Ok(());
+            }
+            Err(error) => return Err(job_error(error)),
+        };
         self.reconcile_workspace(&workspace).await
     }
 }

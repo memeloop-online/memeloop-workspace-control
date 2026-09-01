@@ -45,6 +45,11 @@ pub struct AppConfig {
     #[arg(long, env = "MWC_WEB_SHELL_PUBLIC_ORIGIN")]
     pub web_shell_public_origin: Option<String>,
 
+    /// DNS suffix used for authenticated workspace HTTP mappings, for example
+    /// `k3s.example.com` for `p-<mapping-id>.k3s.example.com`.
+    #[arg(long, env = "MWC_PORT_MAPPING_PUBLIC_DOMAIN")]
+    pub port_mapping_public_domain: Option<String>,
+
     /// Prometheus base URL used for PVC usage telemetry. Omit to disable storage telemetry.
     #[arg(long, env = "MWC_PROMETHEUS_URL")]
     pub prometheus_url: Option<Url>,
@@ -95,6 +100,17 @@ impl AppConfig {
             })
         {
             return Err(ConfigError::InvalidWebShellOrigin);
+        }
+        if self
+            .port_mapping_public_domain
+            .as_deref()
+            .is_some_and(|domain| {
+                domain.parse::<std::net::IpAddr>().is_ok()
+                    || !domain.contains('.')
+                    || !valid_ssh_host(domain)
+            })
+        {
+            return Err(ConfigError::InvalidPortMappingDomain);
         }
         if self.prometheus_url.as_ref().is_some_and(|url| {
             !matches!(url.scheme(), "http" | "https")
@@ -209,6 +225,8 @@ pub enum ConfigError {
     InvalidInternalSshHost,
     #[error("Web Shell public origin must be an https origin without a trailing slash")]
     InvalidWebShellOrigin,
+    #[error("port mapping public domain must be a lower-case DNS suffix")]
+    InvalidPortMappingDomain,
     #[error("Prometheus URL must be an http(s) base URL without credentials, query, or fragment")]
     InvalidPrometheusUrl,
 }
@@ -259,6 +277,7 @@ mod tests {
             ssh_public_host: None,
             internal_ssh_host: None,
             web_shell_public_origin: None,
+            port_mapping_public_domain: None,
             prometheus_url: None,
             plugin_dir: None,
         };
@@ -279,6 +298,7 @@ mod tests {
             ssh_public_host: None,
             internal_ssh_host: Some("100.64.12.34".to_owned()),
             web_shell_public_origin: None,
+            port_mapping_public_domain: None,
             prometheus_url: None,
             plugin_dir: None,
         };
@@ -312,6 +332,7 @@ mod tests {
             ssh_public_host: None,
             internal_ssh_host: None,
             web_shell_public_origin: None,
+            port_mapping_public_domain: None,
             prometheus_url: Some(
                 "http://prometheus.monitoring.svc:9090/prometheus"
                     .parse()

@@ -52,6 +52,8 @@ pub(super) struct WorkspaceRuntimeEntry {
 #[derive(Debug, Deserialize, IntoParams)]
 pub(super) struct WorkspaceRuntimeListQuery {
     organization_id: Uuid,
+    /// Comma-separated workspace IDs from the currently visible page (maximum 100).
+    workspace_ids: String,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -89,10 +91,14 @@ pub(super) async fn list(
     if !actor.allows(Permission::ReadWorkspace, query.organization_id) {
         return Err(ApiError::Forbidden);
     }
+    let workspace_ids = parse_workspace_ids(&query.workspace_ids)?;
     let workspaces = state
         .database
-        .list_workspaces(query.organization_id)
+        .list_workspaces_by_ids(query.organization_id, &workspace_ids)
         .await?;
+    if workspaces.is_empty() {
+        return Ok(Json(Vec::new()));
+    }
     let client = state
         .kubernetes_client
         .clone()
@@ -101,8 +107,14 @@ pub(super) async fn list(
         .observability
         .begin_upstream(crate::observability::UpstreamKind::Kubernetes);
     let selector = format!(
-        "{OWNER_INSTALLATION_LABEL}={}",
-        state.config.installation_id
+        "{OWNER_INSTALLATION_LABEL}={},{} in ({})",
+        state.config.installation_id,
+        WORKSPACE_ID_LABEL,
+        workspaces
+            .iter()
+            .map(|workspace| workspace.id.to_string())
+            .collect::<Vec<_>>()
+            .join(",")
     );
     let pod_list = Api::<Pod>::all(client.clone())
         .list(&ListParams::default().labels(&selector))
@@ -250,4 +262,42 @@ fn unix_timestamp() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |duration| duration.as_secs() as i64)
+}
+
+fn parse_workspace_ids(value: &str) -> Result<Vec<Uuid>, ApiError> {
+    let mut ids = value
+        .split(',')
+        .filter(|value| !value.is_empty())
+        .map(Uuid::parse_str)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| ApiError::BadRequest("workspace_ids must contain UUIDs"))?;
+    ids.sort_unstable();
+    ids.dedup();
+    if ids.is_empty() || ids.len() > 100 {
+        return Err(ApiError::BadRequest(
+            "workspace_ids must contain between 1 and 100 UUIDs",
+        ));
+    }
+    Ok(ids)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn workspace_id_query_is_deduplicated_and_bounded() {
+        let first = Uuid::parse_str("01a05874-0f29-78f2-95ca-086b4debca09").unwrap();
+        let second = Uuid::parse_str("01a05875-87b8-74c1-a252-412a71050991").unwrap();
+        let parsed = parse_workspace_ids(&format!("{second},{first},{second}")).unwrap();
+        assert_eq!(parsed, vec![first, second]);
+
+        assert!(parse_workspace_ids("").is_err());
+        assert!(parse_workspace_ids("not-a-uuid").is_err());
+        let too_many = (0..101)
+            .map(|_| Uuid::now_v7().to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        assert!(parse_workspace_ids(&too_many).is_err());
+    }
 }

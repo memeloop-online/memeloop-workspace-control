@@ -18,6 +18,9 @@ use super::{
     verify_existing,
 };
 
+#[path = "client_apply/port_mappings.rs"]
+mod port_mappings;
+
 impl KubernetesCoordinator {
     pub(super) async fn apply_desired(
         &self,

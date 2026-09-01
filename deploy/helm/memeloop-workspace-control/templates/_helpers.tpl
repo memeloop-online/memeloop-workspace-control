@@ -77,6 +77,12 @@ app.kubernetes.io/instance: {{ include "mwc.name" . }}
 {{- if and .Values.public.webShellOrigin (not .Values.public.webShellDomain) -}}
 {{- fail "public.webShellDomain is required when public.webShellOrigin is configured" -}}
 {{- end -}}
+{{- if and .Values.public.portMappingDomain (not .Values.higress.extAuthPluginUrl) -}}
+{{- fail "higress.extAuthPluginUrl is required when public.portMappingDomain is configured" -}}
+{{- end -}}
+{{- if and .Values.public.portMappingDomain (not .Values.networkPolicy.enabled) -}}
+{{- fail "networkPolicy.enabled must remain true when public.portMappingDomain is configured" -}}
+{{- end -}}
 {{- if and .Values.jumpHost.enabled (not .Values.jumpHost.hostKeySecretName) -}}
 {{- fail "jumpHost.hostKeySecretName is required when jumpHost is enabled" -}}
 {{- end -}}
