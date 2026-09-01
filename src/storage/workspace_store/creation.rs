@@ -97,9 +97,12 @@ fn build_workspace(
     now: i64,
 ) -> Workspace {
     let id = Uuid::now_v7();
+    // UUIDv7 starts with a timestamp, so its leading characters are identical for
+    // workspaces created close together. Use the random tail for the human-facing
+    // identifier to keep concurrent, bulk creation safe.
     Workspace {
         id,
-        short_id: id.simple().to_string()[..8].to_owned(),
+        short_id: workspace_short_id(id),
         organization_id: command.organization_id,
         owner_id: command.owner_id,
         name: command.name.trim().to_owned(),
@@ -110,6 +113,11 @@ fn build_workspace(
         created_at: now,
         updated_at: now,
     }
+}
+
+fn workspace_short_id(id: Uuid) -> String {
+    let encoded_id = id.simple().to_string();
+    encoded_id[encoded_id.len() - 16..].to_owned()
 }
 
 fn verify_admitted_template(
@@ -249,4 +257,18 @@ async fn enqueue_and_audit_postgres(
 
 fn as_i64(value: u64) -> Result<i64, StorageError> {
     i64::try_from(value).map_err(|_| StorageError::InvalidWorkspace)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn short_ids_use_the_uuid_random_tail_instead_of_the_shared_timestamp_prefix() {
+        let first = Uuid::parse_str("01990f5d-6e80-7000-8000-000000000001").unwrap();
+        let second = Uuid::parse_str("01990f5d-6e80-7000-8000-000000000002").unwrap();
+
+        assert_eq!(workspace_short_id(first), "8000000000000001");
+        assert_eq!(workspace_short_id(second), "8000000000000002");
+    }
 }

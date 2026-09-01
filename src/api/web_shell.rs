@@ -161,7 +161,11 @@ fn workspace_short_id_from_uri(uri: &str) -> Option<&str> {
     (segments.next()? == "shell")
         .then(|| segments.next())
         .flatten()
-        .filter(|short_id| short_id.len() == 8)
+        // Eight-character IDs are retained for existing workspaces. New IDs use
+        // a 64-bit random UUIDv7 suffix so concurrent creation cannot collide on
+        // the timestamp prefix.
+        .filter(|short_id| matches!(short_id.len(), 8 | 16))
+        .filter(|short_id| short_id.bytes().all(|byte| byte.is_ascii_hexdigit()))
 }
 
 fn is_ttyd_websocket_uri(uri: &str) -> bool {
@@ -186,6 +190,11 @@ mod tests {
             workspace_short_id_from_uri("/shell/01abcdef/?ticket=one"),
             Some("01abcdef")
         );
+        assert_eq!(
+            workspace_short_id_from_uri("/shell/89abcdef01234567/ws"),
+            Some("89abcdef01234567")
+        );
+        assert_eq!(workspace_short_id_from_uri("/shell/not-an-id/ws"), None);
         assert!(is_ttyd_websocket_uri("/shell/01abcdef/ws?ticket=A_b-09"));
         assert!(!is_ttyd_websocket_uri("/shell/01abcdef/?ticket=A_b-09"));
     }
