@@ -7,8 +7,8 @@ use k8s_openapi::{
         core::v1::{Service, ServicePort, ServiceSpec},
         networking::v1::{
             HTTPIngressPath, HTTPIngressRuleValue, Ingress, IngressBackend, IngressRule,
-            IngressServiceBackend, IngressSpec, NetworkPolicy, NetworkPolicyIngressRule,
-            NetworkPolicyPeer, NetworkPolicyPort, ServiceBackendPort,
+            IngressServiceBackend, IngressSpec, IngressTLS, NetworkPolicy,
+            NetworkPolicyIngressRule, NetworkPolicyPeer, NetworkPolicyPort, ServiceBackendPort,
         },
     },
     apimachinery::pkg::{apis::meta::v1::LabelSelector, util::intstr::IntOrString},
@@ -69,6 +69,14 @@ pub fn resources(
         metadata: namespaced_metadata(&name, namespace, &labels),
         spec: Some(IngressSpec {
             ingress_class_name: Some("nginx".to_owned()),
+            // The placeholder is deliberately absent from user namespaces.
+            // Higress fallbackForInvalidSecret resolves the host against its
+            // central credentialConfig, so wildcard private keys never enter a
+            // workspace namespace.
+            tls: Some(vec![IngressTLS {
+                hosts: Some(vec![hostname.clone()]),
+                secret_name: Some("mwc-port-mapping-tls".to_owned()),
+            }]),
             // A unique hostname deliberately avoids a path rewrite.  SPA asset
             // URLs, service-worker scope, WebSockets and absolute redirects all
             // retain their normal application-visible paths.
@@ -209,9 +217,16 @@ mod tests {
             auth_service.spec.unwrap().type_.as_deref(),
             Some("ExternalName")
         );
+        let ingress_spec = ingress.spec.unwrap();
         assert_eq!(
-            ingress.spec.unwrap().rules.unwrap()[0].host.as_deref(),
+            ingress_spec.rules.unwrap()[0].host.as_deref(),
             Some("p-00000000000000000000000000000000.ports.example.test")
         );
+        let tls = &ingress_spec.tls.unwrap()[0];
+        assert_eq!(
+            tls.hosts.as_deref(),
+            Some(["p-00000000000000000000000000000000.ports.example.test".to_owned()].as_slice())
+        );
+        assert_eq!(tls.secret_name.as_deref(), Some("mwc-port-mapping-tls"));
     }
 }

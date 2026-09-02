@@ -65,6 +65,10 @@ selector is used by both the control-plane and workspace NetworkPolicies.
 Set `public.portMappingDomain` to a DNS suffix dedicated to workspace applications, such as
 `ports.example.com`. The deployment then uses `p-<mapping-id>.ports.example.com` hostnames. A
 wildcard DNS record and matching wildcard TLS certificate for `*.ports.example.com` are required.
+Configure the wildcard in Higress `credentialConfig` without an ACME issuer and enable
+`fallbackForInvalidSecret`; the generated Ingress uses an intentionally absent placeholder Secret
+so Higress resolves the certificate centrally instead of copying private keys into workspace
+namespaces.
 Higress applies an exact `p-*` host rule with fail-closed external authentication. The workspace
 application is reached through a ClusterIP Service; NodePort and hostPort are outside this path.
 

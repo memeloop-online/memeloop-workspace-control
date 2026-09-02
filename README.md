@@ -84,7 +84,7 @@ API 密钥通过 `/api/v1/me/api-keys` 管理。新建密钥必须指定至少�
 - `POST /api/v1/workspaces/<workspace_id>/port-mappings/<mapping_id>/open` 签发一次性浏览器启动地址。
 - `DELETE /api/v1/workspaces/<workspace_id>/port-mappings/<mapping_id>` 删除映射并立即使已有票据和会话失效。
 
-映射使用 `p-<mapping-id>.<portMappingDomain>` 独立主机名，经 Higress 的精确 `p-*` 主机匹配和 external-auth 鉴权后转发到工作区内的 ClusterIP Service。启动地址只用于一次浏览器跳转；交换成功后设置 `__Host-mwc-port-session` 的 `HttpOnly`、`Secure`、`SameSite=Lax` cookie。部署时需为 `*.<portMappingDomain>` 准备 DNS 与 TLS，端口映射不使用 NodePort 或 hostPort。
+映射使用 `p-<mapping-id>.<portMappingDomain>` 独立主机名，经 Higress 的精确 `p-*` 主机匹配和 external-auth 鉴权后转发到工作区内的 ClusterIP Service。启动地址只用于一次浏览器跳转；交换成功后设置 `__Host-mwc-port-session` 的 `HttpOnly`、`Secure`、`SameSite=Lax` cookie。部署时需为 `*.<portMappingDomain>` 准备 DNS，并在 Higress `credentialConfig` 中集中配置通配证书和 `fallbackForInvalidSecret`；证书私钥不复制到工作区 Namespace。端口映射不使用 NodePort 或 hostPort。
 
 ## 数据迁移
 
