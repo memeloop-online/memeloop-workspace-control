@@ -300,6 +300,11 @@ fn identity_storage_response(error: &StorageError) -> Option<ErrorResponse> {
             "invalid_api_key",
             "API key names must contain 1-80 characters",
         ),
+        StorageError::InvalidOrganizationMembership => response(
+            StatusCode::BAD_REQUEST,
+            "invalid_organization_membership",
+            "organization memberships require a member or organization administrator role",
+        ),
         StorageError::ApiKeyNotFound => response(
             StatusCode::NOT_FOUND,
             "api_key_not_found",
@@ -319,6 +324,11 @@ fn identity_storage_response(error: &StorageError) -> Option<ErrorResponse> {
             StatusCode::CONFLICT,
             "last_system_admin",
             "create or promote another active system administrator before disabling or demoting this user",
+        ),
+        StorageError::LastOrganizationAdmin => response(
+            StatusCode::CONFLICT,
+            "last_organization_admin",
+            "create or promote another organization administrator before demoting or removing this member",
         ),
         StorageError::OrganizationInUse => response(
             StatusCode::CONFLICT,

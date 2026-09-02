@@ -4,6 +4,7 @@ use uuid::Uuid;
 use crate::auth::Role;
 use crate::storage::{Database, Organization, StorageError};
 
+use super::organization_locks::lock_organization_membership_writes_postgres;
 use super::pagination::{decode_cursor, page_limit, page_members, page_organizations};
 use super::{MembershipPage, MembershipSummary, OrganizationPage};
 
@@ -309,27 +310,76 @@ impl Database {
                 pool,
                 installation_id,
             } => {
+                // IMMEDIATE makes the read/guard/write sequence hold the SQLite write lock
+                // before checking the current administrator count. This prevents two
+                // concurrent demotions from both observing the same last administrator.
+                let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
+                let current_role: Option<String> = sqlx::query_scalar(
+                    "SELECT role FROM organization_memberships WHERE installation_id = ?1 AND organization_id = ?2 AND user_id = ?3",
+                )
+                .bind(installation_id.as_str())
+                .bind(organization_id.to_string())
+                .bind(user_id.to_string())
+                .fetch_optional(&mut *tx)
+                .await?;
+                if current_role.as_deref() == Some(Role::OrganizationAdmin.as_str())
+                    && role != Role::OrganizationAdmin
+                {
+                    ensure_another_organization_admin_sqlite(
+                        &mut tx,
+                        installation_id.as_str(),
+                        organization_id,
+                    )
+                    .await?;
+                }
                 sqlx::query("INSERT INTO organization_memberships (installation_id, organization_id, user_id, role, created_at) VALUES (?1, ?2, ?3, ?4, ?5) ON CONFLICT (installation_id, organization_id, user_id) DO UPDATE SET role = excluded.role")
                     .bind(installation_id.as_str())
                     .bind(organization_id.to_string())
                     .bind(user_id.to_string())
                     .bind(role.as_str())
                     .bind(now)
-                    .execute(pool)
+                    .execute(&mut *tx)
                     .await?;
+                tx.commit().await?;
             }
             Self::Postgres {
                 pool,
                 installation_id,
             } => {
+                let mut tx = pool.begin().await?;
+                lock_organization_membership_writes_postgres(
+                    &mut tx,
+                    installation_id.as_str(),
+                    organization_id,
+                )
+                .await?;
+                let current_role: Option<String> = sqlx::query_scalar(
+                    "SELECT role FROM organization_memberships WHERE installation_id = $1 AND organization_id = $2 AND user_id = $3 FOR UPDATE",
+                )
+                .bind(installation_id.as_str())
+                .bind(organization_id.to_string())
+                .bind(user_id.to_string())
+                .fetch_optional(&mut *tx)
+                .await?;
+                if current_role.as_deref() == Some(Role::OrganizationAdmin.as_str())
+                    && role != Role::OrganizationAdmin
+                {
+                    ensure_another_organization_admin_postgres(
+                        &mut tx,
+                        installation_id.as_str(),
+                        organization_id,
+                    )
+                    .await?;
+                }
                 sqlx::query("INSERT INTO organization_memberships (installation_id, organization_id, user_id, role, created_at) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (installation_id, organization_id, user_id) DO UPDATE SET role = excluded.role")
                     .bind(installation_id.as_str())
                     .bind(organization_id.to_string())
                     .bind(user_id.to_string())
                     .bind(role.as_str())
                     .bind(now)
-                    .execute(pool)
+                    .execute(&mut *tx)
                     .await?;
+                tx.commit().await?;
             }
         }
         Ok(())
@@ -345,27 +395,121 @@ impl Database {
                 pool,
                 installation_id,
             } => {
+                let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
+                let current_role: Option<String> = sqlx::query_scalar(
+                    "SELECT role FROM organization_memberships WHERE installation_id = ?1 AND organization_id = ?2 AND user_id = ?3",
+                )
+                .bind(installation_id.as_str())
+                .bind(organization_id.to_string())
+                .bind(user_id.to_string())
+                .fetch_optional(&mut *tx)
+                .await?;
+                if current_role.as_deref() == Some(Role::OrganizationAdmin.as_str()) {
+                    ensure_another_organization_admin_sqlite(
+                        &mut tx,
+                        installation_id.as_str(),
+                        organization_id,
+                    )
+                    .await?;
+                }
                 sqlx::query("DELETE FROM organization_memberships WHERE installation_id = ?1 AND organization_id = ?2 AND user_id = ?3")
                     .bind(installation_id.as_str())
                     .bind(organization_id.to_string())
                     .bind(user_id.to_string())
-                    .execute(pool)
+                    .execute(&mut *tx)
                     .await?;
+                tx.commit().await?;
             }
             Self::Postgres {
                 pool,
                 installation_id,
             } => {
+                let mut tx = pool.begin().await?;
+                lock_organization_membership_writes_postgres(
+                    &mut tx,
+                    installation_id.as_str(),
+                    organization_id,
+                )
+                .await?;
+                let current_role: Option<String> = sqlx::query_scalar(
+                    "SELECT role FROM organization_memberships WHERE installation_id = $1 AND organization_id = $2 AND user_id = $3 FOR UPDATE",
+                )
+                .bind(installation_id.as_str())
+                .bind(organization_id.to_string())
+                .bind(user_id.to_string())
+                .fetch_optional(&mut *tx)
+                .await?;
+                if current_role.as_deref() == Some(Role::OrganizationAdmin.as_str()) {
+                    ensure_another_organization_admin_postgres(
+                        &mut tx,
+                        installation_id.as_str(),
+                        organization_id,
+                    )
+                    .await?;
+                }
                 sqlx::query("DELETE FROM organization_memberships WHERE installation_id = $1 AND organization_id = $2 AND user_id = $3")
                     .bind(installation_id.as_str())
                     .bind(organization_id.to_string())
                     .bind(user_id.to_string())
-                    .execute(pool)
+                    .execute(&mut *tx)
                     .await?;
+                tx.commit().await?;
             }
         }
         Ok(())
     }
+}
+
+async fn ensure_another_organization_admin_sqlite(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    installation_id: &str,
+    organization_id: Uuid,
+) -> Result<(), StorageError> {
+    let count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) \
+         FROM organization_memberships membership \
+         JOIN users user \
+           ON user.installation_id = membership.installation_id \
+          AND user.id = membership.user_id \
+         WHERE membership.installation_id = ?1 \
+           AND membership.organization_id = ?2 \
+           AND membership.role = 'organization_admin' \
+           AND user.disabled = 0",
+    )
+    .bind(installation_id)
+    .bind(organization_id.to_string())
+    .fetch_one(&mut **tx)
+    .await?;
+    if count <= 1 {
+        return Err(StorageError::LastOrganizationAdmin);
+    }
+    Ok(())
+}
+
+async fn ensure_another_organization_admin_postgres(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    installation_id: &str,
+    organization_id: Uuid,
+) -> Result<(), StorageError> {
+    let count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) \
+         FROM organization_memberships membership \
+         JOIN users user \
+           ON user.installation_id = membership.installation_id \
+          AND user.id = membership.user_id \
+         WHERE membership.installation_id = $1 \
+           AND membership.organization_id = $2 \
+           AND membership.role = 'organization_admin' \
+           AND user.disabled = 0",
+    )
+    .bind(installation_id)
+    .bind(organization_id.to_string())
+    .fetch_one(&mut **tx)
+    .await?;
+    if count <= 1 {
+        return Err(StorageError::LastOrganizationAdmin);
+    }
+    Ok(())
 }
 
 fn decode_sqlite_membership(row: SqliteRow) -> Result<MembershipSummary, StorageError> {

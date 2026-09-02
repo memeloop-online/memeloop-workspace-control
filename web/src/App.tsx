@@ -5,6 +5,7 @@ import { BrandIcon } from "./BrandIcon";
 import { UserAvatar } from "./UserAvatar";
 import { WorkspacePanel } from "./WorkspacePanel";
 import { useI18n } from "./i18n";
+import { canManageOrganization as mayManageOrganization, canManageSystem } from "./permissions";
 import type { Organization, Principal, WorkspaceResponse } from "./types";
 
 type View = "workspaces" | "injections" | "plugins" | "administration" | "audit" | "settings";
@@ -42,7 +43,10 @@ export default function App() {
   const [fatal, setFatal] = useState("");
   const api = useMemo(() => new ApiClient(token), [token]);
   const organizationRole = principal?.memberships.find((membership) => membership.organization_id === organizationId)?.role;
-  const canManageOrganization = Boolean(principal?.system_admin || organizationRole === "organization_admin");
+  const canManageGlobalState = Boolean(principal && canManageSystem(principal));
+  const canManageOrganizationState = Boolean(principal && organizationId && mayManageOrganization(principal, organizationId, "manage_organization"));
+  const canManageMembers = Boolean(principal && organizationId && mayManageOrganization(principal, organizationId, "manage_members"));
+  const canOpenAdministration = canManageGlobalState || canManageOrganizationState || canManageMembers;
   const currentOrganization = organizations.find((organization) => organization.id === organizationId);
 
   useEffect(() => {
@@ -143,10 +147,11 @@ export default function App() {
   }, [notice]);
 
   useEffect(() => {
-    if ((view === "administration" || view === "audit" || view === "plugins") && !canManageOrganization) {
+    const allowed = view === "administration" ? canOpenAdministration : canManageGlobalState || canManageOrganizationState;
+    if ((view === "administration" || view === "audit" || view === "plugins") && !allowed) {
       setView("workspaces");
     }
-  }, [canManageOrganization, view]);
+  }, [canManageGlobalState, canManageOrganizationState, canOpenAdministration, view]);
 
   function login(event: FormEvent) {
     event.preventDefault();
@@ -211,9 +216,9 @@ export default function App() {
         <nav>
           <Nav active={view === "workspaces"} onClick={() => setView("workspaces")} icon="◇">{t("workspaces")}</Nav>
           <Nav active={view === "injections"} onClick={() => setView("injections")} icon="⌁">{t("credentials")}</Nav>
-          {canManageOrganization && <Nav active={view === "plugins"} onClick={() => setView("plugins")} icon="⬡">{t("pluginsTitle")}</Nav>}
-          {canManageOrganization && <Nav active={view === "administration"} onClick={() => setView("administration")} icon="◉">{t("administration")}</Nav>}
-          {canManageOrganization && <Nav active={view === "audit"} onClick={() => setView("audit")} icon="≡">{t("audit")}</Nav>}
+          {(canManageGlobalState || canManageOrganizationState) && <Nav active={view === "plugins"} onClick={() => setView("plugins")} icon="⬡">{t("pluginsTitle")}</Nav>}
+          {canOpenAdministration && <Nav active={view === "administration"} onClick={() => setView("administration")} icon="◉">{t("administration")}</Nav>}
+          {(canManageGlobalState || canManageOrganizationState) && <Nav active={view === "audit"} onClick={() => setView("audit")} icon="≡">{t("audit")}</Nav>}
           <Nav active={view === "settings"} onClick={() => setView("settings")} icon="⚙">{t("settings")}</Nav>
         </nav>
         <div className="sidebar-foot"><span className="live-dot" />{t("apiOnline")}</div>
@@ -229,13 +234,13 @@ export default function App() {
           {view === "settings" ? (
             <SettingsPanel api={api} principal={principal} organizations={organizations} organizationId={organizationId} onOrganizationChange={selectOrganization} onProfileChanged={(profile) => setPrincipal((current) => current ? { ...current, ...profile } : current)} onError={setNotice} />
           ) : view === "audit" ? (
-            <AuditPanel api={api} organizationId={organizationId} systemAdmin={principal.system_admin} onError={setNotice} />
-          ) : !organizationId ? <EmptyOrganization systemAdmin={principal.system_admin} /> : view === "workspaces" ? (
+            <AuditPanel api={api} organizationId={organizationId} systemAdmin={canManageGlobalState} onError={setNotice} />
+          ) : !organizationId ? <EmptyOrganization systemAdmin={canManageGlobalState} /> : view === "workspaces" ? (
             <WorkspacePanel api={api} principal={principal} organizationId={organizationId} workspaces={scopedWorkspaces} busy={loading} onRefresh={refresh} onError={setNotice} />
           ) : view === "injections" ? (
             <InjectionPanel api={api} principal={principal} organizationId={organizationId} workspaces={scopedWorkspaces} onError={setNotice} />
           ) : view === "plugins" ? (
-            <PluginPanel token={token} organizationId={organizationId} systemAdmin={principal.system_admin} onOpenCredentials={() => setView("injections")} />
+            <PluginPanel token={token} organizationId={organizationId} systemAdmin={canManageGlobalState} onOpenCredentials={() => setView("injections")} />
           ) : (
             <AdminPanel api={api} principal={principal} organizationId={organizationId} workspaces={scopedWorkspaces} onError={setNotice} onOrganizationsChanged={refreshOrganizations} />
           )}

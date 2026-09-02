@@ -43,6 +43,29 @@ pub enum ApiKeyScope {
 }
 
 impl ApiKeyScope {
+    pub fn initial_key_defaults(system_admin: bool) -> Vec<Self> {
+        let mut scopes = vec![
+            Self::ManageApiKeys,
+            Self::CreateWorkspace,
+            Self::ReadWorkspace,
+            Self::ConnectWorkspace,
+            Self::ChangeWorkspaceState,
+        ];
+        if system_admin {
+            scopes.splice(
+                1..1,
+                [
+                    Self::ManageSystem,
+                    Self::ManageOrganization,
+                    Self::ManageMembers,
+                    Self::ManageLockedInjections,
+                ],
+            );
+            scopes.push(Self::DeleteWorkspace);
+        }
+        scopes
+    }
+
     pub fn permits(self, permission: Permission) -> bool {
         matches!(self, Self::Wildcard)
             || matches!(
@@ -148,5 +171,18 @@ mod tests {
             serde_json::from_str::<Vec<ApiKeyScope>>(r#"["*"]"#).unwrap(),
             vec![ApiKeyScope::Wildcard]
         );
+    }
+
+    #[test]
+    fn initial_key_defaults_are_explicit_and_role_appropriate() {
+        let member = ApiKeyScope::initial_key_defaults(false);
+        assert!(member.contains(&ApiKeyScope::ManageApiKeys));
+        assert!(!member.contains(&ApiKeyScope::ManageSystem));
+        assert!(!member.contains(&ApiKeyScope::DeleteWorkspace));
+
+        let administrator = ApiKeyScope::initial_key_defaults(true);
+        assert!(administrator.contains(&ApiKeyScope::ManageSystem));
+        assert!(administrator.contains(&ApiKeyScope::DeleteWorkspace));
+        assert!(!administrator.contains(&ApiKeyScope::Wildcard));
     }
 }

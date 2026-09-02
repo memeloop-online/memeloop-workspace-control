@@ -4,6 +4,7 @@ import type {
   ApiKeyScope,
   AuditPage,
   CreatedApiKey,
+  CreateUserInput,
   CreateWorkspace,
   InjectionDraft,
   InjectionScope,
@@ -37,6 +38,10 @@ export interface PageOptions {
   limit?: number;
   cursor?: string;
   search?: string;
+}
+
+export interface UsersPageOptions extends PageOptions {
+  organization_id?: string;
 }
 
 function queryString(values: object): string {
@@ -121,17 +126,17 @@ export class ApiClient {
   }
 
   /** Return only one page; use usersPage for cursor metadata. */
-  users(options: PageOptions = {}): Promise<UserSummary[]> {
+  users(options: UsersPageOptions = {}): Promise<UserSummary[]> {
     return this.usersPage(options).then((page) => page.items);
   }
 
-  usersPage(options: PageOptions = {}): Promise<UserPage> {
+  usersPage(options: UsersPageOptions = {}): Promise<UserPage> {
     return this.request(`/api/v1/admin/users?${queryString(options)}`);
   }
 
-  createUser(displayName: string, token: string): Promise<UserSummary> {
+  createUser(input: CreateUserInput): Promise<UserSummary> {
     return this.request("/api/v1/admin/users", {
-      method: "POST", body: JSON.stringify({ display_name: displayName, token, system_admin: false }), idempotent: true,
+      method: "POST", body: JSON.stringify(input), idempotent: true,
     });
   }
 

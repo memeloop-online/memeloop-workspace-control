@@ -125,6 +125,11 @@ textarea { resize: vertical; font-family: "DM Mono", monospace; line-height: 1.5
 .credential-reference-options > small, .credential-reference-popover > p { color: var(--muted); font-size: .75rem; }
 .credential-reference-popover > p { margin: 9px 2px 0; line-height: 1.5; }
 .workspace-list { display: grid; gap: 10px; }
+.workspace-pagination { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 10px; }
+.workspace-pagination > span { color: var(--muted); font-size: .72rem; min-width: 8rem; text-align: center; }
+.create-user-form { margin: 12px 0 16px; }
+.create-user-scope-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 8px 14px; margin-top: 10px; }
+.create-user-scope-grid label { display: flex; flex-direction: row; align-items: center; gap: 7px; }
 .workspace-card { border: 1px solid var(--line); border-radius: 13px; background: var(--surface); padding: 16px 18px; transition: border-color .15s; }
 .workspace-card:hover { border-color: #344054; }
 .workspace-main { display: flex; align-items: center; justify-content: space-between; }
@@ -663,4 +668,10 @@ textarea { resize: vertical; font-family: "DM Mono", monospace; line-height: 1.5
   .current-organization { display: none; }
   .logout-button { font-size: 0 !important; }
   .logout-button::after { content: "↪"; font-size: .85rem; }
+}
+
+@media (max-width: 390px) {
+  .workspace-pagination { gap: 6px; }
+  .workspace-pagination > span { order: -1; flex-basis: 100%; }
+  .workspace-pagination .button { flex: 1 1 0; min-width: 0; }
 }

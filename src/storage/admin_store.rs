@@ -6,6 +6,7 @@ use uuid::Uuid;
 use crate::auth::Role;
 use crate::storage::{Database, Organization, StorageError};
 
+mod organization_locks;
 mod organizations;
 mod pagination;
 mod quotas;
@@ -18,6 +19,9 @@ pub struct UserSummary {
     pub system_admin: bool,
     pub disabled: bool,
     pub created_at: i64,
+    /// Present only when the user page was scoped to an organization.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub membership_role: Option<Option<Role>>,
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]

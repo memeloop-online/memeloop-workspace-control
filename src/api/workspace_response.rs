@@ -24,9 +24,11 @@ pub(super) async fn complete_workspace_response(
     request_hash: &str,
     status: StatusCode,
     workspace: Workspace,
+    expose_connection: bool,
 ) -> Result<Response, ApiError> {
-    let response_json = serde_json::to_string(&workspace_response(state, workspace).await?)
-        .map_err(|_| ApiError::BadRequest("response serialization failed"))?;
+    let response_json =
+        serde_json::to_string(&workspace_response(state, workspace, expose_connection).await?)
+            .map_err(|_| ApiError::BadRequest("response serialization failed"))?;
     state
         .database
         .finish_idempotency(scope, key, request_hash, status.as_u16(), &response_json)
@@ -37,13 +39,14 @@ pub(super) async fn complete_workspace_response(
 pub(super) async fn workspace_response(
     state: &AppState,
     workspace: Workspace,
+    expose_connection: bool,
 ) -> Result<WorkspaceResponse, ApiError> {
     let namespace = state
         .config
         .installation_id
         .workspace_namespace(&workspace.short_id)
         .map_err(|_| ApiError::BadRequest("workspace namespace is invalid"))?;
-    let connectable = workspace.state == WorkspaceState::Ready;
+    let connectable = expose_connection && workspace.state == WorkspaceState::Ready;
     let internal_endpoint = ssh_endpoint(state, &workspace, &namespace, connectable).await?;
     let (ssh_command, ssh_config) = ssh_commands(
         &workspace,

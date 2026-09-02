@@ -10,7 +10,9 @@ use std::os::unix::fs::OpenOptionsExt;
 
 use clap::{Parser, Subcommand};
 
-use crate::{config::AppConfig, storage::Database};
+use crate::{auth::ApiKeyScope, config::AppConfig, storage::Database};
+
+const SECONDS_PER_DAY: i64 = 24 * 60 * 60;
 
 #[derive(Debug, Parser)]
 #[command(version, about)]
@@ -48,6 +50,9 @@ pub enum AdminCommand {
         token: String,
         #[arg(long, default_value_t = false)]
         system_admin: bool,
+        /// Lifetime of the initial API key. Rotate it through the settings API before expiry.
+        #[arg(long, default_value_t = 30, value_parser = clap::value_parser!(u16).range(1..=365))]
+        expires_in_days: u16,
     },
     /// Generate a new random Base64 installation encryption key.
     GenerateEncryptionKey,
@@ -141,13 +146,23 @@ pub async fn execute_admin(
             display_name,
             token,
             system_admin,
+            expires_in_days,
         } => {
+            let now = unix_timestamp()?;
+            let expires_at = now.saturating_add(i64::from(expires_in_days) * SECONDS_PER_DAY);
             let principal = database
-                .create_user(&display_name, &token, system_admin, unix_timestamp()?)
+                .create_user_with_initial_key(
+                    &display_name,
+                    &token,
+                    system_admin,
+                    ApiKeyScope::initial_key_defaults(system_admin),
+                    expires_at,
+                    now,
+                )
                 .await?;
             println!(
-                "created user {} ({})",
-                principal.user_id, principal.display_name
+                "created user {} ({}); initial key expires at Unix timestamp {}",
+                principal.user_id, principal.display_name, expires_at
             );
         }
         AdminCommand::GenerateEncryptionKey => {

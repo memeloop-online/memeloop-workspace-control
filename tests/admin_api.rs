@@ -1,4 +1,8 @@
-use std::{net::SocketAddr, sync::Arc};
+use std::{
+    net::SocketAddr,
+    sync::Arc,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use axum::{
     body::Body,
@@ -7,6 +11,7 @@ use axum::{
 use http_body_util::BodyExt;
 use memeloop_workspace_control::{
     api::{AppState, router},
+    auth::ApiKeyScope,
     config::{AppConfig, InstallationId},
     quota::Resources,
     storage::{CreateOrganization, Database},
@@ -15,6 +20,7 @@ use memeloop_workspace_control::{
 };
 use serde_json::{Value, json};
 use tower::ServiceExt;
+use uuid::Uuid;
 
 const ADMIN_TOKEN: &str = "admin-api-token-000000000000000000000000000";
 const MEMBER_TOKEN: &str = "member-api-token-00000000000000000000000000";
@@ -22,6 +28,7 @@ const CREATED_TOKEN: &str = "created-api-token-000000000000000000000000";
 
 #[tokio::test]
 async fn management_api_enforces_system_and_organization_boundaries() {
+    let initial_key_expiry = test_key_expiry();
     let installation_id: InstallationId = "admin-test".parse().unwrap();
     let database = Database::connect("sqlite::memory:", installation_id.clone())
         .await
@@ -80,7 +87,19 @@ async fn management_api_enforces_system_and_organization_boundaries() {
                 .header("content-type", "application/json")
                 .header("idempotency-key", "create-managed-user")
                 .body(Body::from(
-                    json!({"display_name":"Created User","token":CREATED_TOKEN}).to_string(),
+                    json!({
+                        "display_name":"Created User",
+                        "token":CREATED_TOKEN,
+                        "scopes":[
+                            "manage_organization",
+                            "create_workspace",
+                            "read_workspace",
+                            "connect_workspace",
+                            "change_workspace_state"
+                        ],
+                        "expires_at": initial_key_expiry
+                    })
+                    .to_string(),
                 ))
                 .unwrap(),
         )
@@ -90,6 +109,31 @@ async fn management_api_enforces_system_and_organization_boundaries() {
     let created: Value = body_json(created).await;
     let created_user_id = created["id"].as_str().unwrap();
     assert!(created.get("token").is_none());
+
+    // Explicit grants are stored as named scopes and an expiry, never as a
+    // wildcard or unbounded initial key.
+    let created_principal = app
+        .clone()
+        .oneshot(
+            authenticated(Request::get("/api/v1/me"), CREATED_TOKEN)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(created_principal.status(), StatusCode::OK);
+    let created_principal: Value = body_json(created_principal).await;
+    assert_eq!(
+        created_principal["api_key_scopes"],
+        json!([
+            "manage_organization",
+            "create_workspace",
+            "read_workspace",
+            "connect_workspace",
+            "change_workspace_state"
+        ])
+    );
+    assert_eq!(created_principal["api_key_expires_at"], initial_key_expiry);
 
     let set_user_quota = app
         .clone()
@@ -440,7 +484,322 @@ async fn management_api_enforces_system_and_organization_boundaries() {
     let scaling: Value = body_json(scaling).await;
     assert_eq!(scaling["database_mode"], "sqlite");
     assert_eq!(scaling["configured_replicas"], 1);
-    assert_eq!(scaling["schema_version"], 15);
+    assert_eq!(scaling["schema_version"], 16);
+}
+
+#[tokio::test]
+async fn admin_user_initial_key_policy_rejects_escalation_and_invalid_expiry() {
+    const SCOPED_ADMIN_TOKEN: &str = "scoped-admin-api-token-000000000000000000000";
+    const LEGACY_ADMIN_TOKEN: &str = "legacy-admin-api-token-000000000000000000000";
+    const NEXT_TOKEN: &str = "next-user-api-token-000000000000000000000000000";
+    let initial_key_now = test_unix_timestamp();
+    let initial_key_expiry = initial_key_now + 30 * 24 * 60 * 60;
+    let installation_id: InstallationId = "initial-key-policy".parse().unwrap();
+    let database = Database::connect("sqlite::memory:", installation_id.clone())
+        .await
+        .unwrap();
+    database.migrate().await.unwrap();
+    database
+        .create_user_with_initial_key(
+            "Scoped administrator",
+            SCOPED_ADMIN_TOKEN,
+            true,
+            vec![ApiKeyScope::ManageSystem],
+            initial_key_expiry,
+            initial_key_now,
+        )
+        .await
+        .unwrap();
+    database
+        .create_user("Legacy administrator", LEGACY_ADMIN_TOKEN, true, 101)
+        .await
+        .unwrap();
+    let app = router(Arc::new(AppState::new(
+        AppConfig {
+            installation_id,
+            listen_address: SocketAddr::from(([127, 0, 0, 1], 0)),
+            database_url: "sqlite::memory:".to_owned(),
+            replica_count: 1,
+            instance_id: "test".to_owned(),
+            ssh_public_host: None,
+            internal_ssh_host: None,
+            web_shell_public_origin: None,
+            port_mapping_public_domain: None,
+            prometheus_url: None,
+            plugin_dir: None,
+        },
+        database,
+    )));
+
+    let compatibility = app
+        .clone()
+        .oneshot(
+            authenticated(Request::post("/api/v1/admin/users"), LEGACY_ADMIN_TOKEN)
+                .header("content-type", "application/json")
+                .header("idempotency-key", "initial-key-compatible")
+                .body(Body::from(
+                    json!({"display_name": "Compatible user", "token": NEXT_TOKEN}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(compatibility.status(), StatusCode::CREATED);
+    let compatibility_principal = app
+        .clone()
+        .oneshot(
+            authenticated(Request::get("/api/v1/me"), NEXT_TOKEN)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let compatibility_principal: Value = body_json(compatibility_principal).await;
+    assert_eq!(
+        compatibility_principal["api_key_scopes"],
+        json!([
+            "manage_api_keys",
+            "create_workspace",
+            "read_workspace",
+            "connect_workspace",
+            "change_workspace_state"
+        ])
+    );
+    assert!(
+        compatibility_principal["api_key_expires_at"]
+            .as_i64()
+            .is_some()
+    );
+
+    let escalation = app
+        .clone()
+        .oneshot(
+            authenticated(Request::post("/api/v1/admin/users"), SCOPED_ADMIN_TOKEN)
+                .header("content-type", "application/json")
+                .header("idempotency-key", "initial-key-escalation")
+                .body(Body::from(
+                    json!({
+                        "display_name": "Escalated user",
+                        "token": NEXT_TOKEN,
+                        "scopes": ["manage_system", "read_workspace"],
+                        "expires_at": 1_900_000_000,
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(escalation.status(), StatusCode::FORBIDDEN);
+
+    let expired = app
+        .clone()
+        .oneshot(
+            authenticated(Request::post("/api/v1/admin/users"), SCOPED_ADMIN_TOKEN)
+                .header("content-type", "application/json")
+                .header("idempotency-key", "initial-key-expired")
+                .body(Body::from(
+                    json!({
+                        "display_name": "Expired user",
+                        "token": NEXT_TOKEN,
+                        "scopes": ["manage_system"],
+                        "expires_at": 1,
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(expired.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn creating_a_user_with_an_organization_membership_is_atomic_and_authorized() {
+    const RESTRICTED_ADMIN_TOKEN: &str = "restricted-admin-api-token-0000000000000000000";
+    const JOINED_TOKEN: &str = "joined-user-api-token-00000000000000000000000000";
+    const MISSING_ORG_TOKEN: &str = "missing-org-user-api-token-000000000000000000000";
+    const FORBIDDEN_TOKEN: &str = "forbidden-org-user-api-token-0000000000000000000";
+    let now = test_unix_timestamp();
+    let expiry = now + 30 * 24 * 60 * 60;
+    let installation_id: InstallationId = "atomic-onboard".parse().unwrap();
+    let database = Database::connect("sqlite::memory:", installation_id.clone())
+        .await
+        .unwrap();
+    database.migrate().await.unwrap();
+    let administrator = database
+        .create_user("Administrator", ADMIN_TOKEN, true, now)
+        .await
+        .unwrap();
+    let organization = database
+        .create_organization(
+            CreateOrganization {
+                name: "Atomic onboarding".to_owned(),
+                owner_user_id: administrator.user_id,
+            },
+            now,
+        )
+        .await
+        .unwrap();
+    database
+        .create_user_with_initial_key(
+            "Restricted administrator",
+            RESTRICTED_ADMIN_TOKEN,
+            true,
+            vec![ApiKeyScope::ManageSystem],
+            expiry,
+            now,
+        )
+        .await
+        .unwrap();
+    let app = router(Arc::new(AppState::new(
+        AppConfig {
+            installation_id,
+            listen_address: SocketAddr::from(([127, 0, 0, 1], 0)),
+            database_url: "sqlite::memory:".to_owned(),
+            replica_count: 1,
+            instance_id: "test".to_owned(),
+            ssh_public_host: None,
+            internal_ssh_host: None,
+            web_shell_public_origin: None,
+            port_mapping_public_domain: None,
+            prometheus_url: None,
+            plugin_dir: None,
+        },
+        database,
+    )));
+
+    let joined = app
+        .clone()
+        .oneshot(
+            authenticated(Request::post("/api/v1/admin/users"), ADMIN_TOKEN)
+                .header("content-type", "application/json")
+                .header("idempotency-key", "atomic-user-joined")
+                .body(Body::from(
+                    json!({
+                        "display_name": "Joined user",
+                        "token": JOINED_TOKEN,
+                        "organization_id": organization.id,
+                        "organization_role": "member"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(joined.status(), StatusCode::CREATED);
+    let joined: Value = body_json(joined).await;
+    let joined_user_id = joined["id"].as_str().unwrap();
+    let members = app
+        .clone()
+        .oneshot(
+            authenticated(
+                Request::get(format!(
+                    "/api/v1/organizations/{}/members?search=Joined%20user",
+                    organization.id
+                )),
+                ADMIN_TOKEN,
+            )
+            .body(Body::empty())
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(members.status(), StatusCode::OK);
+    let members: Value = body_json(members).await;
+    assert_eq!(members["items"][0]["user"]["id"], joined_user_id);
+    assert_eq!(members["items"][0]["role"], "member");
+
+    let nonexistent = app
+        .clone()
+        .oneshot(
+            authenticated(Request::post("/api/v1/admin/users"), ADMIN_TOKEN)
+                .header("content-type", "application/json")
+                .header("idempotency-key", "atomic-user-missing-org")
+                .body(Body::from(
+                    json!({
+                        "display_name": "Missing organization user",
+                        "token": MISSING_ORG_TOKEN,
+                        "organization_id": Uuid::now_v7(),
+                        "organization_role": "member"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(nonexistent.status(), StatusCode::NOT_FOUND);
+
+    let forbidden = app
+        .clone()
+        .oneshot(
+            authenticated(Request::post("/api/v1/admin/users"), RESTRICTED_ADMIN_TOKEN)
+                .header("content-type", "application/json")
+                .header("idempotency-key", "atomic-user-no-membership-scope")
+                .body(Body::from(
+                    json!({
+                        "display_name": "Forbidden organization user",
+                        "token": FORBIDDEN_TOKEN,
+                        "organization_id": organization.id,
+                        "organization_role": "member"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(forbidden.status(), StatusCode::FORBIDDEN);
+
+    for (token, name) in [
+        (MISSING_ORG_TOKEN, "Missing organization user"),
+        (FORBIDDEN_TOKEN, "Forbidden organization user"),
+    ] {
+        let authenticated_user = app
+            .clone()
+            .oneshot(
+                authenticated(Request::get("/api/v1/me"), token)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(authenticated_user.status(), StatusCode::UNAUTHORIZED);
+        let listed = app
+            .clone()
+            .oneshot(
+                authenticated(
+                    Request::get(format!(
+                        "/api/v1/admin/users?search={}",
+                        name.replace(' ', "%20")
+                    )),
+                    ADMIN_TOKEN,
+                )
+                .body(Body::empty())
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(
+            body_json(listed).await["items"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+    }
+}
+
+fn test_key_expiry() -> i64 {
+    test_unix_timestamp() + 30 * 24 * 60 * 60
+}
+
+fn test_unix_timestamp() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64
 }
 
 #[tokio::test]
@@ -507,6 +866,8 @@ async fn user_and_organization_management_are_paginated_and_safe() {
     assert_eq!(page.status(), StatusCode::OK);
     let page = body_json(page).await;
     assert_eq!(page["items"][0]["id"], admin.user_id.to_string());
+    // Preserve the historical response shape unless an organization is requested.
+    assert!(page["items"][0].get("membership_role").is_none());
     let cursor = page["next_cursor"].as_str().unwrap();
     let second_page = app
         .clone()
@@ -527,6 +888,46 @@ async fn user_and_organization_management_are_paginated_and_safe() {
         body_json(second_page).await["items"][0]["display_name"],
         "Admin Two"
     );
+
+    let organization_roles = app
+        .clone()
+        .oneshot(
+            authenticated(
+                Request::get(format!(
+                    "/api/v1/admin/users?organization_id={}&limit=1&search=adm",
+                    organization.id
+                )),
+                ADMIN_TOKEN,
+            )
+            .body(Body::empty())
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(organization_roles.status(), StatusCode::OK);
+    let organization_roles = body_json(organization_roles).await;
+    assert_eq!(
+        organization_roles["items"][0]["membership_role"],
+        "organization_admin"
+    );
+    let role_cursor = organization_roles["next_cursor"].as_str().unwrap();
+    let no_membership = app
+        .clone()
+        .oneshot(
+            authenticated(
+                Request::get(format!(
+                    "/api/v1/admin/users?organization_id={}&limit=1&search=adm&cursor={role_cursor}",
+                    organization.id
+                )),
+                ADMIN_TOKEN,
+            )
+            .body(Body::empty())
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(no_membership.status(), StatusCode::OK);
+    assert!(body_json(no_membership).await["items"][0]["membership_role"].is_null());
 
     let self_lockout = app
         .clone()
@@ -585,6 +986,83 @@ async fn user_and_organization_management_are_paginated_and_safe() {
         body_json(members).await["items"][0]["user"]["id"],
         admin.user_id.to_string()
     );
+}
+
+#[tokio::test]
+async fn user_page_search_treats_like_metacharacters_literally() {
+    let installation_id: InstallationId = "admin-search-test".parse().unwrap();
+    let database = Database::connect("sqlite::memory:", installation_id.clone())
+        .await
+        .unwrap();
+    database.migrate().await.unwrap();
+    database
+        .create_user("Search admin", ADMIN_TOKEN, true, 1)
+        .await
+        .unwrap();
+    for (display_name, token) in [
+        (
+            "Percent % user",
+            "literal-percent-token-000000000000000000000",
+        ),
+        (
+            "Underscore _ user",
+            "literal-underscore-token-000000000000000000",
+        ),
+        (
+            "Backslash \\ user",
+            "literal-backslash-token-0000000000000000000",
+        ),
+    ] {
+        database
+            .create_user(display_name, token, false, 2)
+            .await
+            .unwrap();
+    }
+    let app = router(Arc::new(AppState::new(
+        AppConfig {
+            installation_id,
+            listen_address: SocketAddr::from(([127, 0, 0, 1], 0)),
+            database_url: "sqlite::memory:".to_owned(),
+            replica_count: 1,
+            instance_id: "test".to_owned(),
+            ssh_public_host: None,
+            internal_ssh_host: None,
+            web_shell_public_origin: None,
+            port_mapping_public_domain: None,
+            prometheus_url: None,
+            plugin_dir: None,
+        },
+        database,
+    )));
+
+    for (search, expected) in [
+        ("%", "Percent % user"),
+        ("_", "Underscore _ user"),
+        ("\\", "Backslash \\ user"),
+    ] {
+        let query = url::form_urlencoded::Serializer::new(String::new())
+            .append_pair("search", search)
+            .finish();
+        let response = app
+            .clone()
+            .oneshot(
+                authenticated(
+                    Request::get(format!("/api/v1/admin/users?{query}")),
+                    ADMIN_TOKEN,
+                )
+                .body(Body::empty())
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let users = body_json(response).await["items"]
+            .as_array()
+            .unwrap()
+            .to_vec();
+        assert_eq!(users.len(), 1);
+        assert_eq!(users[0]["display_name"], expected);
+    }
 }
 
 fn authenticated(

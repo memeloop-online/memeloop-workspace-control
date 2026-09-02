@@ -3,8 +3,10 @@ import type { FormEvent } from "react";
 import type { ApiClient } from "./api";
 import { CredentialReferencePicker } from "./forms/CredentialReferencePicker";
 import { useI18n } from "./i18n";
+import { hasApiKeyScope } from "./permissions";
 import { WorkspaceCard } from "./WorkspaceCard";
 import { reserveWebShellWindow } from "./workspaceShell";
+import { previousWorkspaceCursor } from "./workspacePaging";
 import type {
   CreateWorkspace,
   Principal,
@@ -16,6 +18,7 @@ import type {
 } from "./types";
 
 const EMPTY_WORKSPACE_PAGE: WorkspaceResponse[] = [];
+const WORKSPACE_PAGE_SIZE = 50;
 
 interface Props {
   api: ApiClient;
@@ -45,20 +48,30 @@ export function WorkspacePanel(props: Props) {
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [pagedWorkspaces, setPagedWorkspaces] = useState<WorkspaceResponse[]>([]);
   const [nextWorkspaceCursor, setNextWorkspaceCursor] = useState<string | null>(null);
+  const [workspaceCursorHistory, setWorkspaceCursorHistory] = useState<(string | null)[]>([null]);
+  const [workspacePageNumber, setWorkspacePageNumber] = useState(1);
   const [pageLoading, setPageLoading] = useState(false);
   const [loadedWorkspaceScope, setLoadedWorkspaceScope] = useState<string | null>(null);
   const [runtimeLoadFailed, setRuntimeLoadFailed] = useState(false);
   const [runtimeRetryToken, setRuntimeRetryToken] = useState(0);
   const pageRequestGeneration = useRef(0);
   const pageRequestActive = useRef(false);
+  const currentWorkspaceCursor = useRef<string | null>(null);
+  const nextWorkspaceCursorRef = useRef<string | null>(null);
+  const currentWorkspaceIdsRef = useRef<string[]>([]);
+  const workspaceListRef = useRef<HTMLDivElement | null>(null);
   const runtimeRequestGeneration = useRef(0);
   const runtimeKey = pagedWorkspaces.map((item) => `${item.workspace.id}:${item.workspace.state}`).join(",");
-  const externalRefreshKey = props.workspaces.map((item) => `${item.workspace.id}:${item.workspace.generation}:${item.workspace.state}`).join(",");
   const workspaceScope = `${props.organizationId}\u0000${debouncedSearch.trim()}`;
   const workspaceScopeRef = useRef(workspaceScope);
   workspaceScopeRef.current = workspaceScope;
   const showingCurrentWorkspaceScope = loadedWorkspaceScope === workspaceScope;
   const currentPagedWorkspaces = showingCurrentWorkspaceScope ? pagedWorkspaces : EMPTY_WORKSPACE_PAGE;
+  const canCreateWorkspace = hasApiKeyScope(props.principal, "create_workspace");
+  const canConnectWorkspace = hasApiKeyScope(props.principal, "connect_workspace");
+  const canChangeWorkspaceState = hasApiKeyScope(props.principal, "change_workspace_state");
+  const canDeleteWorkspace = hasApiKeyScope(props.principal, "delete_workspace");
+  currentWorkspaceIdsRef.current = currentPagedWorkspaces.map((item) => item.workspace.id);
 
   useEffect(() => {
     const timer = window.setTimeout(() => setDebouncedSearch(workspaceSearch), 250);
@@ -71,14 +84,19 @@ export function WorkspacePanel(props: Props) {
     setPageLoading(true);
     setPagedWorkspaces([]);
     setNextWorkspaceCursor(null);
+    nextWorkspaceCursorRef.current = null;
+    currentWorkspaceCursor.current = null;
+    setWorkspaceCursorHistory([null]);
+    setWorkspacePageNumber(1);
     setLoadedWorkspaceScope(null);
     setRuntime({});
     setRuntimeLoadFailed(false);
-    props.api.workspacesPage(props.organizationId, { limit: 50, search: debouncedSearch.trim() || undefined })
+    props.api.workspacesPage(props.organizationId, { limit: WORKSPACE_PAGE_SIZE, search: debouncedSearch.trim() || undefined })
       .then((page) => {
         if (pageRequestGeneration.current !== generation || workspaceScopeRef.current !== workspaceScope) return;
         setPagedWorkspaces(page.items);
         setNextWorkspaceCursor(page.next_cursor);
+        nextWorkspaceCursorRef.current = page.next_cursor;
         setLoadedWorkspaceScope(workspaceScope);
       })
       .catch((error) => {
@@ -90,7 +108,15 @@ export function WorkspacePanel(props: Props) {
           setPageLoading(false);
         }
       });
-  }, [props.api, props.organizationId, debouncedSearch, externalRefreshKey, props.onError]);
+  }, [props.api, props.organizationId, debouncedSearch, props.onError]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      if (document.visibilityState !== "visible" || !showingCurrentWorkspaceScope || pageRequestActive.current) return;
+      void loadWorkspacePage(currentWorkspaceCursor.current, workspaceScopeRef.current, { preserveRuntime: true });
+    }, 10_000);
+    return () => window.clearInterval(timer);
+  }, [props.api, props.organizationId, debouncedSearch, showingCurrentWorkspaceScope]);
 
   useEffect(() => {
     let active = true;
@@ -102,13 +128,10 @@ export function WorkspacePanel(props: Props) {
         const responses = await Promise.all(batches.map((workspaceIds) => props.api.workspaceRuntimes(props.organizationId, workspaceIds)));
         if (!active || runtimeRequestGeneration.current !== generation) return;
         const entries = responses.flat();
-        setRuntime((current) => ({
-          ...current,
-          ...Object.fromEntries(entries.map((entry) => [
+        setRuntime((current) => Object.fromEntries(entries.map((entry) => [
             entry.workspace_id,
             { ...entry.runtime, events: current[entry.workspace_id]?.events ?? [] },
-          ])),
-        }));
+          ])));
         setRuntimeLoadFailed(false);
       } catch {
         if (active && runtimeRequestGeneration.current === generation) setRuntimeLoadFailed(true);
@@ -117,7 +140,7 @@ export function WorkspacePanel(props: Props) {
     void refreshRuntime();
     const timer = window.setInterval(() => void refreshRuntime(), 30000);
     return () => { active = false; window.clearInterval(timer); };
-  }, [props.api, props.organizationId, runtimeKey, currentPagedWorkspaces, showingCurrentWorkspaceScope, runtimeRetryToken]);
+  }, [props.api, props.organizationId, runtimeKey, showingCurrentWorkspaceScope, runtimeRetryToken]);
 
   useEffect(() => {
     let active = true;
@@ -203,6 +226,7 @@ export function WorkspacePanel(props: Props) {
       setResourceDraft(null);
       setShowCreate(false);
       await props.onRefresh();
+      await resetWorkspacePage();
     } catch (error) {
       props.onError(message(error));
     } finally {
@@ -242,6 +266,7 @@ export function WorkspacePanel(props: Props) {
     try {
       await props.api.workspaceAction(id, value);
       await props.onRefresh();
+      await loadWorkspacePage(currentWorkspaceCursor.current, workspaceScopeRef.current);
     } catch (error) {
       props.onError(message(error));
     }
@@ -263,7 +288,7 @@ export function WorkspacePanel(props: Props) {
     const scope = workspaceScope;
     try {
       const observation = await props.api.workspaceRuntime(workspaceId);
-      if (workspaceScopeRef.current !== scope) return;
+      if (workspaceScopeRef.current !== scope || !currentWorkspaceIdsRef.current.includes(workspaceId)) return;
       setRuntime((current) => ({ ...current, [workspaceId]: observation }));
       setRuntimeLoadFailed(false);
     } catch (error) {
@@ -274,25 +299,56 @@ export function WorkspacePanel(props: Props) {
     }
   }
 
-  async function loadMoreWorkspaces() {
-    if (!nextWorkspaceCursor || pageLoading || pageRequestActive.current || !showingCurrentWorkspaceScope) return;
-    const generation = pageRequestGeneration.current;
-    const cursor = nextWorkspaceCursor;
-    const scope = workspaceScope;
+  async function loadWorkspacePage(cursor: string | null, scope: string, options: { resetScroll?: boolean; preserveRuntime?: boolean } = {}) {
+    if (pageRequestActive.current || workspaceScopeRef.current !== scope) return false;
+    const generation = ++pageRequestGeneration.current;
     pageRequestActive.current = true;
     setPageLoading(true);
+    if (!options.preserveRuntime) setRuntime({});
     try {
-      const page = await props.api.workspacesPage(props.organizationId, { limit: 50, cursor, search: debouncedSearch.trim() || undefined });
-      if (pageRequestGeneration.current !== generation || scope !== workspaceScopeRef.current) return;
-      setPagedWorkspaces((items) => [...items, ...page.items]);
+      const page = await props.api.workspacesPage(props.organizationId, { limit: WORKSPACE_PAGE_SIZE, cursor: cursor ?? undefined, search: debouncedSearch.trim() || undefined });
+      if (pageRequestGeneration.current !== generation || scope !== workspaceScopeRef.current) return false;
+      currentWorkspaceCursor.current = cursor;
+      nextWorkspaceCursorRef.current = page.next_cursor;
+      setPagedWorkspaces(page.items);
+      setLoadedWorkspaceScope(scope);
       setNextWorkspaceCursor(page.next_cursor);
+      if (options.resetScroll && workspaceListRef.current) workspaceListRef.current.scrollTop = 0;
+      return true;
     } catch (error) {
       if (pageRequestGeneration.current === generation && scope === workspaceScopeRef.current) props.onError(message(error));
+      return false;
     } finally {
       if (pageRequestGeneration.current === generation && scope === workspaceScopeRef.current) {
         pageRequestActive.current = false;
         setPageLoading(false);
       }
+    }
+  }
+
+  async function resetWorkspacePage() {
+    if (workspaceScopeRef.current !== workspaceScope) return;
+    setWorkspaceCursorHistory([null]);
+    setWorkspacePageNumber(1);
+    currentWorkspaceCursor.current = null;
+    await loadWorkspacePage(null, workspaceScope, { resetScroll: true });
+  }
+
+  async function loadNextWorkspacePage() {
+    if (!nextWorkspaceCursorRef.current || pageLoading || pageRequestActive.current || !showingCurrentWorkspaceScope) return;
+    const cursor = nextWorkspaceCursorRef.current;
+    if (await loadWorkspacePage(cursor, workspaceScope, { resetScroll: true })) {
+      setWorkspaceCursorHistory((history) => [...history, cursor]);
+      setWorkspacePageNumber((page) => page + 1);
+    }
+  }
+
+  async function loadPreviousWorkspacePage() {
+    if (workspacePageNumber <= 1 || pageLoading || pageRequestActive.current || !showingCurrentWorkspaceScope) return;
+    const cursor = previousWorkspaceCursor(workspaceCursorHistory, workspacePageNumber);
+    if (await loadWorkspacePage(cursor, workspaceScope, { resetScroll: true })) {
+      setWorkspaceCursorHistory((history) => history.slice(0, -1));
+      setWorkspacePageNumber((page) => page - 1);
     }
   }
 
@@ -310,12 +366,12 @@ export function WorkspacePanel(props: Props) {
           <p className="eyebrow">{t("workspaces")}</p>
           <h2>{t("workspaces")}</h2>
         </div>
-        <button className="button primary" onClick={() => setShowCreate((value) => !value)}>
+        {canCreateWorkspace && <button className="button primary" onClick={() => setShowCreate((value) => !value)}>
           {showCreate ? t("collapse") : t("newWorkspace")}
-        </button>
+        </button>}
       </div>
 
-      {showCreate && (
+      {canCreateWorkspace && showCreate && (
         <form className="create-card" onSubmit={create}>
           <label>{t("name")}<input required value={name} onChange={(e) => setName(e.target.value)} /></label>
           <label><FieldTitle label={t("template")} help={t("templatePersistenceHelp")} /><select required value={templateId} onChange={(e) => chooseTemplate(e.target.value)}><option value="">{t("chooseTemplate")}</option>{templates.map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}</select></label>
@@ -335,15 +391,17 @@ export function WorkspacePanel(props: Props) {
         {t("runtimeDataUnavailable")} <button onClick={() => setRuntimeRetryToken((token) => token + 1)}>{t("retryRuntime")}</button>
       </div>}
 
-      <div className="workspace-list" aria-busy={props.busy || pageLoading} style={{ maxHeight: "min(70vh, 820px)", overflowY: "auto", paddingRight: "6px" }} onScroll={(event) => {
-        const el = event.currentTarget;
-        if (el.scrollTop + el.clientHeight >= el.scrollHeight - 120) void loadMoreWorkspaces();
-      }}>
+      <div className="workspace-pagination" aria-label={t("workspacePagination")}>
+        <button className="button" type="button" disabled={workspacePageNumber <= 1 || pageLoading} onClick={() => void loadPreviousWorkspacePage()}>{t("previousPage")}</button>
+        <span role="status">{t("workspacePageStatus")} {workspacePageNumber} · {currentPagedWorkspaces.length}</span>
+        <button className="button" type="button" disabled={!nextWorkspaceCursor || pageLoading} onClick={() => void loadNextWorkspacePage()}>{t("nextPage")}</button>
+      </div>
+
+      <div ref={workspaceListRef} className="workspace-list" aria-busy={props.busy || pageLoading} style={{ maxHeight: "min(70vh, 820px)", overflowY: "auto", paddingRight: "6px" }}>
         {currentPagedWorkspaces.length === 0 && pageLoading && <div className="empty" role="status">{t("loadingWorkspaces")}</div>}
         {currentPagedWorkspaces.length === 0 && !pageLoading && showingCurrentWorkspaceScope && <div className="empty">{t("noWorkspaces")}</div>}
         {currentPagedWorkspaces.length > 0 && filteredWorkspaces.length === 0 && <div className="empty">{t("noMatchingWorkspaces")}</div>}
-        {visibleWorkspaces.map((item) => <WorkspaceCard key={item.workspace.id} api={props.api} item={item} runtime={runtime[item.workspace.id]} onAction={action} onOpenShell={openShell} onRequestRuntime={refreshWorkspaceRuntime} onError={props.onError} />)}
-        {currentPagedWorkspaces.length > 0 && <div className="empty" role="status">{pageLoading ? t("loadingWorkspaces") : nextWorkspaceCursor ? t("scrollToLoadMoreWorkspaces") : t("allLoadedWorkspaces")}</div>}
+        {visibleWorkspaces.map((item) => <WorkspaceCard key={item.workspace.id} api={props.api} item={item} runtime={runtime[item.workspace.id]} onAction={action} onOpenShell={openShell} onRequestRuntime={refreshWorkspaceRuntime} onError={props.onError} canConnect={canConnectWorkspace} canChangeState={canChangeWorkspaceState} canDelete={canDeleteWorkspace} />)}
       </div>
     </section>
   );

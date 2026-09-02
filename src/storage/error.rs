@@ -42,8 +42,12 @@ pub enum StorageError {
     InvalidAuditQuery,
     #[error("organization was not found")]
     OrganizationNotFound,
+    #[error("organization membership role is invalid")]
+    InvalidOrganizationMembership,
     #[error("the last active system administrator cannot be disabled or demoted")]
     LastSystemAdmin,
+    #[error("the last organization administrator cannot be demoted or removed")]
+    LastOrganizationAdmin,
     #[error("organization still has dependent workspaces or templates")]
     OrganizationInUse,
     #[error("database contains unknown role {0}")]

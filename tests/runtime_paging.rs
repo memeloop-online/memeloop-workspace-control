@@ -415,3 +415,115 @@ async fn workspace_page_cursor_and_search_are_keyset_scoped() {
     assert_eq!(filtered["items"][0]["workspace"]["name"], "alpha-second");
     assert!(filtered["next_cursor"].is_null());
 }
+
+#[tokio::test]
+async fn workspace_page_search_covers_workspace_fields_case_insensitively() {
+    let (app, database, admin_id) = test_app().await;
+    let (organization_id, default_template_id) =
+        seeded_organization(&database, admin_id, "Workspace search", 10).await;
+    database
+        .upsert_image_policy("registry.example/Search-Image:42", true, 99)
+        .await
+        .unwrap();
+
+    for (name, now) in [("first", 10), ("second", 20)] {
+        seeded_workspace(
+            &database,
+            organization_id,
+            admin_id,
+            default_template_id,
+            name,
+            now,
+        )
+        .await;
+    }
+
+    let mut searchable_spec = WorkspaceTemplateSpec::standard(
+        "registry.example/Search-Image:42",
+        AccessMode::Internal,
+        Resources {
+            cpu_millis: 1_000,
+            memory_mib: 2_048,
+            gpu_count: 0,
+            disk_gib: 20,
+        },
+    );
+    searchable_spec.workspace_user = "node-dev".to_owned();
+    let searchable_template = database
+        .create_workspace_template(
+            CreateWorkspaceTemplate {
+                organization_id: Some(organization_id),
+                yaml: WorkspaceTemplateDocument::new("Search template", searchable_spec)
+                    .to_yaml()
+                    .unwrap(),
+            },
+            true,
+            30,
+        )
+        .await
+        .unwrap();
+    let searchable_workspace_id = seeded_workspace(
+        &database,
+        organization_id,
+        admin_id,
+        searchable_template.id,
+        "searchable workspace",
+        30,
+    )
+    .await;
+    let searchable_workspace = database
+        .get_workspace(searchable_workspace_id)
+        .await
+        .unwrap();
+
+    async fn search_names(app: &Router, organization_id: Uuid, search: &str) -> Vec<String> {
+        let query = url::form_urlencoded::Serializer::new(String::new())
+            .append_pair("organization_id", &organization_id.to_string())
+            .append_pair("search", search)
+            .finish();
+        let response = app
+            .clone()
+            .oneshot(request(
+                Method::GET,
+                &format!("/api/v1/workspaces?{query}"),
+                Some(ADMIN_TOKEN),
+                None,
+                None,
+            ))
+            .await
+            .unwrap();
+        let (status, response_body) = body(response).await;
+        assert_eq!(status, StatusCode::OK);
+        serde_json::from_slice::<Value>(&response_body).unwrap()["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| item["workspace"]["name"].as_str().unwrap().to_owned())
+            .collect()
+    }
+
+    assert_eq!(
+        search_names(&app, organization_id, "SEARCHABLE WORKSPACE").await,
+        vec!["searchable workspace"]
+    );
+    assert_eq!(
+        search_names(&app, organization_id, "SEARCH-IMAGE:42").await,
+        vec!["searchable workspace"]
+    );
+    assert_eq!(
+        search_names(&app, organization_id, "NODE-DEV").await,
+        vec!["searchable workspace"]
+    );
+    assert_eq!(
+        search_names(&app, organization_id, "PROVISIONING")
+            .await
+            .len(),
+        3
+    );
+    assert_eq!(
+        search_names(&app, organization_id, &searchable_workspace.short_id).await,
+        vec!["searchable workspace"]
+    );
+    // LIKE metacharacters are treated literally rather than broadening the result set.
+    assert!(search_names(&app, organization_id, "%").await.is_empty());
+}

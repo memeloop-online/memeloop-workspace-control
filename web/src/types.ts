@@ -78,6 +78,18 @@ export interface UserSummary {
   system_admin: boolean;
   disabled: boolean;
   created_at: number;
+  /** Returned when the admin user page is scoped to an organization. */
+  membership_role?: Role | null;
+}
+
+export interface CreateUserInput {
+  display_name: string;
+  token: string;
+  system_admin: boolean;
+  scopes: ApiKeyScope[];
+  expires_at: number;
+  organization_id?: string;
+  organization_role?: Exclude<Role, "system_admin">;
 }
 
 export interface UserPage {

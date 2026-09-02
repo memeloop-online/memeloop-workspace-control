@@ -11,10 +11,12 @@ use crate::{
 
 use super::{
     ApiKeySummary, Database, StorageError,
-    user_settings::{insert_key_postgres, insert_key_sqlite, token_prefix},
+    user_settings::{token_prefix, validate_api_key_policy},
 };
 
 mod backend;
+
+use backend::{create_user_with_key_postgres, create_user_with_key_sqlite};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
 pub struct Principal {
@@ -79,6 +81,27 @@ pub struct CreateOrganization {
     pub owner_user_id: Uuid,
 }
 
+/// Inputs for creating a user with the first, bounded API key. Keeping these
+/// together makes the onboarding operation difficult to call inconsistently.
+pub struct InitialUserCommand<'a> {
+    pub display_name: &'a str,
+    pub token: &'a str,
+    pub system_admin: bool,
+    pub scopes: Vec<ApiKeyScope>,
+    pub expires_at: i64,
+    pub membership: Option<(Uuid, Role)>,
+    pub now: i64,
+}
+
+struct UserWithKeyCommand<'a> {
+    display_name: &'a str,
+    token: &'a str,
+    system_admin: bool,
+    initial_key: ApiKeySummary,
+    membership: Option<(Uuid, Role)>,
+    now: i64,
+}
+
 impl Database {
     pub async fn create_user(
         &self,
@@ -87,81 +110,135 @@ impl Database {
         system_admin: bool,
         now: i64,
     ) -> Result<Principal, StorageError> {
-        validate_token(token)?;
+        // Kept for bootstrap and fixture compatibility.  Management APIs must
+        // call `create_user_with_initial_key`, which cannot create a wildcard
+        // or unbounded credential.
+        self.create_user_with_key(UserWithKeyCommand {
+            display_name,
+            token,
+            system_admin,
+            initial_key: ApiKeySummary {
+                id: Uuid::now_v7(),
+                name: "Initial key".to_owned(),
+                prefix: token_prefix(token),
+                last_used_at: None,
+                created_at: now,
+                scopes: vec![ApiKeyScope::Wildcard],
+                expires_at: None,
+            },
+            membership: None,
+            now,
+        })
+        .await
+    }
+
+    /// Creates a user with a safe, administrator-provided initial key policy.
+    /// This deliberately accepts a caller-supplied token so onboarding can hand
+    /// it to the user out of band without the API ever returning it.
+    pub async fn create_user_with_initial_key(
+        &self,
+        display_name: &str,
+        token: &str,
+        system_admin: bool,
+        scopes: Vec<ApiKeyScope>,
+        expires_at: i64,
+        now: i64,
+    ) -> Result<Principal, StorageError> {
+        self.create_user_with_initial_key_and_membership(InitialUserCommand {
+            display_name,
+            token,
+            system_admin,
+            scopes,
+            expires_at,
+            membership: None,
+            now,
+        })
+        .await
+    }
+
+    /// Creates a user, its initial key, and (when supplied) an organization
+    /// membership in one transaction. The organization is checked in that
+    /// transaction so a missing target cannot leave a user or key behind.
+    pub async fn create_user_with_initial_key_and_membership(
+        &self,
+        command: InitialUserCommand<'_>,
+    ) -> Result<Principal, StorageError> {
+        if command
+            .membership
+            .is_some_and(|(_, role)| role == Role::SystemAdmin)
+        {
+            return Err(StorageError::InvalidOrganizationMembership);
+        }
+        let scopes =
+            validate_api_key_policy(command.scopes, Some(command.expires_at), command.now)?;
+        self.create_user_with_key(UserWithKeyCommand {
+            display_name: command.display_name,
+            token: command.token,
+            system_admin: command.system_admin,
+            initial_key: ApiKeySummary {
+                id: Uuid::now_v7(),
+                name: "Initial key".to_owned(),
+                prefix: token_prefix(command.token),
+                last_used_at: None,
+                created_at: command.now,
+                scopes,
+                expires_at: Some(command.expires_at),
+            },
+            membership: command.membership,
+            now: command.now,
+        })
+        .await
+    }
+
+    async fn create_user_with_key(
+        &self,
+        command: UserWithKeyCommand<'_>,
+    ) -> Result<Principal, StorageError> {
+        validate_token(command.token)?;
         let user_id = Uuid::now_v7();
-        let token_hash = hash_token(token);
-        let initial_key = ApiKeySummary {
-            id: user_id,
-            name: "Initial key".to_owned(),
-            prefix: token_prefix(token),
-            last_used_at: None,
-            created_at: now,
-            scopes: vec![ApiKeyScope::Wildcard],
-            expires_at: None,
-        };
+        let token_hash = hash_token(command.token);
         match self {
             Self::Sqlite {
                 pool,
                 installation_id,
             } => {
-                let mut transaction = pool.begin().await?;
-                sqlx::query(
-                    "INSERT INTO users (id, installation_id, display_name, token_hash, \
-                    system_admin, disabled, created_at) VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6)",
-                )
-                .bind(user_id.to_string())
-                .bind(installation_id.as_str())
-                .bind(display_name)
-                .bind(&token_hash)
-                .bind(i64::from(system_admin))
-                .bind(now)
-                .execute(&mut *transaction)
-                .await?;
-                insert_key_sqlite(
-                    &mut transaction,
+                create_user_with_key_sqlite(
+                    pool,
                     installation_id.as_str(),
                     user_id,
-                    &initial_key,
                     &token_hash,
+                    &command,
                 )
-                .await?;
-                transaction.commit().await?;
+                .await?
             }
             Self::Postgres {
                 pool,
                 installation_id,
             } => {
-                let mut transaction = pool.begin().await?;
-                sqlx::query(
-                    "INSERT INTO users (id, installation_id, display_name, token_hash, \
-                    system_admin, disabled, created_at) VALUES ($1, $2, $3, $4, $5, 0, $6)",
-                )
-                .bind(user_id.to_string())
-                .bind(installation_id.as_str())
-                .bind(display_name)
-                .bind(&token_hash)
-                .bind(i64::from(system_admin))
-                .bind(now)
-                .execute(&mut *transaction)
-                .await?;
-                insert_key_postgres(
-                    &mut transaction,
+                create_user_with_key_postgres(
+                    pool,
                     installation_id.as_str(),
                     user_id,
-                    &initial_key,
                     &token_hash,
+                    &command,
                 )
-                .await?;
-                transaction.commit().await?;
+                .await?
             }
         }
         Ok(Principal {
             user_id,
-            display_name: display_name.to_owned(),
-            system_admin,
-            memberships: Vec::new(),
-            api_key_scopes: vec![ApiKeyScope::Wildcard],
-            api_key_expires_at: None,
+            display_name: command.display_name.to_owned(),
+            system_admin: command.system_admin,
+            memberships: command
+                .membership
+                .map(|(organization_id, role)| Membership {
+                    organization_id,
+                    role,
+                })
+                .into_iter()
+                .collect(),
+            api_key_scopes: command.initial_key.scopes,
+            api_key_expires_at: command.initial_key.expires_at,
         })
     }
 

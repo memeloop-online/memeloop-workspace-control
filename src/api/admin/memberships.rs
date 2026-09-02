@@ -55,7 +55,7 @@ pub(in crate::api) async fn list_members(
     ))
 }
 
-#[utoipa::path(put, path = "/api/v1/organizations/{organization_id}/members/{user_id}", request_body = MembershipRequest, params(("Idempotency-Key" = String, Header)), responses((status = 204), (status = 403, body = ErrorEnvelope)))]
+#[utoipa::path(put, path = "/api/v1/organizations/{organization_id}/members/{user_id}", request_body = MembershipRequest, params(("Idempotency-Key" = String, Header)), responses((status = 204), (status = 403, body = ErrorEnvelope), (status = 409, body = ErrorEnvelope)))]
 pub(in crate::api) async fn upsert_membership(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -80,35 +80,46 @@ pub(in crate::api) async fn upsert_membership(
     if let Some(response) = reserve(&state, &scope, key, &request_hash, now).await? {
         return Ok(response);
     }
-    state
-        .database
-        .upsert_membership(organization_id, user_id, request.role, now)
-        .await?;
-    state
-        .database
-        .enqueue_injection_reconciles(
-            crate::storage::InjectionScopeRef {
-                scope: crate::injections::InjectionScope::Organization,
-                scope_id: organization_id,
-            },
-            now,
-        )
-        .await?;
-    state
-        .database
-        .record_audit(
-            Some(actor.user_id),
-            Some(organization_id),
-            None,
-            "membership.upsert",
-            serde_json::json!({"user_id": user_id, "role": request.role}),
-            now,
-        )
-        .await?;
+    let result = async {
+        state
+            .database
+            .upsert_membership(organization_id, user_id, request.role, now)
+            .await?;
+        state
+            .database
+            .enqueue_injection_reconciles(
+                crate::storage::InjectionScopeRef {
+                    scope: crate::injections::InjectionScope::Organization,
+                    scope_id: organization_id,
+                },
+                now,
+            )
+            .await?;
+        state
+            .database
+            .record_audit(
+                Some(actor.user_id),
+                Some(organization_id),
+                None,
+                "membership.upsert",
+                serde_json::json!({"user_id": user_id, "role": request.role}),
+                now,
+            )
+            .await?;
+        Ok::<(), ApiError>(())
+    }
+    .await;
+    if let Err(error) = result {
+        state
+            .database
+            .abandon_idempotency(&scope, key, &request_hash)
+            .await?;
+        return Err(error);
+    }
     finish_empty(&state, &scope, key, &request_hash).await
 }
 
-#[utoipa::path(delete, path = "/api/v1/organizations/{organization_id}/members/{user_id}", params(("Idempotency-Key" = String, Header)), responses((status = 204), (status = 403, body = ErrorEnvelope)))]
+#[utoipa::path(delete, path = "/api/v1/organizations/{organization_id}/members/{user_id}", params(("Idempotency-Key" = String, Header)), responses((status = 204), (status = 403, body = ErrorEnvelope), (status = 409, body = ErrorEnvelope)))]
 pub(in crate::api) async fn remove_membership(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -126,30 +137,41 @@ pub(in crate::api) async fn remove_membership(
     if let Some(response) = reserve(&state, &scope, key, &request_hash, now).await? {
         return Ok(response);
     }
-    state
-        .database
-        .remove_membership(organization_id, user_id)
-        .await?;
-    state
-        .database
-        .enqueue_injection_reconciles(
-            crate::storage::InjectionScopeRef {
-                scope: crate::injections::InjectionScope::Organization,
-                scope_id: organization_id,
-            },
-            now,
-        )
-        .await?;
-    state
-        .database
-        .record_audit(
-            Some(actor.user_id),
-            Some(organization_id),
-            None,
-            "membership.remove",
-            serde_json::json!({"user_id": user_id}),
-            now,
-        )
-        .await?;
+    let result = async {
+        state
+            .database
+            .remove_membership(organization_id, user_id)
+            .await?;
+        state
+            .database
+            .enqueue_injection_reconciles(
+                crate::storage::InjectionScopeRef {
+                    scope: crate::injections::InjectionScope::Organization,
+                    scope_id: organization_id,
+                },
+                now,
+            )
+            .await?;
+        state
+            .database
+            .record_audit(
+                Some(actor.user_id),
+                Some(organization_id),
+                None,
+                "membership.remove",
+                serde_json::json!({"user_id": user_id}),
+                now,
+            )
+            .await?;
+        Ok::<(), ApiError>(())
+    }
+    .await;
+    if let Err(error) = result {
+        state
+            .database
+            .abandon_idempotency(&scope, key, &request_hash)
+            .await?;
+        return Err(error);
+    }
     finish_empty(&state, &scope, key, &request_hash).await
 }

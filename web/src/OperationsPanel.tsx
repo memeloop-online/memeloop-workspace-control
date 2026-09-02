@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
+import { CreateUserForm } from "./admin/CreateUserForm";
 import type { ApiClient } from "./api";
 import { OrganizationManager } from "./OrganizationManager";
+import { canManageOrganization, canManageSystem } from "./permissions";
 import { UsersDirectory } from "./UsersDirectory";
 import { useI18n } from "./i18n";
 import { TemplateEditor } from "./TemplateEditor";
@@ -47,25 +49,28 @@ export function AdminPanel({ api, principal, organizationId, workspaces, onError
   const [editingQuota, setEditingQuota] = useState(false);
   const [quotaDraft, setQuotaDraft] = useState<ResourceDraft>(() => resourceDraft(DEFAULT_QUOTA));
   const [directoryVersion, setDirectoryVersion] = useState(0);
-  const canManageQuota = principal.system_admin || principal.memberships.some((membership) => membership.organization_id === organizationId && membership.role === "organization_admin");
-  const canManageMembers = canManageQuota;
+  const [showCreateUser, setShowCreateUser] = useState(false);
+  const canManageQuota = canManageOrganization(principal, organizationId, "manage_organization");
+  const canManageMembers = canManageOrganization(principal, organizationId, "manage_members");
+  const canManageGlobalState = canManageSystem(principal);
   const currentOrganization = organizations.find((organization) => organization.id === organizationId);
   const states = workspaces.reduce<Record<string, number>>((sum, item) => ({ ...sum, [item.workspace.state]: (sum[item.workspace.state] ?? 0) + 1 }), {});
 
   async function refresh() {
     try {
-      const [currentQuota, visibleTemplates, subscriptions, organizationPage] = await Promise.all([
-        api.quota(organizationId),
-        api.templates(organizationId),
-        api.webhooks(organizationId),
+      const [managedResources, organizationPage] = await Promise.all([
+        canManageQuota
+          ? Promise.all([api.quota(organizationId), api.templates(organizationId), api.webhooks(organizationId)])
+          : Promise.resolve([null, [], []] as [Resources | null, WorkspaceTemplate[], WebhookSubscription[]]),
         api.organizationsPage({ limit: 200 }),
       ]);
+      const [currentQuota, visibleTemplates, subscriptions] = managedResources;
       setQuota(currentQuota);
       setQuotaDraft(resourceDraft(currentQuota ?? DEFAULT_QUOTA));
       setTemplates(visibleTemplates);
       setWebhooks(subscriptions);
       setOrganizations(organizationPage.items);
-      if (principal.system_admin) {
+      if (canManageGlobalState) {
         const [allImages, status] = await Promise.all([api.images(), api.scaling()]);
         setImages(allImages);
         setScaling(status);
@@ -75,7 +80,7 @@ export function AdminPanel({ api, principal, organizationId, workspaces, onError
     }
   }
 
-  useEffect(() => { void refresh(); }, [api, organizationId, principal.system_admin]);
+  useEffect(() => { void refresh(); }, [api, organizationId, canManageGlobalState, canManageQuota]);
 
   useEffect(() => {
     setCurrentOrganizationName(currentOrganization?.name ?? "");
@@ -159,19 +164,6 @@ export function AdminPanel({ api, principal, organizationId, workspaces, onError
     }
   }
 
-  async function newUser() {
-    const name = prompt(t("userDisplayNamePrompt"));
-    const token = prompt(t("initialTokenPrompt"));
-    if (!name || !token) return;
-    try {
-      await api.createUser(name, token);
-      setDirectoryVersion((value) => value + 1);
-      await refresh();
-    } catch (error) {
-      onError(message(error, t("requestFailed")));
-    }
-  }
-
   return <section className="panel-stack">
     <div className="section-heading">
       <div><p className="eyebrow">{t("administrationEyebrow")}</p><h2>{t("administrationTitle")}</h2></div>
@@ -200,8 +192,9 @@ export function AdminPanel({ api, principal, organizationId, workspaces, onError
         organization={currentOrganization}
         organizationName={currentOrganizationName}
         newOrganizationName={organizationName}
-        canCreate={principal.system_admin}
-        canDelete={principal.system_admin}
+        canCreate={canManageGlobalState}
+        canEdit={canManageQuota}
+        canDelete={canManageGlobalState}
         onOrganizationNameChange={setCurrentOrganizationName}
         onNewOrganizationNameChange={setOrganizationName}
         onSave={() => void saveOrganization()}
@@ -211,16 +204,15 @@ export function AdminPanel({ api, principal, organizationId, workspaces, onError
 
       {canManageMembers && <>
         <div className="system-card wide">
-          <div className="card-heading"><h3>{t("usersRoles")}</h3>{principal.system_admin && <button className="button" onClick={() => void newUser()}>{t("createUser")}</button>}</div>
-          <UsersDirectory api={api} organizationId={organizationId} principal={principal} canManageUsers={principal.system_admin} refreshVersion={directoryVersion} onError={onError} onEditQuota={(userId) => void editUserQuota(userId)} />
+          <div className="card-heading"><h3>{t("usersRoles")}</h3>{canManageGlobalState && <button className="button" onClick={() => setShowCreateUser((visible) => !visible)}>{showCreateUser ? t("collapse") : t("createUser")}</button>}</div>
+          {canManageGlobalState && showCreateUser && <CreateUserForm api={api} principal={principal} organizationId={organizationId} onCancel={() => setShowCreateUser(false)} onError={onError} onCreated={async () => { setShowCreateUser(false); setDirectoryVersion((value) => value + 1); await refresh(); }} />}
+          <UsersDirectory api={api} organizationId={organizationId} principal={principal} canManageUsers={canManageGlobalState} canEditQuota={canManageGlobalState} refreshVersion={directoryVersion} onError={onError} onEditQuota={(userId) => void editUserQuota(userId)} />
         </div>
-        {principal.system_admin && <ImageAllowlist images={images} image={image} onImageChange={setImage} onAllow={() => void allowImage()} />}
       </>}
-      {principal.system_admin && <>
-      </>}
+      {canManageGlobalState && <ImageAllowlist images={images} image={image} onImageChange={setImage} onAllow={() => void allowImage()} />}
 
-      <div className="system-card wide template-system-card"><TemplateEditor api={api} organizationId={organizationId} templates={templates} canGrantClusterAccess={principal.system_admin} onRefresh={refresh} onError={onError} /></div>
-      <div className="system-card wide"><h3>{t("webhook")}</h3><button className="button" onClick={() => void newWebhook()}>{t("addWebhook")}</button>{webhooks.length ? <div className="state-bars">{webhooks.map((hook) => <div key={hook.id}><span>{hook.event_prefix}</span><code>{hook.url}</code></div>)}</div> : <p>{t("noWebhooks")}</p>}</div>
+      {canManageQuota && <div className="system-card wide template-system-card"><TemplateEditor api={api} organizationId={organizationId} templates={templates} canGrantClusterAccess={canManageGlobalState} onRefresh={refresh} onError={onError} /></div>}
+      {canManageQuota && <div className="system-card wide"><h3>{t("webhook")}</h3><button className="button" onClick={() => void newWebhook()}>{t("addWebhook")}</button>{webhooks.length ? <div className="state-bars">{webhooks.map((hook) => <div key={hook.id}><span>{hook.event_prefix}</span><code>{hook.url}</code></div>)}</div> : <p>{t("noWebhooks")}</p>}</div>}
     </div>
   </section>;
 }

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
 import type { ApiClient } from "./api";
+import { API_KEY_SCOPES, API_KEY_SCOPE_LABELS } from "./apiKeyScopes";
 import { useI18n, type MessageKey } from "./i18n";
 import type { ApiKeyScope, ApiKeySummary, CreatedApiKey, Organization, Principal, UserProfile } from "./types";
 import { UserAvatar } from "./UserAvatar";
@@ -204,33 +205,6 @@ function customAvatarUrl(value: string | null | undefined): string {
   // network URL back into the editor or send it back to the API.
   return value && /^(data:image\/(png|jpeg|webp);base64,)/i.test(value) ? value : "";
 }
-
-const API_KEY_SCOPES = [
-  { scope: "manage_api_keys", label: "scope_manage_api_keys" },
-  { scope: "manage_system", label: "scope_manage_system" },
-  { scope: "manage_organization", label: "scope_manage_organization" },
-  { scope: "manage_members", label: "scope_manage_members" },
-  { scope: "manage_locked_injections", label: "scope_manage_locked_injections" },
-  { scope: "create_workspace", label: "scope_create_workspace" },
-  { scope: "read_workspace", label: "scope_read_workspace" },
-  { scope: "connect_workspace", label: "scope_connect_workspace" },
-  { scope: "change_workspace_state", label: "scope_change_workspace_state" },
-  { scope: "delete_workspace", label: "scope_delete_workspace" },
-] as const satisfies ReadonlyArray<{ scope: ApiKeyScope; label: Parameters<ReturnType<typeof useI18n>["t"]>[0] }>;
-
-const API_KEY_SCOPE_LABELS: Record<string, MessageKey> = {
-  "*": "scope_wildcard",
-  manage_api_keys: "scope_manage_api_keys",
-  manage_system: "scope_manage_system",
-  manage_organization: "scope_manage_organization",
-  manage_members: "scope_manage_members",
-  manage_locked_injections: "scope_manage_locked_injections",
-  create_workspace: "scope_create_workspace",
-  read_workspace: "scope_read_workspace",
-  connect_workspace: "scope_connect_workspace",
-  change_workspace_state: "scope_change_workspace_state",
-  delete_workspace: "scope_delete_workspace",
-};
 
 function localDateTime(value: Date): string {
   const offset = value.getTimezoneOffset() * 60_000;

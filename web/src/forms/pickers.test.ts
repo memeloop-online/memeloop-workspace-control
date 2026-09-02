@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { filterReferenceItems, filterWorkspaces, mergeWorkspaces } from "./pickerModel.ts";
+import { filterReferenceItems, filterWorkspaces, mergeWorkspaces, shouldClearWorkspaceDraft } from "./pickerModel.ts";
 import type { StoredInjection, WorkspaceResponse } from "../types.ts";
 
 const translate = ((key: string) => ({ environmentVariable: "环境变量", credentialFile: "敏感文件", sshPublicKey: "SSH 公钥", configFile: "配置文件" })[key] ?? key) as never;
@@ -35,4 +35,10 @@ test("workspace combobox merges local and remote results without duplicate optio
 test("workspace combobox filtering keeps the displayed selected label searchable", () => {
   const item = { workspace: { name: "Docs", short_id: "01docs", workspace_user: "node-dev" } } as WorkspaceResponse;
   assert.deepEqual(filterWorkspaces([item], "Docs · 01docs"), [item]);
+});
+
+test("workspace combobox treats an empty draft as clearing its prior selection", () => {
+  assert.equal(shouldClearWorkspaceDraft(""), true);
+  assert.equal(shouldClearWorkspaceDraft("   "), true);
+  assert.equal(shouldClearWorkspaceDraft("unmatched search"), false);
 });

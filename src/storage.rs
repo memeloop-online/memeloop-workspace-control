@@ -46,7 +46,7 @@ pub use audit_store::{AuditFilter, AuditPage};
 pub use error::StorageError;
 pub use event_store::{EventNotifier, EventRecord};
 pub use idempotency::{IdempotencyDecision, IdempotencyReplay};
-pub use identity::{CreateOrganization, Membership, Organization, Principal};
+pub use identity::{CreateOrganization, InitialUserCommand, Membership, Organization, Principal};
 pub use image_policy_store::ImagePolicy;
 pub use injection_store::{InjectionScopeRef, StoredInjectionSummary};
 pub use job_types::{ClaimedJob, NewJob};
@@ -61,6 +61,7 @@ pub use ssh_access::SshAccessCandidate;
 pub use ssh_identity::{WorkspaceSshIdentity, WorkspaceSshPublicIdentity};
 pub use template_store::{CreateWorkspaceTemplate, WorkspaceTemplate};
 pub use transfer::DatabaseSnapshot;
+pub(crate) use user_settings::validate_api_key_policy;
 pub use user_settings::{ApiKeySummary, CreatedApiKey, StoredUserProfile};
 pub use web_shell::{IssuedWebShellTicket, WebShellIdentity};
 pub use webhook_store::{CreateWebhookSubscription, WebhookDelivery, WebhookSubscriptionSummary};
@@ -202,6 +203,9 @@ async fn migrate_sqlite(pool: &SqlitePool, applied_at: i64) -> Result<(), Storag
             .await?;
         apply_sqlite_migration_group(&mut transaction, schema::V15_MIGRATIONS).await?;
     }
+    if version < 16 {
+        apply_sqlite_migration_group(&mut transaction, schema::V16_MIGRATIONS).await?;
+    }
     if version < schema::SCHEMA_VERSION {
         sqlx::query("INSERT INTO schema_migrations (version, applied_at) VALUES (?1, ?2)")
             .bind(schema::SCHEMA_VERSION)
@@ -264,6 +268,9 @@ async fn migrate_postgres(
             .await?;
         apply_postgres_migration_group(&mut transaction, schema::V15_MIGRATIONS).await?;
     }
+    if version < 16 {
+        apply_postgres_migration_group(&mut transaction, schema::V16_MIGRATIONS).await?;
+    }
     if version < schema::SCHEMA_VERSION {
         sqlx::query("INSERT INTO schema_migrations (version, applied_at) VALUES ($1, $2)")
             .bind(schema::SCHEMA_VERSION)
@@ -291,4 +298,89 @@ fn unix_timestamp() -> Result<i64, StorageError> {
         .map_err(|_| StorageError::Clock)?
         .as_secs();
     i64::try_from(seconds).map_err(|_| StorageError::Clock)
+}
+
+#[cfg(test)]
+mod schema_tests {
+    use super::*;
+    use sqlx::Row;
+    use uuid::Uuid;
+
+    #[tokio::test]
+    async fn sqlite_membership_organization_role_index_has_expected_columns() {
+        let database = Database::connect("sqlite::memory:", "schema-index-test".parse().unwrap())
+            .await
+            .unwrap();
+        database.migrate().await.unwrap();
+
+        let Database::Sqlite { pool, .. } = &database else {
+            unreachable!("the test database is SQLite");
+        };
+        let rows = sqlx::query("PRAGMA index_info('memberships_organization_role_idx')")
+            .fetch_all(pool)
+            .await
+            .unwrap();
+        let columns = rows
+            .into_iter()
+            .map(|row| row.try_get::<String, _>("name").unwrap())
+            .collect::<Vec<_>>();
+
+        assert_eq!(columns, ["installation_id", "organization_id", "role"]);
+        assert_eq!(database.schema_version().await.unwrap(), 16);
+
+        // Re-running migrations must retain the same index rather than attempting to recreate it.
+        database.migrate().await.unwrap();
+        let index_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'memberships_organization_role_idx'",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        assert_eq!(index_count, 1);
+    }
+
+    #[tokio::test]
+    async fn postgres_membership_organization_role_index_has_expected_columns() {
+        let Ok(database_url) = std::env::var("MWC_TEST_POSTGRES_URL") else {
+            eprintln!("skipping PostgreSQL schema index test: MWC_TEST_POSTGRES_URL is not set");
+            return;
+        };
+        let schema = format!("mwc_schema_index_{}", Uuid::now_v7().simple());
+        let administration = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&database_url)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&administration)
+            .await
+            .unwrap();
+        let mut scoped_url = url::Url::parse(&database_url).unwrap();
+        scoped_url
+            .query_pairs_mut()
+            .append_pair("options", &format!("-c search_path={schema}"));
+        let database = Database::connect(scoped_url.as_str(), "schema-index-test".parse().unwrap())
+            .await
+            .unwrap();
+        database.migrate().await.unwrap();
+
+        let Database::Postgres { pool, .. } = &database else {
+            unreachable!("the test database is PostgreSQL");
+        };
+        let index_definition: String = sqlx::query_scalar(
+            "SELECT indexdef FROM pg_indexes WHERE schemaname = current_schema() AND indexname = 'memberships_organization_role_idx'",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        assert!(index_definition.contains("(installation_id, organization_id, role)",));
+        assert_eq!(database.schema_version().await.unwrap(), 16);
+
+        drop(database);
+        sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+            .execute(&administration)
+            .await
+            .unwrap();
+        administration.close().await;
+    }
 }

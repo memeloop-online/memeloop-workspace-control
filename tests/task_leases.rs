@@ -207,9 +207,9 @@ async fn migrations_are_versioned_and_idempotent() {
         .await
         .unwrap();
     database.migrate().await.unwrap();
-    assert_eq!(database.schema_version().await.unwrap(), 15);
+    assert_eq!(database.schema_version().await.unwrap(), 16);
     database.migrate().await.unwrap();
-    assert_eq!(database.schema_version().await.unwrap(), 15);
+    assert_eq!(database.schema_version().await.unwrap(), 16);
 }
 
 #[tokio::test]
@@ -243,7 +243,7 @@ async fn schema_ten_backfills_yaml_for_a_legacy_template_row() {
     );
     assert!(!template.yaml.contains("runtimeProfile"));
     assert!(!template.yaml.contains("runtime_profile"));
-    assert_eq!(database.schema_version().await.unwrap(), 15);
+    assert_eq!(database.schema_version().await.unwrap(), 16);
 }
 
 #[tokio::test]

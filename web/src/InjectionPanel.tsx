@@ -3,6 +3,7 @@ import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import type { ApiClient } from "./api";
 import { WorkspaceCombobox } from "./forms/WorkspaceCombobox";
 import { useI18n } from "./i18n";
+import { canManageOrganization as mayManageOrganization } from "./permissions";
 import type {
   InjectionKind,
   InjectionScope,
@@ -30,7 +31,7 @@ interface Props {
 export function InjectionPanel(props: Props) {
   const { t } = useI18n();
   const scopeTabsId = useId();
-  const canManageOrganization = props.principal.system_admin || props.principal.memberships.some((membership) => membership.organization_id === props.organizationId && membership.role === "organization_admin");
+  const canManageOrganization = mayManageOrganization(props.principal, props.organizationId, "manage_organization");
   const scopeValues: InjectionScope[] = [...(canManageOrganization ? ["organization" as const] : []), "user", "workspace"];
   const [scope, setScope] = useState<InjectionScope>("user");
   const [workspaceId, setWorkspaceId] = useState(() => props.workspaces.find((item) => !item.workspace.organization_id || item.workspace.organization_id === props.organizationId)?.workspace.id ?? "");

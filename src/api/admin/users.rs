@@ -10,7 +10,10 @@ use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
-use crate::storage::{IdempotencyDecision, UserPage, UserSummary};
+use crate::{
+    auth::{ApiKeyScope, Permission, Role},
+    storage::{IdempotencyDecision, InitialUserCommand, UserPage, UserSummary},
+};
 
 use super::{
     ApiError, AppState, ErrorEnvelope,
@@ -24,6 +27,18 @@ pub(in crate::api) struct CreateUserRequest {
     token: String,
     #[serde(default)]
     system_admin: bool,
+    /// Omitted by old clients: use the safe role-specific default below.
+    #[serde(default)]
+    scopes: Option<Vec<ApiKeyScope>>,
+    /// Unix seconds. Omitted by old clients: defaults to 30 days.
+    #[serde(default)]
+    expires_at: Option<i64>,
+    /// Optionally place the new user in an organization as part of creation.
+    #[serde(default)]
+    organization_id: Option<Uuid>,
+    /// Required with `organization_id`; organization roles never accept `system_admin`.
+    #[serde(default)]
+    organization_role: Option<Role>,
 }
 
 #[derive(Debug, Deserialize, IntoParams)]
@@ -31,6 +46,7 @@ pub(in crate::api) struct PageQuery {
     pub limit: Option<u32>,
     pub cursor: Option<String>,
     pub search: Option<String>,
+    pub organization_id: Option<Uuid>,
 }
 
 #[derive(Debug, Clone, Deserialize, ToSchema)]
@@ -54,6 +70,7 @@ pub(in crate::api) async fn list_users_page(
                 query.limit,
                 query.cursor.as_deref(),
                 query.search.as_deref(),
+                query.organization_id,
             )
             .await?,
     ))
@@ -117,9 +134,10 @@ pub(in crate::api) async fn create_user(
 ) -> Result<Response, ApiError> {
     let actor = require_system_admin(&state, &headers).await?;
     let key = idempotency_key(&headers)?;
+    let now = unix_timestamp()?;
+    let command = initial_user_command(&actor, &request, now)?;
     let request_hash = hash(&request)?;
     let scope = format!("{}:admin-create-user", actor.user_id);
-    let now = unix_timestamp()?;
     match state
         .database
         .begin_idempotency(
@@ -140,12 +158,7 @@ pub(in crate::api) async fn create_user(
     }
     let principal = match state
         .database
-        .create_user(
-            &request.display_name,
-            &request.token,
-            request.system_admin,
-            now,
-        )
+        .create_user_with_initial_key_and_membership(command)
         .await
     {
         Ok(principal) => principal,
@@ -157,12 +170,17 @@ pub(in crate::api) async fn create_user(
             return Err(error.into());
         }
     };
+    let membership_role = principal
+        .memberships
+        .first()
+        .map(|membership| membership.role);
     let summary = UserSummary {
         id: principal.user_id,
         display_name: principal.display_name,
         system_admin: principal.system_admin,
         disabled: false,
         created_at: now,
+        membership_role: Some(membership_role),
     };
     state
         .database
@@ -189,3 +207,61 @@ pub(in crate::api) async fn create_user(
         .await?;
     json_response(StatusCode::CREATED, response_json)
 }
+
+fn initial_user_command<'a>(
+    actor: &crate::storage::Principal,
+    request: &'a CreateUserRequest,
+    now: i64,
+) -> Result<InitialUserCommand<'a>, ApiError> {
+    let membership = requested_membership(actor, request)?;
+    let scopes = request
+        .scopes
+        .clone()
+        .unwrap_or_else(|| ApiKeyScope::initial_key_defaults(request.system_admin));
+    let expires_at = request
+        .expires_at
+        .unwrap_or_else(|| now + INITIAL_KEY_LIFETIME_SECONDS);
+    if !super::settings::actor_may_grant(&actor.api_key_scopes, &scopes)
+        || actor
+            .api_key_expires_at
+            .is_some_and(|limit| expires_at > limit)
+    {
+        return Err(ApiError::Forbidden);
+    }
+    // Validate before reserving the idempotency key so malformed requests don't
+    // leave a reservation behind. The storage path validates again atomically.
+    crate::storage::validate_api_key_policy(scopes.clone(), Some(expires_at), now)?;
+    Ok(InitialUserCommand {
+        display_name: &request.display_name,
+        token: &request.token,
+        system_admin: request.system_admin,
+        scopes,
+        expires_at,
+        membership,
+        now,
+    })
+}
+
+fn requested_membership(
+    actor: &crate::storage::Principal,
+    request: &CreateUserRequest,
+) -> Result<Option<(Uuid, Role)>, ApiError> {
+    match (request.organization_id, request.organization_role) {
+        (Some(organization_id), Some(role @ (Role::OrganizationAdmin | Role::Member))) => {
+            if actor.allows(Permission::ManageMembers, organization_id) {
+                Ok(Some((organization_id, role)))
+            } else {
+                Err(ApiError::Forbidden)
+            }
+        }
+        (Some(_), Some(Role::SystemAdmin)) => Err(ApiError::BadRequest(
+            "organization membership cannot grant system_admin",
+        )),
+        (Some(_), None) | (None, Some(_)) => Err(ApiError::BadRequest(
+            "organization_id and organization_role must be supplied together",
+        )),
+        (None, None) => Ok(None),
+    }
+}
+
+const INITIAL_KEY_LIFETIME_SECONDS: i64 = 30 * 24 * 60 * 60;

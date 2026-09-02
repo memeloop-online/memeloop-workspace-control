@@ -19,6 +19,14 @@ export function filterWorkspaces(items: WorkspaceResponse[], query: string) {
 }
 
 /**
+ * A blank draft is an explicit removal of the current workspace selection.
+ * Other unfinished searches remain drafts and are restored on blur or Escape.
+ */
+export function shouldClearWorkspaceDraft(query: string) {
+  return query.trim().length === 0;
+}
+
+/**
  * Keep the first representation of a workspace while combining locally loaded
  * items with a remote search response. The local list is deliberately first:
  * it is the parent panel's current, complete representation and therefore

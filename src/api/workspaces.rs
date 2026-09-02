@@ -169,6 +169,7 @@ pub(super) async fn create(
         workspace =
             wait_until_ready(&state, workspace, query.timeout.unwrap_or(30).clamp(1, 120)).await?;
     }
+    let expose_connection = actor.allows(Permission::ConnectWorkspace, workspace.organization_id);
     complete_workspace_response(
         &state,
         &scope,
@@ -176,6 +177,7 @@ pub(super) async fn create(
         &request_hash,
         StatusCode::CREATED,
         workspace,
+        expose_connection,
     )
     .await
 }
@@ -210,7 +212,9 @@ pub(super) async fn list(
         .await?;
     let mut responses = Vec::with_capacity(workspaces.items.len());
     for workspace in workspaces.items {
-        responses.push(workspace_response(&state, workspace).await?);
+        let expose_connection =
+            actor.allows(Permission::ConnectWorkspace, workspace.organization_id);
+        responses.push(workspace_response(&state, workspace, expose_connection).await?);
     }
     Ok(Json(WorkspaceResponsePage {
         items: responses,
@@ -239,7 +243,10 @@ pub(super) async fn get(
     if !actor.allows(Permission::ReadWorkspace, workspace.organization_id) {
         return Err(ApiError::Forbidden);
     }
-    Ok(Json(workspace_response(&state, workspace).await?))
+    let expose_connection = actor.allows(Permission::ConnectWorkspace, workspace.organization_id);
+    Ok(Json(
+        workspace_response(&state, workspace, expose_connection).await?,
+    ))
 }
 
 #[utoipa::path(
@@ -312,6 +319,7 @@ pub(super) async fn action(
             return Err(error.into());
         }
     };
+    let expose_connection = actor.allows(Permission::ConnectWorkspace, workspace.organization_id);
     complete_workspace_response(
         &state,
         &scope,
@@ -319,6 +327,7 @@ pub(super) async fn action(
         &request_hash,
         StatusCode::ACCEPTED,
         workspace,
+        expose_connection,
     )
     .await
 }

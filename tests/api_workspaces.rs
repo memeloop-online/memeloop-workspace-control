@@ -1,4 +1,8 @@
-use std::{net::SocketAddr, sync::Arc};
+use std::{
+    net::SocketAddr,
+    sync::Arc,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use axum::{
     Router,
@@ -8,6 +12,7 @@ use axum::{
 use http_body_util::BodyExt;
 use memeloop_workspace_control::{
     api::{AppState, router},
+    auth::ApiKeyScope,
     config::AppConfig,
     crypto::EnvelopeCipher,
     injections::InjectionScope,
@@ -393,6 +398,46 @@ async fn authenticated_workspace_api_enforces_rbac_and_exact_idempotent_replay()
     assert!(ready["ssh_connection"]["app"]["ssh_port"].is_null());
     assert_eq!(ready["ssh_command"], ready["ssh_connection"]["command"]);
     assert_eq!(ready["ssh_config"], ready["ssh_connection"]["config"]);
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    let read_only_key = database
+        .create_api_key(
+            admin_id,
+            "read-only test",
+            vec![ApiKeyScope::ReadWorkspace],
+            Some(now + 3_600),
+            now,
+        )
+        .await
+        .unwrap();
+    let read_only = app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            &format!("/api/v1/workspaces/{workspace_id}"),
+            Some(&read_only_key.token),
+            None,
+            None,
+        ))
+        .await
+        .unwrap();
+    let (read_only_status, read_only_body) = body(read_only).await;
+    assert_eq!(read_only_status, StatusCode::OK);
+    let read_only: Value = serde_json::from_slice(&read_only_body).unwrap();
+    for field in [
+        "ssh_connection",
+        "ssh_host",
+        "ssh_port",
+        "ssh_command",
+        "ssh_config",
+        "web_shell_url",
+        "workspace_host_key",
+        "jump_host_key",
+    ] {
+        assert!(read_only[field].is_null(), "{field} was exposed");
+    }
     let stop = app
         .oneshot(request(
             Method::POST,

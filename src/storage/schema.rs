@@ -1,4 +1,4 @@
-pub(super) const SCHEMA_VERSION: i64 = 15;
+pub(super) const SCHEMA_VERSION: i64 = 16;
 pub(super) const MIGRATION_TABLE: &str = "CREATE TABLE IF NOT EXISTS schema_migrations (\
     version BIGINT PRIMARY KEY, applied_at BIGINT NOT NULL\
 )";
@@ -280,4 +280,11 @@ pub(super) const V15_MIGRATIONS: &[&str] = &[
     )",
     "CREATE INDEX IF NOT EXISTS workspace_port_mapping_sessions_expiry_idx \
         ON workspace_port_mapping_sessions (installation_id, expires_at, revoked_at)",
+];
+
+/// Indexes added after the initial pagination schema. Keep this group separate so an
+/// installation already at v15 receives the index without replaying older DDL.
+pub(super) const V16_MIGRATIONS: &[&str] = &[
+    "CREATE INDEX IF NOT EXISTS memberships_organization_role_idx \
+        ON organization_memberships (installation_id, organization_id, role)",
 ];

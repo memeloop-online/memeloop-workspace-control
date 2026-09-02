@@ -168,7 +168,7 @@ pub(in crate::api) async fn create_api_key(
     ))
 }
 
-fn actor_may_grant(actor_scopes: &[ApiKeyScope], requested: &[ApiKeyScope]) -> bool {
+pub(super) fn actor_may_grant(actor_scopes: &[ApiKeyScope], requested: &[ApiKeyScope]) -> bool {
     actor_scopes
         .iter()
         .any(|scope| matches!(scope, ApiKeyScope::Wildcard))

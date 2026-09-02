@@ -26,9 +26,12 @@ interface Props {
   onOpenShell: (id: string) => Promise<void>;
   onRequestRuntime: (id: string) => Promise<void>;
   onError: (message: string) => void;
+  canConnect: boolean;
+  canChangeState: boolean;
+  canDelete: boolean;
 }
 
-export function WorkspaceCard({ api, item, runtime, onAction, onOpenShell, onRequestRuntime, onError }: Props) {
+export function WorkspaceCard({ api, item, runtime, onAction, onOpenShell, onRequestRuntime, onError, canConnect, canChangeState, canDelete }: Props) {
   const { locale, t } = useI18n();
   const [detailView, setDetailView] = useState<DetailView | null>(null);
   const workspace = item.workspace;
@@ -53,20 +56,20 @@ export function WorkspaceCard({ api, item, runtime, onAction, onOpenShell, onReq
 
       <ResourceOverview item={item} runtime={runtime} />
 
-      {item.ssh_connection && <WorkspaceConnectionDialog connection={item.ssh_connection} workspaceHostKey={item.workspace_host_key} jumpHostKey={item.jump_host_key} />}
+      {canConnect && item.ssh_connection && <WorkspaceConnectionDialog connection={item.ssh_connection} workspaceHostKey={item.workspace_host_key} jumpHostKey={item.jump_host_key} />}
 
       <div className="workspace-toolbar">
         <div className="primary-actions">
-          {workspace.state === "ready" && <button className="terminal-action" onClick={() => void onOpenShell(workspace.id)}>{t("webShell")}</button>}
-          <WorkspacePortMappings api={api} workspaceId={workspace.id} workspaceReady={workspace.state === "ready"} onError={onError} />
-          {workspace.state === "ready" && <button onClick={() => void onAction(workspace.id, "stop")}>{t("stop")}</button>}
-          {workspace.state === "ready" && <button onClick={() => void onAction(workspace.id, "restart")}>{t("restart")}</button>}
-          {(workspace.state === "stopped" || workspace.state === "failed") && <button onClick={() => void onAction(workspace.id, "start")}>{t("start")}</button>}
+          {canConnect && workspace.state === "ready" && <button className="terminal-action" onClick={() => void onOpenShell(workspace.id)}>{t("webShell")}</button>}
+          {canConnect && <WorkspacePortMappings api={api} workspaceId={workspace.id} workspaceReady={workspace.state === "ready"} onError={onError} />}
+          {canChangeState && workspace.state === "ready" && <button onClick={() => void onAction(workspace.id, "stop")}>{t("stop")}</button>}
+          {canChangeState && workspace.state === "ready" && <button onClick={() => void onAction(workspace.id, "restart")}>{t("restart")}</button>}
+          {canChangeState && (workspace.state === "stopped" || workspace.state === "failed") && <button onClick={() => void onAction(workspace.id, "start")}>{t("start")}</button>}
         </div>
         <div className="detail-actions">
           {runtime && <button className={detailView === "status" ? "active" : ""} aria-controls={`runtime-${workspace.short_id}`} aria-expanded={detailView === "status"} onClick={() => toggleDetail("status")}>{t("runtimeStatus")} <span aria-hidden="true">{detailView === "status" ? "▴" : "▾"}</span></button>}
           {runtime && <button className={detailView === "events" ? "active" : ""} aria-controls={`events-${workspace.short_id}`} aria-expanded={detailView === "events"} onClick={() => toggleDetail("events")}>{t("eventLog")} <span aria-hidden="true">{detailView === "events" ? "▴" : "▾"}</span></button>}
-          {!(["deleting", "deleted"] as string[]).includes(workspace.state) && <button className="danger" onClick={() => void onAction(workspace.id, "delete")}>{t("delete")}</button>}
+          {canDelete && !(["deleting", "deleted"] as string[]).includes(workspace.state) && <button className="danger" onClick={() => void onAction(workspace.id, "delete")}>{t("delete")}</button>}
         </div>
       </div>
 

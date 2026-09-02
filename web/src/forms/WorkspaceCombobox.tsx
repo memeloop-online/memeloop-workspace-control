@@ -2,7 +2,7 @@ import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent as Reac
 
 import { useI18n } from "../i18n";
 import type { WorkspaceResponse } from "../types";
-import { filterWorkspaces, mergeWorkspaces } from "./pickerModel";
+import { filterWorkspaces, mergeWorkspaces, shouldClearWorkspaceDraft } from "./pickerModel";
 
 interface Props {
   items: WorkspaceResponse[];
@@ -140,6 +140,11 @@ export function WorkspaceCombobox({ items, loadItems, selectedId, onChange }: Pr
     editingRef.current = false;
     restoreSelectionRef.current = null;
     setActiveIndex(-1);
+    if (shouldClearWorkspaceDraft(query)) {
+      setQuery("");
+      if (selectedId) onChange("");
+      return;
+    }
     if (previous) {
       setQuery(workspaceLabel(previous));
       if (selectedId !== previous.workspace.id) onChange(previous.workspace.id);

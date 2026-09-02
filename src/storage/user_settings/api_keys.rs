@@ -224,6 +224,19 @@ where
     })
 }
 
+/// Validate the policy shared by self-service keys and administrator-provisioned
+/// initial keys.  New keys must always be explicitly scoped and time-bounded;
+/// `Wildcard` remains readable only for keys created before this policy existed.
+pub(crate) fn validate_api_key_policy(
+    scopes: Vec<ApiKeyScope>,
+    expires_at: Option<i64>,
+    now: i64,
+) -> Result<Vec<ApiKeyScope>, StorageError> {
+    let scopes = validate_scopes(scopes)?;
+    validate_expiration(expires_at, now)?;
+    Ok(scopes)
+}
+
 fn validate_scopes(scopes: Vec<ApiKeyScope>) -> Result<Vec<ApiKeyScope>, StorageError> {
     if scopes.is_empty()
         || scopes

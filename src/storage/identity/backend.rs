@@ -1,10 +1,248 @@
-use sqlx::{PgConnection, Row, SqliteConnection};
+use sqlx::{PgConnection, PgPool, Row, SqliteConnection, SqlitePool};
 use uuid::Uuid;
 
 use crate::{
     auth::Role,
-    storage::{Membership, Organization, StorageError},
+    storage::{
+        Membership, Organization, StorageError,
+        user_settings::{insert_key_postgres, insert_key_sqlite},
+    },
 };
+
+use super::UserWithKeyCommand;
+
+pub(super) async fn create_user_with_key_sqlite(
+    pool: &SqlitePool,
+    installation_id: &str,
+    user_id: Uuid,
+    token_hash: &str,
+    command: &UserWithKeyCommand<'_>,
+) -> Result<(), StorageError> {
+    let mut transaction = pool.begin().await?;
+    if let Some((organization_id, _)) = command.membership {
+        ensure_organization_exists_sqlite(&mut transaction, installation_id, organization_id)
+            .await?;
+    }
+    insert_user_sqlite(
+        &mut transaction,
+        installation_id,
+        user_id,
+        token_hash,
+        command,
+    )
+    .await?;
+    insert_key_sqlite(
+        &mut transaction,
+        installation_id,
+        user_id,
+        &command.initial_key,
+        token_hash,
+    )
+    .await?;
+    insert_optional_membership_sqlite(&mut transaction, installation_id, user_id, command).await?;
+    transaction.commit().await?;
+    Ok(())
+}
+
+pub(super) async fn create_user_with_key_postgres(
+    pool: &PgPool,
+    installation_id: &str,
+    user_id: Uuid,
+    token_hash: &str,
+    command: &UserWithKeyCommand<'_>,
+) -> Result<(), StorageError> {
+    let mut transaction = pool.begin().await?;
+    if let Some((organization_id, _)) = command.membership {
+        ensure_organization_exists_postgres(&mut transaction, installation_id, organization_id)
+            .await?;
+    }
+    insert_user_postgres(
+        &mut transaction,
+        installation_id,
+        user_id,
+        token_hash,
+        command,
+    )
+    .await?;
+    insert_key_postgres(
+        &mut transaction,
+        installation_id,
+        user_id,
+        &command.initial_key,
+        token_hash,
+    )
+    .await?;
+    insert_optional_membership_postgres(&mut transaction, installation_id, user_id, command)
+        .await?;
+    transaction.commit().await?;
+    Ok(())
+}
+
+async fn insert_user_sqlite(
+    connection: &mut SqliteConnection,
+    installation_id: &str,
+    user_id: Uuid,
+    token_hash: &str,
+    command: &UserWithKeyCommand<'_>,
+) -> Result<(), StorageError> {
+    sqlx::query(
+        "INSERT INTO users (id, installation_id, display_name, token_hash, \
+         system_admin, disabled, created_at) VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6)",
+    )
+    .bind(user_id.to_string())
+    .bind(installation_id)
+    .bind(command.display_name)
+    .bind(token_hash)
+    .bind(i64::from(command.system_admin))
+    .bind(command.now)
+    .execute(&mut *connection)
+    .await?;
+    Ok(())
+}
+
+async fn insert_user_postgres(
+    connection: &mut PgConnection,
+    installation_id: &str,
+    user_id: Uuid,
+    token_hash: &str,
+    command: &UserWithKeyCommand<'_>,
+) -> Result<(), StorageError> {
+    sqlx::query(
+        "INSERT INTO users (id, installation_id, display_name, token_hash, \
+         system_admin, disabled, created_at) VALUES ($1, $2, $3, $4, $5, 0, $6)",
+    )
+    .bind(user_id.to_string())
+    .bind(installation_id)
+    .bind(command.display_name)
+    .bind(token_hash)
+    .bind(i64::from(command.system_admin))
+    .bind(command.now)
+    .execute(&mut *connection)
+    .await?;
+    Ok(())
+}
+
+async fn insert_optional_membership_sqlite(
+    connection: &mut SqliteConnection,
+    installation_id: &str,
+    user_id: Uuid,
+    command: &UserWithKeyCommand<'_>,
+) -> Result<(), StorageError> {
+    if let Some((organization_id, role)) = command.membership {
+        insert_membership_sqlite(
+            connection,
+            installation_id,
+            organization_id,
+            user_id,
+            role,
+            command.now,
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+async fn insert_optional_membership_postgres(
+    connection: &mut PgConnection,
+    installation_id: &str,
+    user_id: Uuid,
+    command: &UserWithKeyCommand<'_>,
+) -> Result<(), StorageError> {
+    if let Some((organization_id, role)) = command.membership {
+        insert_membership_postgres(
+            connection,
+            installation_id,
+            organization_id,
+            user_id,
+            role,
+            command.now,
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+pub(super) async fn ensure_organization_exists_sqlite(
+    connection: &mut SqliteConnection,
+    installation_id: &str,
+    organization_id: Uuid,
+) -> Result<(), StorageError> {
+    let found = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM organizations WHERE installation_id = ?1 AND id = ?2",
+    )
+    .bind(installation_id)
+    .bind(organization_id.to_string())
+    .fetch_one(&mut *connection)
+    .await?;
+    if found == 1 {
+        Ok(())
+    } else {
+        Err(StorageError::OrganizationNotFound)
+    }
+}
+
+pub(super) async fn ensure_organization_exists_postgres(
+    connection: &mut PgConnection,
+    installation_id: &str,
+    organization_id: Uuid,
+) -> Result<(), StorageError> {
+    let found = sqlx::query_scalar::<_, String>(
+        "SELECT id FROM organizations WHERE installation_id = $1 AND id = $2 FOR SHARE",
+    )
+    .bind(installation_id)
+    .bind(organization_id.to_string())
+    .fetch_optional(&mut *connection)
+    .await?;
+    if found.is_some() {
+        Ok(())
+    } else {
+        Err(StorageError::OrganizationNotFound)
+    }
+}
+
+pub(super) async fn insert_membership_sqlite(
+    connection: &mut SqliteConnection,
+    installation_id: &str,
+    organization_id: Uuid,
+    user_id: Uuid,
+    role: Role,
+    now: i64,
+) -> Result<(), StorageError> {
+    sqlx::query(
+        "INSERT INTO organization_memberships (installation_id, organization_id, user_id, role, created_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+    )
+    .bind(installation_id)
+    .bind(organization_id.to_string())
+    .bind(user_id.to_string())
+    .bind(role.as_str())
+    .bind(now)
+    .execute(&mut *connection)
+    .await?;
+    Ok(())
+}
+
+pub(super) async fn insert_membership_postgres(
+    connection: &mut PgConnection,
+    installation_id: &str,
+    organization_id: Uuid,
+    user_id: Uuid,
+    role: Role,
+    now: i64,
+) -> Result<(), StorageError> {
+    sqlx::query(
+        "INSERT INTO organization_memberships (installation_id, organization_id, user_id, role, created_at) \
+         VALUES ($1, $2, $3, $4, $5)",
+    )
+    .bind(installation_id)
+    .bind(organization_id.to_string())
+    .bind(user_id.to_string())
+    .bind(role.as_str())
+    .bind(now)
+    .execute(&mut *connection)
+    .await?;
+    Ok(())
+}
 
 pub(super) async fn insert_organization_sqlite(
     connection: &mut SqliteConnection,

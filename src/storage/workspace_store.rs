@@ -304,11 +304,18 @@ impl Database {
                     .map_err(|_| StorageError::InvalidWorkspace)
             })
             .transpose()?;
-        let search = search.unwrap_or("").trim();
-        let pattern = format!("%{search}%");
+        // Search the immutable workspace columns and the serialized template snapshot. The
+        // latter is where `workspace_user` lives, so historical workspaces use the same source of
+        // truth as reconciliation. Escape LIKE metacharacters so user input remains literal.
+        let search = search.unwrap_or("").trim().to_lowercase();
+        let pattern = format!("%{}%", escape_like_pattern(&search));
         let sql = format!(
             "SELECT {} FROM workspaces WHERE installation_id = {{install}} AND organization_id = {{organization}} AND state <> 'deleted' \
-             AND ({{search}} = '' OR name {{like}} {{pattern}}) \
+             AND ({{search}} = '' OR LOWER(name) LIKE {{pattern}} ESCAPE '\\' \
+                OR LOWER(short_id) LIKE {{pattern}} ESCAPE '\\' \
+                OR LOWER(state) LIKE {{pattern}} ESCAPE '\\' \
+                OR LOWER(image) LIKE {{pattern}} ESCAPE '\\' \
+                OR LOWER(template_snapshot_yaml) LIKE {{pattern}} ESCAPE '\\') \
              AND ({{cursor_created}} IS NULL OR created_at > {{cursor_created}} OR (created_at = {{cursor_created}} AND id > {{cursor_id}})) \
              ORDER BY created_at, id LIMIT {{limit}}",
             row::WORKSPACE_COLUMNS
@@ -321,7 +328,6 @@ impl Database {
                 &sql.replace("{install}", "?1")
                     .replace("{organization}", "?2")
                     .replace("{search}", "?3")
-                    .replace("{like}", "LIKE")
                     .replace("{pattern}", "?4")
                     .replace("{cursor_created}", "?5")
                     .replace("{cursor_id}", "?6")
@@ -346,7 +352,6 @@ impl Database {
                 &sql.replace("{install}", "$1")
                     .replace("{organization}", "$2")
                     .replace("{search}", "$3")
-                    .replace("{like}", "ILIKE")
                     .replace("{pattern}", "$4")
                     .replace("{cursor_created}", "$5")
                     .replace("{cursor_id}", "$6")
@@ -378,4 +383,15 @@ impl Database {
         };
         Ok(WorkspacePage { items, next_cursor })
     }
+}
+
+fn escape_like_pattern(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for character in value.chars() {
+        if matches!(character, '\\' | '%' | '_') {
+            escaped.push('\\');
+        }
+        escaped.push(character);
+    }
+    escaped
 }
