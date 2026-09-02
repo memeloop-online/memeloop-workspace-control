@@ -27,9 +27,8 @@ pub fn resources(
     labels: &BTreeMap<String, String>,
     pod_labels: &BTreeMap<String, String>,
     wildcard_domain: &str,
-    auth_service_dns: &str,
     mapping: &PortMapping,
-) -> (Service, Service, Ingress) {
+) -> (Service, Ingress) {
     let name = name(mapping);
     let hostname = hostname(mapping, wildcard_domain);
     let labels = mapping_labels(labels, mapping);
@@ -42,22 +41,6 @@ pub fn resources(
                 name: Some("http".to_owned()),
                 port: i32::from(mapping.internal_port),
                 target_port: Some(IntOrString::Int(i32::from(mapping.internal_port))),
-                protocol: Some("TCP".to_owned()),
-                ..ServicePort::default()
-            }]),
-            ..ServiceSpec::default()
-        }),
-        ..Service::default()
-    };
-    let auth_service = Service {
-        metadata: namespaced_metadata(&format!("{name}-auth"), namespace, &labels),
-        spec: Some(ServiceSpec {
-            type_: Some("ExternalName".to_owned()),
-            external_name: Some(auth_service_dns.to_owned()),
-            ports: Some(vec![ServicePort {
-                name: Some("http".to_owned()),
-                port: 8081,
-                target_port: Some(IntOrString::Int(8081)),
                 protocol: Some("TCP".to_owned()),
                 ..ServicePort::default()
             }]),
@@ -83,43 +66,27 @@ pub fn resources(
             rules: Some(vec![IngressRule {
                 host: Some(hostname),
                 http: Some(HTTPIngressRuleValue {
-                    paths: vec![
-                        HTTPIngressPath {
-                            path: Some("/_mwc/bootstrap".to_owned()),
-                            path_type: "Prefix".to_owned(),
-                            backend: IngressBackend {
-                                service: Some(IngressServiceBackend {
-                                    name: format!("{name}-auth"),
-                                    port: Some(ServiceBackendPort {
-                                        number: Some(8081),
-                                        ..ServiceBackendPort::default()
-                                    }),
+                    paths: vec![HTTPIngressPath {
+                        path: Some("/".to_owned()),
+                        path_type: "Prefix".to_owned(),
+                        backend: IngressBackend {
+                            service: Some(IngressServiceBackend {
+                                name: name.clone(),
+                                port: Some(ServiceBackendPort {
+                                    number: Some(i32::from(mapping.internal_port)),
+                                    ..ServiceBackendPort::default()
                                 }),
-                                ..IngressBackend::default()
-                            },
+                            }),
+                            ..IngressBackend::default()
                         },
-                        HTTPIngressPath {
-                            path: Some("/".to_owned()),
-                            path_type: "Prefix".to_owned(),
-                            backend: IngressBackend {
-                                service: Some(IngressServiceBackend {
-                                    name: name.clone(),
-                                    port: Some(ServiceBackendPort {
-                                        number: Some(i32::from(mapping.internal_port)),
-                                        ..ServiceBackendPort::default()
-                                    }),
-                                }),
-                                ..IngressBackend::default()
-                            },
-                        },
-                    ],
+                    }],
                 }),
             }]),
             ..IngressSpec::default()
         }),
         ..Ingress::default()
     };
-    (service, auth_service, ingress)
+    (service, ingress)
 }
 
 pub fn name(mapping: &PortMapping) -> String {
@@ -204,19 +171,14 @@ mod tests {
             created_by: Uuid::nil(),
             created_at: 1,
         };
-        let (service, auth_service, ingress) = resources(
+        let (service, ingress) = resources(
             "ns",
             &BTreeMap::new(),
             &BTreeMap::new(),
             "ports.example.test",
-            "mwc-internal.control.svc.cluster.local",
             &mapping,
         );
         assert_eq!(service.spec.unwrap().type_.as_deref(), Some("ClusterIP"));
-        assert_eq!(
-            auth_service.spec.unwrap().type_.as_deref(),
-            Some("ExternalName")
-        );
         let ingress_spec = ingress.spec.unwrap();
         assert_eq!(
             ingress_spec.rules.unwrap()[0].host.as_deref(),

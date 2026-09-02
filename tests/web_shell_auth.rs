@@ -1,4 +1,8 @@
-use std::{net::SocketAddr, sync::Arc};
+use std::{
+    net::SocketAddr,
+    sync::Arc,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use axum::{
     body::Body,
@@ -20,7 +24,7 @@ const USER_TOKEN: &str = "web-shell-user-token-000000000000000000000000";
 const INTERNAL_TOKEN: &str = "web-shell-internal-token-000000000000000000";
 
 #[tokio::test]
-async fn web_shell_ticket_is_ready_only_scoped_and_consumed_once() {
+async fn browser_access_tickets_are_scoped_and_consumed_once() {
     let installation_id = "shell-test".parse::<InstallationId>().unwrap();
     let database = Database::connect("sqlite::memory:", installation_id.clone())
         .await
@@ -90,6 +94,28 @@ async fn web_shell_ticket_is_ready_only_scoped_and_consumed_once() {
         .record_workspace_observation(workspace.id, WorkspaceObservation::Ready, user.user_id, 103)
         .await
         .unwrap();
+    let now = i64::try_from(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs(),
+    )
+    .unwrap();
+    let mapping = database
+        .create_port_mapping(
+            organization.id,
+            workspace.id,
+            3000,
+            Some("test app"),
+            user.user_id,
+            now,
+        )
+        .await
+        .unwrap();
+    let mapping_ticket = database
+        .issue_port_mapping_ticket(&mapping, user.user_id, now)
+        .await
+        .unwrap();
 
     let mut state = AppState::new(
         AppConfig {
@@ -101,11 +127,11 @@ async fn web_shell_ticket_is_ready_only_scoped_and_consumed_once() {
             ssh_public_host: None,
             internal_ssh_host: None,
             web_shell_public_origin: Some("https://shell.example.com".to_owned()),
-            port_mapping_public_domain: None,
+            port_mapping_public_domain: Some("apps.example.com".to_owned()),
             prometheus_url: None,
             plugin_dir: None,
         },
-        database,
+        database.clone(),
     );
     state.set_internal_auth_token(INTERNAL_TOKEN);
     let app = router(Arc::new(state.clone()));
@@ -168,8 +194,67 @@ async fn web_shell_ticket_is_ready_only_scoped_and_consumed_once() {
     let first = internal_app.clone().oneshot(authorize()).await.unwrap();
     assert_eq!(first.status(), StatusCode::OK);
     assert_eq!(first.headers()["x-mwc-user-id"], user.user_id.to_string());
-    let replay = internal_app.oneshot(authorize()).await.unwrap();
+    let replay = internal_app.clone().oneshot(authorize()).await.unwrap();
     assert_eq!(replay.status(), StatusCode::UNAUTHORIZED);
+
+    let mapping_host = format!("p-{}.apps.example.com", mapping.id.simple());
+    let port_request = |uri: &str, cookie: Option<&str>| {
+        let mut request = Request::get("/api/v1/internal/port-mappings/authorize")
+            .header("x-forwarded-host", &mapping_host)
+            .header("x-forwarded-uri", uri);
+        if let Some(cookie) = cookie {
+            request = request.header("cookie", cookie);
+        }
+        request.body(Body::empty()).unwrap()
+    };
+    let denied = internal_app
+        .clone()
+        .oneshot(port_request("/", None))
+        .await
+        .unwrap();
+    assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
+
+    let bootstrap_uri = format!("/_mwc/bootstrap?ticket={}", mapping_ticket.ticket);
+    let bootstrap = internal_app
+        .clone()
+        .oneshot(port_request(&bootstrap_uri, None))
+        .await
+        .unwrap();
+    assert_eq!(bootstrap.status(), StatusCode::SEE_OTHER);
+    assert_eq!(bootstrap.headers()["location"], "/");
+    let cookie = bootstrap.headers()["set-cookie"]
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_owned();
+    assert!(cookie.starts_with("__Host-mwc-port-session="));
+
+    let replay = internal_app
+        .clone()
+        .oneshot(port_request(&bootstrap_uri, None))
+        .await
+        .unwrap();
+    assert_eq!(replay.status(), StatusCode::UNAUTHORIZED);
+    let authorized = internal_app
+        .clone()
+        .oneshot(port_request("/", Some(&cookie)))
+        .await
+        .unwrap();
+    assert_eq!(authorized.status(), StatusCode::OK);
+
+    assert!(
+        database
+            .delete_port_mapping(workspace.id, mapping.id)
+            .await
+            .unwrap()
+    );
+    let revoked = internal_app
+        .oneshot(port_request("/", Some(&cookie)))
+        .await
+        .unwrap();
+    assert_eq!(revoked.status(), StatusCode::UNAUTHORIZED);
 }
 
 #[tokio::test]

@@ -51,10 +51,13 @@ needed only for the fixed public API HTTPRoute and public SSH TCPRoute; the Gate
 routes from this namespace and public SSH additionally needs listener and Service port 22. Web
 Shell instead uses a built-in `networking.k8s.io/v1` Ingress in each workspace Namespace, with
 `ingressClassName: nginx`, and therefore needs neither Gateway API CRDs nor ReferenceGrant. Set
-`higress.extAuthPluginUrl` to the pinned official Higress ext-auth plugin OCI URL to protect all
-`/shell/` paths. The example pins the official ext-auth 1.0.0 artifact by digest; mirror that OCI
-artifact into Harbor only if gateway nodes cannot reach the official registry, then update the
-value to the verified mirror digest.
+`higress.extAuthPluginUrl` to the pinned official Higress ext-auth plugin OCI URL. When either
+public Web Shell or HTTP port mappings is enabled, the chart creates one `<installation>-access-auth`
+WasmPlugin. Its ordered match rules put the exact Web Shell host first and the full-label port
+mapping wildcard second; each rule keeps its own fail-closed policy, inner blacklist, authorization
+endpoint, and response-header policy. The example pins the official ext-auth 1.0.0 artifact by
+digest; mirror that OCI artifact into Harbor only if gateway nodes cannot reach the official
+registry, then update the value to the verified mirror digest.
 The chart refuses to render a Web Shell domain without that plugin and an exact
 `https://<webShellDomain>` public origin.
 Set `higress.podLabels` to the labels actually present on the K3S Higress gateway Pods. The same
@@ -69,15 +72,18 @@ Configure the wildcard in Higress `credentialConfig` without an ACME issuer and 
 `fallbackForInvalidSecret`; the generated Ingress uses an intentionally absent placeholder Secret
 so Higress resolves the certificate centrally instead of copying private keys into workspace
 namespaces.
-Higress attaches fail-closed external authentication through a valid full-label wildcard route
-match, then the plugin selects only `p-*` mapping hosts. This two-stage match is required because
-Higress route matching does not accept a partial-label wildcard such as `p-*.example.com`. The
-workspace application is reached through a ClusterIP Service; NodePort and hostPort are outside
-this path.
+Higress attaches fail-closed external authentication through the shared `access-auth` plugin and
+the valid full-label wildcard route match, then the port-mapping rule selects only `p-*` mapping
+hosts with its inner blacklist. This two-stage match is required because Higress route matching
+does not accept a partial-label wildcard such as `p-*.example.com`. The workspace application is
+reached through a ClusterIP Service; NodePort and hostPort are outside this path.
 
 The API returns a stable HTTPS URL for each mapping. The `open` action creates a one-use bootstrap
-URL valid for 60 seconds. After the bootstrap exchange, the browser receives the `__Host-mwc-port-session`
-HttpOnly, Secure, SameSite cookie, whose session lifetime is eight hours. Deleting a mapping
+URL valid for 60 seconds. Requesting that URL reaches the mapping Ingress and invokes the internal
+port-mapping authorization endpoint in the same access-auth pass. On success, the endpoint returns
+`303 See Other` with `Location` and `Set-Cookie`; the browser follows the redirect and receives the
+`__Host-mwc-port-session` `HttpOnly`, `Secure`, `SameSite=Lax` cookie in one exchange. Its session
+lifetime is eight hours. There is no per-mapping public bootstrap backend. Deleting a mapping
 revokes its tickets and sessions and queues reconciliation of the owned Ingress, Services, and
 NetworkPolicy. The mapping domain is passed to the control plane as `MWC_PORT_MAPPING_PUBLIC_DOMAIN`.
 

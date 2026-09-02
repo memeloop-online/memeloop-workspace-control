@@ -354,13 +354,6 @@ fn resource_builder(
         storage_class_name,
         web_shell_domain,
         port_mapping_domain: config.port_mapping_public_domain.clone(),
-        control_plane_internal_service_dns: std::env::var("MWC_CONTROL_PLANE_INTERNAL_SERVICE_DNS")
-            .unwrap_or_else(|_| {
-                format!(
-                    "mwc-{}-internal.{}.svc.cluster.local",
-                    config.installation_id, jump_host_namespace
-                )
-            }),
         higress_gateway_name: std::env::var("MWC_HIGRESS_GATEWAY_NAME")
             .unwrap_or_else(|_| "higress-gateway".to_owned()),
         higress_https_section_name: std::env::var("MWC_HIGRESS_HTTPS_SECTION_NAME")

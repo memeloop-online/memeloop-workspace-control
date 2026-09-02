@@ -106,7 +106,18 @@ jobs:
           grep -q 'failStrategy: FAIL_CLOSE' <<<"${rendered_public}"
           grep -q 'defaultConfigDisable: true' <<<"${rendered_public}"
           grep -q 'matchRules:' <<<"${rendered_public}"
-          grep -q 'name: mwc-public-a-web-shell-auth' <<<"${rendered_public}"
+          test "$(grep -c '^  name: mwc-public-a-access-auth$' <<<"${rendered_public}")" -eq 1
+          if grep -q -- 'mwc-public-a-\(web-shell\|port-mapping\)-auth' <<<"${rendered_public}"; then
+            echo "legacy split access-auth plugins were rendered" >&2
+            exit 1
+          fi
+          grep -q -- '- "shell.example.com"' <<<"${rendered_public}"
+          grep -q -- '- "\*.example.com"' <<<"${rendered_public}"
+          web_rule_line=$(grep -n -- '- "shell.example.com"' <<<"${rendered_public}" | head -n1 | cut -d: -f1)
+          port_rule_line=$(grep -n -- '- "\*.example.com"' <<<"${rendered_public}" | head -n1 | cut -d: -f1)
+          test "${web_rule_line}" -lt "${port_rule_line}"
+          grep -q 'path: /api/v1/internal/web-shell/authorize' <<<"${rendered_public}"
+          grep -q 'path: /api/v1/internal/port-mappings/authorize' <<<"${rendered_public}"
           grep -q 'service_name: mwc-public-a.default.svc.cluster.local' <<<"${rendered_public}"
           grep -q 'name: MWC_HIGRESS_SOURCE_CIDRS_JSON' <<<"${rendered_public}"
           grep -q 'resources: \["networkpolicies", "ingresses"\]' <<<"${rendered_public}"
@@ -166,6 +177,10 @@ jobs:
           grep -q -- '- "\*.example.com"' <<<"${rendered_ports}"
           grep -q 'match_rule_domain: "p-\*.example.com"' <<<"${rendered_ports}"
           grep -q 'path: /api/v1/internal/port-mappings/authorize' <<<"${rendered_ports}"
+          grep -q 'allowed_headers:' <<<"${rendered_ports}"
+          grep -q -- '- exact: cookie' <<<"${rendered_ports}"
+          grep -q -- '- exact: set-cookie' <<<"${rendered_ports}"
+          grep -q -- '- exact: location' <<<"${rendered_ports}"
           grep -q 'name: external-auth' <<<"${rendered_ports}"
           if linux-amd64/helm template unsafe-ports deploy/helm/memeloop-workspace-control \
             --set installationId=unsafe-ports \

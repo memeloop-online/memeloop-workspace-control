@@ -50,40 +50,24 @@ pub(in crate::api) async fn authorize(
     {
         return Ok(StatusCode::OK.into_response());
     }
-    if forwarded_uri(&headers)
-        .is_some_and(|uri| uri.starts_with("/_mwc/bootstrap?") && ticket_from_uri(uri).is_some())
+    if let Some(ticket) = forwarded_uri(&headers)
+        .filter(|uri| uri.starts_with("/_mwc/bootstrap?"))
+        .and_then(ticket_from_uri)
     {
-        return Ok(StatusCode::OK.into_response());
+        return exchange_ticket(&state, mapping_id, ticket, now).await;
     }
     Err(ApiError::Unauthorized)
 }
 
-/// Browser bootstrap endpoint routed by the mapping Ingress to the internal
-/// listener. It consumes the query credential before redirecting to the user
-/// application, so workspace processes never receive or log the ticket.
-pub(in crate::api) async fn bootstrap(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
+/// The external-auth response itself performs the one-time browser bootstrap.
+/// Returning the redirect here avoids a second Higress upstream hop while
+/// ensuring the workspace process never receives or logs the ticket.
+async fn exchange_ticket(
+    state: &AppState,
+    mapping_id: Uuid,
+    ticket: &str,
+    now: i64,
 ) -> Result<Response, ApiError> {
-    verify_internal_caller(&state, &headers)?;
-    let mapping_id = mapping_id_from_host(&headers, &state)?;
-    let mapping = state
-        .database
-        .get_port_mapping(mapping_id)
-        .await
-        .map_err(|_| ApiError::Unauthorized)?;
-    let workspace = state
-        .database
-        .get_workspace(mapping.workspace_id)
-        .await
-        .map_err(|_| ApiError::Unauthorized)?;
-    if workspace.state != crate::workspaces::WorkspaceState::Ready {
-        return Err(ApiError::Unauthorized);
-    }
-    let now = super::unix_timestamp()?;
-    let ticket = forwarded_uri(&headers)
-        .and_then(ticket_from_uri)
-        .ok_or(ApiError::Unauthorized)?;
     let mut bytes = [0_u8; 32];
     getrandom::fill(&mut bytes).map_err(|_| ApiError::Unauthorized)?;
     let session = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes);

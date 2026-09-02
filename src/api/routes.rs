@@ -224,7 +224,6 @@ pub(super) fn internal_router(state: Arc<AppState>) -> Router {
             "/api/v1/internal/port-mappings/authorize",
             get(port_mappings::authorize),
         )
-        .route("/_mwc/bootstrap", get(port_mappings::bootstrap))
         .route(
             "/api/v1/internal/ssh/authorized-key",
             get(ssh::authorized_key),

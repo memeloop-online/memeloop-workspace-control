@@ -28,7 +28,7 @@ use super::{
 
 mod auth;
 
-pub(super) use auth::{authorize, bootstrap};
+pub(super) use auth::authorize;
 
 #[derive(Debug, Deserialize, Serialize, ToSchema)]
 pub(super) struct CreatePortMappingRequest {

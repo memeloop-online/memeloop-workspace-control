@@ -30,23 +30,18 @@ impl KubernetesCoordinator {
         let apply = PatchParams::apply(FIELD_MANAGER);
         let mut desired = std::collections::BTreeSet::new();
         for mapping in mappings {
-            let Some((service, auth_service, ingress, policy)) =
+            let Some((service, ingress, policy)) =
                 self.builder.port_mapping_resources(workspace, mapping)?
             else {
                 continue;
             };
             let name = resource_port_mappings::name(mapping);
-            let auth_name = format!("{name}-auth");
             let policy_name = format!("{name}-ingress");
             verify_existing(&services, &name, &self.builder, workspace.id).await?;
-            verify_existing(&services, &auth_name, &self.builder, workspace.id).await?;
             verify_existing(&ingresses, &name, &self.builder, workspace.id).await?;
             verify_existing(&policies, &policy_name, &self.builder, workspace.id).await?;
             services
                 .patch(&name, &apply, &Patch::Apply(&service))
-                .await?;
-            services
-                .patch(&auth_name, &apply, &Patch::Apply(&auth_service))
                 .await?;
             ingresses
                 .patch(&name, &apply, &Patch::Apply(&ingress))
@@ -55,7 +50,6 @@ impl KubernetesCoordinator {
                 .patch(&policy_name, &apply, &Patch::Apply(&policy))
                 .await?;
             desired.insert(name);
-            desired.insert(auth_name);
         }
 
         let selector = format!(

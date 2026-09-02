@@ -60,7 +60,6 @@ pub struct ResourceBuilder {
     pub storage_class_name: Option<String>,
     pub web_shell_domain: Option<String>,
     pub port_mapping_domain: Option<String>,
-    pub control_plane_internal_service_dns: String,
     pub higress_gateway_name: String,
     pub higress_https_section_name: String,
     pub internal_ssh_node_port_enabled: bool,
@@ -227,7 +226,7 @@ impl ResourceBuilder {
         &self,
         workspace: &Workspace,
         mapping: &crate::storage::PortMapping,
-    ) -> Result<Option<(Service, Service, Ingress, NetworkPolicy)>, BuildError> {
+    ) -> Result<Option<(Service, Ingress, NetworkPolicy)>, BuildError> {
         let Some(domain) = self.port_mapping_domain.as_deref() else {
             return Ok(None);
         };
@@ -236,14 +235,8 @@ impl ResourceBuilder {
             .workspace_namespace(&workspace.short_id)?;
         let labels = self.workspace_labels(workspace);
         let selector_labels = pod_labels(&self.labels(workspace.id));
-        let (service, auth_service, ingress) = port_mappings::resources(
-            &namespace,
-            &labels,
-            &selector_labels,
-            domain,
-            &self.control_plane_internal_service_dns,
-            mapping,
-        );
+        let (service, ingress) =
+            port_mappings::resources(&namespace, &labels, &selector_labels, domain, mapping);
         let network_policy = port_mappings::network_policy(
             &namespace,
             &labels,
@@ -252,7 +245,7 @@ impl ResourceBuilder {
             &self.higress_pod_labels,
             mapping,
         );
-        Ok(Some((service, auth_service, ingress, network_policy)))
+        Ok(Some((service, ingress, network_policy)))
     }
 
     fn labels(&self, workspace_id: Uuid) -> BTreeMap<String, String> {

@@ -15,76 +15,12 @@ spec:
         - name: {{ include "mwc.name" . }}-ssh-jump
           port: 22
 {{- end }}
-{{- if and .Values.public.portMappingDomain .Values.higress.extAuthPluginUrl }}
+{{- if and .Values.higress.extAuthPluginUrl (or .Values.public.webShellDomain .Values.public.portMappingDomain) }}
 ---
 apiVersion: extensions.higress.io/v1alpha1
 kind: WasmPlugin
 metadata:
-  name: {{ include "mwc.name" . }}-port-mapping-auth
-  namespace: {{ .Values.higress.namespace }}
-  labels:
-    {{- include "mwc.labels" . | nindent 4 }}
-spec:
-  url: {{ .Values.higress.extAuthPluginUrl | quote }}
-  imagePullPolicy: IfNotPresent
-  phase: AUTHN
-  priority: 361
-  failStrategy: FAIL_CLOSE
-  defaultConfigDisable: true
-  matchRules:
-    - domain:
-        # Higress route matching accepts a full wildcard label ("*.example.com"),
-        # not a partial label such as "p-*.example.com". The ext-auth plugin's
-        # blacklist below performs the narrower p-* selection after the route
-        # config has been attached.
-        - {{ printf "*.%s" .Values.public.portMappingDomain | quote }}
-      config:
-        match_type: blacklist
-        match_list:
-          - match_rule_domain: {{ printf "p-*.%s" .Values.public.portMappingDomain | quote }}
-            match_rule_path: /
-            match_rule_type: prefix
-        failure_mode_allow: false
-        status_on_error: 503
-        http_service:
-          endpoint_mode: forward_auth
-          endpoint:
-            service_name: {{ include "mwc.name" . }}.{{ .Release.Namespace }}.svc.cluster.local
-            service_port: 8081
-            path: /api/v1/internal/port-mappings/authorize
-            request_method: GET
-          timeout: 1000
-          authorization_request:
-            with_request_body: false
-          authorization_response:
-            allowed_client_headers:
-              - exact: content-type
-{{- end }}
-{{- if .Values.public.apiDomain }}
----
-apiVersion: gateway.networking.k8s.io/v1
-kind: HTTPRoute
-metadata:
-  name: {{ include "mwc.name" . }}-api
-  labels:
-    {{- include "mwc.labels" . | nindent 4 }}
-spec:
-  parentRefs:
-    - name: {{ .Values.higress.gatewayName }}
-      namespace: {{ .Values.higress.namespace }}
-      sectionName: {{ .Values.higress.httpsSectionName }}
-  hostnames: [{{ .Values.public.apiDomain | quote }}]
-  rules:
-    - backendRefs:
-        - name: {{ include "mwc.name" . }}
-          port: 8080
-{{- end }}
-{{- if and .Values.public.webShellDomain .Values.higress.extAuthPluginUrl }}
----
-apiVersion: extensions.higress.io/v1alpha1
-kind: WasmPlugin
-metadata:
-  name: {{ include "mwc.name" . }}-web-shell-auth
+  name: {{ include "mwc.name" . }}-access-auth
   namespace: {{ .Values.higress.namespace }}
   labels:
     {{- include "mwc.labels" . | nindent 4 }}
@@ -96,6 +32,7 @@ spec:
   failStrategy: FAIL_CLOSE
   defaultConfigDisable: true
   matchRules:
+{{ if .Values.public.webShellDomain }}
     - domain:
         - {{ .Values.public.webShellDomain | quote }}
       config:
@@ -122,4 +59,57 @@ spec:
               - exact: x-mwc-workspace-id
             allowed_client_headers:
               - exact: content-type
+{{ end }}
+{{ if .Values.public.portMappingDomain }}
+    - domain:
+        # Higress route matching accepts a full wildcard label ("*.example.com"),
+        # not a partial label such as "p-*.example.com". The ext-auth plugin's
+        # blacklist below performs the narrower p-* selection after the route
+        # config has been attached.
+        - {{ printf "*.%s" .Values.public.portMappingDomain | quote }}
+      config:
+        match_type: blacklist
+        match_list:
+          - match_rule_domain: {{ printf "p-*.%s" .Values.public.portMappingDomain | quote }}
+            match_rule_path: /
+            match_rule_type: prefix
+        failure_mode_allow: false
+        status_on_error: 503
+        http_service:
+          endpoint_mode: forward_auth
+          endpoint:
+            service_name: {{ include "mwc.name" . }}.{{ .Release.Namespace }}.svc.cluster.local
+            service_port: 8081
+            path: /api/v1/internal/port-mappings/authorize
+            request_method: GET
+          timeout: 1000
+          authorization_request:
+            with_request_body: false
+            allowed_headers:
+              - exact: cookie
+          authorization_response:
+            allowed_client_headers:
+              - exact: content-type
+              - exact: set-cookie
+              - exact: location
+{{- end }}
+{{- if .Values.public.apiDomain }}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: {{ include "mwc.name" . }}-api
+  labels:
+    {{- include "mwc.labels" . | nindent 4 }}
+spec:
+  parentRefs:
+    - name: {{ .Values.higress.gatewayName }}
+      namespace: {{ .Values.higress.namespace }}
+      sectionName: {{ .Values.higress.httpsSectionName }}
+  hostnames: [{{ .Values.public.apiDomain | quote }}]
+  rules:
+    - backendRefs:
+        - name: {{ include "mwc.name" . }}
+          port: 8080
+{{- end }}
 {{- end }}

@@ -29,7 +29,6 @@ fn builder() -> ResourceBuilder {
         storage_class_name: Some("managed-delete".to_owned()),
         web_shell_domain: Some("shell.example.com".to_owned()),
         port_mapping_domain: Some("ports.example.com".to_owned()),
-        control_plane_internal_service_dns: "mwc-internal.control.svc.cluster.local".to_owned(),
         higress_gateway_name: "higress-gateway".to_owned(),
         higress_https_section_name: "https".to_owned(),
         internal_ssh_node_port_enabled: false,

@@ -103,8 +103,6 @@ spec:
             {{- if .Values.public.portMappingDomain }}
             - name: MWC_PORT_MAPPING_PUBLIC_DOMAIN
               value: {{ .Values.public.portMappingDomain | quote }}
-            - name: MWC_CONTROL_PLANE_INTERNAL_SERVICE_DNS
-              value: {{ printf "%s-internal.%s.svc.cluster.local" (include "mwc.name" .) .Release.Namespace | quote }}
             {{- end }}
             {{- if .Values.workspace.storageClassName }}
             - name: MWC_STORAGE_CLASS_NAME
