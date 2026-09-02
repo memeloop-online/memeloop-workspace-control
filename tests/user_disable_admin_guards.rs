@@ -256,7 +256,8 @@ async fn postgres_serializes_disable_and_membership_demotion() {
     );
     assert!(
         (disable.is_ok() && matches!(demote, Err(StorageError::LastOrganizationAdmin)))
-            || (matches!(disable, Err(StorageError::LastOrganizationAdmin)) && demote.is_ok())
+            || (matches!(disable, Err(StorageError::LastOrganizationAdmin)) && demote.is_ok()),
+        "unexpected PostgreSQL disable/demotion outcomes: disable={disable:?}, demote={demote:?}"
     );
     let members = database
         .list_members_page(organization.id, None, None, None)
