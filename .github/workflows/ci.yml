@@ -160,6 +160,7 @@ jobs:
           grep -q 'alert: MwcNodeEphemeralStorageRequestsCritical' <<<"${rendered_monitoring}"
           grep -q 'alert: MwcNodeDiskPressure' <<<"${rendered_monitoring}"
           grep -q 'alert: MwcJobsFailed' <<<"${rendered_monitoring}"
+          grep -q 'clamp_min(delta(mwc_jobs{status="failed"}\[15m\]), 0) > 0' <<<"${rendered_monitoring}"
           grep -q 'alert: MwcJobsPendingTooOld' <<<"${rendered_monitoring}"
           grep -q 'kube_pod_info{namespace=~"ws-monitoring-.*"}' <<<"${rendered_monitoring}"
           grep -q '>= 80' <<<"${rendered_monitoring}"

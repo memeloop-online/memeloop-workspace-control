@@ -56,8 +56,9 @@ product explicitly supports Grafana aggregation per user.
 
 The chart's optional `PrometheusRule` turns these signals into operational alerts. Workspace Home
 PVC usage and node ephemeral-storage requests use warning/critical bands at 80%/90%. A sustained
-oldest pending job age above 15 minutes raises `MwcJobsPendingTooOld`; one or more failed jobs
-raises `MwcJobsFailed` after 10 minutes. The `monitoring.prometheusRule.warningFor` and
+oldest pending job age above 15 minutes raises `MwcJobsPendingTooOld`; an increase in the durable
+failed-job count within 15 minutes raises `MwcJobsFailed`. Retained historical failures therefore
+remain visible in Grafana without keeping Alertmanager permanently firing. The `monitoring.prometheusRule.warningFor` and
 `monitoring.prometheusRule.criticalFor` values control storage alert duration (15 minutes and
 5 minutes by default). Alert labels and routing remain under the existing Prometheus Operator
 and Alertmanager configuration.

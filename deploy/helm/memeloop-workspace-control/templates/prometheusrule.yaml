@@ -100,13 +100,13 @@ spec:
             summary: "Kubernetes node reports DiskPressure"
             description: "{{`{{ $labels.node }}`}} reports DiskPressure; Pod-lifetime workspace data may be evicted even when individual size limits are not reached."
         - alert: MwcJobsFailed
-          expr: mwc_jobs{status="failed"} > 0
-          for: 10m
+          expr: clamp_min(delta(mwc_jobs{status="failed"}[15m]), 0) > 0
+          for: 1m
           labels:
             severity: warning
           annotations:
-            summary: "Workspace control has failed background jobs"
-            description: "{{`{{ $value }}`}} durable background jobs are in failed state. Inspect the job kind and failure reason before retrying."
+            summary: "Workspace control has newly failed background jobs"
+            description: "The durable failed-job count increased within the last 15 minutes. Inspect the job kind and failure reason before retrying."
         - alert: MwcJobsPendingTooOld
           expr: mwc_jobs_oldest_pending_age_seconds > 900
           for: 10m
