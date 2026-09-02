@@ -33,7 +33,11 @@ spec:
   defaultConfigDisable: true
   matchRules:
     - domain:
-        - {{ printf "p-*.%s" .Values.public.portMappingDomain | quote }}
+        # Higress route matching accepts a full wildcard label ("*.example.com"),
+        # not a partial label such as "p-*.example.com". The ext-auth plugin's
+        # blacklist below performs the narrower p-* selection after the route
+        # config has been attached.
+        - {{ printf "*.%s" .Values.public.portMappingDomain | quote }}
       config:
         match_type: blacklist
         match_list:

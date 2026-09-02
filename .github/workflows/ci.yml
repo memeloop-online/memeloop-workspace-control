@@ -163,7 +163,8 @@ jobs:
             --set public.portMappingDomain=example.com \
             --set higress.extAuthPluginUrl=oci://example.invalid/ext-auth@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa)
           grep -q 'name: MWC_PORT_MAPPING_PUBLIC_DOMAIN' <<<"${rendered_ports}"
-          grep -q 'p-\*.example.com' <<<"${rendered_ports}"
+          grep -q -- '- "\*.example.com"' <<<"${rendered_ports}"
+          grep -q 'match_rule_domain: "p-\*.example.com"' <<<"${rendered_ports}"
           grep -q 'path: /api/v1/internal/port-mappings/authorize' <<<"${rendered_ports}"
           grep -q 'name: external-auth' <<<"${rendered_ports}"
           if linux-amd64/helm template unsafe-ports deploy/helm/memeloop-workspace-control \

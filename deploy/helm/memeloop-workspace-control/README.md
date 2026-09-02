@@ -69,8 +69,11 @@ Configure the wildcard in Higress `credentialConfig` without an ACME issuer and 
 `fallbackForInvalidSecret`; the generated Ingress uses an intentionally absent placeholder Secret
 so Higress resolves the certificate centrally instead of copying private keys into workspace
 namespaces.
-Higress applies an exact `p-*` host rule with fail-closed external authentication. The workspace
-application is reached through a ClusterIP Service; NodePort and hostPort are outside this path.
+Higress attaches fail-closed external authentication through a valid full-label wildcard route
+match, then the plugin selects only `p-*` mapping hosts. This two-stage match is required because
+Higress route matching does not accept a partial-label wildcard such as `p-*.example.com`. The
+workspace application is reached through a ClusterIP Service; NodePort and hostPort are outside
+this path.
 
 The API returns a stable HTTPS URL for each mapping. The `open` action creates a one-use bootstrap
 URL valid for 60 seconds. After the bootstrap exchange, the browser receives the `__Host-mwc-port-session`
