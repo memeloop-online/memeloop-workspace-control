@@ -468,13 +468,13 @@ async fn ensure_another_organization_admin_sqlite(
     let count: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) \
          FROM organization_memberships membership \
-         JOIN users user \
-           ON user.installation_id = membership.installation_id \
-          AND user.id = membership.user_id \
+         JOIN users member_user \
+           ON member_user.installation_id = membership.installation_id \
+          AND member_user.id = membership.user_id \
          WHERE membership.installation_id = ?1 \
            AND membership.organization_id = ?2 \
            AND membership.role = 'organization_admin' \
-           AND user.disabled = 0",
+           AND member_user.disabled = 0",
     )
     .bind(installation_id)
     .bind(organization_id.to_string())
@@ -494,13 +494,13 @@ async fn ensure_another_organization_admin_postgres(
     let count: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) \
          FROM organization_memberships membership \
-         JOIN users user \
-           ON user.installation_id = membership.installation_id \
-          AND user.id = membership.user_id \
+         JOIN users member_user \
+           ON member_user.installation_id = membership.installation_id \
+          AND member_user.id = membership.user_id \
          WHERE membership.installation_id = $1 \
            AND membership.organization_id = $2 \
            AND membership.role = 'organization_admin' \
-           AND user.disabled = 0",
+           AND member_user.disabled = 0",
     )
     .bind(installation_id)
     .bind(organization_id.to_string())
