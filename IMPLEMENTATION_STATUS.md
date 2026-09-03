@@ -32,21 +32,26 @@ Last updated: 2026-09-03
   for all five workspaces. Prometheus scrape/rules and the Grafana Home-usage panel are healthy.
 - Web shell returned HTTP 200 and completed a real WebSocket open. SSH reached the public-key
   authentication boundary; the current machine has no matching private key for a full login test.
+- Port-mapping revision `f94c2128330d7086290007e7454960fc3261f38f` passed GitHub Actions run
+  `33730713365` and is deployed by GitOps revision `f980934` at control-plane digest
+  `sha256:c1e9bd1f187f86d5640ce4f590dfb7b0947f554b1c3627c41070fcd7097159cd`.
+- A real mapped port-3000 test returned a 303 bootstrap response with a session cookie and then
+  HTTP 200 from the workspace process. An anonymous request and consumed-ticket replay were
+  refused by the gateway. All test mappings, generated resources, and temporary processes were
+  removed; the test workspace replacement Pod returned 3/3 Ready.
 - Daily-use API tokens were rotated to explicit scopes and expiry. Historical keys remain only for
   a deliberate no-downtime observation window.
 
 ## In progress
 
-- Port mapping creation reached `ready`, but the one-time bootstrap URL reset the client connection.
-  The test mapping, Kubernetes resources, and temporary port-3000 process were fully removed. Root
-  cause diagnosis is in progress; this is the only confirmed product regression in this checkpoint.
+- No product implementation item remains open from this checkpoint. Only the time-based API-key
+  safety closeout below remains.
 
 ## Next action
 
-1. Diagnose the port-mapping bootstrap connection reset from live routing evidence and code review.
-2. Implement the smallest confirmed fix and run focused plus required release tests.
-3. Re-deploy, repeat the real port-3000 access test, record evidence here, and keep only the API-key
-   observation window open.
+1. After the API-key overlap window, compare historical-key `last_used_at` values with the recorded
+   rotation checkpoint.
+2. Revoke only keys that remained unused, then verify daily clients with the replacement keys.
 
 ## Deferred safety closeout
 
