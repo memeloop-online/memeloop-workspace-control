@@ -453,9 +453,23 @@ async fn postgres_admin_revocation_is_idempotent_for_a_disabled_target() {
         eprintln!("skipping PostgreSQL API-key test: MWC_TEST_POSTGRES_URL is not set");
         return;
     };
+    let schema = format!("mwc_admin_api_keys_{}", Uuid::now_v7().simple());
+    let administration = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&database_url)
+        .await
+        .unwrap();
+    sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        .execute(&administration)
+        .await
+        .unwrap();
+    let mut scoped_url = url::Url::parse(&database_url).unwrap();
+    scoped_url
+        .query_pairs_mut()
+        .append_pair("options", &format!("-c search_path={schema}"));
     let suffix = &Uuid::now_v7().simple().to_string()[..8];
     let installation_id: InstallationId = format!("key-pg-{suffix}").parse().unwrap();
-    let database = Database::connect(&database_url, installation_id)
+    let database = Database::connect(scoped_url.as_str(), installation_id)
         .await
         .unwrap();
     database.migrate().await.unwrap();
@@ -514,6 +528,13 @@ async fn postgres_admin_revocation_is_idempotent_for_a_disabled_target() {
     assert_eq!(revoked_page.items.len(), 1);
     assert_eq!(revoked_page.items[0].id, key_id);
     assert_eq!(admin_revoke_audit_count(&database).await, 1);
+
+    drop(database);
+    sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+        .execute(&administration)
+        .await
+        .unwrap();
+    administration.close().await;
 }
 
 fn authenticated(

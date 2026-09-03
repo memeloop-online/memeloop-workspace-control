@@ -13,13 +13,27 @@ async fn postgres_replicas_distribute_jobs_serialize_workspaces_and_notify_event
         eprintln!("skipping PostgreSQL integration test: MWC_TEST_POSTGRES_URL is not set");
         return;
     };
+    let schema = format!("mwc_scaleout_{}", Uuid::now_v7().simple());
+    let administration = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&database_url)
+        .await
+        .unwrap();
+    sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        .execute(&administration)
+        .await
+        .unwrap();
+    let mut scoped_url = url::Url::parse(&database_url).unwrap();
+    scoped_url
+        .query_pairs_mut()
+        .append_pair("options", &format!("-c search_path={schema}"));
     let installation_id = "pg-scale-ci"
         .parse::<memeloop_workspace_control::config::InstallationId>()
         .unwrap();
-    let replica_a = Database::connect(&database_url, installation_id.clone())
+    let replica_a = Database::connect(scoped_url.as_str(), installation_id.clone())
         .await
         .unwrap();
-    let replica_b = Database::connect(&database_url, installation_id)
+    let replica_b = Database::connect(scoped_url.as_str(), installation_id)
         .await
         .unwrap();
 
@@ -175,11 +189,20 @@ async fn postgres_replicas_distribute_jobs_serialize_workspaces_and_notify_event
         1
     );
 
-    let wrong_installation = Database::connect(&database_url, "pg-other".parse().unwrap())
+    let wrong_installation = Database::connect(scoped_url.as_str(), "pg-other".parse().unwrap())
         .await
         .unwrap();
     assert!(matches!(
         wrong_installation.migrate().await,
         Err(StorageError::InstallationMismatch { stored, .. }) if stored == "pg-scale-ci"
     ));
+
+    drop(wrong_installation);
+    drop(replica_b);
+    drop(replica_a);
+    sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+        .execute(&administration)
+        .await
+        .unwrap();
+    administration.close().await;
 }

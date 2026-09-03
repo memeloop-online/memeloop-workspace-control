@@ -57,15 +57,20 @@ Last updated: 2026-09-03
   the complete Rust integration suite, strict all-target Clippy, and the repository's additional
   maintainability Clippy gates. PostgreSQL-specific revocation and listing coverage is included for
   CI where `MWC_TEST_POSTGRES_URL` is available.
+- API-key management revision `29a74f4eb255672429ee622b02d6be43e6160546` was pushed. CI run
+  `33759962378` passed the web, formatting, maintainability, and strict Clippy gates, then exposed a
+  PostgreSQL test-fixture collision before image publication. The administrator-key and scale-out
+  PostgreSQL tests now each use a unique temporary schema, including cleanup, so installation
+  identity and job rows cannot leak between the suite or concurrent CI shards.
 
 ## In progress
 
-- Publish the validated API-key management revision through CI, then deploy the exact image digest
-  through GitOps and perform production regression.
+- Publish the PostgreSQL-isolated API-key management revision through CI, then deploy the exact
+  image digest through GitOps and perform production regression.
 
 ## Next action
 
-1. Commit and publish the validated image through GitHub Actions.
+1. Commit and publish the PostgreSQL test-isolation fix through GitHub Actions.
 2. Deploy the exact published digest through GitOps and perform production regression.
 3. After the API-key overlap window, compare historical-key `last_used_at` values with the recorded
    rotation checkpoint.
