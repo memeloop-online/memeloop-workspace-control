@@ -62,19 +62,27 @@ Last updated: 2026-09-03
   PostgreSQL test-fixture collision before image publication. The administrator-key and scale-out
   PostgreSQL tests now each use a unique temporary schema, including cleanup, so installation
   identity and job rows cannot leak between the suite or concurrent CI shards.
+- PostgreSQL-isolated revision `6402b421a5d33ee5db4359ad9a105a3f78a1f0ba` passed push CI run
+  `33761599812`, then explicit publication run `33762304948` passed the same full verification and
+  published all four GHCR images with provenance. The control-plane digest is
+  `sha256:d58538eba4444179152171362eefe8073bd84e50448665c789a98ddc4f9318ad`.
+- GitOps revision `adb347b` pins source revision `6402b421a5d33ee5db4359ad9a105a3f78a1f0ba`
+  and the exact control-plane digest above. Production recovered from the single-replica rollout
+  window with `/livez` and `/readyz` returning HTTP 200, served the revision's
+  `assets/index-CW5kKWYO.js`, and returned HTTP 401 from the new administrator API-key route when
+  called without authentication.
 
 ## In progress
 
-- Publish the PostgreSQL-isolated API-key management revision through CI, then deploy the exact
-  image digest through GitOps and perform production regression.
+- Observe the historical API-key overlap window until at least 24 hours have elapsed from the
+  recorded rotation checkpoint. No implementation or deployment work remains for the twelve
+  2026-09-03 fixes.
 
 ## Next action
 
-1. Commit and publish the PostgreSQL test-isolation fix through GitHub Actions.
-2. Deploy the exact published digest through GitOps and perform production regression.
-3. After the API-key overlap window, compare historical-key `last_used_at` values with the recorded
+1. After the API-key overlap window, compare historical-key `last_used_at` values with the recorded
    rotation checkpoint.
-4. Revoke only keys that remained unused, then verify daily clients with the replacement keys.
+2. Revoke only keys that remained unused, then verify daily clients with the replacement keys.
 
 ## Deferred safety closeout
 
@@ -84,7 +92,7 @@ Last updated: 2026-09-03
 
 ## Operational access checkpoint
 
-- The dedicated local Kubernetes client certificate expired at `2026-09-03T08:42:49Z`; its private
-  key remains local. GitOps publication and rollout can continue, but direct `kubectl` evidence
-  requires a newly signed certificate. A fresh matching CSR can be regenerated from the existing
-  key; never copy or disclose the private key.
+- The dedicated local Kubernetes identity still authenticates, but its current RBAC grants only
+  Longhorn snapshot/volume and PersistentVolume operations, not Argo CD, Pod, or StatefulSet reads.
+  GitOps and external service evidence are complete; direct in-cluster rollout evidence requires a
+  reviewed read-only RBAC expansion. Never copy or disclose the private key.
