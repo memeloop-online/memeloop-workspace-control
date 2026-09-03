@@ -252,8 +252,8 @@ jobs:
   publish-images:
     needs: verify
     if: >-
-      github.event_name == 'push' &&
       github.ref == 'refs/heads/main' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
       needs.verify.outputs.image-inputs-changed == 'true'
     runs-on: ubuntu-latest
     permissions:
