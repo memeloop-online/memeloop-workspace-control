@@ -45,7 +45,7 @@ pub use admin_store::{
 pub use audit_store::{AuditFilter, AuditPage};
 pub use error::StorageError;
 pub use event_store::{EventNotifier, EventRecord};
-pub use idempotency::{IdempotencyDecision, IdempotencyReplay};
+pub use idempotency::{IdempotencyCompletion, IdempotencyDecision, IdempotencyReplay};
 pub use identity::{CreateOrganization, InitialUserCommand, Membership, Organization, Principal};
 pub use image_policy_store::ImagePolicy;
 pub use injection_store::{InjectionScopeRef, StoredInjectionSummary};

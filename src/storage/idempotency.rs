@@ -3,6 +3,15 @@ use sqlx::Row;
 
 use super::{Database, StorageError};
 
+#[derive(Debug, Clone, Copy)]
+pub struct IdempotencyCompletion<'a> {
+    pub scope: &'a str,
+    pub key: &'a str,
+    pub request_hash: &'a str,
+    pub status_code: u16,
+    pub response_json: &'a str,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IdempotencyDecision {
     Reserved,
@@ -65,21 +74,24 @@ impl Database {
         status_code: u16,
         response_json: &str,
     ) -> Result<(), StorageError> {
-        let affected = match self {
-            Self::Sqlite { pool, installation_id } => sqlx::query(
-                "UPDATE idempotency_keys SET status_code = ?1, response_json = ?2 WHERE \
-                installation_id = ?3 AND scope = ?4 AND key = ?5 AND request_hash = ?6 AND status_code = 0",
-            ).bind(i64::from(status_code)).bind(response_json).bind(installation_id.as_str())
-                .bind(scope).bind(key).bind(request_hash).execute(pool).await?.rows_affected(),
-            Self::Postgres { pool, installation_id } => sqlx::query(
-                "UPDATE idempotency_keys SET status_code = $1, response_json = $2 WHERE \
-                installation_id = $3 AND scope = $4 AND key = $5 AND request_hash = $6 AND status_code = 0",
-            ).bind(i64::from(status_code)).bind(response_json).bind(installation_id.as_str())
-                .bind(scope).bind(key).bind(request_hash).execute(pool).await?.rows_affected(),
+        let completion = IdempotencyCompletion {
+            scope,
+            key,
+            request_hash,
+            status_code,
+            response_json,
         };
-        if affected != 1 {
-            return Err(StorageError::IdempotencyReservationLost);
-        }
+        let affected = match self {
+            Self::Sqlite {
+                pool,
+                installation_id,
+            } => finish_sqlite(pool, installation_id.as_str(), completion).await?,
+            Self::Postgres {
+                pool,
+                installation_id,
+            } => finish_postgres(pool, installation_id.as_str(), completion).await?,
+        };
+        ensure_finished(affected)?;
         Ok(())
     }
 
@@ -156,6 +168,59 @@ impl Database {
             response_json,
         }))
     }
+}
+
+pub(in crate::storage) async fn finish_sqlite<'e, E>(
+    executor: E,
+    installation: &str,
+    completion: IdempotencyCompletion<'_>,
+) -> Result<u64, StorageError>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
+{
+    Ok(sqlx::query(
+        "UPDATE idempotency_keys SET status_code = ?1, response_json = ?2 WHERE \
+         installation_id = ?3 AND scope = ?4 AND key = ?5 AND request_hash = ?6 AND status_code = 0",
+    )
+    .bind(i64::from(completion.status_code))
+    .bind(completion.response_json)
+    .bind(installation)
+    .bind(completion.scope)
+    .bind(completion.key)
+    .bind(completion.request_hash)
+    .execute(executor)
+    .await?
+    .rows_affected())
+}
+
+pub(in crate::storage) async fn finish_postgres<'e, E>(
+    executor: E,
+    installation: &str,
+    completion: IdempotencyCompletion<'_>,
+) -> Result<u64, StorageError>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+{
+    Ok(sqlx::query(
+        "UPDATE idempotency_keys SET status_code = $1, response_json = $2 WHERE \
+         installation_id = $3 AND scope = $4 AND key = $5 AND request_hash = $6 AND status_code = 0",
+    )
+    .bind(i64::from(completion.status_code))
+    .bind(completion.response_json)
+    .bind(installation)
+    .bind(completion.scope)
+    .bind(completion.key)
+    .bind(completion.request_hash)
+    .execute(executor)
+    .await?
+    .rows_affected())
+}
+
+pub(in crate::storage) fn ensure_finished(affected: u64) -> Result<(), StorageError> {
+    if affected != 1 {
+        return Err(StorageError::IdempotencyReservationLost);
+    }
+    Ok(())
 }
 
 fn validate(scope: &str, key: &str) -> Result<(), StorageError> {

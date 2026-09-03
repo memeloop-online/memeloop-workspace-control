@@ -22,7 +22,11 @@ use crate::{
 #[path = "injections/delete.rs"]
 mod deletion;
 
-pub(super) use deletion::{__path_delete, delete};
+#[path = "injections/batch.rs"]
+mod batch;
+
+pub(super) use batch::{__path_batch_delete, BatchDeleteRequest, batch_delete};
+pub(super) use deletion::{__path_delete, abandon, delete, no_content_response};
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub(super) struct PreviewRequest {

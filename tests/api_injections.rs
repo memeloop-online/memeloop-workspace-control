@@ -325,6 +325,98 @@ async fn injection_delete_is_idempotent_and_removes_the_summary() {
     assert_eq!(missing.status(), StatusCode::NO_CONTENT);
 }
 
+#[tokio::test]
+async fn injection_batch_delete_validates_once_and_is_idempotent() {
+    let (app, user_id) = app(true).await;
+    for (key, target) in [("first", "FIRST_VALUE"), ("second", "SECOND_VALUE")] {
+        let response = app
+            .clone()
+            .oneshot(request(
+                Method::PUT,
+                &format!("/api/v1/injections/user/{user_id}/{key}"),
+                Some(&format!("create-{key}")),
+                Some(json!({
+                    "key": key,
+                    "kind": "environment_variable",
+                    "target": target,
+                    "value": {"encoding": "utf8", "value": "not-returned"},
+                    "sensitive": true,
+                    "locked": false,
+                    "version": 0,
+                    "file_mode": null,
+                    "owner": null,
+                    "group": null,
+                    "template_selector": null,
+                    "labels": {}
+                })),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    let uri = format!("/api/v1/injections/user/{user_id}/batch-delete");
+    let duplicate = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            &uri,
+            Some("duplicate-batch"),
+            Some(json!({"keys": ["first", "first"]})),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(duplicate.status(), StatusCode::BAD_REQUEST);
+
+    let still_present = app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            &format!("/api/v1/injections/user/{user_id}"),
+            None,
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(body_json_array_length(still_present).await, 2);
+
+    let body = json!({"keys": ["second", "missing", "first"]});
+    let deleted = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            &uri,
+            Some("delete-batch"),
+            Some(body.clone()),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(deleted.status(), StatusCode::NO_CONTENT);
+
+    let replay = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            &uri,
+            Some("delete-batch"),
+            Some(body),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(replay.status(), StatusCode::NO_CONTENT);
+
+    let empty = app
+        .oneshot(request(
+            Method::GET,
+            &format!("/api/v1/injections/user/{user_id}"),
+            None,
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(body_json_array_length(empty).await, 0);
+}
+
 async fn body_json_array_length(response: axum::response::Response) -> usize {
     let (status, body) = response_body(response).await;
     assert_eq!(status, StatusCode::OK);

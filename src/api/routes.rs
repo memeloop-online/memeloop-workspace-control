@@ -58,6 +58,10 @@ fn system_and_identity_routes(router: ApiRouter) -> ApiRouter {
             get(injections::list),
         )
         .route(
+            "/api/v1/injections/{scope}/{scope_id}/batch-delete",
+            post(injections::batch_delete),
+        )
+        .route(
             "/api/v1/injections/{scope}/{scope_id}/{key}",
             axum::routing::put(injections::replace).delete(injections::delete),
         )

@@ -11,7 +11,7 @@ pub use model::{
     ResolvedInjectionSummary, ScopedInjection,
 };
 pub use selection::{InjectionSelection, filter_injection_refs, select_injections};
-pub use validation::validate_injection_item;
+pub use validation::{validate_injection_item, validate_injection_key};
 
 #[cfg(test)]
 mod tests {

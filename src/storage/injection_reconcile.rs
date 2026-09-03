@@ -1,68 +1,129 @@
-use sqlx::Row;
+use sqlx::{PgConnection, Row, SqliteConnection};
 use uuid::Uuid;
 
 use crate::injections::InjectionScope;
 
-use super::{Database, InjectionScopeRef, NewJob, StorageError};
+use super::{Database, InjectionScopeRef, StorageError};
 
 impl Database {
-    /// Schedules every live workspace whose materialized cascade or SSH access
-    /// set can be affected by a replaced injection.
+    /// Schedules every live workspace whose materialized cascade or SSH access set can be affected
+    /// by a changed injection. The complete set of jobs is committed atomically.
     pub async fn enqueue_injection_reconciles(
         &self,
         scope: InjectionScopeRef,
         now: i64,
     ) -> Result<usize, StorageError> {
-        let workspace_ids = match self {
+        match self {
             Self::Sqlite {
                 pool,
                 installation_id,
             } => {
-                let sql = affected_sql(scope.scope, "?1", "?2");
-                sqlx::query(&sql)
-                    .bind(installation_id.as_str())
-                    .bind(scope.scope_id.to_string())
-                    .fetch_all(pool)
-                    .await?
-                    .into_iter()
-                    .map(|row| -> Result<Uuid, StorageError> {
-                        let id: String = row.try_get("id")?;
-                        Ok(Uuid::parse_str(&id)?)
-                    })
-                    .collect::<Result<Vec<_>, StorageError>>()?
+                let mut transaction = pool.begin().await?;
+                let count =
+                    enqueue_sqlite(&mut transaction, installation_id.as_str(), scope, now).await?;
+                transaction.commit().await?;
+                Ok(count)
             }
             Self::Postgres {
                 pool,
                 installation_id,
             } => {
-                let sql = affected_sql(scope.scope, "$1", "$2");
-                sqlx::query(&sql)
-                    .bind(installation_id.as_str())
-                    .bind(scope.scope_id.to_string())
-                    .fetch_all(pool)
-                    .await?
-                    .into_iter()
-                    .map(|row| -> Result<Uuid, StorageError> {
-                        let id: String = row.try_get("id")?;
-                        Ok(Uuid::parse_str(&id)?)
-                    })
-                    .collect::<Result<Vec<_>, StorageError>>()?
+                let mut transaction = pool.begin().await?;
+                let count =
+                    enqueue_postgres(&mut transaction, installation_id.as_str(), scope, now)
+                        .await?;
+                transaction.commit().await?;
+                Ok(count)
             }
-        };
-        for workspace_id in &workspace_ids {
-            self.enqueue_job(
-                NewJob {
-                    kind: "reconcile_workspace".to_owned(),
-                    workspace_id: Some(*workspace_id),
-                    payload: serde_json::json!({"reason": "injection_changed"}),
-                    available_at: now,
-                },
-                now,
-            )
-            .await?;
         }
-        Ok(workspace_ids.len())
     }
+}
+
+pub(in crate::storage) async fn enqueue_sqlite(
+    connection: &mut SqliteConnection,
+    installation: &str,
+    scope: InjectionScopeRef,
+    now: i64,
+) -> Result<usize, StorageError> {
+    let workspace_ids = affected_sqlite(connection, installation, scope).await?;
+    for workspace_id in &workspace_ids {
+        sqlx::query("INSERT INTO jobs (id, installation_id, kind, workspace_id, payload_json, status, available_at, lease_owner, lease_expires_at, attempts, created_at, updated_at) VALUES (?1, ?2, 'reconcile_workspace', ?3, ?4, 'pending', ?5, NULL, NULL, 0, ?5, ?5)")
+            .bind(Uuid::now_v7().to_string())
+            .bind(installation)
+            .bind(workspace_id.to_string())
+            .bind(reconcile_payload())
+            .bind(now)
+            .execute(&mut *connection)
+            .await?;
+    }
+    Ok(workspace_ids.len())
+}
+
+pub(in crate::storage) async fn enqueue_postgres(
+    connection: &mut PgConnection,
+    installation: &str,
+    scope: InjectionScopeRef,
+    now: i64,
+) -> Result<usize, StorageError> {
+    let workspace_ids = affected_postgres(connection, installation, scope).await?;
+    for workspace_id in &workspace_ids {
+        sqlx::query("INSERT INTO jobs (id, installation_id, kind, workspace_id, payload_json, status, available_at, lease_owner, lease_expires_at, attempts, created_at, updated_at) VALUES ($1, $2, 'reconcile_workspace', $3, $4, 'pending', $5, NULL, NULL, 0, $5, $5)")
+            .bind(Uuid::now_v7().to_string())
+            .bind(installation)
+            .bind(workspace_id.to_string())
+            .bind(reconcile_payload())
+            .bind(now)
+            .execute(&mut *connection)
+            .await?;
+    }
+    Ok(workspace_ids.len())
+}
+
+async fn affected_sqlite(
+    connection: &mut SqliteConnection,
+    installation: &str,
+    scope: InjectionScopeRef,
+) -> Result<Vec<Uuid>, StorageError> {
+    let sql = affected_sql(scope.scope, "?1", "?2");
+    decode_workspace_ids(
+        sqlx::query(&sql)
+            .bind(installation)
+            .bind(scope.scope_id.to_string())
+            .fetch_all(connection)
+            .await?,
+    )
+}
+
+async fn affected_postgres(
+    connection: &mut PgConnection,
+    installation: &str,
+    scope: InjectionScopeRef,
+) -> Result<Vec<Uuid>, StorageError> {
+    let sql = affected_sql(scope.scope, "$1", "$2");
+    decode_workspace_ids(
+        sqlx::query(&sql)
+            .bind(installation)
+            .bind(scope.scope_id.to_string())
+            .fetch_all(connection)
+            .await?,
+    )
+}
+
+fn decode_workspace_ids<R: Row>(rows: Vec<R>) -> Result<Vec<Uuid>, StorageError>
+where
+    for<'a> &'a str: sqlx::ColumnIndex<R>,
+    String: for<'d> sqlx::Decode<'d, R::Database> + sqlx::Type<R::Database>,
+{
+    rows.into_iter()
+        .map(|row| -> Result<Uuid, StorageError> {
+            let id: String = row.try_get("id")?;
+            Ok(Uuid::parse_str(&id)?)
+        })
+        .collect()
+}
+
+fn reconcile_payload() -> String {
+    serde_json::json!({"reason": "injection_changed"}).to_string()
 }
 
 fn affected_sql(scope: InjectionScope, installation: &str, scope_id: &str) -> String {

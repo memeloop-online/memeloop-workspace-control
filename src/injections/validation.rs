@@ -4,16 +4,7 @@ use uuid::Uuid;
 use super::{InjectionError, InjectionItem, InjectionKind, InjectionValue};
 
 pub fn validate_injection_item(item: &InjectionItem) -> Result<(), InjectionError> {
-    if item.key.trim() != item.key
-        || item.key.is_empty()
-        || item.key.chars().count() > 128
-        || !item
-            .key
-            .chars()
-            .all(|character| character.is_alphanumeric() || " ._-".contains(character))
-    {
-        return Err(InjectionError::InvalidKey);
-    }
+    validate_injection_key(&item.key)?;
     if item.file_mode.is_some_and(|mode| mode > 0o777) {
         return Err(InjectionError::InvalidFileMode);
     }
@@ -67,6 +58,19 @@ pub fn validate_injection_item(item: &InjectionItem) -> Result<(), InjectionErro
         STANDARD
             .decode(value)
             .map_err(|_| InjectionError::InvalidBase64)?;
+    }
+    Ok(())
+}
+
+pub fn validate_injection_key(key: &str) -> Result<(), InjectionError> {
+    if key.trim() != key
+        || key.is_empty()
+        || key.chars().count() > 128
+        || !key
+            .chars()
+            .all(|character| character.is_alphanumeric() || " ._-".contains(character))
+    {
+        return Err(InjectionError::InvalidKey);
     }
     Ok(())
 }

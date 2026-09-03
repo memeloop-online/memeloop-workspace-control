@@ -1,6 +1,7 @@
 use sqlx::{PgConnection, Row, SqliteConnection};
 use uuid::Uuid;
 
+use super::super::idempotency::{self, IdempotencyCompletion};
 use super::{Database, InjectionScope, InjectionScopeRef, StorageError};
 
 impl Database {
@@ -12,17 +13,35 @@ impl Database {
         actor: Uuid,
         now: i64,
     ) -> Result<bool, StorageError> {
+        let keys = [key.to_owned()];
+        Ok(self
+            .delete_injections(scope, &keys, allow_locked, actor, now)
+            .await?
+            == 1)
+    }
+
+    /// Deletes one logical batch in a single database transaction. Audit rows are retained for
+    /// every item that existed, while missing keys remain idempotent successes.
+    pub async fn delete_injections(
+        &self,
+        scope: InjectionScopeRef,
+        keys: &[String],
+        allow_locked: bool,
+        actor: Uuid,
+        now: i64,
+    ) -> Result<usize, StorageError> {
+        let keys = sorted_unique_keys(keys);
         match self {
             Self::Sqlite {
                 pool,
                 installation_id,
             } => {
                 let mut transaction = pool.begin().await?;
-                let deleted = delete_sqlite(
+                let deleted = delete_many_sqlite(
                     &mut transaction,
                     installation_id.as_str(),
                     scope,
-                    key,
+                    &keys,
                     allow_locked,
                     actor,
                     now,
@@ -36,11 +55,11 @@ impl Database {
                 installation_id,
             } => {
                 let mut transaction = pool.begin().await?;
-                let deleted = delete_postgres(
+                let deleted = delete_many_postgres(
                     &mut transaction,
                     installation_id.as_str(),
                     scope,
-                    key,
+                    &keys,
                     allow_locked,
                     actor,
                     now,
@@ -51,6 +70,151 @@ impl Database {
             }
         }
     }
+
+    /// Atomically commits the deletion audit tombstones and one reconciliation job per affected
+    /// workspace. A failed transaction can never leave Kubernetes materialization stale.
+    pub async fn delete_injections_and_enqueue_reconciles(
+        &self,
+        scope: InjectionScopeRef,
+        keys: &[String],
+        allow_locked: bool,
+        actor: Uuid,
+        now: i64,
+        completion: IdempotencyCompletion<'_>,
+    ) -> Result<usize, StorageError> {
+        let keys = sorted_unique_keys(keys);
+        match self {
+            Self::Sqlite {
+                pool,
+                installation_id,
+            } => {
+                let mut transaction = pool.begin().await?;
+                let deleted = delete_many_sqlite(
+                    &mut transaction,
+                    installation_id.as_str(),
+                    scope,
+                    &keys,
+                    allow_locked,
+                    actor,
+                    now,
+                )
+                .await?;
+                if deleted > 0 {
+                    super::super::injection_reconcile::enqueue_sqlite(
+                        &mut transaction,
+                        installation_id.as_str(),
+                        scope,
+                        now,
+                    )
+                    .await?;
+                }
+                let finished = idempotency::finish_sqlite(
+                    &mut *transaction,
+                    installation_id.as_str(),
+                    completion,
+                )
+                .await?;
+                idempotency::ensure_finished(finished)?;
+                transaction.commit().await?;
+                Ok(deleted)
+            }
+            Self::Postgres {
+                pool,
+                installation_id,
+            } => {
+                let mut transaction = pool.begin().await?;
+                let deleted = delete_many_postgres(
+                    &mut transaction,
+                    installation_id.as_str(),
+                    scope,
+                    &keys,
+                    allow_locked,
+                    actor,
+                    now,
+                )
+                .await?;
+                if deleted > 0 {
+                    super::super::injection_reconcile::enqueue_postgres(
+                        &mut transaction,
+                        installation_id.as_str(),
+                        scope,
+                        now,
+                    )
+                    .await?;
+                }
+                let finished = idempotency::finish_postgres(
+                    &mut *transaction,
+                    installation_id.as_str(),
+                    completion,
+                )
+                .await?;
+                idempotency::ensure_finished(finished)?;
+                transaction.commit().await?;
+                Ok(deleted)
+            }
+        }
+    }
+}
+
+fn sorted_unique_keys(keys: &[String]) -> Vec<&str> {
+    let mut keys = keys.iter().map(String::as_str).collect::<Vec<_>>();
+    keys.sort_unstable();
+    keys.dedup();
+    keys
+}
+
+async fn delete_many_sqlite(
+    connection: &mut SqliteConnection,
+    installation: &str,
+    scope: InjectionScopeRef,
+    keys: &[&str],
+    allow_locked: bool,
+    actor: Uuid,
+    now: i64,
+) -> Result<usize, StorageError> {
+    let mut deleted = 0;
+    for key in keys {
+        deleted += usize::from(
+            delete_sqlite(
+                connection,
+                installation,
+                scope,
+                key,
+                allow_locked,
+                actor,
+                now,
+            )
+            .await?,
+        );
+    }
+    Ok(deleted)
+}
+
+async fn delete_many_postgres(
+    connection: &mut PgConnection,
+    installation: &str,
+    scope: InjectionScopeRef,
+    keys: &[&str],
+    allow_locked: bool,
+    actor: Uuid,
+    now: i64,
+) -> Result<usize, StorageError> {
+    let mut deleted = 0;
+    for key in keys {
+        deleted += usize::from(
+            delete_postgres(
+                connection,
+                installation,
+                scope,
+                key,
+                allow_locked,
+                actor,
+                now,
+            )
+            .await?,
+        );
+    }
+    Ok(deleted)
 }
 
 async fn delete_sqlite(
