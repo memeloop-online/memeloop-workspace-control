@@ -276,11 +276,27 @@ async fn postgres_batch_delete_is_atomic() {
         eprintln!("skipping PostgreSQL injection batch test: MWC_TEST_POSTGRES_URL is not set");
         return;
     };
-    let installation = format!("batch-pg-{}", &Uuid::now_v7().simple().to_string()[..11])
-        .parse::<InstallationId>()
+    let schema = format!("mwc_injection_batch_{}", Uuid::now_v7().simple());
+    let administration = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&database_url)
+        .await
         .unwrap();
-    let database = Database::connect(&database_url, installation)
+    sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        .execute(&administration)
+        .await
+        .unwrap();
+    let mut scoped_url = url::Url::parse(&database_url).unwrap();
+    scoped_url
+        .query_pairs_mut()
+        .append_pair("options", &format!("-c search_path={schema}"));
+    let database = Database::connect(scoped_url.as_str(), "batch-pg".parse().unwrap())
         .await
         .unwrap();
     assert_locked_batch_rolls_back(database).await;
+    sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+        .execute(&administration)
+        .await
+        .unwrap();
+    administration.close().await;
 }
