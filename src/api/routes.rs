@@ -87,6 +87,14 @@ fn organization_routes(router: ApiRouter) -> ApiRouter {
             axum::routing::put(admin::update_user),
         )
         .route(
+            "/api/v1/admin/users/{user_id}/api-keys",
+            get(admin::list_user_api_keys),
+        )
+        .route(
+            "/api/v1/admin/users/{user_id}/api-keys/{key_id}",
+            axum::routing::delete(admin::admin_revoke_api_key),
+        )
+        .route(
             "/api/v1/organizations/{organization_id}/members",
             get(admin::list_members),
         )

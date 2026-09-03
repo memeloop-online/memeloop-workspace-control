@@ -45,6 +45,12 @@ export interface ApiKeySummary {
   created_at: number;
   scopes: ApiKeyScope[];
   expires_at: number | null;
+  revoked_at: number | null;
+}
+
+export interface ApiKeyPage {
+  items: ApiKeySummary[];
+  next_cursor: string | null;
 }
 
 export type ApiKeyScope =

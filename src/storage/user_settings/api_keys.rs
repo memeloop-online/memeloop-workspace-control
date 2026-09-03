@@ -1,20 +1,32 @@
-use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::Serialize;
-use sqlx::Row;
 use utoipa::ToSchema;
 use uuid::Uuid;
 
 use super::super::{Database, StorageError, identity::hash_token};
 use crate::auth::ApiKeyScope;
 
+mod audit;
+mod listing;
 mod persistence;
+mod policy;
+mod revocation;
 
-use persistence::{
-    audit_api_key_postgres, audit_api_key_sqlite, ensure_key_capacity_postgres,
-    ensure_key_capacity_sqlite, lock_user_postgres, lock_user_sqlite, revoke_postgres,
-    revoke_sqlite,
+use audit::{
+    audit_admin_api_key_postgres, audit_admin_api_key_sqlite, audit_api_key_postgres,
+    audit_api_key_sqlite,
 };
+pub use listing::{ApiKeyListStatus, ApiKeyPage};
+use persistence::{
+    ensure_key_capacity_postgres, ensure_key_capacity_sqlite, lock_user_postgres, lock_user_sqlite,
+};
+use policy::{generate_token, validate_api_key_name, validate_expiration, validate_scopes};
+use revocation::{
+    revoke_postgres, revoke_sqlite, revoke_user_key_postgres, revoke_user_key_sqlite,
+};
+
 pub(in crate::storage) use persistence::{insert_key_postgres, insert_key_sqlite};
+pub(in crate::storage) use policy::token_prefix;
+pub(crate) use policy::validate_api_key_policy;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
 pub struct ApiKeySummary {
@@ -25,6 +37,15 @@ pub struct ApiKeySummary {
     pub created_at: i64,
     pub scopes: Vec<ApiKeyScope>,
     pub expires_at: Option<i64>,
+    pub revoked_at: Option<i64>,
+}
+
+/// The outcome of a revocation attempt.  `remaining_active` is scoped to the
+/// target user and is useful to callers deciding whether an audit record is due.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
+pub struct ApiKeyRevokeResult {
+    pub changed: bool,
+    pub remaining_active: usize,
 }
 
 pub struct CreatedApiKey {
@@ -33,37 +54,6 @@ pub struct CreatedApiKey {
 }
 
 impl Database {
-    pub async fn list_api_keys(&self, user_id: Uuid) -> Result<Vec<ApiKeySummary>, StorageError> {
-        match self {
-            Self::Sqlite {
-                pool,
-                installation_id,
-            } => sqlx::query(
-                "SELECT id, name, token_prefix, last_used_at, created_at, scopes_json, expires_at FROM user_api_keys WHERE installation_id = ?1 AND user_id = ?2 AND revoked_at IS NULL ORDER BY created_at, id",
-            )
-            .bind(installation_id.as_str())
-            .bind(user_id.to_string())
-            .fetch_all(pool)
-            .await?
-            .into_iter()
-            .map(decode_api_key)
-            .collect(),
-            Self::Postgres {
-                pool,
-                installation_id,
-            } => sqlx::query(
-                "SELECT id, name, token_prefix, last_used_at, created_at, scopes_json, expires_at FROM user_api_keys WHERE installation_id = $1 AND user_id = $2 AND revoked_at IS NULL ORDER BY created_at, id",
-            )
-            .bind(installation_id.as_str())
-            .bind(user_id.to_string())
-            .fetch_all(pool)
-            .await?
-            .into_iter()
-            .map(decode_api_key)
-            .collect(),
-        }
-    }
-
     pub async fn create_api_key(
         &self,
         user_id: Uuid,
@@ -84,6 +74,7 @@ impl Database {
             created_at: now,
             scopes,
             expires_at,
+            revoked_at: None,
         };
         let token_hash = hash_token(&token);
         match self {
@@ -150,15 +141,15 @@ impl Database {
         user_id: Uuid,
         key_id: Uuid,
         now: i64,
-    ) -> Result<(), StorageError> {
+    ) -> Result<ApiKeyRevokeResult, StorageError> {
         match self {
             Self::Sqlite {
                 pool,
                 installation_id,
             } => {
-                let mut transaction = pool.begin().await?;
+                let mut transaction = pool.begin_with("BEGIN IMMEDIATE").await?;
                 lock_user_sqlite(&mut transaction, installation_id.as_str(), user_id).await?;
-                revoke_sqlite(
+                let result = revoke_sqlite(
                     &mut transaction,
                     installation_id.as_str(),
                     user_id,
@@ -176,6 +167,7 @@ impl Database {
                 )
                 .await?;
                 transaction.commit().await?;
+                Ok(result)
             }
             Self::Postgres {
                 pool,
@@ -183,7 +175,7 @@ impl Database {
             } => {
                 let mut transaction = pool.begin().await?;
                 lock_user_postgres(&mut transaction, installation_id.as_str(), user_id).await?;
-                revoke_postgres(
+                let result = revoke_postgres(
                     &mut transaction,
                     installation_id.as_str(),
                     user_id,
@@ -201,83 +193,82 @@ impl Database {
                 )
                 .await?;
                 transaction.commit().await?;
+                Ok(result)
             }
         }
-        Ok(())
     }
-}
 
-fn decode_api_key<R: Row>(row: R) -> Result<ApiKeySummary, StorageError>
-where
-    for<'a> &'a str: sqlx::ColumnIndex<R>,
-    String: for<'d> sqlx::Decode<'d, R::Database> + sqlx::Type<R::Database>,
-    i64: for<'d> sqlx::Decode<'d, R::Database> + sqlx::Type<R::Database>,
-{
-    Ok(ApiKeySummary {
-        id: Uuid::parse_str(&row.try_get::<String, _>("id")?)?,
-        name: row.try_get("name")?,
-        prefix: row.try_get("token_prefix")?,
-        last_used_at: row.try_get("last_used_at")?,
-        created_at: row.try_get("created_at")?,
-        scopes: serde_json::from_str(&row.try_get::<String, _>("scopes_json")?)?,
-        expires_at: row.try_get("expires_at")?,
-    })
-}
-
-/// Validate the policy shared by self-service keys and administrator-provisioned
-/// initial keys.  New keys must always be explicitly scoped and time-bounded;
-/// `Wildcard` remains readable only for keys created before this policy existed.
-pub(crate) fn validate_api_key_policy(
-    scopes: Vec<ApiKeyScope>,
-    expires_at: Option<i64>,
-    now: i64,
-) -> Result<Vec<ApiKeyScope>, StorageError> {
-    let scopes = validate_scopes(scopes)?;
-    validate_expiration(expires_at, now)?;
-    Ok(scopes)
-}
-
-fn validate_scopes(scopes: Vec<ApiKeyScope>) -> Result<Vec<ApiKeyScope>, StorageError> {
-    if scopes.is_empty()
-        || scopes
-            .iter()
-            .any(|scope| matches!(scope, ApiKeyScope::Wildcard))
-    {
-        return Err(StorageError::InvalidApiKey);
+    /// Revokes a target user's key without applying the self-service recovery
+    /// guard.  Missing, already-revoked, and mismatched keys are deliberately
+    /// idempotent and return `changed: false`.
+    pub async fn admin_revoke_api_key(
+        &self,
+        actor_user_id: Uuid,
+        target_user_id: Uuid,
+        key_id: Uuid,
+        reason: &str,
+        now: i64,
+    ) -> Result<ApiKeyRevokeResult, StorageError> {
+        if actor_user_id == target_user_id {
+            return Err(StorageError::SelfApiKeyAdministration);
+        }
+        match self {
+            Self::Sqlite {
+                pool,
+                installation_id,
+            } => {
+                let mut transaction = pool.begin_with("BEGIN IMMEDIATE").await?;
+                let result = revoke_user_key_sqlite(
+                    &mut transaction,
+                    installation_id.as_str(),
+                    target_user_id,
+                    key_id,
+                    now,
+                )
+                .await?;
+                if result.changed {
+                    audit_admin_api_key_sqlite(
+                        &mut transaction,
+                        installation_id.as_str(),
+                        actor_user_id,
+                        target_user_id,
+                        key_id,
+                        reason,
+                        now,
+                    )
+                    .await?;
+                }
+                transaction.commit().await?;
+                Ok(result)
+            }
+            Self::Postgres {
+                pool,
+                installation_id,
+            } => {
+                let mut transaction = pool.begin().await?;
+                let result = revoke_user_key_postgres(
+                    &mut transaction,
+                    installation_id.as_str(),
+                    target_user_id,
+                    key_id,
+                    now,
+                )
+                .await?;
+                if result.changed {
+                    audit_admin_api_key_postgres(
+                        &mut transaction,
+                        installation_id.as_str(),
+                        actor_user_id,
+                        target_user_id,
+                        key_id,
+                        reason,
+                        now,
+                    )
+                    .await?;
+                }
+                transaction.commit().await?;
+                Ok(result)
+            }
+        }
     }
-    let mut scopes = scopes;
-    scopes.sort_by_key(|scope| *scope as u8);
-    scopes.dedup();
-    Ok(scopes)
-}
-
-const MAX_API_KEY_LIFETIME_SECONDS: i64 = 365 * 24 * 60 * 60;
-
-fn validate_expiration(expires_at: Option<i64>, now: i64) -> Result<(), StorageError> {
-    let Some(expires_at) = expires_at else {
-        return Err(StorageError::InvalidApiKey);
-    };
-    if expires_at <= now || expires_at.saturating_sub(now) > MAX_API_KEY_LIFETIME_SECONDS {
-        return Err(StorageError::InvalidApiKey);
-    }
-    Ok(())
-}
-
-fn validate_api_key_name(name: &str) -> Result<String, StorageError> {
-    let name = name.trim();
-    if name.is_empty() || name.chars().count() > 80 || name.chars().any(char::is_control) {
-        return Err(StorageError::InvalidApiKey);
-    }
-    Ok(name.to_owned())
-}
-
-fn generate_token() -> Result<String, StorageError> {
-    let mut random = [0_u8; 32];
-    getrandom::fill(&mut random).map_err(|_| StorageError::RandomSource)?;
-    Ok(format!("mwc_{}", URL_SAFE_NO_PAD.encode(random)))
-}
-
-pub(in crate::storage) fn token_prefix(token: &str) -> String {
-    let visible = token.chars().take(12).collect::<String>();
-    format!("{visible}…")
 }

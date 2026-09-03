@@ -2,6 +2,7 @@ use axum::{http::StatusCode, response::Response};
 
 use crate::storage::{IdempotencyDecision, Principal};
 
+mod api_keys;
 #[path = "audit.rs"]
 mod audit_api;
 mod memberships;
@@ -11,6 +12,10 @@ mod settings;
 mod system;
 mod users;
 
+pub(super) use api_keys::{
+    __path_admin_revoke_api_key, __path_list_user_api_keys, AdminRevokeApiKeyRequest,
+    admin_revoke_api_key, list_user_api_keys,
+};
 pub(super) use audit_api::{__path_audit, audit};
 pub(super) use memberships::{
     __path_list_members, __path_remove_membership, __path_upsert_membership, MembershipRequest,

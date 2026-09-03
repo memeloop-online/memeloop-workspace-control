@@ -1,5 +1,6 @@
 import type {
   ApiFailure,
+  ApiKeyPage,
   ApiKeySummary,
   ApiKeyScope,
   AuditPage,
@@ -44,6 +45,10 @@ export interface UsersPageOptions extends PageOptions {
   organization_id?: string;
 }
 
+export interface AdminApiKeyPageOptions extends PageOptions {
+  status?: "all" | "active" | "revoked";
+}
+
 function queryString(values: object): string {
   const query = new URLSearchParams();
   for (const [key, value] of Object.entries(values as Record<string, string | number | undefined>)) {
@@ -53,7 +58,11 @@ function queryString(values: object): string {
 }
 
 export class ApiClient {
-  constructor(readonly token: string) {}
+  readonly token: string;
+
+  constructor(token: string) {
+    this.token = token;
+  }
 
   static savedToken(): string {
     return sessionStorage.getItem(TOKEN_KEY) ?? "";
@@ -143,6 +152,16 @@ export class ApiClient {
   updateUser(id: string, input: { display_name?: string; system_admin?: boolean; disabled?: boolean }): Promise<UserSummary> {
     return this.request(`/api/v1/admin/users/${id}`, {
       method: "PUT", body: JSON.stringify(input),
+    });
+  }
+
+  adminUserApiKeys(userId: string, options: AdminApiKeyPageOptions = {}): Promise<ApiKeyPage> {
+    return this.request(`/api/v1/admin/users/${encodeURIComponent(userId)}/api-keys?${queryString(options)}`);
+  }
+
+  revokeAdminUserApiKey(userId: string, keyId: string, reason: string): Promise<void> {
+    return this.request(`/api/v1/admin/users/${encodeURIComponent(userId)}/api-keys/${encodeURIComponent(keyId)}`, {
+      method: "DELETE", body: JSON.stringify({ reason }),
     });
   }
 

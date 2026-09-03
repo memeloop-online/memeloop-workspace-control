@@ -298,7 +298,12 @@ fn identity_storage_response(error: &StorageError) -> Option<ErrorResponse> {
         StorageError::InvalidApiKey => response(
             StatusCode::BAD_REQUEST,
             "invalid_api_key",
-            "API key names must contain 1-80 characters",
+            "API keys require a 1-80 character name, explicit non-wildcard scopes, and an expiration within 365 days",
+        ),
+        StorageError::InvalidApiKeyQuery => response(
+            StatusCode::BAD_REQUEST,
+            "invalid_api_key_query",
+            "the API key pagination cursor is invalid",
         ),
         StorageError::InvalidOrganizationMembership => response(
             StatusCode::BAD_REQUEST,
@@ -310,10 +315,15 @@ fn identity_storage_response(error: &StorageError) -> Option<ErrorResponse> {
             "api_key_not_found",
             "the API key was not found",
         ),
+        StorageError::SelfApiKeyAdministration => response(
+            StatusCode::BAD_REQUEST,
+            "self_api_key_administration",
+            "use the personal API-key endpoint when revoking your own key",
+        ),
         StorageError::LastApiKey => response(
             StatusCode::CONFLICT,
             "last_api_key",
-            "create another API key before revoking the last active key",
+            "create another active API key with the required recovery permissions before revoking this key",
         ),
         StorageError::TooManyApiKeys => response(
             StatusCode::CONFLICT,

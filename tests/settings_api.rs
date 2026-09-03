@@ -1,4 +1,8 @@
-use std::{net::SocketAddr, sync::Arc};
+use std::{
+    net::SocketAddr,
+    sync::Arc,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use axum::{
     Router,
@@ -9,6 +13,7 @@ use base64::{Engine, engine::general_purpose::STANDARD};
 use http_body_util::BodyExt;
 use memeloop_workspace_control::{
     api::{AppState, router},
+    auth::ApiKeyScope,
     config::{AppConfig, InstallationId},
     storage::Database,
 };
@@ -292,6 +297,115 @@ async fn api_keys_rotate_without_ever_returning_stored_tokens() {
     assert!(snapshot_json.contains("user.api_key.revoke"));
 }
 
+#[tokio::test]
+async fn self_service_cannot_revoke_the_last_api_key_management_or_system_recovery_scope() {
+    const API_KEY_MANAGER_TOKEN: &str = "settings-last-manager-token-00000000000000000000";
+    const SYSTEM_ADMIN_TOKEN: &str = "settings-last-system-token-000000000000000000000";
+    let now = unix_timestamp();
+    let expiry = now + 24 * 60 * 60;
+    let installation_id: InstallationId = "settings-key-guard".parse().unwrap();
+    let database = Database::connect("sqlite::memory:", installation_id.clone())
+        .await
+        .unwrap();
+    database.migrate().await.unwrap();
+
+    let key_manager = database
+        .create_user_with_initial_key(
+            "API key manager",
+            API_KEY_MANAGER_TOKEN,
+            false,
+            vec![ApiKeyScope::ManageApiKeys],
+            expiry,
+            now,
+        )
+        .await
+        .unwrap();
+    let key_manager_id = database.list_api_keys(key_manager.user_id).await.unwrap()[0].id;
+    // A second usable key proves this is a recovery-scope guard, not merely
+    // the legacy rule that a user must retain any key at all.
+    database
+        .create_api_key(
+            key_manager.user_id,
+            "Read-only fallback",
+            vec![ApiKeyScope::ReadWorkspace],
+            Some(expiry),
+            now,
+        )
+        .await
+        .unwrap();
+
+    let system_admin = database
+        .create_user_with_initial_key(
+            "System administrator",
+            SYSTEM_ADMIN_TOKEN,
+            true,
+            vec![ApiKeyScope::ManageSystem],
+            expiry,
+            now,
+        )
+        .await
+        .unwrap();
+    let system_admin_id = database.list_api_keys(system_admin.user_id).await.unwrap()[0].id;
+    let system_admin_api_key = database
+        .create_api_key(
+            system_admin.user_id,
+            "API key management fallback",
+            vec![ApiKeyScope::ManageApiKeys],
+            Some(expiry),
+            now,
+        )
+        .await
+        .unwrap();
+
+    let config = AppConfig {
+        installation_id,
+        listen_address: SocketAddr::from(([127, 0, 0, 1], 0)),
+        database_url: "sqlite::memory:".to_owned(),
+        replica_count: 1,
+        instance_id: "test".to_owned(),
+        ssh_public_host: None,
+        internal_ssh_host: None,
+        web_shell_public_origin: None,
+        port_mapping_public_domain: None,
+        prometheus_url: None,
+        plugin_dir: None,
+    };
+    let app = router(Arc::new(AppState::new(config, database.clone())));
+    let audit_before = database.export_snapshot(now).await.unwrap().tables["audit_log"].len();
+
+    let last_manager = app
+        .clone()
+        .oneshot(request(
+            Method::DELETE,
+            &format!("/api/v1/me/api-keys/{key_manager_id}"),
+            API_KEY_MANAGER_TOKEN,
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(last_manager.status(), StatusCode::CONFLICT);
+
+    // Authenticate with the fallback manage-api-keys credential so that the
+    // attempted revocation is the only manage-system credential, not the key
+    // that authenticated this request.
+    let last_system = app
+        .oneshot(request(
+            Method::DELETE,
+            &format!("/api/v1/me/api-keys/{system_admin_id}"),
+            &system_admin_api_key.token,
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(last_system.status(), StatusCode::CONFLICT);
+
+    assert_eq!(
+        database.export_snapshot(now).await.unwrap().tables["audit_log"].len(),
+        audit_before,
+        "recovery-guard rejections must not create revoke audit records"
+    );
+}
+
 async fn key_last_used(database: &Database, key_id: &str) -> Value {
     database.export_snapshot(100).await.unwrap().tables["user_api_keys"]
         .iter()
@@ -318,4 +432,13 @@ fn request(method: Method, uri: &str, token: &str, body: Option<Value>) -> Reque
 async fn json_response(response: axum::response::Response, expected: StatusCode) -> Value {
     assert_eq!(response.status(), expected);
     serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap()
+}
+
+fn unix_timestamp() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+        .try_into()
+        .unwrap()
 }

@@ -41,20 +41,45 @@ Last updated: 2026-09-03
   removed; the test workspace replacement Pod returned 3/3 Ready.
 - Daily-use API tokens were rotated to explicit scopes and expiry. Historical keys remain only for
   a deliberate no-downtime observation window.
+- System administrators can now page through another user's API-key summaries and force-revoke a
+  target key without exposing token or hash material. Cross-user revocation requires both
+  `manage_system` and `manage_api_keys`, requires an audited reason, is idempotent, and commits the
+  revocation and audit event atomically. The administrator endpoint rejects self-targeting so it
+  cannot bypass personal recovery-key protection.
+- Personal revocation now preserves the last usable `manage_api_keys` key and, for system
+  administrators, the last usable `manage_system` key. Expired keys remain removable. The user
+  directory provides paginated administrator controls with explicit active/expired/revoked states.
+- Independent backend and UI reviews were applied: administrator self-targeting is rejected at
+  both the HTTP and storage boundaries; the dialog cannot close mid-revocation, distinguishes load
+  failures from empty results, supports retry and page fallback, and keeps a successful revocation
+  visible even if the follow-up refresh fails.
+- Local validation for this change passed 52 web tests and production UI build, 87 Rust unit tests,
+  the complete Rust integration suite, strict all-target Clippy, and the repository's additional
+  maintainability Clippy gates. PostgreSQL-specific revocation and listing coverage is included for
+  CI where `MWC_TEST_POSTGRES_URL` is available.
 
 ## In progress
 
-- No product implementation item remains open from this checkpoint. Only the time-based API-key
-  safety closeout below remains.
+- Publish the validated API-key management revision through CI, then deploy the exact image digest
+  through GitOps and perform production regression.
 
 ## Next action
 
-1. After the API-key overlap window, compare historical-key `last_used_at` values with the recorded
+1. Commit and publish the validated image through GitHub Actions.
+2. Deploy the exact published digest through GitOps and perform production regression.
+3. After the API-key overlap window, compare historical-key `last_used_at` values with the recorded
    rotation checkpoint.
-2. Revoke only keys that remained unused, then verify daily clients with the replacement keys.
+4. Revoke only keys that remained unused, then verify daily clients with the replacement keys.
 
 ## Deferred safety closeout
 
 - Observe the retired API keys for 24–72 hours and revoke only after their `last_used_at` values stop
   advancing. Do not revoke the unrelated acceptance administrator key without transferring its
   organization ownership first.
+
+## Operational access checkpoint
+
+- The dedicated local Kubernetes client certificate expired at `2026-09-03T08:42:49Z`; its private
+  key remains local. GitOps publication and rollout can continue, but direct `kubectl` evidence
+  requires a newly signed certificate. A fresh matching CSR can be regenerated from the existing
+  key; never copy or disclose the private key.

@@ -31,6 +31,7 @@ const ACTION_LABELS: Readonly<Record<string, MessageKey>> = {
   "user.profile.update": "auditActionProfileUpdate",
   "user.api_key.create": "auditActionApiKeyCreate",
   "user.api_key.revoke": "auditActionApiKeyRevoke",
+  "user.api_key.admin_revoke": "auditActionApiKeyAdminRevoke",
   "membership.upsert": "auditActionMembershipUpsert",
   "membership.remove": "auditActionMembershipRemove",
   "quota.set": "auditActionOrganizationQuotaSet",

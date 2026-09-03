@@ -30,10 +30,14 @@ pub enum StorageError {
     UserNotFound,
     #[error("display name or avatar upload is invalid")]
     InvalidUserProfile,
-    #[error("API key name is invalid")]
+    #[error("API key name, scopes, or expiration is invalid")]
     InvalidApiKey,
+    #[error("API key pagination query is invalid")]
+    InvalidApiKeyQuery,
     #[error("API key was not found")]
     ApiKeyNotFound,
+    #[error("administrator API-key revocation cannot target the acting user")]
+    SelfApiKeyAdministration,
     #[error("the last active API key cannot be revoked")]
     LastApiKey,
     #[error("a user may have at most 20 active API keys")]
