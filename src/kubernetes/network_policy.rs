@@ -50,7 +50,7 @@ pub(super) fn build(
     }
 }
 
-fn ingress_rule_with_ip_blocks(
+pub(super) fn ingress_rule_with_ip_blocks(
     namespace: &str,
     pod_labels: &BTreeMap<String, String>,
     source_cidrs: &[String],

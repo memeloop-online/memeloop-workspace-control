@@ -7,8 +7,7 @@ use k8s_openapi::{
         core::v1::{Service, ServicePort, ServiceSpec},
         networking::v1::{
             HTTPIngressPath, HTTPIngressRuleValue, Ingress, IngressBackend, IngressRule,
-            IngressServiceBackend, IngressSpec, IngressTLS, NetworkPolicy,
-            NetworkPolicyIngressRule, NetworkPolicyPeer, NetworkPolicyPort, ServiceBackendPort,
+            IngressServiceBackend, IngressSpec, IngressTLS, NetworkPolicy, ServiceBackendPort,
         },
     },
     apimachinery::pkg::{apis::meta::v1::LabelSelector, util::intstr::IntOrString},
@@ -16,7 +15,7 @@ use k8s_openapi::{
 
 use crate::storage::PortMapping;
 
-use super::namespaced_metadata;
+use super::{namespaced_metadata, network_policy::ingress_rule_with_ip_blocks};
 
 pub const PORT_MAPPING_ID_LABEL: &str = "workspace.memeloop.dev/port-mapping-id";
 
@@ -110,6 +109,7 @@ pub fn network_policy(
     pod_labels: &BTreeMap<String, String>,
     higress_namespace: &str,
     higress_pod_labels: &BTreeMap<String, String>,
+    higress_source_cidrs: &[String],
     mapping: &PortMapping,
 ) -> NetworkPolicy {
     let labels = mapping_labels(labels, mapping);
@@ -121,27 +121,12 @@ pub fn network_policy(
                 ..LabelSelector::default()
             }),
             policy_types: Some(vec!["Ingress".to_owned()]),
-            ingress: Some(vec![NetworkPolicyIngressRule {
-                from: Some(vec![NetworkPolicyPeer {
-                    namespace_selector: Some(LabelSelector {
-                        match_labels: Some(BTreeMap::from([(
-                            "kubernetes.io/metadata.name".to_owned(),
-                            higress_namespace.to_owned(),
-                        )])),
-                        ..LabelSelector::default()
-                    }),
-                    pod_selector: Some(LabelSelector {
-                        match_labels: Some(higress_pod_labels.clone()),
-                        ..LabelSelector::default()
-                    }),
-                    ..NetworkPolicyPeer::default()
-                }]),
-                ports: Some(vec![NetworkPolicyPort {
-                    port: Some(IntOrString::Int(i32::from(mapping.internal_port))),
-                    protocol: Some("TCP".to_owned()),
-                    ..NetworkPolicyPort::default()
-                }]),
-            }]),
+            ingress: Some(vec![ingress_rule_with_ip_blocks(
+                higress_namespace,
+                higress_pod_labels,
+                higress_source_cidrs,
+                i32::from(mapping.internal_port),
+            )]),
             ..k8s_openapi::api::networking::v1::NetworkPolicySpec::default()
         }),
     }
@@ -190,5 +175,63 @@ mod tests {
             Some(["p-00000000000000000000000000000000.ports.example.test".to_owned()].as_slice())
         );
         assert_eq!(tls.secret_name.as_deref(), Some("mwc-port-mapping-tls"));
+    }
+
+    #[test]
+    fn allows_host_network_higress_source_cidrs() {
+        let mapping = PortMapping {
+            id: Uuid::nil(),
+            organization_id: Uuid::nil(),
+            workspace_id: Uuid::nil(),
+            internal_port: 3000,
+            display_name: None,
+            created_by: Uuid::nil(),
+            created_at: 1,
+        };
+        let gateway_labels = BTreeMap::from([("app".to_owned(), "higress-gateway".to_owned())]);
+        let policy = network_policy(
+            "workspace",
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            "higress-system",
+            &gateway_labels,
+            &["10.50.0.0/24".to_owned(), "10.42.0.0/16".to_owned()],
+            &mapping,
+        );
+        let mut rules = policy.spec.unwrap().ingress.unwrap();
+        let rule = rules.remove(0);
+        assert_eq!(rule.ports.unwrap()[0].port, Some(IntOrString::Int(3000)));
+        let peers = rule.from.unwrap();
+        assert!(peers.iter().any(|peer| {
+            peer.namespace_selector.is_some()
+                && peer
+                    .pod_selector
+                    .as_ref()
+                    .and_then(|selector| selector.match_labels.as_ref())
+                    == Some(&gateway_labels)
+        }));
+        assert_eq!(
+            peers
+                .iter()
+                .filter_map(|peer| peer.ip_block.as_ref().map(|block| block.cidr.as_str()))
+                .collect::<Vec<_>>(),
+            ["10.50.0.0/24", "10.42.0.0/16"]
+        );
+
+        let policy_without_cidrs = network_policy(
+            "workspace",
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            "higress-system",
+            &gateway_labels,
+            &[],
+            &mapping,
+        );
+        let peers = policy_without_cidrs.spec.unwrap().ingress.unwrap()[0]
+            .from
+            .clone()
+            .unwrap();
+        assert_eq!(peers.len(), 1);
+        assert!(peers[0].ip_block.is_none());
     }
 }

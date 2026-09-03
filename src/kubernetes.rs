@@ -243,6 +243,7 @@ impl ResourceBuilder {
             &selector_labels,
             &self.higress_namespace,
             &self.higress_pod_labels,
+            &self.higress_source_cidrs,
             mapping,
         );
         Ok(Some((service, ingress, network_policy)))
