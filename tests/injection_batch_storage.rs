@@ -276,7 +276,7 @@ async fn postgres_batch_delete_is_atomic() {
         eprintln!("skipping PostgreSQL injection batch test: MWC_TEST_POSTGRES_URL is not set");
         return;
     };
-    let installation = format!("batch-pg-{}", &Uuid::now_v7().simple().to_string()[..12])
+    let installation = format!("batch-pg-{}", &Uuid::now_v7().simple().to_string()[..11])
         .parse::<InstallationId>()
         .unwrap();
     let database = Database::connect(&database_url, installation)
