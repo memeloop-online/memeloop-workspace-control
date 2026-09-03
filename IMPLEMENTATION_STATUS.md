@@ -71,12 +71,21 @@ Last updated: 2026-09-03
   window with `/livez` and `/readyz` returning HTTP 200, served the revision's
   `assets/index-CW5kKWYO.js`, and returned HTTP 401 from the new administrator API-key route when
   called without authentication.
+- Loki ingestion was verified through Grafana using aggregate-only LogQL queries: the six-hour
+  result contained the MWC control-plane container and workspace containers without reading or
+  printing log bodies. The existing dashboard expected datasource UID `loki`, while the datasource
+  had an auto-generated UID. GitOps revisions `597b73d` and `614cf67` completed a two-stage
+  migration to one persistent `uid=loki` datasource and removed the one-time delete directive.
+  Grafana health is HTTP 200, the live dashboard and datasource use the same UID, and the dashboard
+  LogQL selector is `{mwc_installation="k3si-7032544955"}`.
+- All twelve fixes requested on 2026-09-03 are implemented, deployed, and covered by the evidence
+  above. No product or deployment work remains for that objective.
 
-## In progress
+## Post-goal operational follow-up
 
 - Observe the historical API-key overlap window until at least 24 hours have elapsed from the
-  recorded rotation checkpoint. No implementation or deployment work remains for the twelve
-  2026-09-03 fixes.
+  recorded rotation checkpoint. This is a separate credential-rotation safety window, not an
+  incomplete part of the twelve product fixes.
 
 ## Next action
 
