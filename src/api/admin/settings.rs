@@ -169,12 +169,9 @@ pub(in crate::api) async fn create_api_key(
 }
 
 pub(super) fn actor_may_grant(actor_scopes: &[ApiKeyScope], requested: &[ApiKeyScope]) -> bool {
-    actor_scopes
+    requested
         .iter()
-        .any(|scope| matches!(scope, ApiKeyScope::Wildcard))
-        || requested
-            .iter()
-            .all(|requested_scope| actor_scopes.contains(requested_scope))
+        .all(|requested_scope| actor_scopes.contains(requested_scope))
 }
 
 #[utoipa::path(

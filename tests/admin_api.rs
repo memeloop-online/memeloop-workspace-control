@@ -484,13 +484,13 @@ async fn management_api_enforces_system_and_organization_boundaries() {
     let scaling: Value = body_json(scaling).await;
     assert_eq!(scaling["database_mode"], "sqlite");
     assert_eq!(scaling["configured_replicas"], 1);
-    assert_eq!(scaling["schema_version"], 16);
+    assert_eq!(scaling["schema_version"], 17);
 }
 
 #[tokio::test]
 async fn admin_user_initial_key_policy_rejects_escalation_and_invalid_expiry() {
     const SCOPED_ADMIN_TOKEN: &str = "scoped-admin-api-token-000000000000000000000";
-    const LEGACY_ADMIN_TOKEN: &str = "legacy-admin-api-token-000000000000000000000";
+    const BOOTSTRAP_ADMIN_TOKEN: &str = "bootstrap-admin-api-token-000000000000000000";
     const NEXT_TOKEN: &str = "next-user-api-token-000000000000000000000000000";
     let initial_key_now = test_unix_timestamp();
     let initial_key_expiry = initial_key_now + 30 * 24 * 60 * 60;
@@ -511,7 +511,7 @@ async fn admin_user_initial_key_policy_rejects_escalation_and_invalid_expiry() {
         .await
         .unwrap();
     database
-        .create_user("Legacy administrator", LEGACY_ADMIN_TOKEN, true, 101)
+        .create_user("Bootstrap administrator", BOOTSTRAP_ADMIN_TOKEN, true, 101)
         .await
         .unwrap();
     let app = router(Arc::new(AppState::new(
@@ -534,7 +534,7 @@ async fn admin_user_initial_key_policy_rejects_escalation_and_invalid_expiry() {
     let compatibility = app
         .clone()
         .oneshot(
-            authenticated(Request::post("/api/v1/admin/users"), LEGACY_ADMIN_TOKEN)
+            authenticated(Request::post("/api/v1/admin/users"), BOOTSTRAP_ADMIN_TOKEN)
                 .header("content-type", "application/json")
                 .header("idempotency-key", "initial-key-compatible")
                 .body(Body::from(

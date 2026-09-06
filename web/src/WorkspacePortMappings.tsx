@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import type { FormEvent } from "react";
+import { ConfirmDialog } from "./components/ConfirmDialog";
 import { useI18n } from "./i18n";
 import type { MessageKey } from "./i18n";
 import { reserveWebShellWindow } from "./workspaceShell";
@@ -17,7 +18,7 @@ interface Props {
   onError?: (message: string) => void;
 }
 
-/** Port forwarding controls for a workspace, including stopped workspaces. */
+/** Port forwarding controls rendered only for an active workspace. */
 export function WorkspacePortMappings({ api, workspaceId, workspaceReady, onError }: Props) {
   const { t } = useI18n();
   const dialog = useRef<HTMLDialogElement>(null);
@@ -31,6 +32,7 @@ export function WorkspacePortMappings({ api, workspaceId, workspaceReady, onErro
   const [port, setPort] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [pendingDelete, setPendingDelete] = useState<PortMapping | null>(null);
 
   const report = useCallback((errorValue: unknown) => {
     const message = errorValue instanceof Error ? errorValue.message : t("portMappingRequestFailed");
@@ -83,12 +85,14 @@ export function WorkspacePortMappings({ api, workspaceId, workspaceReady, onErro
     finally { setSaving(false); }
   }
 
-  async function remove(item: PortMapping) {
-    if (!window.confirm(t("portMappingDeleteConfirm"))) return;
+  async function remove() {
+    const item = pendingDelete;
+    if (!item) return;
     setDeleting(item.id); setError(null);
     try {
       await api.deletePortMapping(workspaceId, item.id);
       setItems((current) => current.filter((candidate) => candidate.id !== item.id));
+      setPendingDelete(null);
     } catch (errorValue) { report(errorValue); }
     finally { setDeleting(null); }
   }
@@ -118,10 +122,11 @@ export function WorkspacePortMappings({ api, workspaceId, workspaceReady, onErro
         <section className="port-mappings-list" aria-live="polite">
           {loading && <p>{t("portMappingsLoading")}</p>}
           {!loading && !error && items.length === 0 && <p>{t("noPortMappings")}</p>}
-          {!loading && items.map((item) => <PortMappingRow key={item.id} api={api} workspaceId={workspaceId} workspaceReady={workspaceReady} item={item} deleting={deleting === item.id} onDelete={() => void remove(item)} onError={report} />)}
+          {!loading && items.map((item) => <PortMappingRow key={item.id} api={api} workspaceId={workspaceId} workspaceReady={workspaceReady} item={item} deleting={deleting === item.id} onDelete={() => setPendingDelete(item)} onError={report} />)}
         </section>
       </div>
     </dialog>
+    <ConfirmDialog open={pendingDelete !== null} title={t("delete")} description={t("portMappingDeleteConfirm")} confirmLabel={t("delete")} cancelLabel={t("cancel")} busy={deleting !== null} danger details={pendingDelete && <code>{pendingDelete.display_name || pendingDelete.internal_port}</code>} onClose={() => deleting === null && setPendingDelete(null)} onConfirm={() => void remove()} />
   </>;
 }
 

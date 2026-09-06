@@ -307,9 +307,7 @@ fn count_keys_with_scope(keys: &[Vec<ApiKeyScope>], required: ApiKeyScope) -> us
 }
 
 fn has_scope(scopes: &[ApiKeyScope], required: ApiKeyScope) -> bool {
-    scopes
-        .iter()
-        .any(|scope| matches!(scope, ApiKeyScope::Wildcard) || *scope == required)
+    scopes.contains(&required)
 }
 
 fn ensure_key_revoked(rows: u64) -> Result<(), StorageError> {

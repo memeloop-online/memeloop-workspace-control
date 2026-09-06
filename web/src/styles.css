@@ -355,7 +355,7 @@ textarea { resize: vertical; font-family: "DM Mono", monospace; line-height: 1.5
 .audit-table, .audit-action strong, .audit-actor strong, .audit-target strong,
 .connection-facts dd { font-size: .8rem; }
 
-@media (max-width: 1000px) {
+@media (max-width: 1200px) {
   .audit-filters, .audit-filters.with-scope { grid-template-columns: 1fr 1fr; }
 }
 
@@ -674,4 +674,39 @@ textarea { resize: vertical; font-family: "DM Mono", monospace; line-height: 1.5
   .workspace-pagination { gap: 6px; }
   .workspace-pagination > span { order: -1; flex-basis: 100%; }
   .workspace-pagination .button { flex: 1 1 0; min-width: 0; }
+}
+
+/* Final responsive ownership rules. The mobile shell gives navigation its own
+ * row so it never overlays forms or workspace actions. */
+@media (min-width: 651px) and (max-width: 960px) {
+  .sidebar .brand > div:last-child { display: none; }
+  .sidebar nav button { font-size: 0; }
+  .sidebar nav button span { font-size: 1.05rem; }
+}
+
+@media (max-width: 650px) {
+  .app-shell {
+    height: 100dvh;
+    min-height: 0;
+    display: grid;
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(0, 1fr) auto;
+    overflow: hidden;
+  }
+  .content {
+    grid-row: 1;
+    min-height: 0;
+    padding-bottom: 0;
+    overflow-y: auto;
+    overscroll-behavior-y: contain;
+  }
+  .sidebar {
+    position: static;
+    grid-row: 2;
+  }
+  .panel-stack { padding-bottom: 18px; }
+}
+
+.audit-action-unmapped {
+  color: #e4bd7c;
 }

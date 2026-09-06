@@ -1,4 +1,4 @@
-pub(super) const SCHEMA_VERSION: i64 = 16;
+pub(super) const SCHEMA_VERSION: i64 = 17;
 pub(super) const MIGRATION_TABLE: &str = "CREATE TABLE IF NOT EXISTS schema_migrations (\
     version BIGINT PRIMARY KEY, applied_at BIGINT NOT NULL\
 )";
@@ -239,10 +239,6 @@ pub(super) const USER_SETTINGS_MIGRATIONS: &[&str] = &[
     )",
     "CREATE INDEX IF NOT EXISTS user_api_keys_user_idx ON user_api_keys \
         (installation_id, user_id, revoked_at, created_at, id)",
-    "INSERT INTO user_api_keys (id, installation_id, user_id, name, token_prefix, token_hash, \
-        last_used_at, created_at, revoked_at) \
-        SELECT id, installation_id, id, 'Legacy key', 'legacy', token_hash, NULL, created_at, NULL \
-        FROM users WHERE true ON CONFLICT (installation_id, token_hash) DO NOTHING",
 ];
 
 pub(super) const V15_MIGRATIONS: &[&str] = &[
@@ -288,3 +284,12 @@ pub(super) const V16_MIGRATIONS: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS memberships_organization_role_idx \
         ON organization_memberships (installation_id, organization_id, role)",
 ];
+
+/// API keys created before explicit, bounded grants were introduced are not
+/// safe to retain. Deleting key records revokes their token hashes while
+/// preserving users and their audit history.
+pub(super) const V17_SQLITE_MIGRATIONS: &[&str] =
+    &["DELETE FROM user_api_keys WHERE instr(scopes_json, '\"*\"') > 0 OR expires_at IS NULL"];
+
+pub(super) const V17_POSTGRES_MIGRATIONS: &[&str] =
+    &["DELETE FROM user_api_keys WHERE position('\"*\"' IN scopes_json) > 0 OR expires_at IS NULL"];

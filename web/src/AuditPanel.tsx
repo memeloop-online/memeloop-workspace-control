@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import type { FormEvent } from "react";
 import type { ApiClient } from "./api";
+import { AuditRow } from "./audit/AuditRow";
 import { useI18n } from "./i18n";
-import type { MessageKey } from "./i18n";
 import type { AuditRecord } from "./types";
 
 interface AuditFilters {
@@ -13,65 +13,6 @@ interface AuditFilters {
 }
 
 const EMPTY_FILTERS: AuditFilters = { action: "", actor: "", workspace: "", q: "" };
-
-const ACTION_LABELS: Readonly<Record<string, MessageKey>> = {
-  "workspace.create": "auditActionWorkspaceCreate",
-  "workspace.start": "auditActionWorkspaceStart",
-  "workspace.stop": "auditActionWorkspaceStop",
-  "workspace.restart": "auditActionWorkspaceRestart",
-  "workspace.delete": "auditActionWorkspaceDelete",
-  "workspace.mark_ready": "auditActionWorkspaceReady",
-  "workspace.mark_stopped": "auditActionWorkspaceStopped",
-  "workspace.mark_deleted": "auditActionWorkspaceDeleted",
-  "workspace.mark_failed": "auditActionWorkspaceFailed",
-  "injection.replace": "auditActionCredentialReplace",
-  "injection.delete": "auditActionCredentialDelete",
-  "organization.create": "auditActionOrganizationCreate",
-  "user.create": "auditActionUserCreate",
-  "user.profile.update": "auditActionProfileUpdate",
-  "user.api_key.create": "auditActionApiKeyCreate",
-  "user.api_key.revoke": "auditActionApiKeyRevoke",
-  "user.api_key.admin_revoke": "auditActionApiKeyAdminRevoke",
-  "membership.upsert": "auditActionMembershipUpsert",
-  "membership.remove": "auditActionMembershipRemove",
-  "quota.set": "auditActionOrganizationQuotaSet",
-  "user_quota.set": "auditActionUserQuotaSet",
-  "image_policy.upsert": "auditActionImagePolicyUpsert",
-  "template.create": "auditActionTemplateCreate",
-  "template.update": "auditActionTemplateUpdate",
-  "template.enabled": "auditActionTemplateEnabled",
-  "template.delete": "auditActionTemplateDelete",
-  "webhook.create": "auditActionWebhookCreate",
-  "plugin.install": "auditActionPluginInstall",
-  "plugin.enabled.set": "auditActionPluginEnabled",
-  "plugin.uninstall": "auditActionPluginUninstall",
-  "plugin.configuration.put": "auditActionPluginConfigurationPut",
-  "plugin.configuration.delete": "auditActionPluginConfigurationDelete",
-};
-
-const ACTION_STATES: Readonly<Record<string, MessageKey>> = {
-  "workspace.create": "stateProvisioning",
-  "workspace.start": "stateStarting",
-  "workspace.stop": "stateStopping",
-  "workspace.restart": "stateRestarting",
-  "workspace.delete": "stateDeleting",
-  "workspace.mark_ready": "stateReady",
-  "workspace.mark_stopped": "stateStopped",
-  "workspace.mark_deleted": "stateDeleted",
-  "workspace.mark_failed": "stateFailed",
-};
-
-const STATE_LABELS: Readonly<Record<string, MessageKey>> = {
-  provisioning: "stateProvisioning",
-  ready: "stateReady",
-  stopping: "stateStopping",
-  stopped: "stateStopped",
-  starting: "stateStarting",
-  restarting: "stateRestarting",
-  deleting: "stateDeleting",
-  deleted: "stateDeleted",
-  failed: "stateFailed",
-};
 
 export function AuditPanel({ api, organizationId, systemAdmin, onError }: { api: ApiClient; organizationId: string; systemAdmin: boolean; onError: (message: string) => void }) {
   const { locale, t } = useI18n();
@@ -146,42 +87,6 @@ export function AuditPanel({ api, organizationId, systemAdmin, onError }: { api:
       <footer className="audit-pagination"><label>{t("rowsPerPage")}<select value={limit} onChange={(event) => changeLimit(Number(event.target.value))}><option value="10">10</option><option value="25">25</option><option value="50">50</option><option value="100">100</option></select></label><span>{t("page")} {offsetHistory.length + 1}</span><button className="button" disabled={loading || offsetHistory.length === 0} onClick={previousPage}>{t("previousPage")}</button><button className="button" disabled={loading || nextOffset === null} onClick={nextPage}>{t("nextPage")}</button></footer>
     </section>
   </section>;
-}
-
-function AuditRow({ record, locale }: { record: AuditRecord; locale: string }) {
-  const { t } = useI18n();
-  const stateKey = auditStateKey(record);
-  return <tr>
-    <td data-label={t("auditAction")}><div className="audit-action"><strong>{t(ACTION_LABELS[record.action] ?? "auditUnknownAction")}</strong><code>{record.action}</code>{stateKey && <span className="audit-state-badge" data-state={stateKey}>{t(stateKey)}</span>}</div></td>
-    <td data-label={t("auditActor")}><AuditActor record={record} /></td>
-    <td data-label={t("auditScopeObject")}><AuditTarget record={record} /></td>
-    <td data-label={t("auditTime")}><div className="audit-time"><time dateTime={new Date(record.created_at * 1_000).toISOString()}>{new Date(record.created_at * 1_000).toLocaleString(locale)}</time>{Object.keys(record.metadata).length > 0 && <details><summary>{t("auditDetails")}</summary><pre>{JSON.stringify(record.metadata, null, 2)}</pre></details>}</div></td>
-  </tr>;
-}
-
-function AuditActor({ record }: { record: AuditRecord }) {
-  const { t } = useI18n();
-  if (!record.actor_user_id) return <span className="audit-system-badge">{t("systemActor")}</span>;
-  return <div className="audit-actor"><strong>{record.actor_display_name ?? t("unknownActor")}</strong><code title={`${t("auditTechnicalId")}: ${record.actor_user_id}`}>{record.actor_user_id}</code></div>;
-}
-
-function AuditTarget({ record }: { record: AuditRecord }) {
-  const { t } = useI18n();
-  if (record.workspace_id) {
-    return <div className="audit-target"><span className="audit-scope-badge">{t("scopeWorkspace")}</span><strong>{record.workspace_name ?? t("auditDeletedWorkspace")}</strong>{record.workspace_short_id && <code>{record.workspace_short_id}</code>}<code title={`${t("auditTechnicalId")}: ${record.workspace_id}`}>{record.workspace_id}</code></div>;
-  }
-  if (record.organization_id) {
-    return <div className="audit-target"><span className="audit-scope-badge">{t("scopeOrganization")}</span><strong>{t("currentOrganization")}</strong><code title={`${t("auditTechnicalId")}: ${record.organization_id}`}>{record.organization_id}</code></div>;
-  }
-  return <div className="audit-target"><span className="audit-scope-badge">{t("auditGlobalScope")}</span><strong>{t("auditPlatformObject")}</strong></div>;
-}
-
-function auditStateKey(record: AuditRecord): MessageKey | undefined {
-  const actionState = ACTION_STATES[record.action];
-  if (actionState) return actionState;
-  if (typeof record.metadata.state === "string") return STATE_LABELS[record.metadata.state];
-  if (typeof record.metadata.enabled === "boolean") return record.metadata.enabled ? "enabled" : "disabled";
-  return undefined;
 }
 
 function message(error: unknown, fallback: string) {

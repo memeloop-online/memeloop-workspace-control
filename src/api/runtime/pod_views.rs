@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use k8s_openapi::api::core::v1::{Event, Pod};
 use kube::{
@@ -8,9 +8,52 @@ use kube::{
 };
 use uuid::Uuid;
 
-use crate::kubernetes::WORKSPACE_ID_LABEL;
+use crate::{kubernetes::WORKSPACE_ID_LABEL, workspaces::WorkspaceState};
 
 use super::{PodEvent, PodMetric, PodRuntime};
+
+/// Returns whether a workspace state can have a live runtime to display.
+///
+/// Stopped and deletion states deliberately hide any late Kubernetes reads: a
+/// StatefulSet may have been scaled down while a terminating Pod or a stale
+/// metrics-server sample is still visible for a short period.
+pub(super) fn has_live_runtime(state: WorkspaceState) -> bool {
+    !matches!(
+        state,
+        WorkspaceState::Stopped | WorkspaceState::Deleting | WorkspaceState::Deleted
+    )
+}
+
+/// A Pod is a current runtime observation only while it is neither terminating
+/// nor completed. Kubernetes can retain both kinds briefly after a workspace
+/// has stopped or restarted.
+pub(super) fn is_active_pod(pod: &Pod) -> bool {
+    pod.metadata.deletion_timestamp.is_none()
+        && !matches!(
+            pod.status
+                .as_ref()
+                .and_then(|status| status.phase.as_deref()),
+            Some("Succeeded" | "Failed")
+        )
+}
+
+pub(super) fn active_pod_names(pods: &[Pod]) -> BTreeSet<String> {
+    pods.iter()
+        .filter(|pod| is_active_pod(pod))
+        .filter_map(|pod| pod.metadata.name.clone())
+        .collect()
+}
+
+pub(super) fn active_pod_metrics(
+    metrics: &[PodMetric],
+    active_pod_names: &BTreeSet<String>,
+) -> Vec<PodMetric> {
+    metrics
+        .iter()
+        .filter(|metric| active_pod_names.contains(&metric.pod))
+        .cloned()
+        .collect()
+}
 
 pub(super) fn pod_runtime(pod: &Pod) -> PodRuntime {
     let statuses = pod
@@ -137,12 +180,18 @@ fn metrics_from_pod(pod: DynamicObject) -> Vec<PodMetric> {
 #[cfg(test)]
 mod tests {
     use k8s_openapi::{
-        api::core::v1::{Event, EventSeries},
+        api::core::v1::{Event, EventSeries, Pod, PodStatus},
+        apimachinery::pkg::apis::meta::v1::ObjectMeta,
         apimachinery::pkg::apis::meta::v1::{MicroTime, Time},
         jiff::Timestamp,
     };
 
-    use super::{PodEvent, newest_events, pod_event};
+    use crate::workspaces::WorkspaceState;
+
+    use super::{
+        PodEvent, active_pod_metrics, active_pod_names, has_live_runtime, newest_events, pod_event,
+    };
+    use crate::api::runtime::PodMetric;
 
     fn timestamp(value: &str) -> Timestamp {
         value.parse().expect("valid test timestamp")
@@ -187,10 +236,80 @@ mod tests {
         );
     }
 
+    #[test]
+    fn stopped_and_deleting_workspaces_hide_runtime_observations() {
+        for state in [
+            WorkspaceState::Stopped,
+            WorkspaceState::Deleting,
+            WorkspaceState::Deleted,
+        ] {
+            assert!(!has_live_runtime(state));
+        }
+        for state in [
+            WorkspaceState::Provisioning,
+            WorkspaceState::Ready,
+            WorkspaceState::Stopping,
+            WorkspaceState::Starting,
+            WorkspaceState::Restarting,
+            WorkspaceState::Failed,
+        ] {
+            assert!(has_live_runtime(state));
+        }
+    }
+
+    #[test]
+    fn completed_and_terminating_pods_do_not_supply_runtime_metrics() {
+        let running = pod("running", Some("Running"), false);
+        let completed = pod("completed", Some("Succeeded"), false);
+        let failed = pod("failed", Some("Failed"), false);
+        let terminating = pod("terminating", Some("Running"), true);
+        let active = active_pod_names(&[running, completed, failed, terminating]);
+        assert_eq!(active.into_iter().collect::<Vec<_>>(), vec!["running"]);
+
+        let metrics = active_pod_metrics(
+            &[
+                metric("running"),
+                metric("completed"),
+                metric("terminating"),
+            ],
+            &active_pod_names(&[
+                pod("running", Some("Running"), false),
+                pod("completed", Some("Succeeded"), false),
+                pod("terminating", Some("Running"), true),
+            ]),
+        );
+        assert_eq!(metrics.len(), 1);
+        assert_eq!(metrics[0].pod, "running");
+    }
+
     fn pod_event_at(value: &str) -> PodEvent {
         pod_event(Event {
             event_time: Some(MicroTime(timestamp(value))),
             ..Event::default()
         })
+    }
+
+    fn pod(name: &str, phase: Option<&str>, terminating: bool) -> Pod {
+        Pod {
+            metadata: ObjectMeta {
+                name: Some(name.to_owned()),
+                deletion_timestamp: terminating.then(|| Time(timestamp("2026-08-28T10:00:00Z"))),
+                ..ObjectMeta::default()
+            },
+            status: Some(PodStatus {
+                phase: phase.map(str::to_owned),
+                ..PodStatus::default()
+            }),
+            ..Pod::default()
+        }
+    }
+
+    fn metric(pod: &str) -> PodMetric {
+        PodMetric {
+            pod: pod.to_owned(),
+            container: "workspace".to_owned(),
+            cpu: Some("1m".to_owned()),
+            memory: Some("1Mi".to_owned()),
+        }
     }
 }

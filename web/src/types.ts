@@ -28,7 +28,7 @@ export interface Principal {
   avatar_url?: string | null;
   system_admin: boolean;
   memberships: Membership[];
-  api_key_scopes: Array<ApiKeyScope | "*">;
+  api_key_scopes: ApiKeyScope[];
   api_key_expires_at: number | null;
 }
 
@@ -116,6 +116,13 @@ export interface MembershipPage {
 export interface WorkspacePage {
   items: WorkspaceResponse[];
   next_cursor: string | null;
+  summary: WorkspaceSummary;
+}
+
+export interface WorkspaceSummary {
+  total_count: number;
+  requested: Resources;
+  state_counts: Partial<Record<WorkspaceState, number>>;
 }
 
 export interface ImagePolicy {

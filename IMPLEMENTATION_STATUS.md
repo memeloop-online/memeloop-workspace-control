@@ -4,7 +4,55 @@ This file is the durable continuation checkpoint for active implementation work.
 compaction, continue from **Next action**; do not repeat the completed audits below unless a new
 failure supplies contradictory evidence.
 
-Last updated: 2026-09-03
+Last updated: 2026-09-06
+
+## Active goal: product-wide responsive UI closeout
+
+Do not repeat the 2026-09-03 operational audit. The active worktree is the authority for this
+goal. Current verified state:
+
+- Workspace, settings, and audit React pages have been split into reusable components; the main
+  page modules are below the repository's maintainability limit.
+- Workspace stop/restart/delete use the shared application dialog. Stop/restart skip confirmation
+  only when complete live telemetry reports exactly zero CPU; unknown telemetry still confirms.
+- Stopped workspaces expose neither port mappings nor live Pod/container observations. The runtime
+  API also filters stopped, deleting, completed, and terminating Pods while retaining event history.
+- Workspace list statistics come from a database-wide filtered summary rather than the current
+  cursor page. CPU, memory, and disk allocations render against organization quotas as accessible
+  progress backgrounds with precise hover text.
+- API-key permissions use responsive explanatory cards. Wildcard authorization and all `Legacy
+  key` / `legacy` / unbounded-key compatibility are removed; schema v17 deletes such rows instead
+  of converting them to another full-access form.
+- Audit action labels cover current mutable resources. Future action codes render as diagnosable
+  “other API operation” text rather than implying missing authentication. The API still requires a
+  bearer key; current audit rows identify the account but do not yet identify the calling client.
+- First and second 360/768/1024/1440 screenshot reviews were completed. The second review verified
+  stopped-state controls, global summaries, single-scroll workspace layout, and the new key UI, and
+  found two final defects: a 1024 audit-filter overflow and a 360 fixed-nav overlay. Both are fixed.
+  Final targeted measurements are 360/360 for workspace and settings document/client width and
+  1024/1024 for audit; the mobile Stop action opened the application dialog within three seconds.
+- Web typecheck, 54 tests, and production build pass. Rust formatting, both strict Clippy gates,
+  all 92 unit tests, every integration suite, and doc tests pass locally. The only remaining local
+  maintainability issue was resolved by moving migration coordination out of `storage.rs`, reducing
+  it from 568 to 166 lines; the new single-purpose migration module is 362 lines.
+
+### Next action
+
+1. Commit and push the verified worktree.
+2. Require GitHub Actions success for Rust 1.98, PostgreSQL, bootstrap, and Helm verification;
+   obtain the published GHCR digest, then update GitOps.
+3. Verify the live application at all critical widths and runtime endpoints.
+4. Record the final source revision, workflow run, image digest, GitOps revision, and live checks
+   here before marking the goal complete.
+
+### Separate migration constraint queued after this release
+
+- Existing workspace PVCs remain in their current dedicated Namespaces and must not be deleted.
+- Shared-Namespace support first requires persisted `legacy_v1 | prefixed_v2` runtime identity and
+  centralized collision-free names for every Kubernetes object, selector, route, and PVC reference.
+- A control-plane SQLite Namespace move requires a stopped, integrity-checked volume migration or
+  backup/restore; it is not a live file copy. No GitOps or cluster change is authorized for this
+  design stage.
 
 ## Completed evidence
 
@@ -39,8 +87,8 @@ Last updated: 2026-09-03
   HTTP 200 from the workspace process. An anonymous request and consumed-ticket replay were
   refused by the gateway. All test mappings, generated resources, and temporary processes were
   removed; the test workspace replacement Pod returned 3/3 Ready.
-- Daily-use API tokens were rotated to explicit scopes and expiry. Historical keys remain only for
-  a deliberate no-downtime observation window.
+- Daily-use API tokens were rotated to explicit scopes and expiry before the current schema-v17
+  removal of wildcard and unbounded historical keys.
 - System administrators can now page through another user's API-key summaries and force-revoke a
   target key without exposing token or hash material. Cross-user revocation requires both
   `manage_system` and `manage_api_keys`, requires an audited reason, is idempotent, and commits the
@@ -78,26 +126,8 @@ Last updated: 2026-09-03
   migration to one persistent `uid=loki` datasource and removed the one-time delete directive.
   Grafana health is HTTP 200, the live dashboard and datasource use the same UID, and the dashboard
   LogQL selector is `{mwc_installation="k3si-7032544955"}`.
-- All twelve fixes requested on 2026-09-03 are implemented, deployed, and covered by the evidence
-  above. No product or deployment work remains for that objective.
-
-## Post-goal operational follow-up
-
-- Observe the historical API-key overlap window until at least 24 hours have elapsed from the
-  recorded rotation checkpoint. This is a separate credential-rotation safety window, not an
-  incomplete part of the twelve product fixes.
-
-## Next action
-
-1. After the API-key overlap window, compare historical-key `last_used_at` values with the recorded
-   rotation checkpoint.
-2. Revoke only keys that remained unused, then verify daily clients with the replacement keys.
-
-## Deferred safety closeout
-
-- Observe the retired API keys for 24–72 hours and revoke only after their `last_used_at` values stop
-  advancing. Do not revoke the unrelated acceptance administrator key without transferring its
-  organization ownership first.
+- All twelve fixes requested on 2026-09-03 were implemented and deployed with the evidence above.
+  The active responsive-UI/schema-v17 release is tracked separately at the top of this file.
 
 ## Operational access checkpoint
 

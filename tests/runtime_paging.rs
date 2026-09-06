@@ -9,12 +9,12 @@ use http_body_util::BodyExt;
 use memeloop_workspace_control::{
     api::{AppState, router},
     auth::Role,
-    config::AppConfig,
+    config::{AppConfig, InstallationId},
     crypto::EnvelopeCipher,
     quota::Resources,
     storage::{CreateOrganization, CreateWorkspace, CreateWorkspaceTemplate, Database},
     templates::{WorkspaceTemplateDocument, WorkspaceTemplateSpec},
-    workspaces::AccessMode,
+    workspaces::{AccessMode, WorkspaceAction, WorkspaceObservation},
 };
 use serde_json::{Value, json};
 use tower::ServiceExt;
@@ -414,6 +414,228 @@ async fn workspace_page_cursor_and_search_are_keyset_scoped() {
     let filtered: Value = serde_json::from_slice(&filtered_body).unwrap();
     assert_eq!(filtered["items"][0]["workspace"]["name"], "alpha-second");
     assert!(filtered["next_cursor"].is_null());
+}
+
+#[tokio::test]
+async fn workspace_page_summary_covers_every_matching_workspace_not_only_the_cursor_page() {
+    let (app, database, admin_id) = test_app().await;
+    let (organization_id, template_id) =
+        seeded_organization(&database, admin_id, "Workspace summary", 10).await;
+    for (name, now) in [("alpha-first", 10), ("beta", 20), ("alpha-second", 30)] {
+        seeded_workspace(&database, organization_id, admin_id, template_id, name, now).await;
+    }
+    let deleted_workspace = seeded_workspace(
+        &database,
+        organization_id,
+        admin_id,
+        template_id,
+        "alpha-deleted",
+        40,
+    )
+    .await;
+    database
+        .request_workspace_action(deleted_workspace, WorkspaceAction::Delete, admin_id, 41)
+        .await
+        .unwrap();
+    database
+        .record_workspace_observation(
+            deleted_workspace,
+            WorkspaceObservation::Deleted,
+            admin_id,
+            42,
+        )
+        .await
+        .unwrap();
+
+    let first_page = app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            &format!("/api/v1/workspaces?organization_id={organization_id}&limit=1"),
+            Some(ADMIN_TOKEN),
+            None,
+            None,
+        ))
+        .await
+        .unwrap();
+    let (status, first_page_body) = body(first_page).await;
+    assert_eq!(status, StatusCode::OK);
+    let first_page: Value = serde_json::from_slice(&first_page_body).unwrap();
+    assert_eq!(first_page["items"].as_array().unwrap().len(), 1);
+    assert_eq!(first_page["summary"]["total_count"], 3);
+    assert_eq!(
+        first_page["summary"]["requested"],
+        json!({
+            "cpu_millis": 3_000,
+            "memory_mib": 6_144,
+            "gpu_count": 0,
+            "disk_gib": 60,
+        })
+    );
+    assert_eq!(first_page["summary"]["state_counts"]["provisioning"], 3);
+
+    let cursor = first_page["next_cursor"].as_str().unwrap();
+    let later_page = app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            &format!(
+                "/api/v1/workspaces?organization_id={organization_id}&limit=1&cursor={cursor}"
+            ),
+            Some(ADMIN_TOKEN),
+            None,
+            None,
+        ))
+        .await
+        .unwrap();
+    let (status, later_page_body) = body(later_page).await;
+    assert_eq!(status, StatusCode::OK);
+    let later_page: Value = serde_json::from_slice(&later_page_body).unwrap();
+    assert_eq!(later_page["items"].as_array().unwrap().len(), 1);
+    assert_eq!(later_page["summary"], first_page["summary"]);
+
+    let filtered = app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            &format!("/api/v1/workspaces?organization_id={organization_id}&limit=1&search=alpha"),
+            Some(ADMIN_TOKEN),
+            None,
+            None,
+        ))
+        .await
+        .unwrap();
+    let (status, filtered_body) = body(filtered).await;
+    assert_eq!(status, StatusCode::OK);
+    let filtered: Value = serde_json::from_slice(&filtered_body).unwrap();
+    assert_eq!(filtered["items"].as_array().unwrap().len(), 1);
+    assert_eq!(filtered["summary"]["total_count"], 2);
+    assert_eq!(filtered["summary"]["requested"]["cpu_millis"], 2_000);
+    assert_eq!(filtered["summary"]["state_counts"]["provisioning"], 2);
+
+    let empty = app
+        .oneshot(request(
+            Method::GET,
+            &format!("/api/v1/workspaces?organization_id={organization_id}&search=no-match"),
+            Some(ADMIN_TOKEN),
+            None,
+            None,
+        ))
+        .await
+        .unwrap();
+    let (status, empty_body) = body(empty).await;
+    assert_eq!(status, StatusCode::OK);
+    let empty: Value = serde_json::from_slice(&empty_body).unwrap();
+    assert_eq!(empty["summary"]["total_count"], 0);
+    assert_eq!(
+        empty["summary"]["requested"],
+        json!({
+            "cpu_millis": 0,
+            "memory_mib": 0,
+            "gpu_count": 0,
+            "disk_gib": 0,
+        })
+    );
+    assert_eq!(empty["summary"]["state_counts"], json!({}));
+}
+
+#[tokio::test]
+async fn workspace_page_openapi_declares_the_summary_shape() {
+    let (app, _, _) = test_app().await;
+    let response = app
+        .oneshot(request(
+            Method::GET,
+            "/api/v1/openapi.json",
+            Some(ADMIN_TOKEN),
+            None,
+            None,
+        ))
+        .await
+        .unwrap();
+    let (status, response_body) = body(response).await;
+    assert_eq!(status, StatusCode::OK);
+    let openapi: Value = serde_json::from_slice(&response_body).unwrap();
+    let summary = &openapi["components"]["schemas"]["WorkspaceListSummary"];
+    assert_eq!(summary["properties"]["total_count"]["type"], "integer");
+    assert!(summary["properties"]["requested"].is_object());
+    assert_eq!(summary["properties"]["state_counts"]["type"], "object");
+}
+
+#[tokio::test]
+async fn postgres_workspace_page_summary_matches_the_filtered_collection() {
+    let Ok(database_url) = std::env::var("MWC_TEST_POSTGRES_URL") else {
+        eprintln!("skipping PostgreSQL workspace summary test: MWC_TEST_POSTGRES_URL is not set");
+        return;
+    };
+    let schema = format!("mwc_workspace_summary_{}", Uuid::now_v7().simple());
+    let administration = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&database_url)
+        .await
+        .unwrap();
+    sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        .execute(&administration)
+        .await
+        .unwrap();
+    let mut scoped_url = url::Url::parse(&database_url).unwrap();
+    scoped_url
+        .query_pairs_mut()
+        .append_pair("options", &format!("-c search_path={schema}"));
+    let suffix = &Uuid::now_v7().simple().to_string()[..8];
+    let installation_id: InstallationId = format!("summary-pg-{suffix}").parse().unwrap();
+    let database = Database::connect(scoped_url.as_str(), installation_id)
+        .await
+        .unwrap();
+    database.migrate().await.unwrap();
+    database
+        .upsert_image_policy("registry.example/workspace:1", true, 1)
+        .await
+        .unwrap();
+    let admin = database
+        .create_user(
+            "PostgreSQL summary admin",
+            &format!("summary-pg-admin-{suffix}-000000000000000000000000"),
+            true,
+            1,
+        )
+        .await
+        .unwrap();
+    let (organization_id, template_id) =
+        seeded_organization(&database, admin.user_id, "PostgreSQL summary", 10).await;
+    for (name, now) in [("alpha-first", 10), ("beta", 20), ("alpha-second", 30)] {
+        seeded_workspace(
+            &database,
+            organization_id,
+            admin.user_id,
+            template_id,
+            name,
+            now,
+        )
+        .await;
+    }
+
+    let page = database
+        .list_workspaces_page(organization_id, Some(1), None, Some("alpha"))
+        .await
+        .unwrap();
+    assert_eq!(page.items.len(), 1);
+    assert_eq!(page.total_count, 2);
+    assert_eq!(
+        page.requested,
+        Resources {
+            cpu_millis: 2_000,
+            memory_mib: 4_096,
+            gpu_count: 0,
+            disk_gib: 40,
+        }
+    );
+    assert_eq!(page.state_counts.get("provisioning"), Some(&2));
+
+    drop(database);
+    sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+        .execute(&administration)
+        .await
+        .unwrap();
 }
 
 #[tokio::test]

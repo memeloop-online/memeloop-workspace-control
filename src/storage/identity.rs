@@ -24,9 +24,9 @@ pub struct Principal {
     pub display_name: String,
     pub system_admin: bool,
     pub memberships: Vec<Membership>,
-    /// The authenticating key's grants. Legacy keys carry `Wildcard`.
+    /// The authenticating key's explicit grants.
     pub api_key_scopes: Vec<ApiKeyScope>,
-    /// `None` is the intentionally unbounded legacy-key case.
+    /// The authenticating key's expiry timestamp.
     pub api_key_expires_at: Option<i64>,
 }
 
@@ -54,7 +54,7 @@ impl Principal {
     pub fn may_manage_api_keys(&self) -> bool {
         self.api_key_scopes
             .iter()
-            .any(|scope| matches!(scope, ApiKeyScope::Wildcard | ApiKeyScope::ManageApiKeys))
+            .any(|scope| matches!(scope, ApiKeyScope::ManageApiKeys))
     }
 
     pub fn may_manage_system(&self) -> bool {
@@ -110,9 +110,8 @@ impl Database {
         system_admin: bool,
         now: i64,
     ) -> Result<Principal, StorageError> {
-        // Kept for bootstrap and fixture compatibility.  Management APIs must
-        // call `create_user_with_initial_key`, which cannot create a wildcard
-        // or unbounded credential.
+        // Kept for bootstrap and fixture compatibility. Management APIs call
+        // `create_user_with_initial_key` to require a bounded key policy.
         self.create_user_with_key(UserWithKeyCommand {
             display_name,
             token,
@@ -123,8 +122,12 @@ impl Database {
                 prefix: token_prefix(token),
                 last_used_at: None,
                 created_at: now,
-                scopes: vec![ApiKeyScope::Wildcard],
-                expires_at: None,
+                scopes: ApiKeyScope::initial_key_defaults(system_admin),
+                // Test/bootstrap callers may use synthetic historical timestamps;
+                // derive the bounded expiry from the actual clock rather than
+                // from those fixture clocks. Production onboarding uses the
+                // caller-supplied bounded expiry above.
+                expires_at: Some(bootstrap_key_expiry()?),
                 revoked_at: None,
             },
             membership: None,
@@ -259,7 +262,8 @@ impl Database {
                     k.last_used_at, k.scopes_json, k.expires_at FROM users u \
                     JOIN user_api_keys k ON k.installation_id = u.installation_id AND k.user_id = u.id \
                     WHERE u.installation_id = ?1 AND k.token_hash = ?2 AND k.revoked_at IS NULL \
-                    AND (k.expires_at IS NULL OR k.expires_at > unixepoch()) AND u.disabled = 0",
+                    AND instr(k.scopes_json, '\"*\"') = 0 \
+                    AND k.expires_at > unixepoch() AND u.disabled = 0",
                 )
                 .bind(installation_id.as_str())
                 .bind(token_hash)
@@ -295,7 +299,8 @@ impl Database {
                     k.last_used_at, k.scopes_json, k.expires_at FROM users u \
                     JOIN user_api_keys k ON k.installation_id = u.installation_id AND k.user_id = u.id \
                     WHERE u.installation_id = $1 AND k.token_hash = $2 AND k.revoked_at IS NULL \
-                    AND (k.expires_at IS NULL OR k.expires_at > EXTRACT(EPOCH FROM CURRENT_TIMESTAMP)::BIGINT) AND u.disabled = 0",
+                    AND position('\"*\"' IN k.scopes_json) = 0 \
+                    AND k.expires_at > EXTRACT(EPOCH FROM CURRENT_TIMESTAMP)::BIGINT AND u.disabled = 0",
                 )
                 .bind(installation_id.as_str())
                 .bind(token_hash)
@@ -438,4 +443,14 @@ fn validate_token(token: &str) -> Result<(), StorageError> {
 
 fn as_i64(value: u64) -> Result<i64, StorageError> {
     i64::try_from(value).map_err(|_| StorageError::LeaseDurationOverflow)
+}
+
+fn bootstrap_key_expiry() -> Result<i64, StorageError> {
+    let seconds = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|_| StorageError::Clock)?
+        .as_secs();
+    let now = i64::try_from(seconds).map_err(|_| StorageError::Clock)?;
+    now.checked_add(365 * 24 * 60 * 60)
+        .ok_or(StorageError::Clock)
 }

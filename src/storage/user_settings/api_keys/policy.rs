@@ -3,8 +3,7 @@ use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use crate::{auth::ApiKeyScope, storage::StorageError};
 
 /// Validate the policy shared by self-service keys and administrator-provisioned
-/// initial keys. New keys must always be explicitly scoped and time-bounded;
-/// `Wildcard` remains readable only for keys created before this policy existed.
+/// initial keys. New keys must always be explicitly scoped and time-bounded.
 pub(crate) fn validate_api_key_policy(
     scopes: Vec<ApiKeyScope>,
     expires_at: Option<i64>,
@@ -16,11 +15,7 @@ pub(crate) fn validate_api_key_policy(
 }
 
 pub(super) fn validate_scopes(scopes: Vec<ApiKeyScope>) -> Result<Vec<ApiKeyScope>, StorageError> {
-    if scopes.is_empty()
-        || scopes
-            .iter()
-            .any(|scope| matches!(scope, ApiKeyScope::Wildcard))
-    {
+    if scopes.is_empty() {
         return Err(StorageError::InvalidApiKey);
     }
     let mut scopes = scopes;

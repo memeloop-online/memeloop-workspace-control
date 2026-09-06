@@ -1,4 +1,8 @@
-use std::{net::SocketAddr, sync::Arc};
+use std::{
+    net::SocketAddr,
+    sync::Arc,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use axum::{
     body::Body,
@@ -7,7 +11,7 @@ use axum::{
 use http_body_util::BodyExt;
 use memeloop_workspace_control::{
     api::{AppState, router},
-    auth::Role,
+    auth::{ApiKeyScope, Role},
     config::{AppConfig, InstallationId},
     storage::{CreateOrganization, Database},
 };
@@ -26,8 +30,19 @@ async fn audit_api_pages_filters_and_enforces_organization_rbac() {
         .await
         .unwrap();
     database.migrate().await.unwrap();
+    let key_now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
     let admin = database
-        .create_user("Audit Admin", ADMIN_TOKEN, false, 1)
+        .create_user_with_initial_key(
+            "Audit Admin",
+            ADMIN_TOKEN,
+            false,
+            vec![ApiKeyScope::ManageOrganization],
+            key_now + 30 * 24 * 60 * 60,
+            key_now,
+        )
         .await
         .unwrap();
     let member = database

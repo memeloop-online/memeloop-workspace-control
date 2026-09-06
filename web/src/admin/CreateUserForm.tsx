@@ -17,9 +17,7 @@ interface Props {
 export function CreateUserForm({ api, principal, organizationId, onCreated, onCancel, onError }: Props) {
   const { t } = useI18n();
   const grantableScopes = useMemo(
-    () => principal.api_key_scopes.includes("*")
-      ? API_KEY_SCOPES
-      : API_KEY_SCOPES.filter(({ scope }) => principal.api_key_scopes.includes(scope)),
+    () => API_KEY_SCOPES.filter(({ scope }) => principal.api_key_scopes.includes(scope)),
     [principal.api_key_scopes],
   );
   const [displayName, setDisplayName] = useState("");

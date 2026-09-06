@@ -1,7 +1,7 @@
 import type { ApiKeyScope, Principal } from "./types";
 
 export function hasApiKeyScope(principal: Principal, scope: ApiKeyScope): boolean {
-  return principal.api_key_scopes.includes("*") || principal.api_key_scopes.includes(scope);
+  return principal.api_key_scopes.includes(scope);
 }
 
 export function canManageSystem(principal: Principal): boolean {

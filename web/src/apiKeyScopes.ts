@@ -2,20 +2,19 @@ import type { MessageKey } from "./i18n";
 import type { ApiKeyScope } from "./types";
 
 export const API_KEY_SCOPES = [
-  { scope: "manage_api_keys", label: "scope_manage_api_keys" },
-  { scope: "manage_system", label: "scope_manage_system" },
-  { scope: "manage_organization", label: "scope_manage_organization" },
-  { scope: "manage_members", label: "scope_manage_members" },
-  { scope: "manage_locked_injections", label: "scope_manage_locked_injections" },
-  { scope: "create_workspace", label: "scope_create_workspace" },
-  { scope: "read_workspace", label: "scope_read_workspace" },
-  { scope: "connect_workspace", label: "scope_connect_workspace" },
-  { scope: "change_workspace_state", label: "scope_change_workspace_state" },
-  { scope: "delete_workspace", label: "scope_delete_workspace" },
-] as const satisfies ReadonlyArray<{ scope: ApiKeyScope; label: MessageKey }>;
+  { scope: "manage_api_keys", label: "scope_manage_api_keys", description: "apiKeyScopeHelp_manage_api_keys" },
+  { scope: "manage_system", label: "scope_manage_system", description: "apiKeyScopeHelp_manage_system", risk: "high" },
+  { scope: "manage_organization", label: "scope_manage_organization", description: "apiKeyScopeHelp_manage_organization" },
+  { scope: "manage_members", label: "scope_manage_members", description: "apiKeyScopeHelp_manage_members" },
+  { scope: "manage_locked_injections", label: "scope_manage_locked_injections", description: "apiKeyScopeHelp_manage_locked_injections" },
+  { scope: "create_workspace", label: "scope_create_workspace", description: "apiKeyScopeHelp_create_workspace" },
+  { scope: "read_workspace", label: "scope_read_workspace", description: "apiKeyScopeHelp_read_workspace" },
+  { scope: "connect_workspace", label: "scope_connect_workspace", description: "apiKeyScopeHelp_connect_workspace" },
+  { scope: "change_workspace_state", label: "scope_change_workspace_state", description: "apiKeyScopeHelp_change_workspace_state" },
+  { scope: "delete_workspace", label: "scope_delete_workspace", description: "apiKeyScopeHelp_delete_workspace", risk: "high" },
+] as const satisfies ReadonlyArray<{ scope: ApiKeyScope; label: MessageKey; description: MessageKey; risk?: "high" }>;
 
 export const API_KEY_SCOPE_LABELS: Record<string, MessageKey> = {
-  "*": "scope_wildcard",
   ...Object.fromEntries(API_KEY_SCOPES.map(({ scope, label }) => [scope, label])),
 };
 

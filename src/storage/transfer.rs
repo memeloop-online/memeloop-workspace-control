@@ -122,13 +122,6 @@ impl Database {
                 .execute(&mut *transaction)
                 .await?;
         }
-        if snapshot.schema_version < 14 {
-            sqlx::query(
-                "INSERT INTO user_api_keys (id, installation_id, user_id, name, token_prefix, token_hash, last_used_at, created_at, revoked_at, scopes_json, expires_at) SELECT id, installation_id, id, 'Legacy key', 'legacy', token_hash, NULL, created_at, NULL, '[\"*\"]', NULL FROM users WHERE true ON CONFLICT (installation_id, token_hash) DO NOTHING",
-            )
-            .execute(&mut *transaction)
-            .await?;
-        }
         transaction.commit().await?;
         Ok(())
     }
@@ -139,21 +132,8 @@ fn normalize_snapshot_rows(
     rows: &[serde_json::Value],
     schema_version: i64,
 ) -> Result<Vec<serde_json::Value>, StorageError> {
-    if table == "user_api_keys" && schema_version < 15 {
-        return Ok(rows
-            .iter()
-            .cloned()
-            .map(|mut row| {
-                if let Some(object) = row.as_object_mut() {
-                    object.insert(
-                        "scopes_json".to_owned(),
-                        serde_json::Value::String("[\"*\"]".to_owned()),
-                    );
-                    object.insert("expires_at".to_owned(), serde_json::Value::Null);
-                }
-                row
-            })
-            .collect());
+    if table == "user_api_keys" {
+        return Ok(normalize_snapshot_api_key_rows(rows, schema_version));
     }
     if !matches!(table, "workspace_templates" | "workspaces") {
         return Ok(rows.to_vec());
@@ -226,6 +206,29 @@ fn normalize_snapshot_rows(
                 }
             }
             Ok(row)
+        })
+        .collect()
+}
+
+/// Older snapshots either had no API-key grants or used a wildcard/unbounded
+/// grant. Such token hashes must never become usable while importing data into
+/// a current installation. Keep users and audit history, but omit unsafe key
+/// records entirely.
+fn normalize_snapshot_api_key_rows(
+    rows: &[serde_json::Value],
+    schema_version: i64,
+) -> Vec<serde_json::Value> {
+    if schema_version < 15 {
+        return Vec::new();
+    }
+
+    rows.iter()
+        .filter_map(|row| {
+            let object = row.as_object()?;
+            let scopes_json = object.get("scopes_json")?.as_str()?;
+            let scopes = serde_json::from_str::<Vec<crate::auth::ApiKeyScope>>(scopes_json).ok()?;
+            let has_expiry = object.get("expires_at").is_some_and(|value| value.is_i64());
+            (!scopes.is_empty() && has_expiry).then(|| row.clone())
         })
         .collect()
 }
@@ -364,14 +367,27 @@ mod tests {
     }
 
     #[test]
-    fn v14_api_keys_receive_legacy_scope_and_no_expiry() {
+    fn v14_api_keys_are_not_imported_without_explicit_bounded_grants() {
         let rows = vec![serde_json::json!({
             "id": "key", "installation_id": "test", "user_id": "user",
-            "name": "Legacy", "token_prefix": "legacy", "token_hash": "hash",
+            "name": "Imported key", "token_prefix": "mwc_…", "token_hash": "hash",
             "last_used_at": null, "created_at": 1, "revoked_at": null
         })];
         let normalized = normalize_snapshot_rows("user_api_keys", &rows, 14).unwrap();
-        assert_eq!(normalized[0]["scopes_json"], "[\"*\"]");
-        assert!(normalized[0]["expires_at"].is_null());
+        assert!(normalized.is_empty());
+    }
+
+    #[test]
+    fn unbounded_or_wildcard_snapshot_keys_are_not_imported() {
+        let rows = vec![
+            serde_json::json!({
+                "id": "wildcard", "scopes_json": "[\"*\"]", "expires_at": 2_000_000_000
+            }),
+            serde_json::json!({
+                "id": "unbounded", "scopes_json": "[\"read_workspace\"]", "expires_at": null
+            }),
+        ];
+        let normalized = normalize_snapshot_rows("user_api_keys", &rows, 16).unwrap();
+        assert!(normalized.is_empty());
     }
 }

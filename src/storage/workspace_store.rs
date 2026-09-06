@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -11,10 +13,12 @@ use super::{Database, StorageError, WorkspaceInjectionRefs};
 
 mod creation;
 mod row;
+mod summary;
 
 pub(super) use row::{
     decode_postgres, decode_sqlite, select_workspace_by_short_id_sql, select_workspace_sql,
 };
+use summary::{workspace_filter_sql, workspace_page_summary};
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct CreateWorkspace {
@@ -36,6 +40,11 @@ pub struct CreateWorkspace {
 pub struct WorkspacePage {
     pub items: Vec<Workspace>,
     pub next_cursor: Option<String>,
+    /// Aggregate for every non-deleted workspace matching the organization and search query.
+    /// This deliberately ignores the pagination cursor.
+    pub total_count: u64,
+    pub requested: Resources,
+    pub state_counts: BTreeMap<String, u64>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -309,13 +318,10 @@ impl Database {
         // truth as reconciliation. Escape LIKE metacharacters so user input remains literal.
         let search = search.unwrap_or("").trim().to_lowercase();
         let pattern = format!("%{}%", escape_like_pattern(&search));
+        let summary = workspace_page_summary(self, organization_id, &search, &pattern).await?;
+        let filter = workspace_filter_sql("{install}", "{organization}", "{search}", "{pattern}");
         let sql = format!(
-            "SELECT {} FROM workspaces WHERE installation_id = {{install}} AND organization_id = {{organization}} AND state <> 'deleted' \
-             AND ({{search}} = '' OR LOWER(name) LIKE {{pattern}} ESCAPE '\\' \
-                OR LOWER(short_id) LIKE {{pattern}} ESCAPE '\\' \
-                OR LOWER(state) LIKE {{pattern}} ESCAPE '\\' \
-                OR LOWER(image) LIKE {{pattern}} ESCAPE '\\' \
-                OR LOWER(template_snapshot_yaml) LIKE {{pattern}} ESCAPE '\\') \
+            "SELECT {} FROM workspaces WHERE {filter} \
              AND ({{cursor_created}} IS NULL OR created_at > {{cursor_created}} OR (created_at = {{cursor_created}} AND id > {{cursor_id}})) \
              ORDER BY created_at, id LIMIT {{limit}}",
             row::WORKSPACE_COLUMNS
@@ -381,7 +387,13 @@ impl Database {
         } else {
             None
         };
-        Ok(WorkspacePage { items, next_cursor })
+        Ok(WorkspacePage {
+            items,
+            next_cursor,
+            total_count: summary.total_count,
+            requested: summary.requested,
+            state_counts: summary.state_counts,
+        })
     }
 }
 

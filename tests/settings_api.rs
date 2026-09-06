@@ -322,7 +322,7 @@ async fn self_service_cannot_revoke_the_last_api_key_management_or_system_recove
         .unwrap();
     let key_manager_id = database.list_api_keys(key_manager.user_id).await.unwrap()[0].id;
     // A second usable key proves this is a recovery-scope guard, not merely
-    // the legacy rule that a user must retain any key at all.
+    // a rule that a user must retain any key at all.
     database
         .create_api_key(
             key_manager.user_id,

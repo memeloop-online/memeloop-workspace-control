@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use axum::{
@@ -13,6 +14,7 @@ use uuid::Uuid;
 use crate::{
     auth::Permission,
     injections::{InjectionItem, ResolvedInjectionSummary},
+    quota::Resources,
     storage::{CreateWorkspace, IdempotencyDecision},
     workspaces::{Workspace, WorkspaceAction},
 };
@@ -98,6 +100,15 @@ pub(super) struct WorkspaceListQuery {
 pub(super) struct WorkspaceResponsePage {
     pub items: Vec<WorkspaceResponse>,
     pub next_cursor: Option<String>,
+    /// Aggregate for all matching workspaces, independent of the current cursor page.
+    pub summary: WorkspaceListSummary,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub(super) struct WorkspaceListSummary {
+    pub total_count: u64,
+    pub requested: Resources,
+    pub state_counts: BTreeMap<String, u64>,
 }
 
 #[utoipa::path(
@@ -219,6 +230,11 @@ pub(super) async fn list(
     Ok(Json(WorkspaceResponsePage {
         items: responses,
         next_cursor: workspaces.next_cursor,
+        summary: WorkspaceListSummary {
+            total_count: workspaces.total_count,
+            requested: workspaces.requested,
+            state_counts: workspaces.state_counts,
+        },
     }))
 }
 

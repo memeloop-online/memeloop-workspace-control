@@ -22,7 +22,7 @@ interface Props {
   api: ApiClient;
   item: WorkspaceResponse;
   runtime?: WorkspaceRuntime;
-  onAction: (id: string, action: WorkspaceAction) => Promise<void>;
+  onAction: (item: WorkspaceResponse, action: WorkspaceAction) => void;
   onOpenShell: (id: string) => Promise<void>;
   onRequestRuntime: (id: string) => Promise<void>;
   onError: (message: string) => void;
@@ -61,19 +61,19 @@ export function WorkspaceCard({ api, item, runtime, onAction, onOpenShell, onReq
       <div className="workspace-toolbar">
         <div className="primary-actions">
           {canConnect && workspace.state === "ready" && <button className="terminal-action" onClick={() => void onOpenShell(workspace.id)}>{t("webShell")}</button>}
-          {canConnect && <WorkspacePortMappings api={api} workspaceId={workspace.id} workspaceReady={workspace.state === "ready"} onError={onError} />}
-          {canChangeState && workspace.state === "ready" && <button onClick={() => void onAction(workspace.id, "stop")}>{t("stop")}</button>}
-          {canChangeState && workspace.state === "ready" && <button onClick={() => void onAction(workspace.id, "restart")}>{t("restart")}</button>}
-          {canChangeState && (workspace.state === "stopped" || workspace.state === "failed") && <button onClick={() => void onAction(workspace.id, "start")}>{t("start")}</button>}
+          {canConnect && workspace.state === "ready" && <WorkspacePortMappings api={api} workspaceId={workspace.id} workspaceReady onError={onError} />}
+          {canChangeState && workspace.state === "ready" && <button onClick={() => onAction(item, "stop")}>{t("stop")}</button>}
+          {canChangeState && workspace.state === "ready" && <button onClick={() => onAction(item, "restart")}>{t("restart")}</button>}
+          {canChangeState && (workspace.state === "stopped" || workspace.state === "failed") && <button onClick={() => onAction(item, "start")}>{t("start")}</button>}
         </div>
         <div className="detail-actions">
-          {runtime && <button className={detailView === "status" ? "active" : ""} aria-controls={`runtime-${workspace.short_id}`} aria-expanded={detailView === "status"} onClick={() => toggleDetail("status")}>{t("runtimeStatus")} <span aria-hidden="true">{detailView === "status" ? "▴" : "▾"}</span></button>}
+          {runtime && workspace.state !== "stopped" && <button className={detailView === "status" ? "active" : ""} aria-controls={`runtime-${workspace.short_id}`} aria-expanded={detailView === "status"} onClick={() => toggleDetail("status")}>{t("runtimeStatus")} <span aria-hidden="true">{detailView === "status" ? "▴" : "▾"}</span></button>}
           {runtime && <button className={detailView === "events" ? "active" : ""} aria-controls={`events-${workspace.short_id}`} aria-expanded={detailView === "events"} onClick={() => toggleDetail("events")}>{t("eventLog")} <span aria-hidden="true">{detailView === "events" ? "▴" : "▾"}</span></button>}
-          {canDelete && !(["deleting", "deleted"] as string[]).includes(workspace.state) && <button className="danger" onClick={() => void onAction(workspace.id, "delete")}>{t("delete")}</button>}
+          {canDelete && !(["deleting", "deleted"] as string[]).includes(workspace.state) && <button className="danger" onClick={() => onAction(item, "delete")}>{t("delete")}</button>}
         </div>
       </div>
 
-      {runtime && detailView === "status" && <RuntimeStatus id={`runtime-${workspace.short_id}`} runtime={runtime} />}
+      {runtime && workspace.state !== "stopped" && detailView === "status" && <RuntimeStatus id={`runtime-${workspace.short_id}`} runtime={runtime} />}
       {runtime && detailView === "events" && <EventLog id={`events-${workspace.short_id}`} runtime={runtime} locale={locale} />}
     </article>
   );
@@ -81,14 +81,15 @@ export function WorkspaceCard({ api, item, runtime, onAction, onOpenShell, onReq
 
 function ResourceOverview({ item, runtime }: { item: WorkspaceResponse; runtime?: WorkspaceRuntime }) {
   const { t } = useI18n();
-  const usage = useMemo(() => runtime ? aggregateRuntimeUsage(runtime) : { cpuMillis: null, memoryMiB: null }, [runtime]);
+  const isStopped = item.workspace.state === "stopped";
+  const usage = useMemo(() => runtime && !isStopped ? aggregateRuntimeUsage(runtime) : { cpuMillis: null, memoryMiB: null }, [isStopped, runtime]);
   const resources = item.workspace.resources;
   const cpuPercent = usagePercent(usage.cpuMillis, resources.cpu_millis);
   const memoryPercent = usagePercent(usage.memoryMiB, resources.memory_mib);
   return <div className="resource-overview">
     <ResourceMeter label="CPU" actual={formatCpuMillis(usage.cpuMillis)} requested={`${resources.cpu_millis}m`} percent={cpuPercent} />
     <ResourceMeter label={t("memory")} actual={formatMemoryMiB(usage.memoryMiB)} requested={`${formatMemoryMiB(resources.memory_mib)}`} percent={memoryPercent} />
-    <DiskMeter runtime={runtime} configuredGiB={resources.disk_gib} />
+    <DiskMeter runtime={isStopped ? undefined : runtime} configuredGiB={resources.disk_gib} />
     {resources.gpu_count > 0 && <div className="capacity-meter"><div><span>GPU</span><strong>{resources.gpu_count} GPU</strong></div><small>{t("configuredAllocation")} · {t("gpuTelemetryUnavailable")}</small></div>}
   </div>;
 }

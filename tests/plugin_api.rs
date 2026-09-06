@@ -1,4 +1,9 @@
-use std::{fs, net::SocketAddr, sync::Arc};
+use std::{
+    fs,
+    net::SocketAddr,
+    sync::Arc,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use axum::{
     body::Body,
@@ -7,7 +12,7 @@ use axum::{
 use http_body_util::BodyExt;
 use memeloop_workspace_control::{
     api::{AppState, router},
-    auth::Role,
+    auth::{ApiKeyScope, Role},
     config::{AppConfig, InstallationId},
     plugins::PluginRuntime,
     storage::{CreateOrganization, Database},
@@ -29,8 +34,19 @@ async fn plugin_configuration_is_scoped_versioned_and_removable() {
         .create_user("Admin", ADMIN_TOKEN, true, 1)
         .await
         .unwrap();
+    let key_now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
     let org_admin = database
-        .create_user("Org Admin", ORG_ADMIN_TOKEN, false, 2)
+        .create_user_with_initial_key(
+            "Org Admin",
+            ORG_ADMIN_TOKEN,
+            false,
+            vec![ApiKeyScope::ManageOrganization],
+            key_now + 30 * 24 * 60 * 60,
+            key_now,
+        )
         .await
         .unwrap();
     let organization = database
