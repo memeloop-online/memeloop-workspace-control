@@ -196,6 +196,32 @@ async fn postgres_import_restores_dynamic_plugin_package_and_assets_when_configu
         .unwrap();
     target.migrate().await.unwrap();
 
+    // Import is replacement-only. Even ephemeral state that is intentionally
+    // reset by export proves the destination is not empty.
+    let Database::Postgres { pool, .. } = &target else {
+        unreachable!("the import target is PostgreSQL");
+    };
+    let existing_event_id = Uuid::now_v7().to_string();
+    sqlx::query(
+        "INSERT INTO events \
+         (id, installation_id, organization_id, workspace_id, kind, payload_json, created_at) \
+         VALUES ($1, 'snapshot-pg', $2, NULL, 'snapshot.fixture', '{}', 1)",
+    )
+    .bind(&existing_event_id)
+    .bind(Uuid::now_v7().to_string())
+    .execute(pool)
+    .await
+    .unwrap();
+    assert!(matches!(
+        target.import_snapshot(&snapshot).await,
+        Err(StorageError::ImportDestinationNotEmpty)
+    ));
+    sqlx::query("DELETE FROM events WHERE id = $1")
+        .bind(existing_event_id)
+        .execute(pool)
+        .await
+        .unwrap();
+
     // Import validates the persisted identity, rather than accepting a
     // syntactically-valid snapshot row that could target another resource.
     // Every failure must roll the whole import transaction back.
@@ -284,20 +310,29 @@ async fn postgres_import_restores_dynamic_plugin_package_and_assets_when_configu
     // malformed template must not be imported merely because no workspace
     // references it yet.
     let mut invalid_template_snapshot = snapshot.clone();
-    invalid_template_snapshot
+    let mut invalid_unused_template = invalid_template_snapshot
         .tables
-        .get_mut("workspaces")
-        .unwrap()
-        .clear();
+        .get("workspace_templates")
+        .unwrap()[0]
+        .clone();
+    invalid_unused_template["id"] = serde_json::Value::String(Uuid::now_v7().to_string());
+    invalid_unused_template["name"] =
+        serde_json::Value::String("Invalid unused template".to_owned());
+    invalid_unused_template["template_yaml"] =
+        serde_json::Value::String("not a workspace template".to_owned());
     invalid_template_snapshot
         .tables
         .get_mut("workspace_templates")
-        .unwrap()[0]["template_yaml"] =
-        serde_json::Value::String("not a workspace template".to_owned());
-    assert!(matches!(
-        target.import_snapshot(&invalid_template_snapshot).await,
-        Err(StorageError::InvalidTemplate)
-    ));
+        .unwrap()
+        .push(invalid_unused_template);
+    let invalid_template_error = target
+        .import_snapshot(&invalid_template_snapshot)
+        .await
+        .expect_err("a malformed unused template must reject the snapshot");
+    assert!(
+        matches!(invalid_template_error, StorageError::InvalidTemplate),
+        "unexpected snapshot import error: {invalid_template_error:?}"
+    );
     let Database::Postgres { pool, .. } = &target else {
         unreachable!("the import target is PostgreSQL");
     };

@@ -104,16 +104,7 @@ impl Database {
             .bind(format!("mwc:import:{installation_id}"))
             .execute(&mut *transaction)
             .await?;
-        let existing: i64 = sqlx::query_scalar(
-            "SELECT (SELECT COUNT(*) FROM users) + (SELECT COUNT(*) FROM organizations) + \
-            (SELECT COUNT(*) FROM workspaces) + (SELECT COUNT(*) FROM injection_items) + \
-            (SELECT COUNT(*) FROM plugin_packages)",
-        )
-        .fetch_one(&mut *transaction)
-        .await?;
-        if existing != 0 {
-            return Err(StorageError::ImportDestinationNotEmpty);
-        }
+        ensure_import_destination_empty(&mut transaction).await?;
         for table in IMPORT_ORDER {
             let rows = plugin_tables
                 .as_ref()
@@ -152,6 +143,21 @@ impl Database {
         transaction.commit().await?;
         Ok(())
     }
+}
+
+async fn ensure_import_destination_empty(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+) -> Result<(), StorageError> {
+    for table in IMPORT_DESTINATION_DATA_TABLES {
+        let sql = format!("SELECT EXISTS (SELECT 1 FROM {table} LIMIT 1)");
+        let has_rows: bool = sqlx::query_scalar(&sql)
+            .fetch_one(&mut **transaction)
+            .await?;
+        if has_rows {
+            return Err(StorageError::ImportDestinationNotEmpty);
+        }
+    }
+    Ok(())
 }
 
 fn validate_snapshot_row_installations(
@@ -436,6 +442,41 @@ const IMPORT_ORDER: &[&str] = &[
     "workspace_tombstones",
     "jobs",
     "events",
+];
+
+// A snapshot restore is replacement, not merge, semantics. Include both the
+// authoritative tables in the snapshot and ephemeral tables that are reset by
+// export so a partially initialized destination cannot be mistaken for empty.
+const IMPORT_DESTINATION_DATA_TABLES: &[&str] = &[
+    "users",
+    "user_api_keys",
+    "organizations",
+    "organization_memberships",
+    "organization_quotas",
+    "user_quotas",
+    "image_policies",
+    "workspace_templates",
+    "workspaces",
+    "workspace_port_mappings",
+    "workspace_port_mapping_tickets",
+    "workspace_port_mapping_sessions",
+    "workspace_injection_refs",
+    "audit_log",
+    "injection_items",
+    "webhook_subscriptions",
+    "workspace_ssh_identities",
+    "workspace_tombstones",
+    "jobs",
+    "workspace_leases",
+    "events",
+    "web_shell_tickets",
+    "idempotency_keys",
+    "plugin_install_inspections",
+    "plugin_packages",
+    "plugin_assets",
+    "plugin_catalog_metadata",
+    "plugin_configurations",
+    "plugin_ui_sessions",
 ];
 
 const EXPORT_QUERIES: &[(&str, &str)] = &[
