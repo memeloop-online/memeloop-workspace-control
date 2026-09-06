@@ -6,7 +6,7 @@ failure supplies contradictory evidence.
 
 Last updated: 2026-09-06
 
-## Active goal: product-wide responsive UI closeout
+## Completed goal: product-wide responsive UI closeout
 
 Do not repeat the 2026-09-03 operational audit. The active worktree is the authority for this
 goal. Current verified state:
@@ -36,14 +36,31 @@ goal. Current verified state:
   maintainability issue was resolved by moving migration coordination out of `storage.rs`, reducing
   it from 568 to 166 lines; the new single-purpose migration module is 362 lines.
 
+### Release evidence
+
+- Product revision `c31891626c563f846f7aaf3688488fc5508dd78b` passed GitHub Actions run
+  `34041789734`. The run covered the web typecheck/tests/build, Rust 1.98 formatting and both
+  strict Clippy gates, the complete SQLite and PostgreSQL test suites, the full-Home bootstrap
+  check, Helm verification, all four image builds, and build-provenance attestations.
+- The published control-plane image is pinned by manifest digest
+  `sha256:af4a9f4b01f9536422ccce81e4986e543d26a19a677237588ec03e079a9c5fe4`.
+- GitOps revision `0560a99d0c60734f75ef419db89a461320ad6373` pairs that exact source revision
+  and digest while preserving the Harbor proxy-cache repository and every existing production
+  value. The new chart passed an offline lint and full render with the production values before
+  the change was pushed.
+- The single-replica rollout completed after its expected brief 503 window. Three consecutive
+  post-rollout checks returned HTTP 200 for both `/livez` and `/readyz`; the application serves
+  `assets/index-BswvaKCJ.js` and `assets/index-I9HBbLn9.css`, and a complete unauthenticated
+  workspace API request returns HTTP 401.
+- The final independent responsive review used 360 px workspace/settings views and a 1024 px
+  audit view. It measured no horizontal overflow, confirmed the mobile navigation no longer
+  overlays content, and opened the product confirmation dialog from the mobile Stop action. No
+  release-blocking visual defect remained.
+
 ### Next action
 
-1. Commit and push the verified worktree.
-2. Require GitHub Actions success for Rust 1.98, PostgreSQL, bootstrap, and Helm verification;
-   obtain the published GHCR digest, then update GitOps.
-3. Verify the live application at all critical widths and runtime endpoints.
-4. Record the final source revision, workflow run, image digest, GitOps revision, and live checks
-   here before marking the goal complete.
+Start the separately queued collision-free Kubernetes resource naming and migration design below.
+Do not repeat the completed UI release audit unless new production evidence contradicts it.
 
 ### Separate migration constraint queued after this release
 
