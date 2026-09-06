@@ -6,10 +6,10 @@ failure supplies contradictory evidence.
 
 Last updated: 2026-09-06
 
-## Active goal: collision-free runtime identity and migration safety
+## Completed goal: collision-free runtime identity and migration safety
 
-This is the sole active implementation phase. Do not repeat the completed UI or production audits
-below. The upstream repository is being changed and tested; GitOps and the cluster are explicitly
+This implementation phase is complete. Do not repeat the completed UI, production, naming, or
+migration-safety audits below unless new evidence contradicts them. GitOps and the cluster remain
 out of scope until a separate migration window is approved.
 
 - [x] Persist immutable `legacy_v1 | prefixed_v2` runtime identity and centralize Kubernetes object,
@@ -26,10 +26,25 @@ out of scope until a separate migration window is approved.
 - [x] Run formatting, both strict Clippy gates, focused runtime/schema/snapshot/resource tests,
   ShellCheck, K3s script tests, Helm lint, and Prometheus rule validation locally. Three independent
   release reviews report no remaining P1/P2 findings.
-- [ ] Use GitHub Actions for the complete SQLite/PostgreSQL/Helm/image verification to avoid
+- [x] Use GitHub Actions for the complete SQLite/PostgreSQL/Helm/image verification to avoid
   rebuilding the full suite locally.
-- [ ] Record the upstream revision and CI evidence here. Do not deploy this naming change or edit
+- [x] Record the upstream revision and CI evidence here. Do not deploy this naming change or edit
   GitOps as part of this phase.
+
+### Release evidence
+
+- Upstream revision `40f3c26219af3f98f25474235ce0f54b2b1bee6b` passed GitHub Actions run
+  `34054916210`. The run covered the web checks and build, Rust 1.98 formatting, both strict Clippy
+  gates, the complete SQLite and PostgreSQL test suites, full-Home bootstrap recovery, Helm and
+  Prometheus validation, runtime image checks, all four image builds, and provenance attestations.
+- Published immutable image manifests:
+  - control plane: `ghcr.io/memeloop-online/memeloop-workspace-control:sha-40f3c26@sha256:c91d79526454e708e42473916645f3165ea345cbe9edca02c37d5af12d4274f6`
+  - workspace: `ghcr.io/memeloop-online/memeloop-workspace-control-workspace:sha-40f3c26@sha256:98dc5286d5b954f8bc49d778ed32796caf94e8419e101f53ea1ce0d0155bcfd0`
+  - ttyd: `ghcr.io/memeloop-online/memeloop-workspace-control-ttyd:sha-40f3c26@sha256:ed48ad9140a2dc1f012b82c374f409bc3ef9ecf5d6b0a30c5a7128c9afd6828a`
+  - SSH jump host: `ghcr.io/memeloop-online/memeloop-workspace-control-ssh-jump:sha-40f3c26@sha256:d5c368740da7304fb1ce9b254c134453a64aa29fe5d3de800d32e10c366fd920`
+- No GitOps repository, Kubernetes object, existing workspace PVC, or control-plane SQLite volume
+  was changed during this phase. Deployment and data migration require a separately approved,
+  fenced migration window.
 
 ## Completed goal: product-wide responsive UI closeout
 
@@ -84,10 +99,11 @@ goal. Current verified state:
 
 ### Next action
 
-Start the separately queued collision-free Kubernetes resource naming and migration design below.
-Do not repeat the completed UI release audit unless new production evidence contradicts it.
+The separately queued collision-free Kubernetes resource naming and migration design is complete
+and recorded at the top of this file. Do not repeat the completed UI release audit unless new
+production evidence contradicts it.
 
-### Separate migration constraint queued after this release
+### Migration constraints carried into the completed naming release
 
 - Existing workspace PVCs remain in their current dedicated Namespaces and must not be deleted.
 - Shared-Namespace support first requires persisted `legacy_v1 | prefixed_v2` runtime identity and
