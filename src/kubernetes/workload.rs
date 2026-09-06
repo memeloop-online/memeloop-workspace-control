@@ -15,7 +15,10 @@ use k8s_openapi::{
     },
 };
 
-use crate::{templates::WorkspaceStoragePolicy, workspaces::Workspace};
+use crate::{
+    templates::WorkspaceStoragePolicy, workspace_runtime::WorkspaceResourceNames,
+    workspaces::Workspace,
+};
 
 use super::{
     ResourceBuilder, namespaced_metadata,
@@ -25,20 +28,21 @@ use super::{
 
 pub(super) fn stateful_set(
     builder: &ResourceBuilder,
-    namespace: &str,
     labels: &BTreeMap<String, String>,
     template_labels: &BTreeMap<String, String>,
     workspace: &Workspace,
     replicas: i32,
 ) -> StatefulSet {
+    let runtime = &workspace.runtime;
+    let names = runtime.names();
     let stable_labels = builder.labels(workspace.id);
     let pod = WorkspacePod::from_template(&workspace.template);
-    let containers = containers(builder, pod, workspace);
+    let containers = containers(builder, pod, workspace, &names);
     StatefulSet {
-        metadata: namespaced_metadata("workspace", namespace, labels),
+        metadata: namespaced_metadata(&names.stateful_set, &runtime.namespace, labels),
         spec: Some(StatefulSetSpec {
             replicas: Some(replicas),
-            service_name: Some("workspace".to_owned()),
+            service_name: Some(names.service.clone()),
             selector: LabelSelector {
                 match_labels: Some(pod_labels(&stable_labels)),
                 ..LabelSelector::default()
@@ -52,9 +56,14 @@ pub(super) fn stateful_set(
                     )])),
                     ..ObjectMeta::default()
                 }),
-                spec: Some(pod_spec(pod, workspace, containers)),
+                spec: Some(pod_spec(pod, workspace, containers, &names)),
             },
-            volume_claim_templates: Some(vec![workspace_claim(builder, stable_labels, workspace)]),
+            volume_claim_templates: Some(vec![workspace_claim(
+                builder,
+                stable_labels,
+                workspace,
+                &names,
+            )]),
             ..StatefulSetSpec::default()
         }),
         ..StatefulSet::default()
@@ -65,34 +74,41 @@ fn containers(
     builder: &ResourceBuilder,
     pod: WorkspacePod<'_>,
     workspace: &Workspace,
+    names: &WorkspaceResourceNames,
 ) -> Vec<Container> {
     let mut containers = vec![pod.workspace_container(
         &workspace.template.image,
         workspace_resources(pod, workspace),
+        names,
     )];
     if let Some(buildkit) = pod.buildkit_container() {
         containers.push(buildkit);
     }
-    containers.push(ttyd_container(builder, pod, &workspace.short_id));
+    containers.push(ttyd_container(builder, pod, &workspace.runtime.route_key));
     containers
 }
 
-fn pod_spec(pod: WorkspacePod<'_>, workspace: &Workspace, containers: Vec<Container>) -> PodSpec {
-    let mut init_containers = vec![pod.workspace_init_container(&workspace.template.image)];
+fn pod_spec(
+    pod: WorkspacePod<'_>,
+    workspace: &Workspace,
+    containers: Vec<Container>,
+    names: &WorkspaceResourceNames,
+) -> PodSpec {
+    let mut init_containers = vec![pod.workspace_init_container(&workspace.template.image, names)];
     if let Some(buildkit_bootstrap) = pod.buildkit_bootstrap_container() {
         init_containers.push(buildkit_bootstrap);
     }
     let cluster_access = workspace.template.cluster_access;
     PodSpec {
         automount_service_account_token: Some(cluster_access),
-        service_account_name: cluster_access.then(|| "workspace-admin".to_owned()),
+        service_account_name: cluster_access.then(|| names.service_account.clone()),
         init_containers: Some(init_containers),
         containers,
         affinity: pod.affinity(),
         node_selector: pod.node_selector(),
         security_context: pod.pod_security_context(),
         image_pull_secrets: pod.image_pull_secrets(),
-        volumes: Some(workspace_volumes(&workspace.template.storage_policy)),
+        volumes: Some(workspace_volumes(&workspace.template.storage_policy, names)),
         ..PodSpec::default()
     }
 }
@@ -112,7 +128,7 @@ fn workspace_resources(pod: WorkspacePod<'_>, workspace: &Workspace) -> Resource
     }
 }
 
-fn ttyd_container(builder: &ResourceBuilder, pod: WorkspacePod<'_>, short_id: &str) -> Container {
+fn ttyd_container(builder: &ResourceBuilder, pod: WorkspacePod<'_>, route_key: &str) -> Container {
     Container {
         name: "ttyd".to_owned(),
         image: Some(builder.ttyd_image.clone()),
@@ -122,7 +138,7 @@ fn ttyd_container(builder: &ResourceBuilder, pod: WorkspacePod<'_>, short_id: &s
             "7681".to_owned(),
             "--writable".to_owned(),
             "--base-path".to_owned(),
-            format!("/shell/{short_id}"),
+            format!("/shell/{route_key}"),
             "/usr/bin/ssh".to_owned(),
             "-p".to_owned(),
             "2222".to_owned(),
@@ -162,12 +178,15 @@ fn ttyd_container(builder: &ResourceBuilder, pod: WorkspacePod<'_>, short_id: &s
     }
 }
 
-fn workspace_volumes(policy: &WorkspaceStoragePolicy) -> Vec<Volume> {
+fn workspace_volumes(
+    policy: &WorkspaceStoragePolicy,
+    names: &WorkspaceResourceNames,
+) -> Vec<Volume> {
     vec![
         Volume {
             name: "ssh-identity".to_owned(),
             secret: Some(SecretVolumeSource {
-                secret_name: Some("workspace-ssh-identity".to_owned()),
+                secret_name: Some(names.ssh_identity_secret.clone()),
                 default_mode: Some(0o400),
                 ..SecretVolumeSource::default()
             }),
@@ -176,7 +195,7 @@ fn workspace_volumes(policy: &WorkspaceStoragePolicy) -> Vec<Volume> {
         Volume {
             name: "workspace-files-secret".to_owned(),
             secret: Some(SecretVolumeSource {
-                secret_name: Some("workspace-files-secret".to_owned()),
+                secret_name: Some(names.files_secret.clone()),
                 ..SecretVolumeSource::default()
             }),
             ..Volume::default()
@@ -184,7 +203,7 @@ fn workspace_volumes(policy: &WorkspaceStoragePolicy) -> Vec<Volume> {
         Volume {
             name: "workspace-files-config".to_owned(),
             config_map: Some(ConfigMapVolumeSource {
-                name: "workspace-files-config".to_owned(),
+                name: names.files_config_map.clone(),
                 ..ConfigMapVolumeSource::default()
             }),
             ..Volume::default()
@@ -192,7 +211,7 @@ fn workspace_volumes(policy: &WorkspaceStoragePolicy) -> Vec<Volume> {
         Volume {
             name: "workspace-config".to_owned(),
             config_map: Some(ConfigMapVolumeSource {
-                name: "workspace-config".to_owned(),
+                name: names.workspace_config.clone(),
                 default_mode: Some(0o555),
                 ..ConfigMapVolumeSource::default()
             }),
@@ -254,10 +273,11 @@ fn workspace_claim(
     builder: &ResourceBuilder,
     stable_labels: BTreeMap<String, String>,
     workspace: &Workspace,
+    names: &WorkspaceResourceNames,
 ) -> PersistentVolumeClaim {
     PersistentVolumeClaim {
         metadata: ObjectMeta {
-            name: Some("workspace-data".to_owned()),
+            name: Some(names.data_claim_template.clone()),
             labels: Some(stable_labels),
             ..ObjectMeta::default()
         },

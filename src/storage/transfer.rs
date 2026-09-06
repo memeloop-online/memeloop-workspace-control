@@ -1,9 +1,19 @@
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 use sqlx::Row;
 
-use crate::{quota::Resources, templates::WorkspaceTemplateDocument, workspaces::AccessMode};
+use crate::{
+    config::InstallationId,
+    quota::Resources,
+    templates::WorkspaceTemplateDocument,
+    workspace_runtime::{
+        WorkspaceNamespaceScope, WorkspaceRuntimeIdentity, WorkspaceRuntimeNamingScheme,
+    },
+    workspaces::AccessMode,
+};
+use uuid::Uuid;
 
 use super::{Database, StorageError};
 
@@ -29,11 +39,16 @@ impl Database {
         else {
             return Err(StorageError::ExportRequiresSqlite);
         };
+        // Keep every table, plugin blob and the schema version on one SQLite
+        // read snapshot. In WAL mode writers may continue, while the exported
+        // document cannot mix rows observed before and after a concurrent
+        // transaction commits.
+        let mut transaction = pool.begin().await?;
         let mut tables = BTreeMap::new();
         for (name, sql) in EXPORT_QUERIES {
             let rows = sqlx::query(sql)
                 .bind(installation_id.as_str())
-                .fetch_all(pool)
+                .fetch_all(&mut *transaction)
                 .await?;
             let values = rows
                 .into_iter()
@@ -44,10 +59,16 @@ impl Database {
                 .collect::<Result<Vec<_>, _>>()?;
             tables.insert((*name).to_owned(), values);
         }
-        tables.extend(plugin_state::export_tables(pool, installation_id.as_str()).await?);
+        tables
+            .extend(plugin_state::export_tables(&mut transaction, installation_id.as_str()).await?);
+        let schema_version =
+            sqlx::query_scalar("SELECT COALESCE(MAX(version), 0) FROM schema_migrations")
+                .fetch_one(&mut *transaction)
+                .await?;
+        transaction.commit().await?;
         Ok(DatabaseSnapshot {
             format_version: SNAPSHOT_FORMAT_VERSION,
-            schema_version: self.schema_version().await?,
+            schema_version,
             installation_id: installation_id.to_string(),
             exported_at: now,
             tables,
@@ -109,10 +130,14 @@ impl Database {
                 }
                 return Err(StorageError::SnapshotMissingTable((*table).to_owned()));
             };
+            validate_snapshot_row_installations(table, rows, installation_id)?;
             if rows.is_empty() {
                 continue;
             }
             let rows = normalize_snapshot_rows(table, rows, snapshot.schema_version)?;
+            if *table == "workspaces" {
+                validate_snapshot_workspace_rows(&rows, installation_id)?;
+            }
             let json = serde_json::to_string(&rows)?;
             let sql = format!(
                 "INSERT INTO {table} SELECT * FROM json_populate_recordset(NULL::{table}, $1::json)"
@@ -122,92 +147,247 @@ impl Database {
                 .execute(&mut *transaction)
                 .await?;
         }
+        validate_imported_templates(&mut transaction, installation_id).await?;
+        validate_imported_workspaces(&mut transaction, installation_id).await?;
         transaction.commit().await?;
         Ok(())
     }
 }
 
+fn validate_snapshot_row_installations(
+    table: &str,
+    rows: &[Value],
+    installation_id: &InstallationId,
+) -> Result<(), StorageError> {
+    if rows.iter().any(|row| {
+        row.as_object()
+            .and_then(|object| string_field(object, "installation_id"))
+            != Some(installation_id.as_str())
+    }) {
+        return Err(StorageError::SnapshotRowInstallationMismatch {
+            table: table.to_owned(),
+        });
+    }
+    Ok(())
+}
+
+fn validate_snapshot_workspace_rows(
+    rows: &[Value],
+    installation_id: &InstallationId,
+) -> Result<(), StorageError> {
+    for row in rows {
+        let object = row.as_object().ok_or(StorageError::InvalidWorkspace)?;
+        let id = Uuid::parse_str(&required_workspace_string_field(object, "id")?)
+            .map_err(|_| StorageError::InvalidWorkspace)?;
+        let short_id = required_workspace_string_field(object, "short_id")?;
+        let naming_scheme = WorkspaceRuntimeNamingScheme::from_database(
+            &required_workspace_string_field(object, "runtime_naming_scheme")?,
+        )
+        .ok_or(StorageError::InvalidWorkspace)?;
+        let namespace_scope = WorkspaceNamespaceScope::from_database(
+            &required_workspace_string_field(object, "runtime_namespace_scope")?,
+        )
+        .ok_or(StorageError::InvalidWorkspace)?;
+        let runtime = WorkspaceRuntimeIdentity {
+            naming_scheme,
+            namespace_scope,
+            namespace: required_workspace_string_field(object, "runtime_namespace")?,
+            resource_prefix: required_workspace_string_field(object, "runtime_resource_prefix")?,
+            route_key: required_workspace_string_field(object, "runtime_route_key")?,
+        };
+        runtime
+            .validate_for_workspace(installation_id, id, &short_id)
+            .map_err(|_| StorageError::InvalidWorkspace)?;
+    }
+    Ok(())
+}
+
+async fn validate_imported_templates(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    installation_id: &InstallationId,
+) -> Result<(), StorageError> {
+    let rows =
+        sqlx::query("SELECT template_yaml FROM workspace_templates WHERE installation_id = $1")
+            .bind(installation_id.as_str())
+            .fetch_all(&mut **transaction)
+            .await?;
+    for row in rows {
+        let yaml: String = row.try_get("template_yaml")?;
+        WorkspaceTemplateDocument::parse(&yaml).map_err(|_| StorageError::InvalidTemplate)?;
+    }
+    Ok(())
+}
+
+async fn validate_imported_workspaces(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    installation_id: &InstallationId,
+) -> Result<(), StorageError> {
+    let sql = format!(
+        "SELECT {} FROM workspaces WHERE installation_id = $1",
+        super::workspace_store::WORKSPACE_COLUMNS
+    );
+    let rows = sqlx::query(&sql)
+        .bind(installation_id.as_str())
+        .fetch_all(&mut **transaction)
+        .await?;
+    for row in rows {
+        super::workspace_store::decode_postgres(row, installation_id)?;
+    }
+    Ok(())
+}
+
 fn normalize_snapshot_rows(
     table: &str,
-    rows: &[serde_json::Value],
+    rows: &[Value],
     schema_version: i64,
-) -> Result<Vec<serde_json::Value>, StorageError> {
-    if table == "user_api_keys" {
-        return Ok(normalize_snapshot_api_key_rows(rows, schema_version));
+) -> Result<Vec<Value>, StorageError> {
+    match table {
+        "user_api_keys" => Ok(normalize_snapshot_api_key_rows(rows, schema_version)),
+        "workspace_templates" => normalize_template_rows(rows, schema_version),
+        "workspaces" => normalize_workspace_rows(rows, schema_version),
+        _ => Ok(rows.to_vec()),
     }
-    if !matches!(table, "workspace_templates" | "workspaces") {
-        return Ok(rows.to_vec());
-    }
+}
+
+fn normalize_template_rows(
+    rows: &[Value],
+    schema_version: i64,
+) -> Result<Vec<Value>, StorageError> {
     rows.iter()
         .cloned()
-        .map(|mut row| {
-            if let Some(object) = row.as_object_mut() {
-                let profile = object
-                    .entry("runtime_profile")
-                    .or_insert_with(|| serde_json::Value::String("standard".to_owned()));
-                if schema_version < 9 {
-                    let canonical = match profile.as_str() {
-                        Some("coder_rust_dev" | "coder_token_center_rust_dev") => Some("rust_dev"),
-                        Some("coder_node_dev") => Some("node_dev"),
-                        Some("coder_cluster_admin") => Some("maintainance"),
-                        _ => None,
-                    };
-                    if let Some(canonical) = canonical {
-                        *profile = serde_json::Value::String(canonical.to_owned());
-                    }
-                }
-                let yaml_key = if table == "workspace_templates" {
-                    "template_yaml"
-                } else {
-                    "template_snapshot_yaml"
-                };
-                if schema_version < 10
-                    || object
-                        .get(yaml_key)
-                        .and_then(|value| value.as_str())
-                        .is_none_or(str::is_empty)
-                {
-                    let access = object
-                        .get("access_mode")
-                        .and_then(|value| value.as_str())
-                        .and_then(AccessMode::from_database)
-                        .ok_or(StorageError::InvalidTemplate)?;
-                    let unsigned = |key: &str| {
-                        object
-                            .get(key)
-                            .and_then(|value| value.as_u64())
-                            .ok_or(StorageError::InvalidTemplate)
-                    };
-                    let resources = Resources {
-                        cpu_millis: unsigned("cpu_millis")?,
-                        memory_mib: unsigned("memory_mib")?,
-                        gpu_count: u32::try_from(unsigned("gpu_count")?)
-                            .map_err(|_| StorageError::InvalidTemplate)?,
-                        disk_gib: unsigned("disk_gib")?,
-                    };
-                    let profile = object
-                        .get("runtime_profile")
-                        .and_then(|value| value.as_str())
-                        .ok_or(StorageError::InvalidTemplate)?;
-                    let image = object
-                        .get("image")
-                        .and_then(|value| value.as_str())
-                        .ok_or(StorageError::InvalidTemplate)?;
-                    let name = object
-                        .get("name")
-                        .and_then(|value| value.as_str())
-                        .ok_or(StorageError::InvalidTemplate)?;
-                    let spec =
-                        super::template_migration::from_legacy(profile, image, access, resources)?;
-                    let yaml = WorkspaceTemplateDocument::new(name, spec)
-                        .to_yaml()
-                        .map_err(|_| StorageError::InvalidTemplate)?;
-                    object.insert(yaml_key.to_owned(), serde_json::Value::String(yaml));
-                }
+        .map(|row| normalize_template_row(row, schema_version, "template_yaml"))
+        .collect()
+}
+
+fn normalize_workspace_rows(
+    rows: &[Value],
+    schema_version: i64,
+) -> Result<Vec<Value>, StorageError> {
+    rows.iter()
+        .cloned()
+        .map(|row| {
+            let mut row = normalize_template_row(row, schema_version, "template_snapshot_yaml")?;
+            if schema_version < 18
+                && let Some(object) = row.as_object_mut()
+            {
+                add_legacy_workspace_runtime(object)?;
             }
             Ok(row)
         })
         .collect()
+}
+
+fn normalize_template_row(
+    mut row: Value,
+    schema_version: i64,
+    yaml_key: &str,
+) -> Result<Value, StorageError> {
+    let Some(object) = row.as_object_mut() else {
+        return Ok(row);
+    };
+    normalize_runtime_profile(object, schema_version);
+    if schema_version < 10 || missing_yaml(object, yaml_key) {
+        let yaml = legacy_template_yaml(object)?;
+        object.insert(yaml_key.to_owned(), Value::String(yaml));
+    }
+    Ok(row)
+}
+
+fn normalize_runtime_profile(object: &mut Map<String, Value>, schema_version: i64) {
+    let profile = object
+        .entry("runtime_profile")
+        .or_insert_with(|| Value::String("standard".to_owned()));
+    if schema_version >= 9 {
+        return;
+    }
+    let canonical = match profile.as_str() {
+        Some("coder_rust_dev" | "coder_token_center_rust_dev") => Some("rust_dev"),
+        Some("coder_node_dev") => Some("node_dev"),
+        Some("coder_cluster_admin") => Some("maintainance"),
+        _ => None,
+    };
+    if let Some(canonical) = canonical {
+        *profile = Value::String(canonical.to_owned());
+    }
+}
+
+fn missing_yaml(object: &Map<String, Value>, yaml_key: &str) -> bool {
+    object
+        .get(yaml_key)
+        .and_then(Value::as_str)
+        .is_none_or(str::is_empty)
+}
+
+fn legacy_template_yaml(object: &Map<String, Value>) -> Result<String, StorageError> {
+    let access = string_field(object, "access_mode")
+        .and_then(AccessMode::from_database)
+        .ok_or(StorageError::InvalidTemplate)?;
+    let resources = Resources {
+        cpu_millis: unsigned_field(object, "cpu_millis")?,
+        memory_mib: unsigned_field(object, "memory_mib")?,
+        gpu_count: u32::try_from(unsigned_field(object, "gpu_count")?)
+            .map_err(|_| StorageError::InvalidTemplate)?,
+        disk_gib: unsigned_field(object, "disk_gib")?,
+    };
+    let spec = super::template_migration::from_legacy(
+        required_string_field(object, "runtime_profile")?,
+        required_string_field(object, "image")?,
+        access,
+        resources,
+    )?;
+    WorkspaceTemplateDocument::new(required_string_field(object, "name")?, spec)
+        .to_yaml()
+        .map_err(|_| StorageError::InvalidTemplate)
+}
+
+fn string_field<'a>(object: &'a Map<String, Value>, key: &str) -> Option<&'a str> {
+    object.get(key).and_then(Value::as_str)
+}
+
+fn required_string_field<'a>(
+    object: &'a Map<String, Value>,
+    key: &str,
+) -> Result<&'a str, StorageError> {
+    string_field(object, key).ok_or(StorageError::InvalidTemplate)
+}
+
+fn unsigned_field(object: &Map<String, Value>, key: &str) -> Result<u64, StorageError> {
+    object
+        .get(key)
+        .and_then(Value::as_u64)
+        .ok_or(StorageError::InvalidTemplate)
+}
+
+fn add_legacy_workspace_runtime(object: &mut Map<String, Value>) -> Result<(), StorageError> {
+    let installation_id = required_workspace_string_field(object, "installation_id")?;
+    let short_id = required_workspace_string_field(object, "short_id")?;
+    object.insert(
+        "runtime_naming_scheme".to_owned(),
+        Value::String("legacy_v1".to_owned()),
+    );
+    object.insert(
+        "runtime_namespace_scope".to_owned(),
+        Value::String("dedicated".to_owned()),
+    );
+    object.insert(
+        "runtime_namespace".to_owned(),
+        Value::String(format!("ws-{installation_id}-{short_id}")),
+    );
+    object.insert(
+        "runtime_resource_prefix".to_owned(),
+        Value::String("workspace".to_owned()),
+    );
+    object.insert("runtime_route_key".to_owned(), Value::String(short_id));
+    Ok(())
+}
+
+fn required_workspace_string_field(
+    object: &Map<String, Value>,
+    key: &str,
+) -> Result<String, StorageError> {
+    string_field(object, key)
+        .map(str::to_owned)
+        .ok_or(StorageError::InvalidWorkspace)
 }
 
 /// Older snapshots either had no API-key grants or used a wildcard/unbounded
@@ -297,7 +477,7 @@ const EXPORT_QUERIES: &[(&str, &str)] = &[
     ),
     (
         "workspaces",
-        "SELECT json_object('id', id, 'installation_id', installation_id, 'short_id', short_id, 'organization_id', organization_id, 'owner_id', owner_id, 'name', name, 'template_id', template_id, 'image', image, 'access_mode', access_mode, 'state', state, 'cpu_millis', cpu_millis, 'memory_mib', memory_mib, 'gpu_count', gpu_count, 'disk_gib', disk_gib, 'generation', generation, 'created_at', created_at, 'updated_at', updated_at, 'deleted_at', deleted_at, 'runtime_profile', runtime_profile, 'template_snapshot_yaml', template_snapshot_yaml) item FROM workspaces WHERE installation_id = ?1 ORDER BY id",
+        "SELECT json_object('id', id, 'installation_id', installation_id, 'short_id', short_id, 'organization_id', organization_id, 'owner_id', owner_id, 'name', name, 'template_id', template_id, 'image', image, 'access_mode', access_mode, 'state', state, 'cpu_millis', cpu_millis, 'memory_mib', memory_mib, 'gpu_count', gpu_count, 'disk_gib', disk_gib, 'generation', generation, 'created_at', created_at, 'updated_at', updated_at, 'deleted_at', deleted_at, 'runtime_profile', runtime_profile, 'template_snapshot_yaml', template_snapshot_yaml, 'runtime_naming_scheme', runtime_naming_scheme, 'runtime_namespace_scope', runtime_namespace_scope, 'runtime_namespace', runtime_namespace, 'runtime_resource_prefix', runtime_resource_prefix, 'runtime_route_key', runtime_route_key) item FROM workspaces WHERE installation_id = ?1 ORDER BY id",
     ),
     (
         "workspace_port_mappings",
@@ -339,13 +519,19 @@ const EXPORT_QUERIES: &[(&str, &str)] = &[
 
 #[cfg(test)]
 mod tests {
-    use super::normalize_snapshot_rows;
+    use super::{
+        normalize_snapshot_rows, validate_snapshot_row_installations,
+        validate_snapshot_workspace_rows,
+    };
+    use crate::{config::InstallationId, workspace_runtime::workspace_short_id_for};
+    use uuid::Uuid;
 
     #[test]
     fn old_catalog_rows_receive_template_yaml() {
         for table in ["workspace_templates", "workspaces"] {
             let rows = vec![serde_json::json!({
-                "id": "legacy", "name": "Legacy", "image": "registry.example/dev:latest",
+                "id": "legacy", "installation_id": "snapshot-test", "short_id": "abc123",
+                "name": "Legacy", "image": "registry.example/dev:latest",
                 "access_mode": "internal", "cpu_millis": 1000, "memory_mib": 2048,
                 "gpu_count": 0, "disk_gib": 20
             })];
@@ -363,6 +549,16 @@ mod tests {
                     .contains("WorkspaceTemplate")
             );
             assert!(rows[0].get("runtime_profile").is_none());
+            if table == "workspaces" {
+                assert_eq!(normalized[0]["runtime_naming_scheme"], "legacy_v1");
+                assert_eq!(normalized[0]["runtime_namespace_scope"], "dedicated");
+                assert_eq!(
+                    normalized[0]["runtime_namespace"],
+                    "ws-snapshot-test-abc123"
+                );
+                assert_eq!(normalized[0]["runtime_resource_prefix"], "workspace");
+                assert_eq!(normalized[0]["runtime_route_key"], "abc123");
+            }
         }
     }
 
@@ -389,5 +585,26 @@ mod tests {
         ];
         let normalized = normalize_snapshot_rows("user_api_keys", &rows, 16).unwrap();
         assert!(normalized.is_empty());
+    }
+
+    #[test]
+    fn v18_default_runtime_identity_is_rejected_before_insert() {
+        let installation: InstallationId = "snapshot-test".parse().unwrap();
+        let id = Uuid::parse_str("018f0000-0000-7000-8000-000000000001").unwrap();
+        let short_id = workspace_short_id_for(id);
+        let rows = vec![serde_json::json!({
+            "id": id, "installation_id": installation.as_str(), "short_id": short_id,
+            "runtime_naming_scheme": "legacy_v1", "runtime_namespace_scope": "dedicated",
+            "runtime_namespace": "", "runtime_resource_prefix": "workspace",
+            "runtime_route_key": ""
+        })];
+        assert!(validate_snapshot_workspace_rows(&rows, &installation).is_err());
+    }
+
+    #[test]
+    fn imported_rows_must_belong_to_the_snapshot_installation() {
+        let installation: InstallationId = "snapshot-test".parse().unwrap();
+        let rows = vec![serde_json::json!({"installation_id": "other-installation"})];
+        assert!(validate_snapshot_row_installations("users", &rows, &installation).is_err());
     }
 }

@@ -41,6 +41,11 @@ pub struct AppConfig {
     #[arg(long, env = "MWC_INTERNAL_SSH_HOST")]
     pub internal_ssh_host: Option<String>,
 
+    /// Namespace used for newly created prefixed workspaces. Omit to keep one Namespace per
+    /// workspace. Existing workspaces retain the placement stored with their runtime identity.
+    #[arg(long, env = "MWC_WORKSPACE_SHARED_NAMESPACE")]
+    pub workspace_shared_namespace: Option<String>,
+
     /// Public origin used for ttyd links, for example https://shell.example.com.
     #[arg(long, env = "MWC_WEB_SHELL_PUBLIC_ORIGIN")]
     pub web_shell_public_origin: Option<String>,
@@ -89,6 +94,9 @@ impl AppConfig {
             .is_some_and(|host| !valid_ssh_host(host))
         {
             return Err(ConfigError::InvalidInternalSshHost);
+        }
+        if let Some(namespace) = self.workspace_shared_namespace.as_deref() {
+            validate_dns_label(namespace, 63, "workspace shared namespace")?;
         }
         if self
             .web_shell_public_origin
@@ -276,6 +284,7 @@ mod tests {
             instance_id: "one".to_owned(),
             ssh_public_host: None,
             internal_ssh_host: None,
+            workspace_shared_namespace: None,
             web_shell_public_origin: None,
             port_mapping_public_domain: None,
             prometheus_url: None,
@@ -297,6 +306,7 @@ mod tests {
             instance_id: "one".to_owned(),
             ssh_public_host: None,
             internal_ssh_host: Some("100.64.12.34".to_owned()),
+            workspace_shared_namespace: None,
             web_shell_public_origin: None,
             port_mapping_public_domain: None,
             prometheus_url: None,
@@ -331,6 +341,7 @@ mod tests {
             instance_id: "one".to_owned(),
             ssh_public_host: None,
             internal_ssh_host: None,
+            workspace_shared_namespace: None,
             web_shell_public_origin: None,
             port_mapping_public_domain: None,
             prometheus_url: Some(
@@ -354,6 +365,57 @@ mod tests {
                 }
                 .validate(),
                 Err(ConfigError::InvalidPrometheusUrl),
+                "{invalid}"
+            );
+        }
+    }
+
+    #[test]
+    fn workspace_shared_namespace_requires_a_strict_dns_label() {
+        let base = AppConfig {
+            installation_id: "test".parse().unwrap(),
+            listen_address: "127.0.0.1:8080".parse().unwrap(),
+            database_url: "sqlite::memory:".to_owned(),
+            replica_count: 1,
+            instance_id: "one".to_owned(),
+            ssh_public_host: None,
+            internal_ssh_host: None,
+            workspace_shared_namespace: Some("workspace-pool".to_owned()),
+            web_shell_public_origin: None,
+            port_mapping_public_domain: None,
+            prometheus_url: None,
+            plugin_dir: None,
+        };
+        assert!(base.validate().is_ok());
+        assert!(
+            AppConfig {
+                workspace_shared_namespace: Some("a".repeat(63)),
+                ..base.clone()
+            }
+            .validate()
+            .is_ok()
+        );
+
+        for invalid in [
+            "",
+            "Workspace-Pool",
+            "-workspace-pool",
+            "workspace-pool-",
+            "workspace_pool",
+            "workspace.pool",
+            "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijkl",
+        ] {
+            assert_eq!(
+                AppConfig {
+                    workspace_shared_namespace: Some(invalid.to_owned()),
+                    ..base.clone()
+                }
+                .validate(),
+                Err(ConfigError::InvalidDnsLabel {
+                    field: "workspace shared namespace",
+                    value: invalid.to_owned(),
+                    max_length: 63,
+                }),
                 "{invalid}"
             );
         }

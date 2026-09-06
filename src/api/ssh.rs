@@ -80,12 +80,11 @@ pub(super) async fn authorized_key(
         }
     }
     let user_id = authorized_user.ok_or(ApiError::Unauthorized)?;
-    let namespace = state
-        .config
-        .installation_id
-        .workspace_namespace(&workspace.short_id)
-        .map_err(|_| ApiError::Unauthorized)?;
-    let target = format!("workspace.{namespace}.svc.cluster.local:2222");
+    let target = format!(
+        "{}.{}.svc.cluster.local:2222",
+        workspace.runtime.names().service,
+        workspace.runtime.namespace,
+    );
     let line = format!(
         "restrict,port-forwarding,permitopen=\"{target}\" {} {} mwc-user-{user_id}\n",
         query.key_type, query.key_base64

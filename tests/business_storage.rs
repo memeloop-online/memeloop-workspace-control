@@ -4,10 +4,11 @@ use memeloop_workspace_control::{
     injections::{InjectionItem, InjectionKind, InjectionScope, InjectionValue},
     quota::Resources,
     storage::{
-        CreateOrganization, CreateWorkspace, CreateWorkspaceTemplate, Database,
-        IdempotencyDecision, InjectionScopeRef, StorageError,
+        AdmittedWorkspaceCreation, CreateOrganization, CreateWorkspace, CreateWorkspaceTemplate,
+        Database, IdempotencyDecision, InjectionScopeRef, StorageError,
     },
     templates::{WorkspaceTemplateDocument, WorkspaceTemplateSpec},
+    workspace_runtime::{WorkspaceNamespaceScope, WorkspaceRuntimeNamingScheme},
     workspaces::{AccessMode, WorkspaceAction, WorkspaceObservation, WorkspaceState},
 };
 use std::collections::BTreeMap;
@@ -246,8 +247,8 @@ async fn admitted_template_must_match_the_transactional_workspace_snapshot() {
         .await
         .unwrap();
     let result = database
-        .create_workspace_with_admitted_template(
-            CreateWorkspace {
+        .create_workspace_with_admitted_template(AdmittedWorkspaceCreation {
+            command: CreateWorkspace {
                 organization_id: organization.id,
                 owner_id: admin.user_id,
                 name: "rejected-race".to_owned(),
@@ -256,12 +257,13 @@ async fn admitted_template_must_match_the_transactional_workspace_snapshot() {
                 organization_injection_refs: None,
                 user_injection_refs: None,
             },
-            None,
-            &admitted_yaml,
-            true,
-            admin.user_id,
-            104,
-        )
+            inline_injections: None,
+            admitted_template_yaml: &admitted_yaml,
+            shared_namespace: None,
+            allow_cluster_access: true,
+            actor_user_id: admin.user_id,
+            now: 104,
+        })
         .await;
     assert!(matches!(result, Err(StorageError::TemplateNotFound)));
     assert!(
@@ -270,6 +272,95 @@ async fn admitted_template_must_match_the_transactional_workspace_snapshot() {
             .await
             .unwrap()
             .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn workspace_runtime_identity_is_persisted_for_shared_namespace_creation() {
+    let database = database().await;
+    let admin = database
+        .create_user("Admin", ADMIN_TOKEN, true, 100)
+        .await
+        .unwrap();
+    let organization = database
+        .create_organization(
+            CreateOrganization {
+                name: "Shared runtime".to_owned(),
+                owner_user_id: admin.user_id,
+            },
+            101,
+        )
+        .await
+        .unwrap();
+    let template_id = create_template(
+        &database,
+        organization.id,
+        "Shared runtime",
+        "registry.example/workspace:1",
+        AccessMode::Internal,
+        Resources {
+            cpu_millis: 1_000,
+            memory_mib: 2_048,
+            gpu_count: 0,
+            disk_gib: 20,
+        },
+        102,
+    )
+    .await;
+    let admitted_yaml = database
+        .get_workspace_template(template_id)
+        .await
+        .unwrap()
+        .yaml;
+    let workspace = database
+        .create_workspace_with_admitted_template(AdmittedWorkspaceCreation {
+            command: CreateWorkspace {
+                organization_id: organization.id,
+                owner_id: admin.user_id,
+                name: "shared-runtime".to_owned(),
+                template_id,
+                resources: None,
+                organization_injection_refs: None,
+                user_injection_refs: None,
+            },
+            inline_injections: None,
+            admitted_template_yaml: &admitted_yaml,
+            shared_namespace: Some("workspace-pool"),
+            allow_cluster_access: true,
+            actor_user_id: admin.user_id,
+            now: 103,
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(
+        workspace.runtime.naming_scheme,
+        WorkspaceRuntimeNamingScheme::PrefixedV2
+    );
+    assert_eq!(
+        workspace.runtime.namespace_scope,
+        WorkspaceNamespaceScope::Shared
+    );
+    assert_eq!(workspace.runtime.namespace, "workspace-pool");
+    assert_eq!(
+        workspace.runtime.resource_prefix,
+        format!("w-{}", workspace.short_id)
+    );
+    assert_eq!(
+        workspace.runtime.route_key,
+        format!("business-test-{}", workspace.short_id)
+    );
+    assert_eq!(
+        database.get_workspace(workspace.id).await.unwrap().runtime,
+        workspace.runtime
+    );
+    assert_eq!(
+        database
+            .get_workspace_by_route_key(&workspace.runtime.route_key)
+            .await
+            .unwrap()
+            .id,
+        workspace.id
     );
 }
 

@@ -126,6 +126,7 @@ async fn browser_access_tickets_are_scoped_and_consumed_once() {
             instance_id: "test".to_owned(),
             ssh_public_host: None,
             internal_ssh_host: None,
+            workspace_shared_namespace: None,
             web_shell_public_origin: Some("https://shell.example.com".to_owned()),
             port_mapping_public_domain: Some("apps.example.com".to_owned()),
             prometheus_url: None,
@@ -160,17 +161,19 @@ async fn browser_access_tickets_are_scoped_and_consumed_once() {
         body["web_shell_url"]
             .as_str()
             .unwrap()
-            .starts_with("https://shell.example.com/shell/")
+            .starts_with(&format!(
+                "https://shell.example.com{}",
+                workspace.runtime.web_shell_path()
+            ))
     );
     assert!(body["web_shell_url"].as_str().unwrap().contains(ticket));
 
     let authorize = || {
         Request::get("/api/v1/internal/web-shell/authorize")
             .header("authorization", format!("Bearer {INTERNAL_TOKEN}"))
-            .header("x-mwc-workspace-id", workspace.id.to_string())
             .header(
                 "x-forwarded-uri",
-                format!("/shell/{}/ws?ticket={ticket}", workspace.short_id),
+                format!("{}ws?ticket={ticket}", workspace.runtime.web_shell_path()),
             )
             .body(Body::empty())
             .unwrap()
@@ -181,7 +184,7 @@ async fn browser_access_tickets_are_scoped_and_consumed_once() {
             Request::get("/api/v1/internal/web-shell/authorize")
                 .header(
                     "x-forwarded-uri",
-                    format!("/shell/{}/?ticket={ticket}", workspace.short_id),
+                    format!("{}?ticket={ticket}", workspace.runtime.web_shell_path()),
                 )
                 .body(Body::empty())
                 .unwrap(),

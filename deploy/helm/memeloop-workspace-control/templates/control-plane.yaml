@@ -13,6 +13,9 @@ spec:
   {{- if eq .Values.mode "sqlite" }}
   serviceName: {{ include "mwc.name" . }}
   replicas: 1
+  persistentVolumeClaimRetentionPolicy:
+    whenDeleted: Retain
+    whenScaled: Retain
   {{- else }}
   replicas: {{ .Values.replicaCount }}
   {{- end }}
@@ -65,6 +68,10 @@ spec:
             {{- if .Values.workspace.internalSshHost }}
             - name: MWC_INTERNAL_SSH_HOST
               value: {{ .Values.workspace.internalSshHost | quote }}
+            {{- end }}
+            {{- if .Values.workspace.sharedNamespace }}
+            - name: MWC_WORKSPACE_SHARED_NAMESPACE
+              value: {{ .Values.workspace.sharedNamespace | quote }}
             {{- end }}
             {{- if .Values.monitoring.prometheusUrl }}
             - name: MWC_PROMETHEUS_URL
@@ -160,8 +167,13 @@ spec:
               mountPath: /var/run/mwc-diagnostics
             {{- end }}
           {{- end }}
-      {{- if or .Values.plugins.existingConfigMap .Values.plugins.existingClaim .Values.monitoring.diagnostics.enabled }}
+      {{- if or (and (eq .Values.mode "sqlite") .Values.sqlite.existingClaim) .Values.plugins.existingConfigMap .Values.plugins.existingClaim .Values.monitoring.diagnostics.enabled }}
       volumes:
+        {{- if and (eq .Values.mode "sqlite") .Values.sqlite.existingClaim }}
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ .Values.sqlite.existingClaim | quote }}
+        {{- end }}
         {{- if or .Values.plugins.existingConfigMap .Values.plugins.existingClaim }}
         - name: plugins
           {{- if .Values.plugins.existingConfigMap }}
@@ -181,7 +193,7 @@ spec:
             sizeLimit: {{ .Values.monitoring.diagnostics.tempSizeLimit }}
         {{- end }}
       {{- end }}
-  {{- if eq .Values.mode "sqlite" }}
+  {{- if and (eq .Values.mode "sqlite") (not .Values.sqlite.existingClaim) }}
   volumeClaimTemplates:
     - metadata:
         name: data

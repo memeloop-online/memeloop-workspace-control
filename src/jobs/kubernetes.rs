@@ -43,7 +43,7 @@ impl WorkspaceReconcileHandler {
         let resolved = self.resolve_workspace_injections(workspace).await?;
         let materialization = self
             .builder
-            .materialize_injections(workspace.id, &workspace.short_id, &resolved)
+            .materialize_injections(workspace.id, &workspace.runtime, &resolved)
             .map_err(job_error)?;
         let identity = self
             .database
@@ -52,7 +52,7 @@ impl WorkspaceReconcileHandler {
             .map_err(job_error)?;
         let ssh_identity = self
             .builder
-            .materialize_ssh_identity(workspace.id, &workspace.short_id, &identity)
+            .materialize_ssh_identity(workspace.id, &workspace.runtime, &identity)
             .map_err(job_error)?;
         self.coordinator
             .reconcile_with_injections(workspace, materialization, ssh_identity)
@@ -74,7 +74,7 @@ impl WorkspaceReconcileHandler {
             | WorkspaceState::Restarting => {
                 if !self
                     .coordinator
-                    .has_observed_replicas(&workspace.short_id, 1)
+                    .has_observed_replicas(workspace, 1)
                     .await
                     .map_err(job_error)?
                 {
@@ -88,7 +88,7 @@ impl WorkspaceReconcileHandler {
             WorkspaceState::Stopping => {
                 if !self
                     .coordinator
-                    .has_observed_replicas(&workspace.short_id, 0)
+                    .has_observed_replicas(workspace, 0)
                     .await
                     .map_err(job_error)?
                 {
@@ -108,7 +108,7 @@ impl WorkspaceReconcileHandler {
     async fn reconcile_deletion(&self, workspace: &Workspace) -> Result<(), JobHandlerError> {
         match self
             .coordinator
-            .delete_or_confirm(workspace.id, &workspace.short_id)
+            .delete_or_confirm(workspace)
             .await
             .map_err(job_error)?
         {

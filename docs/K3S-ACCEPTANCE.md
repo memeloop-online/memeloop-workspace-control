@@ -51,17 +51,42 @@ After rollout, verify workload shape, readiness, owner labels and workspace name
 ```bash
 export K3S_EXPECT_PUBLIC_SSH=true
 export K3S_EXPECT_PUBLIC_WEB_SHELL=true
+export K3S_WORKSPACE_NAMESPACE_SCOPE=dedicated
 scripts/k3s/verify-installation.sh
 ```
 
-After an API delete reaches `deleted`, prove that the namespace and all workspace-labelled
-objects are gone:
+For an installation configured with a shared workspace Namespace, set
+`K3S_WORKSPACE_NAMESPACE_SCOPE=shared` and provide `K3S_WORKSPACE_SHARED_NAMESPACE`. Before the
+first shared workspace is reconciled, the Namespace may not exist; the verifier reports
+`shared:pending`. Once it exists, it must have the requested installation owner and managed-by
+labels and no workspace, organization, or user ownership labels. Existing legacy dedicated
+Namespaces may coexist and must retain their installation prefix and workspace ID.
+
+After an API delete reaches `deleted`, use dedicated mode to prove that a legacy or prefixed
+dedicated Namespace and all workspace-labelled objects are gone:
 
 ```bash
 export K3S_WORKSPACE_ID=00000000-0000-0000-0000-000000000000
 export K3S_WORKSPACE_NAMESPACE=ws-public-a-00000000
+export K3S_WORKSPACE_NAMESPACE_SCOPE=dedicated
 scripts/k3s/verify-workspace-cleanup.sh
 ```
+
+For a shared workspace, the Namespace must remain. Shared mode instead requires every namespaced
+object and ClusterRoleBinding with the deleted workspace ID to be gone and validates the
+Namespace's installation-level ownership. Optionally provide a sibling workspace UUID as a
+preservation sentinel; when supplied, at least one sibling-labelled object must remain:
+
+```bash
+export K3S_WORKSPACE_ID=00000000-0000-0000-0000-000000000000
+export K3S_WORKSPACE_NAMESPACE=workspace-public-a
+export K3S_WORKSPACE_NAMESPACE_SCOPE=shared
+export K3S_SIBLING_WORKSPACE_ID=00000000-0000-0000-0000-000000000001
+scripts/k3s/verify-workspace-cleanup.sh
+```
+
+Omit `K3S_SIBLING_WORKSPACE_ID` when verifying deletion of the final workspace in a shared
+Namespace.
 
 The scripts do not install, patch or delete resources. Preserve their output together with the
 API responses and OpenSSH command transcripts as acceptance evidence.
@@ -89,8 +114,9 @@ API responses and OpenSSH command transcripts as acceptance evidence.
 1. Install `internal-a` with SQLite and no public SSH route.
 2. Install `public-a` with an independent PostgreSQL database/schema, domains, ServiceAccount,
    Secrets and public LoadBalancer IP.
-3. Confirm every managed object has `workspace.memeloop.dev/owner-installation` and every
-   workspace namespace is prefixed with the correct installation ID.
+3. Confirm every managed object has `workspace.memeloop.dev/owner-installation`. Dedicated
+   workspace Namespaces must be prefixed with the correct installation ID and carry a workspace
+   ID. The explicitly configured shared Namespace must carry only installation-level ownership.
 4. Attempt a delete with a mismatched ownership label and confirm the coordinator refuses it.
 
 ## Lifecycle and cleanup
@@ -98,9 +124,10 @@ API responses and OpenSSH command transcripts as acceptance evidence.
 1. Create internal and public workspaces with the standard Image Contract v1 image.
 2. Wait for Ready; verify one StatefulSet replica, ClusterIP ports 2222/7681 and one RWO PVC.
 3. Stop and start; confirm replicas change 1→0→1 while the PVC and OpenSSH host identity persist.
-4. Delete; confirm new SSH/Web Shell authorization fails immediately, the workspace Ingress is removed,
-   then Namespace, StatefulSet, Pod, Service, Secrets, ConfigMaps and PVC disappear before the
-   database state becomes `deleted`.
+4. Delete; confirm new SSH/Web Shell authorization fails immediately and the workspace Ingress,
+   StatefulSet, Pod, Service, ServiceAccount, Secrets, ConfigMaps, NetworkPolicies, PVC and
+   ClusterRoleBinding disappear before the database state becomes `deleted`. Dedicated Namespace
+   deletion must cascade; a shared Namespace and every sibling workspace object must remain.
 
 ## OpenSSH
 
@@ -116,7 +143,8 @@ Issue a one-time Web Shell ticket, open the returned URL through Higress and exe
 interactive input. Reload or reconnect with the consumed ticket and confirm rejection, then issue
 a fresh ticket and confirm a new session succeeds. Confirm only Higress can reach port 7681 and
 terminal bytes do not traverse the control-plane API. Confirm ttyd HTML assets and the WebSocket
-upgrade both remain below `/shell/<short>/`; no URL prefix rewrite is allowed.
+upgrade both remain below `/shell/<route-key>/`; no URL prefix rewrite is allowed. For legacy
+workspaces the route key is the short ID; `prefixed_v2` includes the installation identity.
 
 ## Injection cascade
 

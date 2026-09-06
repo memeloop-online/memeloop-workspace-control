@@ -5,10 +5,14 @@ use memeloop_workspace_control::{
     config::InstallationId,
     crypto::EnvelopeCipher,
     injections::{InjectionItem, InjectionKind, InjectionScope, InjectionValue},
+    quota::Resources,
     storage::{
-        ConfirmPluginInstall, CreateOrganization, Database, DatabaseSnapshot, InjectionScopeRef,
-        PluginAssetBlob, PluginConfigurationWrite, StorePluginInspection,
+        ConfirmPluginInstall, CreateOrganization, CreateWorkspace, CreateWorkspaceTemplate,
+        Database, DatabaseSnapshot, InjectionScopeRef, PluginAssetBlob, PluginConfigurationWrite,
+        StorageError, StorePluginInspection,
     },
+    templates::{WorkspaceTemplateDocument, WorkspaceTemplateSpec},
+    workspaces::AccessMode,
 };
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
@@ -35,6 +39,7 @@ async fn sqlite_snapshot_contains_ciphertext_and_resets_only_pending_work() {
         )
         .await
         .unwrap();
+    let workspace = create_snapshot_workspace(&database, organization.id, user.user_id).await;
     let cipher = EnvelopeCipher::from_base64(&STANDARD.encode([4_u8; 32])).unwrap();
     let secret_plaintext = "line one\nline two\n";
     database
@@ -81,7 +86,7 @@ async fn sqlite_snapshot_contains_ciphertext_and_resets_only_pending_work() {
 
     let snapshot = database.export_snapshot(200).await.unwrap();
     assert_eq!(snapshot.format_version, 1);
-    assert_eq!(snapshot.schema_version, 17);
+    assert_eq!(snapshot.schema_version, 18);
     assert_eq!(snapshot.installation_id, "snapshot-test");
     assert_eq!(snapshot.tables["injection_items"].len(), 1);
     assert!(snapshot.tables.contains_key("workspace_injection_refs"));
@@ -89,6 +94,29 @@ async fn sqlite_snapshot_contains_ciphertext_and_resets_only_pending_work() {
     assert_eq!(snapshot.tables["plugin_packages"].len(), 1);
     assert_eq!(snapshot.tables["plugin_assets"].len(), 1);
     assert_eq!(snapshot.tables["plugin_catalog_metadata"].len(), 1);
+    let workspace_row = &snapshot.tables["workspaces"][0];
+    assert_eq!(workspace_row["runtime_naming_scheme"], "prefixed_v2");
+    assert_eq!(workspace_row["runtime_namespace_scope"], "dedicated");
+    assert_eq!(
+        workspace_row["runtime_namespace"],
+        format!("ws-snapshot-test-{}", workspace.short_id)
+    );
+    assert_eq!(
+        workspace_row["runtime_resource_prefix"],
+        format!("w-{}", workspace.short_id)
+    );
+    assert_eq!(
+        workspace_row["runtime_route_key"],
+        workspace.runtime.route_key
+    );
+    assert_eq!(
+        database
+            .get_workspace_by_route_key(&workspace.runtime.route_key)
+            .await
+            .unwrap()
+            .runtime,
+        workspace.runtime
+    );
     let asset = &snapshot.tables["plugin_assets"][0];
     assert!(asset.get("content_bytes").is_none());
     assert_eq!(
@@ -149,6 +177,17 @@ async fn postgres_import_restores_dynamic_plugin_package_and_assets_when_configu
         .create_user("Snapshot Plugin User", TOKEN, true, 100)
         .await
         .unwrap();
+    let organization = source
+        .create_organization(
+            CreateOrganization {
+                name: "Snapshot workspace org".to_owned(),
+                owner_user_id: user.user_id,
+            },
+            101,
+        )
+        .await
+        .unwrap();
+    let workspace = create_snapshot_workspace(&source, organization.id, user.user_id).await;
     install_snapshot_plugin(&source, user.user_id).await;
     let snapshot = source.export_snapshot(200).await.unwrap();
 
@@ -156,6 +195,117 @@ async fn postgres_import_restores_dynamic_plugin_package_and_assets_when_configu
         .await
         .unwrap();
     target.migrate().await.unwrap();
+
+    // Import validates the persisted identity, rather than accepting a
+    // syntactically-valid snapshot row that could target another resource.
+    // Every failure must roll the whole import transaction back.
+    for (field, value) in [
+        ("runtime_naming_scheme", "legacy_v1"),
+        ("runtime_namespace_scope", "invalid"),
+        ("runtime_namespace", "other-namespace"),
+        ("runtime_resource_prefix", "other"),
+        ("runtime_route_key", "other"),
+    ] {
+        let mut invalid_snapshot = snapshot.clone();
+        let workspace = invalid_snapshot.tables.get_mut("workspaces").unwrap()[0]
+            .as_object_mut()
+            .unwrap();
+        workspace.insert(
+            field.to_owned(),
+            serde_json::Value::String(value.to_owned()),
+        );
+        assert!(matches!(
+            target.import_snapshot(&invalid_snapshot).await,
+            Err(StorageError::InvalidWorkspace)
+        ));
+        let Database::Postgres { pool, .. } = &target else {
+            unreachable!("the import target is PostgreSQL");
+        };
+        let workspace_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM workspaces")
+            .fetch_one(pool)
+            .await
+            .unwrap();
+        let organization_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM organizations")
+            .fetch_one(pool)
+            .await
+            .unwrap();
+        assert_eq!(workspace_count, 0);
+        assert_eq!(organization_count, 0);
+    }
+
+    // The migration trigger recognizes a v17 writer by this default shape.
+    // A v18 snapshot that explicitly supplies it is untrusted input and must
+    // be rejected before INSERT, rather than silently rewritten by the trigger.
+    let mut v18_default_runtime_snapshot = snapshot.clone();
+    let workspace_row = v18_default_runtime_snapshot
+        .tables
+        .get_mut("workspaces")
+        .unwrap()[0]
+        .as_object_mut()
+        .unwrap();
+    for (field, value) in [
+        ("runtime_naming_scheme", "legacy_v1"),
+        ("runtime_namespace_scope", "dedicated"),
+        ("runtime_namespace", ""),
+        ("runtime_resource_prefix", "workspace"),
+        ("runtime_route_key", ""),
+    ] {
+        workspace_row.insert(
+            field.to_owned(),
+            serde_json::Value::String(value.to_owned()),
+        );
+    }
+    assert!(matches!(
+        target.import_snapshot(&v18_default_runtime_snapshot).await,
+        Err(StorageError::InvalidWorkspace)
+    ));
+
+    let mut foreign_row_snapshot = snapshot.clone();
+    for row in foreign_row_snapshot.tables.get_mut("users").unwrap() {
+        row.as_object_mut().unwrap().insert(
+            "installation_id".to_owned(),
+            serde_json::Value::String("other-installation".to_owned()),
+        );
+    }
+    assert!(matches!(
+        target.import_snapshot(&foreign_row_snapshot).await,
+        Err(StorageError::SnapshotRowInstallationMismatch { .. })
+    ));
+    let Database::Postgres { pool, .. } = &target else {
+        unreachable!("the import target is PostgreSQL");
+    };
+    let user_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users")
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    assert_eq!(user_count, 0);
+
+    // Template validation is independent of workspace decoding: an unused,
+    // malformed template must not be imported merely because no workspace
+    // references it yet.
+    let mut invalid_template_snapshot = snapshot.clone();
+    invalid_template_snapshot
+        .tables
+        .get_mut("workspaces")
+        .unwrap()
+        .clear();
+    invalid_template_snapshot
+        .tables
+        .get_mut("workspace_templates")
+        .unwrap()[0]["template_yaml"] =
+        serde_json::Value::String("not a workspace template".to_owned());
+    assert!(matches!(
+        target.import_snapshot(&invalid_template_snapshot).await,
+        Err(StorageError::InvalidTemplate)
+    ));
+    let Database::Postgres { pool, .. } = &target else {
+        unreachable!("the import target is PostgreSQL");
+    };
+    let template_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM workspace_templates")
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    assert_eq!(template_count, 0);
     target.import_snapshot(&snapshot).await.unwrap();
     let packages = target.list_plugin_packages().await.unwrap();
     assert_eq!(packages.len(), 1);
@@ -175,6 +325,14 @@ async fn postgres_import_restores_dynamic_plugin_package_and_assets_when_configu
     assert_eq!(assets.len(), 1);
     assert_eq!(assets[0].content, snapshot_asset());
     assert!(target.plugin_catalog_revision().await.unwrap() >= 1);
+    assert_eq!(
+        target
+            .get_workspace_by_route_key(&workspace.runtime.route_key)
+            .await
+            .unwrap()
+            .runtime,
+        workspace.runtime
+    );
 
     drop(target);
     sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
@@ -182,6 +340,58 @@ async fn postgres_import_restores_dynamic_plugin_package_and_assets_when_configu
         .await
         .unwrap();
     administration.close().await;
+}
+
+async fn create_snapshot_workspace(
+    database: &Database,
+    organization_id: Uuid,
+    user_id: Uuid,
+) -> memeloop_workspace_control::workspaces::Workspace {
+    const IMAGE: &str = "registry.example/snapshot-workspace:1";
+    database
+        .upsert_image_policy(IMAGE, true, 102)
+        .await
+        .unwrap();
+    let resources = Resources {
+        cpu_millis: 1_000,
+        memory_mib: 2_048,
+        gpu_count: 0,
+        disk_gib: 20,
+    };
+    let yaml = WorkspaceTemplateDocument::new(
+        "Snapshot workspace",
+        WorkspaceTemplateSpec::standard(IMAGE, AccessMode::Internal, resources),
+    )
+    .to_yaml()
+    .unwrap();
+    let template = database
+        .create_workspace_template(
+            CreateWorkspaceTemplate {
+                organization_id: Some(organization_id),
+                yaml,
+            },
+            true,
+            103,
+        )
+        .await
+        .unwrap();
+    database
+        .create_workspace(
+            CreateWorkspace {
+                organization_id,
+                owner_id: user_id,
+                name: "snapshot-workspace".to_owned(),
+                template_id: template.id,
+                resources: None,
+                organization_injection_refs: None,
+                user_injection_refs: None,
+            },
+            true,
+            user_id,
+            104,
+        )
+        .await
+        .unwrap()
 }
 
 async fn install_snapshot_plugin(database: &Database, user_id: Uuid) {

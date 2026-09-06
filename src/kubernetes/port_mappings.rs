@@ -13,7 +13,7 @@ use k8s_openapi::{
     apimachinery::pkg::{apis::meta::v1::LabelSelector, util::intstr::IntOrString},
 };
 
-use crate::storage::PortMapping;
+use crate::{storage::PortMapping, workspace_runtime::WorkspaceRuntimeIdentity};
 
 use super::{namespaced_metadata, network_policy::ingress_rule_with_ip_blocks};
 
@@ -22,7 +22,7 @@ pub const PORT_MAPPING_ID_LABEL: &str = "workspace.memeloop.dev/port-mapping-id"
 /// Names are derived from UUIDs, never user input.  The Service is ClusterIP
 /// only; its port and targetPort both point at the workspace pod port.
 pub fn resources(
-    namespace: &str,
+    runtime: &WorkspaceRuntimeIdentity,
     labels: &BTreeMap<String, String>,
     pod_labels: &BTreeMap<String, String>,
     wildcard_domain: &str,
@@ -32,7 +32,7 @@ pub fn resources(
     let hostname = hostname(mapping, wildcard_domain);
     let labels = mapping_labels(labels, mapping);
     let service = Service {
-        metadata: namespaced_metadata(&name, namespace, &labels),
+        metadata: namespaced_metadata(&name, &runtime.namespace, &labels),
         spec: Some(ServiceSpec {
             type_: Some("ClusterIP".to_owned()),
             selector: Some(pod_labels.clone()),
@@ -48,7 +48,7 @@ pub fn resources(
         ..Service::default()
     };
     let ingress = Ingress {
-        metadata: namespaced_metadata(&name, namespace, &labels),
+        metadata: namespaced_metadata(&name, &runtime.namespace, &labels),
         spec: Some(IngressSpec {
             ingress_class_name: Some("nginx".to_owned()),
             // The placeholder is deliberately absent from user namespaces.
@@ -104,7 +104,7 @@ pub fn hostname(mapping: &PortMapping, wildcard_domain: &str) -> String {
 /// declared application port to Higress.  It never opens it to a node, host or
 /// arbitrary namespace.
 pub fn network_policy(
-    namespace: &str,
+    runtime: &WorkspaceRuntimeIdentity,
     labels: &BTreeMap<String, String>,
     pod_labels: &BTreeMap<String, String>,
     higress_namespace: &str,
@@ -114,7 +114,11 @@ pub fn network_policy(
 ) -> NetworkPolicy {
     let labels = mapping_labels(labels, mapping);
     NetworkPolicy {
-        metadata: namespaced_metadata(&format!("{}-ingress", name(mapping)), namespace, &labels),
+        metadata: namespaced_metadata(
+            &format!("{}-ingress", name(mapping)),
+            &runtime.namespace,
+            &labels,
+        ),
         spec: Some(k8s_openapi::api::networking::v1::NetworkPolicySpec {
             pod_selector: Some(LabelSelector {
                 match_labels: Some(pod_labels.clone()),
@@ -144,7 +148,18 @@ fn mapping_labels(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::workspace_runtime::{WorkspaceNamespaceScope, WorkspaceRuntimeNamingScheme};
     use uuid::Uuid;
+
+    fn runtime() -> WorkspaceRuntimeIdentity {
+        WorkspaceRuntimeIdentity {
+            naming_scheme: WorkspaceRuntimeNamingScheme::LegacyV1,
+            namespace_scope: WorkspaceNamespaceScope::Dedicated,
+            namespace: "workspace".to_owned(),
+            resource_prefix: "workspace".to_owned(),
+            route_key: "test".to_owned(),
+        }
+    }
     #[test]
     fn never_creates_a_node_port() {
         let mapping = PortMapping {
@@ -157,7 +172,7 @@ mod tests {
             created_at: 1,
         };
         let (service, ingress) = resources(
-            "ns",
+            &runtime(),
             &BTreeMap::new(),
             &BTreeMap::new(),
             "ports.example.test",
@@ -190,7 +205,7 @@ mod tests {
         };
         let gateway_labels = BTreeMap::from([("app".to_owned(), "higress-gateway".to_owned())]);
         let policy = network_policy(
-            "workspace",
+            &runtime(),
             &BTreeMap::new(),
             &BTreeMap::new(),
             "higress-system",
@@ -219,7 +234,7 @@ mod tests {
         );
 
         let policy_without_cidrs = network_policy(
-            "workspace",
+            &runtime(),
             &BTreeMap::new(),
             &BTreeMap::new(),
             "higress-system",

@@ -70,7 +70,7 @@ pub use user_settings::{
 pub use web_shell::{IssuedWebShellTicket, WebShellIdentity};
 pub use webhook_store::{CreateWebhookSubscription, WebhookDelivery, WebhookSubscriptionSummary};
 pub use workspace_injection_refs::WorkspaceInjectionRefs;
-pub use workspace_store::{CreateWorkspace, WorkspacePage};
+pub use workspace_store::{AdmittedWorkspaceCreation, CreateWorkspace, WorkspacePage};
 
 #[derive(Debug, Clone)]
 pub enum Database {

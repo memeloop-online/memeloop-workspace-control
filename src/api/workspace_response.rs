@@ -41,11 +41,7 @@ pub(super) async fn workspace_response(
     workspace: Workspace,
     expose_connection: bool,
 ) -> Result<WorkspaceResponse, ApiError> {
-    let namespace = state
-        .config
-        .installation_id
-        .workspace_namespace(&workspace.short_id)
-        .map_err(|_| ApiError::BadRequest("workspace namespace is invalid"))?;
+    let namespace = workspace.runtime.namespace.clone();
     let connectable = expose_connection && workspace.state == WorkspaceState::Ready;
     let internal_endpoint = ssh_endpoint(state, &workspace, &namespace, connectable).await?;
     let (ssh_command, ssh_config) = ssh_commands(
@@ -60,7 +56,7 @@ pub(super) async fn workspace_response(
                 .config
                 .web_shell_public_origin
                 .as_ref()
-                .map(|origin| format!("{origin}/shell/{}/", workspace.short_id))
+                .map(|origin| format!("{origin}{}", workspace.runtime.web_shell_path()))
         })
         .flatten();
     let injection_sources = injection_sources(state, &workspace).await?;
@@ -107,7 +103,16 @@ async fn ssh_endpoint(
     namespace: &str,
     connectable: bool,
 ) -> Result<Option<(String, u16)>, ApiError> {
-    let cluster = || (format!("workspace.{namespace}.svc.cluster.local"), 2222);
+    let cluster = || {
+        (
+            format!(
+                "{}.{}.svc.cluster.local",
+                workspace.runtime.names().service,
+                namespace
+            ),
+            2222,
+        )
+    };
     if workspace.template.access_mode == AccessMode::Public {
         return Ok(Some(cluster()));
     }
@@ -122,7 +127,7 @@ async fn ssh_endpoint(
         .clone()
         .ok_or(ApiError::KubernetesUnavailable)?;
     Ok(
-        crate::kubernetes::workspace_ssh_node_port(client, namespace)
+        crate::kubernetes::workspace_ssh_node_port(client, workspace)
             .await
             .map_err(ApiError::Kubernetes)?
             .map(|port| (host.clone(), port)),

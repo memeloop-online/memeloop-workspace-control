@@ -315,15 +315,10 @@ async fn mapping_status(
     let Some(client) = state.kubernetes_client.clone() else {
         return "provisioning";
     };
-    let Ok(namespace) = state
-        .config
-        .installation_id
-        .workspace_namespace(&workspace.short_id)
-    else {
-        return "failed";
-    };
-    let ingresses =
-        kube::Api::<k8s_openapi::api::networking::v1::Ingress>::namespaced(client, &namespace);
+    let ingresses = kube::Api::<k8s_openapi::api::networking::v1::Ingress>::namespaced(
+        client,
+        &workspace.runtime.namespace,
+    );
     match ingresses
         .get_opt(&format!("port-{}", mapping.id.simple()))
         .await
@@ -334,6 +329,8 @@ async fn mapping_status(
                     == Some(&mapping.id.to_string())
                     && labels.get(crate::kubernetes::OWNER_INSTALLATION_LABEL)
                         == Some(&state.config.installation_id.to_string())
+                    && labels.get(crate::kubernetes::WORKSPACE_ID_LABEL)
+                        == Some(&workspace.id.to_string())
             }) =>
         {
             "ready"

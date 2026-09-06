@@ -118,6 +118,7 @@ async fn authorized_keys_command_returns_only_restricted_workspace_target() {
             instance_id: "test".to_owned(),
             ssh_public_host: None,
             internal_ssh_host: None,
+            workspace_shared_namespace: None,
             web_shell_public_origin: None,
             port_mapping_public_domain: None,
             prometheus_url: None,
@@ -152,8 +153,9 @@ async fn authorized_keys_command_returns_only_restricted_workspace_target() {
     .unwrap();
     assert!(line.starts_with("restrict,port-forwarding,permitopen=\""));
     assert!(line.contains(&format!(
-        "workspace.ws-ssh-test-{}.svc.cluster.local:2222",
-        workspace.short_id
+        "{}.{}.svc.cluster.local:2222",
+        workspace.runtime.names().service,
+        workspace.runtime.namespace,
     )));
     assert!(line.contains("ssh-ed25519 AQIDBA=="));
 

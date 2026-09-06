@@ -6,6 +6,31 @@ failure supplies contradictory evidence.
 
 Last updated: 2026-09-06
 
+## Active goal: collision-free runtime identity and migration safety
+
+This is the sole active implementation phase. Do not repeat the completed UI or production audits
+below. The upstream repository is being changed and tested; GitOps and the cluster are explicitly
+out of scope until a separate migration window is approved.
+
+- [x] Persist immutable `legacy_v1 | prefixed_v2` runtime identity and centralize Kubernetes object,
+  PVC, SSH and Web Shell names.
+- [x] Preserve the five existing dedicated Namespace/`workspace-data-workspace-0` layouts as
+  `legacy_v1`; no existing claim has been renamed, adopted, deleted or moved.
+- [x] Add collision-free shared-Namespace manifests, selectors, routing, runtime telemetry keys and
+  ownership-checked staged deletion.
+- [x] Close independent-review findings: Pod/PVC deletion reference guard, installation-bound
+  identity decode, PostgreSQL old-writer compatibility, transactional snapshot validation, and
+  shared-Namespace creation preflight.
+- [x] Close Chart/runbook findings for kube-state-metrics prerequisites, immutable StatefulSet
+  claim-template transitions, and the three distinct PVC reuse/relocation paths.
+- [x] Run formatting, both strict Clippy gates, focused runtime/schema/snapshot/resource tests,
+  ShellCheck, K3s script tests, Helm lint, and Prometheus rule validation locally. Three independent
+  release reviews report no remaining P1/P2 findings.
+- [ ] Use GitHub Actions for the complete SQLite/PostgreSQL/Helm/image verification to avoid
+  rebuilding the full suite locally.
+- [ ] Record the upstream revision and CI evidence here. Do not deploy this naming change or edit
+  GitOps as part of this phase.
+
 ## Completed goal: product-wide responsive UI closeout
 
 Do not repeat the 2026-09-03 operational audit. The active worktree is the authority for this

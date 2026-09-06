@@ -22,4 +22,5 @@ pub mod plugins;
 pub mod quota;
 pub mod storage;
 pub mod templates;
+pub mod workspace_runtime;
 pub mod workspaces;

@@ -60,7 +60,7 @@ impl Database {
                     .fetch_optional(&mut *transaction)
                     .await?;
                 let mut workspace = row
-                    .map(decode_sqlite)
+                    .map(|row| decode_sqlite(row, installation_id))
                     .transpose()?
                     .ok_or(StorageError::WorkspaceNotFound)?;
                 apply_sqlite(
@@ -86,7 +86,7 @@ impl Database {
                     .fetch_optional(&mut *transaction)
                     .await?;
                 let mut workspace = row
-                    .map(decode_postgres)
+                    .map(|row| decode_postgres(row, installation_id))
                     .transpose()?
                     .ok_or(StorageError::WorkspaceNotFound)?;
                 apply_postgres(

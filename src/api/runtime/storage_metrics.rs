@@ -1,20 +1,20 @@
-use std::{collections::BTreeMap, time::Duration};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    time::Duration,
+};
 
 use reqwest::{Client, Url, redirect::Policy};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use utoipa::ToSchema;
 
-use crate::{
-    config::InstallationId,
-    observability::{Observability, UpstreamKind},
-};
+use crate::observability::{Observability, UpstreamKind};
 
 const QUERY_TIMEOUT: Duration = Duration::from_secs(3);
 const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
 const MAX_SAMPLES: usize = 1_000;
 const STALE_AFTER_SECONDS: i64 = 5 * 60;
-const WORKSPACE_PVC_NAME: &str = "workspace-data-workspace-0";
+const MAX_IDENTITIES: usize = 100;
 const WARNING_PERCENT: f64 = 80.0;
 const CRITICAL_PERCENT: f64 = 90.0;
 
@@ -68,14 +68,15 @@ pub(super) struct StorageMetricBatch {
 }
 
 impl StorageMetricBatch {
-    pub(super) fn telemetry(&self, namespace: &str, now: i64) -> StorageTelemetry {
+    pub(super) fn telemetry(&self, namespace: &str, pvc: &str, now: i64) -> StorageTelemetry {
         if !matches!(self.status, StorageTelemetryStatus::Available) {
             return StorageTelemetry::empty(self.status);
         }
+        let key = (namespace.to_owned(), pvc.to_owned());
         let (Some(used), Some(capacity), Some(available)) = (
-            self.used.get(namespace),
-            self.capacity.get(namespace),
-            self.available.get(namespace),
+            self.used.get(&key),
+            self.capacity.get(&key),
+            self.available.get(&key),
         ) else {
             return StorageTelemetry::empty(StorageTelemetryStatus::Unavailable);
         };
@@ -120,7 +121,8 @@ struct Sample {
     observed_at: i64,
 }
 
-type MetricMap = BTreeMap<String, Sample>;
+pub(super) type StorageIdentity = (String, String);
+type MetricMap = BTreeMap<StorageIdentity, Sample>;
 
 struct FetchedMetrics {
     used: MetricMap,
@@ -138,17 +140,19 @@ pub(super) enum StorageMetricError {
     ResponseTooLarge,
     #[error("Prometheus response is invalid")]
     InvalidResponse,
+    #[error("too many PVC identities were requested")]
+    TooManyIdentities,
 }
 
 pub(super) async fn fetch(
     base_url: Option<&Url>,
-    installation_id: &InstallationId,
+    identities: &[StorageIdentity],
     observability: &Observability,
 ) -> StorageMetricBatch {
     let Some(base_url) = base_url else {
         return empty_batch(StorageTelemetryStatus::Disabled);
     };
-    match fetch_configured(base_url, installation_id, observability).await {
+    match fetch_configured(base_url, identities, observability).await {
         Ok(metrics) => StorageMetricBatch {
             status: StorageTelemetryStatus::Available,
             used: metrics.used,
@@ -173,24 +177,36 @@ fn empty_batch(status: StorageTelemetryStatus) -> StorageMetricBatch {
 
 async fn fetch_configured(
     base_url: &Url,
-    installation_id: &InstallationId,
+    identities: &[StorageIdentity],
     observability: &Observability,
 ) -> Result<FetchedMetrics, StorageMetricError> {
+    let identities = identities.iter().cloned().collect::<BTreeSet<_>>();
+    if identities.len() > MAX_IDENTITIES {
+        return Err(StorageMetricError::TooManyIdentities);
+    }
     let client = Client::builder()
         .timeout(QUERY_TIMEOUT)
         .redirect(Policy::none())
         .build()?;
-    let selector = format!(
-        "{{namespace=~\"ws-{}-.*\",persistentvolumeclaim=\"{WORKSPACE_PVC_NAME}\"}}",
-        installation_id.as_str()
-    );
-    let used_query = format!("kubelet_volume_stats_used_bytes{selector}");
-    let capacity_query = format!("kubelet_volume_stats_capacity_bytes{selector}");
-    let available_query = format!("kubelet_volume_stats_available_bytes{selector}");
+    let used_query = metric_query("kubelet_volume_stats_used_bytes", &identities);
+    let capacity_query = metric_query("kubelet_volume_stats_capacity_bytes", &identities);
+    let available_query = metric_query("kubelet_volume_stats_available_bytes", &identities);
     let (used, capacity, available) = tokio::try_join!(
-        query(&client, base_url, &used_query, observability),
-        query(&client, base_url, &capacity_query, observability),
-        query(&client, base_url, &available_query, observability),
+        query(&client, base_url, &used_query, &identities, observability),
+        query(
+            &client,
+            base_url,
+            &capacity_query,
+            &identities,
+            observability
+        ),
+        query(
+            &client,
+            base_url,
+            &available_query,
+            &identities,
+            observability
+        ),
     )?;
     Ok(FetchedMetrics {
         used,
@@ -199,12 +215,40 @@ async fn fetch_configured(
     })
 }
 
+fn metric_query(metric: &str, identities: &BTreeSet<StorageIdentity>) -> String {
+    identities
+        .iter()
+        .map(|(namespace, pvc)| {
+            format!(
+                "{metric}{{namespace=\"{}\",persistentvolumeclaim=\"{}\"}}",
+                promql_label_value(namespace),
+                promql_label_value(pvc),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(" or ")
+}
+
+fn promql_label_value(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for character in value.chars() {
+        match character {
+            '\\' => escaped.push_str("\\\\"),
+            '"' => escaped.push_str("\\\""),
+            '\n' => escaped.push_str("\\n"),
+            _ => escaped.push(character),
+        }
+    }
+    escaped
+}
+
 async fn query(
     client: &Client,
     base_url: &Url,
     expression: &str,
+    identities: &BTreeSet<StorageIdentity>,
     observability: &Observability,
-) -> Result<BTreeMap<String, Sample>, StorageMetricError> {
+) -> Result<MetricMap, StorageMetricError> {
     let request = observability.begin_upstream(UpstreamKind::Prometheus);
     let mut url = base_url.clone();
     let path = format!("{}/api/v1/query", url.path().trim_end_matches('/'));
@@ -221,7 +265,7 @@ async fn query(
         }
         body.extend_from_slice(&chunk);
     }
-    let parsed = parse_response(&body)?;
+    let parsed = parse_response(&body, identities)?;
     request.success();
     Ok(parsed)
 }
@@ -251,7 +295,10 @@ struct QueryLabels {
     persistentvolumeclaim: String,
 }
 
-fn parse_response(body: &[u8]) -> Result<BTreeMap<String, Sample>, StorageMetricError> {
+fn parse_response(
+    body: &[u8],
+    identities: &BTreeSet<StorageIdentity>,
+) -> Result<MetricMap, StorageMetricError> {
     let response: QueryResponse =
         serde_json::from_slice(body).map_err(|_| StorageMetricError::InvalidResponse)?;
     if response.status != "success"
@@ -262,7 +309,8 @@ fn parse_response(body: &[u8]) -> Result<BTreeMap<String, Sample>, StorageMetric
     }
     let mut samples = BTreeMap::new();
     for item in response.data.result {
-        if item.metric.persistentvolumeclaim != WORKSPACE_PVC_NAME
+        let identity = (item.metric.namespace, item.metric.persistentvolumeclaim);
+        if !identities.contains(&identity)
             || !item.value.0.is_finite()
             || item.value.0 < 0.0
             || item.value.0 > i64::MAX as f64
@@ -281,7 +329,7 @@ fn parse_response(body: &[u8]) -> Result<BTreeMap<String, Sample>, StorageMetric
             observed_at: item.value.0.floor() as i64,
         };
         samples
-            .entry(item.metric.namespace)
+            .entry(identity)
             .and_modify(|existing: &mut Sample| {
                 if sample.observed_at > existing.observed_at {
                     *existing = sample;
@@ -298,25 +346,40 @@ mod tests {
 
     #[test]
     fn parses_vector_and_rejects_wrong_pvc() {
-        let body = br#"{"status":"success","data":{"resultType":"vector","result":[{"metric":{"namespace":"ws-test-01abc","persistentvolumeclaim":"workspace-data-workspace-0"},"value":[1787980000,"1073741824"]}]}}"#;
-        let samples = parse_response(body).unwrap();
-        assert_eq!(samples["ws-test-01abc"].value, 1_073_741_824);
+        let pvc = "workspace-data-workspace-0";
+        let identities = BTreeSet::from([("shared".to_owned(), pvc.to_owned())]);
+        let body = br#"{"status":"success","data":{"resultType":"vector","result":[{"metric":{"namespace":"shared","persistentvolumeclaim":"workspace-data-workspace-0"},"value":[1787980000,"1073741824"]}]}}"#;
+        let samples = parse_response(body, &identities).unwrap();
+        assert_eq!(
+            samples[&("shared".to_owned(), pvc.to_owned())].value,
+            1_073_741_824
+        );
         let wrong = body
-            .windows(WORKSPACE_PVC_NAME.len())
-            .position(|window| window == WORKSPACE_PVC_NAME.as_bytes())
+            .windows(pvc.len())
+            .position(|window| window == pvc.as_bytes())
             .map(|index| {
                 let mut wrong = body.to_vec();
-                wrong.splice(
-                    index..index + WORKSPACE_PVC_NAME.len(),
-                    b"other-volume".iter().copied(),
-                );
+                wrong.splice(index..index + pvc.len(), b"other-volume".iter().copied());
                 wrong
             })
             .unwrap();
         assert!(matches!(
-            parse_response(&wrong),
+            parse_response(&wrong, &identities),
             Err(StorageMetricError::InvalidResponse)
         ));
+    }
+
+    #[test]
+    fn query_enumerates_exact_namespace_and_pvc_pairs() {
+        let identities = BTreeSet::from([
+            ("shared".to_owned(), "workspace-data-w-one-0".to_owned()),
+            ("shared".to_owned(), "workspace-data-w-two-0".to_owned()),
+        ]);
+        assert_eq!(
+            metric_query("used", &identities),
+            "used{namespace=\"shared\",persistentvolumeclaim=\"workspace-data-w-one-0\"} or used{namespace=\"shared\",persistentvolumeclaim=\"workspace-data-w-two-0\"}"
+        );
+        assert_eq!(promql_label_value("a\\\"\nb"), "a\\\\\\\"\\nb");
     }
 
     #[test]
@@ -327,24 +390,24 @@ mod tests {
         };
         let values = StorageMetricBatch {
             status: StorageTelemetryStatus::Available,
-            used: BTreeMap::from([("ws-test-01abc".to_owned(), sample)]),
-            capacity: BTreeMap::from([("ws-test-01abc".to_owned(), sample)]),
-            available: BTreeMap::from([("ws-test-01abc".to_owned(), sample)]),
+            used: BTreeMap::from([(("shared".to_owned(), "pvc-a".to_owned()), sample)]),
+            capacity: BTreeMap::from([(("shared".to_owned(), "pvc-a".to_owned()), sample)]),
+            available: BTreeMap::from([(("shared".to_owned(), "pvc-a".to_owned()), sample)]),
         };
         assert!(matches!(
-            values.telemetry("ws-test-01abc", 1_100).status,
+            values.telemetry("shared", "pvc-a", 1_100).status,
             StorageTelemetryStatus::Available
         ));
         assert!(matches!(
-            values.telemetry("ws-test-01abc", 2_000).status,
+            values.telemetry("shared", "pvc-a", 2_000).status,
             StorageTelemetryStatus::Stale
         ));
         assert!(matches!(
-            values.telemetry("ws-test-missing", 1_100).status,
+            values.telemetry("shared", "pvc-b", 1_100).status,
             StorageTelemetryStatus::Unavailable
         ));
         assert!(matches!(
-            values.telemetry("ws-test-01abc", 1_100).pressure,
+            values.telemetry("shared", "pvc-a", 1_100).pressure,
             Some(StoragePressure::Critical)
         ));
     }

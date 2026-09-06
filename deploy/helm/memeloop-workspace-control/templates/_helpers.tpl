@@ -46,6 +46,18 @@ app.kubernetes.io/instance: {{ include "mwc.name" . }}
 {{- if and (eq .Values.mode "postgresql") (not .Values.database.postgresSecretName) -}}
 {{- fail "database.postgresSecretName is required in postgresql mode" -}}
 {{- end -}}
+{{- if and .Values.sqlite.existingClaim (ne .Values.mode "sqlite") -}}
+{{- fail "sqlite.existingClaim may only be set in sqlite mode" -}}
+{{- end -}}
+{{- if and .Values.sqlite.existingClaim .Values.sqlite.storageClassName -}}
+{{- fail "sqlite.existingClaim and sqlite.storageClassName are mutually exclusive" -}}
+{{- end -}}
+{{- if and .Values.sqlite.existingClaim (or (gt (len .Values.sqlite.existingClaim) 253) (not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$" .Values.sqlite.existingClaim))) -}}
+{{- fail "sqlite.existingClaim must be a lower-case DNS subdomain of at most 253 characters" -}}
+{{- end -}}
+{{- if and .Values.workspace.sharedNamespace (not (regexMatch "^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$" .Values.workspace.sharedNamespace)) -}}
+{{- fail "workspace.sharedNamespace must be a lower-case DNS label of at most 63 characters" -}}
+{{- end -}}
 {{- if and (eq .Values.mode "postgresql") .Values.autoscaling.enabled -}}
 {{- $cpuRequest := dig "requests" "cpu" "" .Values.resources -}}
 {{- $memoryRequest := dig "requests" "memory" "" .Values.resources -}}

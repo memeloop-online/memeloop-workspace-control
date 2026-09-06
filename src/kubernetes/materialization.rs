@@ -12,6 +12,8 @@ use thiserror::Error;
 use crate::injections::{
     InjectionKind, InjectionScope, InjectionValue, ResolvedInjection, ResolvedInjectionSummary,
 };
+use crate::workspace_runtime::WorkspaceRuntimeIdentity;
+use crate::workspace_runtime::WorkspaceRuntimeIdentityError;
 
 use super::namespaced_metadata;
 
@@ -170,10 +172,11 @@ impl MaterializedData {
 }
 
 pub(super) fn build(
-    namespace: &str,
+    runtime: &WorkspaceRuntimeIdentity,
     labels: &BTreeMap<String, String>,
     resolved: &[ResolvedInjection],
 ) -> Result<InjectionMaterialization, MaterializationError> {
+    let names = runtime.names();
     let mut data = MaterializedData::default();
     for (index, item) in resolved.iter().enumerate() {
         data.insert(index, item)?;
@@ -195,24 +198,28 @@ pub(super) fn build(
 
     Ok(InjectionMaterialization {
         environment_secret: Secret {
-            metadata: namespaced_metadata("workspace-environment-secret", namespace, labels),
+            metadata: namespaced_metadata(&names.environment_secret, &runtime.namespace, labels),
             data: Some(data.secret_environment),
             type_: Some("Opaque".to_owned()),
             ..Secret::default()
         },
         environment_config_map: ConfigMap {
-            metadata: namespaced_metadata("workspace-environment-config", namespace, labels),
+            metadata: namespaced_metadata(
+                &names.environment_config_map,
+                &runtime.namespace,
+                labels,
+            ),
             data: Some(data.config_environment),
             ..ConfigMap::default()
         },
         file_secret: Secret {
-            metadata: namespaced_metadata("workspace-files-secret", namespace, labels),
+            metadata: namespaced_metadata(&names.files_secret, &runtime.namespace, labels),
             data: Some(data.secret_files),
             type_: Some("Opaque".to_owned()),
             ..Secret::default()
         },
         file_config_map: ConfigMap {
-            metadata: namespaced_metadata("workspace-files-config", namespace, labels),
+            metadata: namespaced_metadata(&names.files_config_map, &runtime.namespace, labels),
             data: Some(data.config_files),
             binary_data: Some(data.config_binary_files),
             ..ConfigMap::default()
@@ -260,6 +267,8 @@ pub enum MaterializationError {
     #[error(transparent)]
     Config(#[from] crate::config::ConfigError),
     #[error(transparent)]
+    RuntimeIdentity(#[from] WorkspaceRuntimeIdentityError),
+    #[error(transparent)]
     Json(#[from] serde_json::Error),
     #[error("injection contains invalid Base64")]
     InvalidBase64,
@@ -279,6 +288,17 @@ pub enum MaterializationError {
 mod tests {
     use super::*;
     use crate::injections::{InjectionItem, InjectionValue};
+    use crate::workspace_runtime::{WorkspaceNamespaceScope, WorkspaceRuntimeNamingScheme};
+
+    fn runtime() -> WorkspaceRuntimeIdentity {
+        WorkspaceRuntimeIdentity {
+            naming_scheme: WorkspaceRuntimeNamingScheme::LegacyV1,
+            namespace_scope: WorkspaceNamespaceScope::Dedicated,
+            namespace: "workspace-test".to_owned(),
+            resource_prefix: "workspace".to_owned(),
+            route_key: "test".to_owned(),
+        }
+    }
 
     fn resolved_environment(value: InjectionValue, sensitive: bool) -> ResolvedInjection {
         ResolvedInjection {
@@ -304,7 +324,7 @@ mod tests {
     fn environment_manifest_references_projected_data_without_plaintext() {
         let secret = "not-in-the-manifest";
         let materialized = build(
-            "workspace-test",
+            &runtime(),
             &BTreeMap::new(),
             &[resolved_environment(
                 InjectionValue::Utf8(secret.to_owned()),
@@ -336,7 +356,7 @@ mod tests {
     fn environment_values_reject_every_control_character() {
         for value in ["line\nfeed", "carriage\rreturn", "tab\tvalue", "nul\0value"] {
             let result = build(
-                "workspace-test",
+                &runtime(),
                 &BTreeMap::new(),
                 &[resolved_environment(
                     InjectionValue::Utf8(value.to_owned()),
@@ -369,7 +389,7 @@ mod tests {
                 labels: BTreeMap::new(),
             },
         };
-        let materialized = build("workspace-test", &BTreeMap::new(), &[resolved]).unwrap();
+        let materialized = build(&runtime(), &BTreeMap::new(), &[resolved]).unwrap();
         let manifest: serde_json::Value = serde_json::from_str(
             &materialized.file_config_map.data.as_ref().unwrap()["workspace-files.json"],
         )

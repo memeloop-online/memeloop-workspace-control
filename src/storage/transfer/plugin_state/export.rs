@@ -2,13 +2,13 @@ use std::collections::BTreeMap;
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde_json::Value;
-use sqlx::{Row, SqlitePool};
+use sqlx::{Row, Sqlite, Transaction};
 
 use super::{AssetSnapshot, CatalogSnapshot, PackageSnapshot, StorageError, to_value};
 use crate::plugin_distribution::sanitized_source_ref;
 
 pub(crate) async fn export_tables(
-    pool: &SqlitePool,
+    transaction: &mut Transaction<'_, Sqlite>,
     installation: &str,
 ) -> Result<BTreeMap<String, Vec<Value>>, StorageError> {
     let packages = sqlx::query(
@@ -18,7 +18,7 @@ pub(crate) async fn export_tables(
          WHERE installation_id=?1 ORDER BY plugin_id",
     )
     .bind(installation)
-    .fetch_all(pool)
+    .fetch_all(&mut **transaction)
     .await?
     .into_iter()
     .map(|row| {
@@ -48,8 +48,8 @@ pub(crate) async fn export_tables(
         })
     })
     .collect::<Result<Vec<_>, StorageError>>()?;
-    let assets = export_assets(pool, installation).await?;
-    let mut catalog = export_catalog(pool, installation).await?;
+    let assets = export_assets(transaction, installation).await?;
+    let mut catalog = export_catalog(transaction, installation).await?;
     if !packages.is_empty() && catalog.is_empty() {
         catalog.push(to_value(CatalogSnapshot {
             installation_id: installation.to_owned(),
@@ -63,13 +63,16 @@ pub(crate) async fn export_tables(
     ]))
 }
 
-async fn export_assets(pool: &SqlitePool, installation: &str) -> Result<Vec<Value>, StorageError> {
+async fn export_assets(
+    transaction: &mut Transaction<'_, Sqlite>,
+    installation: &str,
+) -> Result<Vec<Value>, StorageError> {
     sqlx::query(
         "SELECT installation_id,plugin_id,asset_path,media_type,content_bytes,content_digest \
          FROM plugin_assets WHERE installation_id=?1 ORDER BY plugin_id,asset_path",
     )
     .bind(installation)
-    .fetch_all(pool)
+    .fetch_all(&mut **transaction)
     .await?
     .into_iter()
     .map(|row| {
@@ -85,13 +88,16 @@ async fn export_assets(pool: &SqlitePool, installation: &str) -> Result<Vec<Valu
     .collect()
 }
 
-async fn export_catalog(pool: &SqlitePool, installation: &str) -> Result<Vec<Value>, StorageError> {
+async fn export_catalog(
+    transaction: &mut Transaction<'_, Sqlite>,
+    installation: &str,
+) -> Result<Vec<Value>, StorageError> {
     sqlx::query(
         "SELECT installation_id,revision FROM plugin_catalog_metadata \
          WHERE installation_id=?1",
     )
     .bind(installation)
-    .fetch_all(pool)
+    .fetch_all(&mut **transaction)
     .await?
     .into_iter()
     .map(|row| {

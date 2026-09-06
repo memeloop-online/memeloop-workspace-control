@@ -6,6 +6,36 @@ The chart supports exactly two runtime shapes:
 - `mode=postgresql`: a Deployment plus an optional HPA. PostgreSQL is external
   and its URL comes from a Kubernetes Secret.
 
+SQLite claim templates are retained when the StatefulSet is deleted or scaled down. To mount a
+pre-created claim in the release Namespace instead, set `sqlite.existingClaim`; the chart then
+omits `volumeClaimTemplates`. This option is valid only in SQLite mode and cannot be combined with
+`sqlite.storageClassName`. Retention does not protect a PVC from direct deletion, Namespace
+deletion, Argo CD prune, or its PV reclaim policy.
+
+`sqlite.existingClaim` may be used directly on a new installation. An existing StatefulSet cannot
+be patched from `volumeClaimTemplates` to an explicit claim because that field is immutable. First
+roll out and verify the Retain policy while leaving `sqlite.existingClaim` empty. In a separately
+controlled window, stop the only database writer, check SQLite integrity, delete/recreate the
+StatefulSet without deleting its retained PVC, and set `sqlite.existingClaim` to that exact claim
+name. Verify the recreated Pod mounts the recorded PVC/PV/CSI handle before allowing writes. See the
+migration document for the Argo prune and rollback constraints.
+
+Set `workspace.sharedNamespace` to place newly created `prefixed_v2` workspaces in one
+installation-owned Namespace. The default empty value preserves dedicated Namespace placement.
+Existing workspaces keep their persisted runtime identity and are never moved by changing this
+value. See
+`docs/runtime-naming-and-migration.md` for the five-PVC legacy boundary and the separately
+authorized downtime, snapshot/restore or prebind, Argo prune, and rollback procedures.
+
+The Helm default does not emit `MWC_WORKSPACE_SHARED_NAMESPACE`. Setting that environment variable
+directly to an empty string is not equivalent to leaving it unset: application validation rejects
+the empty string. For a non-empty value, the control plane creates an absent shared Namespace with
+installation ownership. Before database insertion, the creation API reads an existing configured
+Namespace and rejects installation-ownership conflicts or a workspace-owned Namespace; apply
+repeats the same check to close the race. A missing Namespace is allowed for the coordinator to
+create. RBAC, quota/policy, and StorageClass failures remain ordinary fail-closed reconciliation
+errors rather than claims made by this ownership preflight.
+
 The service exposes OpenMetrics at `/metrics`, including HTTP latency/errors, active streams,
 upstream calls, durable queues, process/allocator memory, plugin state, and platform/per-user
 workspace aggregates. Set `monitoring.serviceMonitor.enabled=true` when the Prometheus Operator is
@@ -28,7 +58,16 @@ covers Home PVC and node ephemeral-storage request bands at 80% (warning) and 90
 failed jobs after 10 minutes, and a pending-job age above 15 minutes. The rule also records the
 workspace Home usage and node ephemeral-storage request percentages for Grafana. Alert duration
 for the storage bands follows `monitoring.prometheusRule.warningFor` and
-`monitoring.prometheusRule.criticalFor`.
+`monitoring.prometheusRule.criticalFor`. Workspace selection uses the bounded
+`workspace.memeloop.dev/owner-installation` and `workspace.memeloop.dev/workspace-id` Pod labels
+from kube-state-metrics and joins matching Pods to
+`kube_pod_spec_volumes_persistentvolumeclaims_info`. The workspace UUID is only a filter and is not
+copied into recording or alert labels. This covers legacy dedicated, prefixed dedicated, and
+prefixed shared-Namespace workspaces while their Pod object exists. Stopped workspaces have no Pod,
+so they intentionally have no Home-usage series or capacity alert; inspect their PVC/storage volume
+directly during stopped maintenance. Before enabling these rules, use a known running workspace to
+verify both allowlisted Pod labels and the Pod/PVC relationship metric are present and the join
+selects exactly its Home claim.
 
 Set `monitoring.prometheusUrl` to an in-cluster Prometheus base URL to show PVC usage,
 capacity, and available bytes. The URL is optional; the control plane uses bounded,
@@ -49,8 +88,9 @@ rendered manifest.
 Higress prerequisites are intentionally explicit. Gateway API CRDs and a referenced Gateway are
 needed only for the fixed public API HTTPRoute and public SSH TCPRoute; the Gateway must allow
 routes from this namespace and public SSH additionally needs listener and Service port 22. Web
-Shell instead uses a built-in `networking.k8s.io/v1` Ingress in each workspace Namespace, with
-`ingressClassName: nginx`, and therefore needs neither Gateway API CRDs nor ReferenceGrant. Set
+Shell instead uses a built-in `networking.k8s.io/v1` Ingress in the Namespace containing each
+workspace, with `ingressClassName: nginx`, and therefore needs neither Gateway API CRDs nor
+ReferenceGrant. Set
 `higress.extAuthPluginUrl` to the pinned official Higress ext-auth plugin OCI URL. When either
 public Web Shell or HTTP port mappings is enabled, the chart creates one `<installation>-access-auth`
 WasmPlugin. Its ordered match rules put the exact Web Shell host first and the full-label port

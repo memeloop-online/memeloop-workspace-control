@@ -18,6 +18,17 @@ pub(super) fn verify(
     check_label(labels, WORKSPACE_ID_LABEL, workspace_id)
 }
 
+pub(super) fn verify_installation(
+    metadata: &ObjectMeta,
+    installation_id: &str,
+) -> Result<(), OwnershipError> {
+    let labels = metadata
+        .labels
+        .as_ref()
+        .ok_or(OwnershipError::MissingLabels)?;
+    check_label(labels, OWNER_INSTALLATION_LABEL, installation_id)
+}
+
 fn check_label(
     labels: &BTreeMap<String, String>,
     key: &'static str,

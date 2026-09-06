@@ -90,6 +90,10 @@ jobs:
           curl -fsSL https://get.helm.sh/helm-v4.2.4-linux-amd64.tar.gz -o helm.tgz
           printf '%s  %s\n' c306b46f719b0a4da32d0f78ee21bf90ce8d602f15b22ab753f0674d1670a7f3 helm.tgz | sha256sum -c -
           tar -xzf helm.tgz
+          curl -fsSL https://github.com/prometheus/prometheus/releases/download/v3.14.0/prometheus-3.14.0.linux-amd64.tar.gz -o prometheus.tgz
+          printf '%s  %s\n' f665c6da19eb7ba399c915d30c7d9793c9b417bf8a749b504bc470678631478d prometheus.tgz | sha256sum -c -
+          tar -xzf prometheus.tgz prometheus-3.14.0.linux-amd64/promtool
+          promtool=prometheus-3.14.0.linux-amd64/promtool
           linux-amd64/helm lint deploy/helm/memeloop-workspace-control \
             --set installationId=ci-a \
             --set secrets.encryptionSecretName=enc \
@@ -123,6 +127,98 @@ jobs:
           grep -q 'resources: \["networkpolicies", "ingresses"\]' <<<"${rendered_public}"
           linux-amd64/helm lint deploy/helm/memeloop-workspace-control \
             -f deploy/helm/memeloop-workspace-control/values.internal.example.yaml
+          rendered_sqlite_default=$(linux-amd64/helm template sqlite-default \
+            deploy/helm/memeloop-workspace-control \
+            --set installationId=sqlite-default \
+            --set secrets.encryptionSecretName=enc \
+            --set secrets.internalAuthSecretName=auth \
+            --set workspace.ttydImage=tsl0922/ttyd:1.7.7 \
+            --set jumpHost.enabled=false \
+            --set autoscaling.enabled=false)
+          grep -q '^  persistentVolumeClaimRetentionPolicy:$' <<<"${rendered_sqlite_default}"
+          grep -q '^    whenDeleted: Retain$' <<<"${rendered_sqlite_default}"
+          grep -q '^    whenScaled: Retain$' <<<"${rendered_sqlite_default}"
+          grep -q '^  volumeClaimTemplates:$' <<<"${rendered_sqlite_default}"
+          if grep -q 'MWC_WORKSPACE_SHARED_NAMESPACE' <<<"${rendered_sqlite_default}"; then
+            echo "default shared Namespace unexpectedly emitted an environment variable" >&2
+            exit 1
+          fi
+          rendered_shared=$(linux-amd64/helm template shared \
+            deploy/helm/memeloop-workspace-control \
+            --set installationId=shared \
+            --set secrets.encryptionSecretName=enc \
+            --set secrets.internalAuthSecretName=auth \
+            --set workspace.ttydImage=tsl0922/ttyd:1.7.7 \
+            --set workspace.sharedNamespace=workspace-pool \
+            --set jumpHost.enabled=false \
+            --set autoscaling.enabled=false)
+          grep -A1 'name: MWC_WORKSPACE_SHARED_NAMESPACE' <<<"${rendered_shared}" \
+            | grep -q 'value: "workspace-pool"'
+          assert_invalid_shared_namespace() {
+            case_name=$1
+            shared_namespace=$2
+            if invalid_shared_output=$(linux-amd64/helm template "${case_name}" \
+              deploy/helm/memeloop-workspace-control \
+              --set "installationId=${case_name}" \
+              --set secrets.encryptionSecretName=enc \
+              --set secrets.internalAuthSecretName=auth \
+              --set workspace.ttydImage=tsl0922/ttyd:1.7.7 \
+              --set-string "workspace.sharedNamespace=${shared_namespace}" \
+              --set jumpHost.enabled=false \
+              --set autoscaling.enabled=false 2>&1); then
+              echo "invalid shared Namespace ${shared_namespace} was accepted" >&2
+              exit 1
+            fi
+            grep -q 'workspace.sharedNamespace must be a lower-case DNS label of at most 63 characters' \
+              <<<"${invalid_shared_output}"
+          }
+          assert_invalid_shared_namespace invalid-shared-dot workspace.pool
+          assert_invalid_shared_namespace invalid-shared-case Workspace-pool
+          assert_invalid_shared_namespace invalid-shared-long aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+          rendered_existing_claim=$(linux-amd64/helm template sqlite-existing \
+            deploy/helm/memeloop-workspace-control \
+            --set installationId=sqlite-existing \
+            --set secrets.encryptionSecretName=enc \
+            --set secrets.internalAuthSecretName=auth \
+            --set workspace.ttydImage=tsl0922/ttyd:1.7.7 \
+            --set sqlite.existingClaim=control-plane-data \
+            --set jumpHost.enabled=false \
+            --set autoscaling.enabled=false)
+          grep -q '^            claimName: "control-plane-data"$' <<<"${rendered_existing_claim}"
+          if grep -q '^  volumeClaimTemplates:$' <<<"${rendered_existing_claim}"; then
+            echo "SQLite existingClaim rendered a volumeClaimTemplate" >&2
+            exit 1
+          fi
+          if postgres_claim_output=$(linux-amd64/helm template postgres-existing \
+            deploy/helm/memeloop-workspace-control \
+            --set installationId=postgres-existing \
+            --set mode=postgresql \
+            --set database.postgresSecretName=database \
+            --set secrets.encryptionSecretName=enc \
+            --set secrets.internalAuthSecretName=auth \
+            --set workspace.ttydImage=tsl0922/ttyd:1.7.7 \
+            --set sqlite.existingClaim=control-plane-data \
+            --set jumpHost.enabled=false \
+            --set autoscaling.enabled=false 2>&1); then
+            echo "PostgreSQL mode accepted sqlite.existingClaim" >&2
+            exit 1
+          fi
+          grep -q 'sqlite.existingClaim may only be set in sqlite mode' <<<"${postgres_claim_output}"
+          if storage_claim_output=$(linux-amd64/helm template sqlite-sc-conflict \
+            deploy/helm/memeloop-workspace-control \
+            --set installationId=sqlite-sc-conflict \
+            --set secrets.encryptionSecretName=enc \
+            --set secrets.internalAuthSecretName=auth \
+            --set workspace.ttydImage=tsl0922/ttyd:1.7.7 \
+            --set sqlite.existingClaim=control-plane-data \
+            --set sqlite.storageClassName=local-path \
+            --set jumpHost.enabled=false \
+            --set autoscaling.enabled=false 2>&1); then
+            echo "SQLite existingClaim accepted a provisioning StorageClass" >&2
+            exit 1
+          fi
+          grep -q 'sqlite.existingClaim and sqlite.storageClassName are mutually exclusive' \
+            <<<"${storage_claim_output}"
           linux-amd64/helm template digest-pinned deploy/helm/memeloop-workspace-control \
             --set installationId=digest-pinned \
             --set secrets.encryptionSecretName=enc \
@@ -162,7 +258,35 @@ jobs:
           grep -q 'alert: MwcJobsFailed' <<<"${rendered_monitoring}"
           grep -q 'clamp_min(delta(mwc_jobs{status="failed"}\[15m\]), 0) > 0' <<<"${rendered_monitoring}"
           grep -q 'alert: MwcJobsPendingTooOld' <<<"${rendered_monitoring}"
-          grep -q 'kube_pod_info{namespace=~"ws-monitoring-.*"}' <<<"${rendered_monitoring}"
+          grep -q 'kube_pod_spec_volumes_persistentvolumeclaims_info' <<<"${rendered_monitoring}"
+          grep -q 'kube_pod_labels{label_workspace_memeloop_dev_owner_installation="monitoring",label_workspace_memeloop_dev_workspace_id!=""}' <<<"${rendered_monitoring}"
+          if grep -q 'kube_persistentvolumeclaim_labels' <<<"${rendered_monitoring}"; then
+            echo "Prometheus rules unexpectedly depend on non-allowlisted PVC labels" >&2
+            exit 1
+          fi
+          if grep -Eq '(by|without|group_left|group_right)[[:space:]]*\([^)]*(workspace_id|label_workspace_memeloop_dev_workspace_id)' \
+            <<<"${rendered_monitoring}"; then
+            echo "Prometheus rules propagate workspace UUIDs into output labels" >&2
+            exit 1
+          fi
+          if grep -Eq '^[[:space:]]+(workspace_id|label_workspace_memeloop_dev_workspace_id):' \
+            <<<"${rendered_monitoring}"; then
+            echo "Prometheus rule output labels contain a workspace UUID dimension" >&2
+            exit 1
+          fi
+          rendered_prometheus_rule=$(linux-amd64/helm template monitoring-rules \
+            deploy/helm/memeloop-workspace-control \
+            --show-only templates/prometheusrule.yaml \
+            --set installationId=monitoring \
+            --set secrets.encryptionSecretName=enc \
+            --set secrets.internalAuthSecretName=auth \
+            --set workspace.ttydImage=tsl0922/ttyd:1.7.7 \
+            --set jumpHost.enabled=false \
+            --set monitoring.prometheusRule.enabled=true)
+          sed -n '/^  groups:$/,$p' <<<"${rendered_prometheus_rule}" \
+            | sed 's/^  //' > /tmp/mwc-prometheus-rules.yaml
+          test -s /tmp/mwc-prometheus-rules.yaml
+          "${promtool}" check rules /tmp/mwc-prometheus-rules.yaml
           grep -q '>= 80' <<<"${rendered_monitoring}"
           grep -q '>= 90' <<<"${rendered_monitoring}"
           rendered_ports=$(linux-amd64/helm template ports \

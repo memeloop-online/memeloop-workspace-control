@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use crate::workspace_runtime::WorkspaceResourceNames;
 use k8s_openapi::{
     api::core::v1::{
         ConfigMapEnvSource, EnvFromSource, EnvVar, NodeSelectorRequirement, NodeSelectorTerm,
@@ -19,18 +20,18 @@ pub(super) fn hostname_term(values: &[String]) -> NodeSelectorTerm {
     }
 }
 
-pub(super) fn injection_env_from() -> Vec<EnvFromSource> {
+pub(super) fn injection_env_from(names: &WorkspaceResourceNames) -> Vec<EnvFromSource> {
     vec![
         EnvFromSource {
             config_map_ref: Some(ConfigMapEnvSource {
-                name: "workspace-environment-config".to_owned(),
+                name: names.environment_config_map.clone(),
                 optional: Some(false),
             }),
             ..EnvFromSource::default()
         },
         EnvFromSource {
             secret_ref: Some(SecretEnvSource {
-                name: "workspace-environment-secret".to_owned(),
+                name: names.environment_secret.clone(),
                 optional: Some(false),
             }),
             ..EnvFromSource::default()

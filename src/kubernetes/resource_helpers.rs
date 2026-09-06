@@ -12,15 +12,16 @@ use k8s_openapi::{
 };
 
 use super::{COMPONENT_LABEL, workspace_pod::WorkspacePod};
-use crate::workspaces::AccessMode;
+use crate::{workspace_runtime::WorkspaceRuntimeIdentity, workspaces::AccessMode};
 
 pub(super) fn service(
-    namespace: &str,
+    runtime: &WorkspaceRuntimeIdentity,
     labels: &BTreeMap<String, String>,
     pod_labels: &BTreeMap<String, String>,
 ) -> Service {
+    let names = runtime.names();
     Service {
-        metadata: namespaced_metadata("workspace", namespace, labels),
+        metadata: namespaced_metadata(&names.service, &runtime.namespace, labels),
         spec: Some(ServiceSpec {
             type_: Some("ClusterIP".to_owned()),
             // SSH is the recovery channel. An optional sidecar (for example BuildKit) must not
@@ -38,14 +39,15 @@ pub(super) fn service(
 }
 
 pub(super) fn internal_ssh_service(
-    namespace: &str,
+    runtime: &WorkspaceRuntimeIdentity,
     labels: &BTreeMap<String, String>,
     pod_labels: &BTreeMap<String, String>,
     access_mode: AccessMode,
     enabled: bool,
 ) -> Option<Service> {
+    let names = runtime.names();
     (enabled && access_mode == AccessMode::Internal).then(|| Service {
-        metadata: namespaced_metadata("workspace-ssh", namespace, labels),
+        metadata: namespaced_metadata(&names.ssh_service, &runtime.namespace, labels),
         spec: Some(ServiceSpec {
             type_: Some("NodePort".to_owned()),
             publish_not_ready_addresses: Some(true),
@@ -60,12 +62,13 @@ pub(super) fn internal_ssh_service(
 }
 
 pub(super) fn cluster_admin_service_account(
-    namespace: &str,
+    runtime: &WorkspaceRuntimeIdentity,
     labels: &BTreeMap<String, String>,
     enabled: bool,
 ) -> Option<ServiceAccount> {
+    let names = runtime.names();
     enabled.then(|| ServiceAccount {
-        metadata: namespaced_metadata("workspace-admin", namespace, labels),
+        metadata: namespaced_metadata(&names.service_account, &runtime.namespace, labels),
         automount_service_account_token: Some(true),
         ..ServiceAccount::default()
     })
@@ -73,10 +76,11 @@ pub(super) fn cluster_admin_service_account(
 
 pub(super) fn cluster_admin_binding(
     name: &str,
-    namespace: &str,
+    runtime: &WorkspaceRuntimeIdentity,
     labels: &BTreeMap<String, String>,
     enabled: bool,
 ) -> Option<ClusterRoleBinding> {
+    let names = runtime.names();
     enabled.then(|| ClusterRoleBinding {
         metadata: ObjectMeta {
             name: Some(name.to_owned()),
@@ -90,8 +94,8 @@ pub(super) fn cluster_admin_binding(
         },
         subjects: Some(vec![Subject {
             kind: "ServiceAccount".to_owned(),
-            name: "workspace-admin".to_owned(),
-            namespace: Some(namespace.to_owned()),
+            name: names.service_account,
+            namespace: Some(runtime.namespace.clone()),
             ..Subject::default()
         }]),
     })
@@ -125,9 +129,13 @@ pub(super) fn mount(name: &str, path: &str, read_only: bool) -> VolumeMount {
     }
 }
 
-pub(super) fn workspace_mounts(home: &str, secondary_home: Option<&str>) -> Vec<VolumeMount> {
+pub(super) fn workspace_mounts(
+    data_volume_name: &str,
+    home: &str,
+    secondary_home: Option<&str>,
+) -> Vec<VolumeMount> {
     let mut mounts = vec![
-        mount("workspace-data", home, false),
+        mount(data_volume_name, home, false),
         mount("runtime-ssh", "/run/mwc-ssh", false),
         mount("ssh-identity", "/etc/ssh/platform", true),
         mount("workspace-config", "/etc/workspace-platform", true),
@@ -143,18 +151,19 @@ pub(super) fn workspace_mounts(home: &str, secondary_home: Option<&str>) -> Vec<
         ),
     ];
     if let Some(secondary_home) = secondary_home {
-        mounts.push(mount("workspace-data", secondary_home, false));
+        mounts.push(mount(data_volume_name, secondary_home, false));
     }
     mounts
 }
 
 pub(super) fn workspace_config(
-    namespace: &str,
+    runtime: &WorkspaceRuntimeIdentity,
     labels: &BTreeMap<String, String>,
     pod: WorkspacePod<'_>,
 ) -> ConfigMap {
+    let names = runtime.names();
     ConfigMap {
-        metadata: namespaced_metadata("workspace-config", namespace, labels),
+        metadata: namespaced_metadata(&names.workspace_config, &runtime.namespace, labels),
         data: Some(BTreeMap::from([
             (
                 "sshd_config".to_owned(),
@@ -175,10 +184,11 @@ pub(super) fn workspace_config(
 }
 
 pub(super) fn ssh_identity(
-    namespace: &str,
+    runtime: &WorkspaceRuntimeIdentity,
     labels: &BTreeMap<String, String>,
     identity: Option<&crate::storage::WorkspaceSshIdentity>,
 ) -> Secret {
+    let names = runtime.names();
     let data = identity.map(|identity| {
         BTreeMap::from([
             (
@@ -192,7 +202,7 @@ pub(super) fn ssh_identity(
         ])
     });
     Secret {
-        metadata: namespaced_metadata("workspace-ssh-identity", namespace, labels),
+        metadata: namespaced_metadata(&names.ssh_identity_secret, &runtime.namespace, labels),
         data,
         type_: Some("Opaque".to_owned()),
         ..Secret::default()

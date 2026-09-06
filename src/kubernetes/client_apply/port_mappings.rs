@@ -20,13 +20,10 @@ impl KubernetesCoordinator {
         workspace: &Workspace,
         mappings: &[PortMapping],
     ) -> Result<(), ReconcileError> {
-        let namespace = self
-            .builder
-            .installation_id
-            .workspace_namespace(&workspace.short_id)?;
-        let services = Api::<Service>::namespaced(self.client.clone(), &namespace);
-        let ingresses = Api::<Ingress>::namespaced(self.client.clone(), &namespace);
-        let policies = Api::<NetworkPolicy>::namespaced(self.client.clone(), &namespace);
+        let namespace = &workspace.runtime.namespace;
+        let services = Api::<Service>::namespaced(self.client.clone(), namespace);
+        let ingresses = Api::<Ingress>::namespaced(self.client.clone(), namespace);
+        let policies = Api::<NetworkPolicy>::namespaced(self.client.clone(), namespace);
         let apply = PatchParams::apply(FIELD_MANAGER);
         let mut desired = std::collections::BTreeSet::new();
         for mapping in mappings {

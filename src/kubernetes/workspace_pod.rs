@@ -9,7 +9,7 @@ use k8s_openapi::{
     apimachinery::pkg::api::resource::Quantity,
 };
 
-use crate::templates::WorkspaceTemplateSpec;
+use crate::{templates::WorkspaceTemplateSpec, workspace_runtime::WorkspaceResourceNames};
 
 use super::{
     buildkit,
@@ -123,7 +123,11 @@ impl<'a> WorkspacePod<'a> {
         )
     }
 
-    pub fn workspace_init_container(&self, image: &str) -> Container {
+    pub fn workspace_init_container(
+        &self,
+        image: &str,
+        names: &WorkspaceResourceNames,
+    ) -> Container {
         Container {
             name: "workspace-bootstrap".to_owned(),
             image: Some(image.to_owned()),
@@ -132,13 +136,18 @@ impl<'a> WorkspacePod<'a> {
             // init container only creates PVC-backed layout and never assumes image packages.
             args: Some(vec!["prepare-layout".to_owned()]),
             env: Some(self.platform_env()),
-            volume_mounts: Some(self.development_mounts()),
+            volume_mounts: Some(self.development_mounts(names)),
             security_context: Some(root_security_context(false)),
             ..Container::default()
         }
     }
 
-    pub fn workspace_container(&self, image: &str, resources: ResourceRequirements) -> Container {
+    pub fn workspace_container(
+        &self,
+        image: &str,
+        resources: ResourceRequirements,
+        names: &WorkspaceResourceNames,
+    ) -> Container {
         let mut env = self.platform_env();
         env.extend(self.development_env());
         Container {
@@ -170,8 +179,8 @@ impl<'a> WorkspacePod<'a> {
             }),
             resources: Some(resources),
             env: Some(env),
-            env_from: Some(injection_env_from()),
-            volume_mounts: Some(self.development_mounts()),
+            env_from: Some(injection_env_from(names)),
+            volume_mounts: Some(self.development_mounts(names)),
             security_context: Some(root_security_context(false)),
             ..Container::default()
         }
@@ -328,8 +337,9 @@ impl<'a> WorkspacePod<'a> {
             || self.template.buildkit && name == "BUILDKIT_HOST"
     }
 
-    fn development_mounts(&self) -> Vec<VolumeMount> {
-        let mut mounts = workspace_mounts(self.home, self.secondary_home());
+    fn development_mounts(&self, names: &WorkspaceResourceNames) -> Vec<VolumeMount> {
+        let mut mounts =
+            workspace_mounts(&names.data_claim_template, self.home, self.secondary_home());
         mounts.extend([
             mount("runtime-tmp", "/tmp", false),
             mount("runtime-tmp", "/var/tmp", false),

@@ -6,6 +6,7 @@ use memeloop_workspace_control::{
     },
     quota::Resources,
     templates::WorkspaceTemplateSpec,
+    workspace_runtime::WorkspaceRuntimeIdentity,
     workspaces::{AccessMode, Workspace, WorkspaceState},
 };
 use std::collections::BTreeMap;
@@ -36,13 +37,16 @@ fn builder() -> ResourceBuilder {
 }
 
 fn workspace(state: WorkspaceState) -> Workspace {
+    let id = Uuid::now_v7();
     Workspace {
-        id: Uuid::now_v7(),
+        id,
         short_id: "01jabc".to_owned(),
         organization_id: Uuid::now_v7(),
         owner_id: Uuid::now_v7(),
         name: "test-workspace".to_owned(),
         template_id: Some(Uuid::now_v7()),
+        runtime: WorkspaceRuntimeIdentity::legacy_v1(&"public-a".parse().unwrap(), "01jabc")
+            .unwrap(),
         template: WorkspaceTemplateSpec::standard(
             "registry.example/workspace:1",
             AccessMode::Public,
@@ -58,6 +62,26 @@ fn workspace(state: WorkspaceState) -> Workspace {
         created_at: 1,
         updated_at: 1,
     }
+}
+
+fn shared_workspace(short_id: &str, id: Uuid) -> Workspace {
+    let mut workspace = workspace(WorkspaceState::Ready);
+    workspace.id = id;
+    workspace.short_id = short_id.to_owned();
+    workspace.runtime = WorkspaceRuntimeIdentity::prefixed_v2(
+        &"public-a".parse().unwrap(),
+        id,
+        short_id,
+        Some("ws-public-a-shared"),
+    )
+    .unwrap();
+    workspace.template.access_mode = AccessMode::Internal;
+    workspace.template.cluster_access = true;
+    workspace
+}
+
+fn metadata_name(metadata: &k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta) -> &str {
+    metadata.name.as_deref().unwrap()
 }
 
 fn node_template(image: &str, resources: Resources) -> WorkspaceTemplateSpec {
@@ -148,6 +172,264 @@ fn observability_labels_do_not_change_statefulset_immutable_fields() {
     );
     assert!(!claim_labels.contains_key(ORGANIZATION_ID_LABEL));
     assert!(!claim_labels.contains_key(OWNER_USER_ID_LABEL));
+}
+
+#[test]
+fn legacy_runtime_keeps_every_desired_resource_name_and_reference_byte_compatible() {
+    let mut workspace = workspace(WorkspaceState::Ready);
+    workspace.template.access_mode = AccessMode::Internal;
+    workspace.template.cluster_access = true;
+    let mut resource_builder = builder();
+    resource_builder.internal_ssh_node_port_enabled = true;
+    let resources = resource_builder.build(&workspace).unwrap();
+
+    assert_eq!(
+        metadata_name(&resources.namespace.metadata),
+        "ws-public-a-01jabc"
+    );
+    assert_eq!(metadata_name(&resources.stateful_set.metadata), "workspace");
+    assert_eq!(metadata_name(&resources.service.metadata), "workspace");
+    assert_eq!(
+        metadata_name(&resources.internal_ssh_service.as_ref().unwrap().metadata),
+        "workspace-ssh"
+    );
+    assert_eq!(
+        metadata_name(&resources.service_account.as_ref().unwrap().metadata),
+        "workspace-admin"
+    );
+    assert_eq!(
+        metadata_name(&resources.cluster_role_binding.as_ref().unwrap().metadata),
+        "mwc-public-a-01jabc-admin"
+    );
+    assert_eq!(
+        metadata_name(&resources.workspace_config.metadata),
+        "workspace-config"
+    );
+    assert_eq!(
+        metadata_name(&resources.ssh_identity.metadata),
+        "workspace-ssh-identity"
+    );
+    assert_eq!(
+        metadata_name(&resources.network_policy.metadata),
+        "workspace-ingress"
+    );
+    assert_eq!(
+        metadata_name(&resources.web_shell_ingress.as_ref().unwrap().metadata),
+        "web-shell"
+    );
+    assert_eq!(
+        metadata_name(&resources.injections.environment_secret.metadata),
+        "workspace-environment-secret"
+    );
+    assert_eq!(
+        metadata_name(&resources.injections.environment_config_map.metadata),
+        "workspace-environment-config"
+    );
+    assert_eq!(
+        metadata_name(&resources.injections.file_secret.metadata),
+        "workspace-files-secret"
+    );
+    assert_eq!(
+        metadata_name(&resources.injections.file_config_map.metadata),
+        "workspace-files-config"
+    );
+
+    let stateful_spec = resources.stateful_set.spec.as_ref().unwrap();
+    assert_eq!(stateful_spec.service_name.as_deref(), Some("workspace"));
+    assert_eq!(
+        stateful_spec.volume_claim_templates.as_ref().unwrap()[0]
+            .metadata
+            .name
+            .as_deref(),
+        Some("workspace-data")
+    );
+    assert_eq!(workspace.runtime.names().pod_ordinal_zero(), "workspace-0");
+    assert_eq!(
+        workspace.runtime.names().data_pvc_ordinal_zero(),
+        "workspace-data-workspace-0"
+    );
+    let pod = stateful_spec.template.spec.as_ref().unwrap();
+    assert_eq!(pod.service_account_name.as_deref(), Some("workspace-admin"));
+    let ingress_path = &resources
+        .web_shell_ingress
+        .as_ref()
+        .unwrap()
+        .spec
+        .as_ref()
+        .unwrap()
+        .rules
+        .as_ref()
+        .unwrap()[0]
+        .http
+        .as_ref()
+        .unwrap()
+        .paths[0];
+    assert_eq!(ingress_path.path.as_deref(), Some("/shell/01jabc/"));
+    assert_eq!(
+        ingress_path.backend.service.as_ref().unwrap().name,
+        "workspace"
+    );
+}
+
+#[test]
+fn prefixed_workspaces_share_a_namespace_without_resource_or_selector_collisions() {
+    let first = shared_workspace(
+        "8000000000000001",
+        Uuid::parse_str("018f0000-0000-7000-8000-000000000001").unwrap(),
+    );
+    let second = shared_workspace(
+        "8000000000000002",
+        Uuid::parse_str("018f0000-0000-7000-8000-000000000002").unwrap(),
+    );
+    let mut resource_builder = builder();
+    resource_builder.internal_ssh_node_port_enabled = true;
+    let first_resources = resource_builder.build(&first).unwrap();
+    let second_resources = resource_builder.build(&second).unwrap();
+
+    assert_eq!(
+        first_resources.namespace.metadata.name,
+        second_resources.namespace.metadata.name
+    );
+    let namespace_labels = first_resources.namespace.metadata.labels.as_ref().unwrap();
+    assert_eq!(namespace_labels[OWNER_INSTALLATION_LABEL], "public-a");
+    assert_eq!(
+        namespace_labels["app.kubernetes.io/managed-by"],
+        "memeloop-workspace-control"
+    );
+    assert_eq!(namespace_labels.len(), 2);
+    assert!(!namespace_labels.contains_key("workspace.memeloop.dev/workspace-id"));
+    assert!(!namespace_labels.contains_key(ORGANIZATION_ID_LABEL));
+    assert!(!namespace_labels.contains_key(OWNER_USER_ID_LABEL));
+
+    let desired_names = |resources: &memeloop_workspace_control::kubernetes::DesiredResources| {
+        BTreeMap::from([
+            (
+                "stateful_set",
+                metadata_name(&resources.stateful_set.metadata).to_owned(),
+            ),
+            (
+                "service",
+                metadata_name(&resources.service.metadata).to_owned(),
+            ),
+            (
+                "ssh_service",
+                metadata_name(&resources.internal_ssh_service.as_ref().unwrap().metadata)
+                    .to_owned(),
+            ),
+            (
+                "service_account",
+                metadata_name(&resources.service_account.as_ref().unwrap().metadata).to_owned(),
+            ),
+            (
+                "config",
+                metadata_name(&resources.workspace_config.metadata).to_owned(),
+            ),
+            (
+                "ssh_identity",
+                metadata_name(&resources.ssh_identity.metadata).to_owned(),
+            ),
+            (
+                "environment_secret",
+                metadata_name(&resources.injections.environment_secret.metadata).to_owned(),
+            ),
+            (
+                "environment_config",
+                metadata_name(&resources.injections.environment_config_map.metadata).to_owned(),
+            ),
+            (
+                "files_secret",
+                metadata_name(&resources.injections.file_secret.metadata).to_owned(),
+            ),
+            (
+                "files_config",
+                metadata_name(&resources.injections.file_config_map.metadata).to_owned(),
+            ),
+            (
+                "network_policy",
+                metadata_name(&resources.network_policy.metadata).to_owned(),
+            ),
+            (
+                "ingress",
+                metadata_name(&resources.web_shell_ingress.as_ref().unwrap().metadata).to_owned(),
+            ),
+        ])
+    };
+    let first_names = desired_names(&first_resources);
+    let second_names = desired_names(&second_resources);
+    for key in first_names.keys() {
+        assert_ne!(first_names[key], second_names[key], "{key} collided");
+    }
+    assert_ne!(
+        first.runtime.names().pod_ordinal_zero(),
+        second.runtime.names().pod_ordinal_zero()
+    );
+    assert_ne!(
+        first.runtime.names().data_pvc_ordinal_zero(),
+        second.runtime.names().data_pvc_ordinal_zero()
+    );
+
+    let first_spec = first_resources.stateful_set.spec.as_ref().unwrap();
+    let second_spec = second_resources.stateful_set.spec.as_ref().unwrap();
+    assert_eq!(
+        first_spec.service_name.as_deref(),
+        Some(first.runtime.names().service.as_str())
+    );
+    assert_eq!(
+        second_spec.service_name.as_deref(),
+        Some(second.runtime.names().service.as_str())
+    );
+    assert_ne!(
+        first_spec.selector.match_labels,
+        second_spec.selector.match_labels
+    );
+    assert_eq!(
+        first_spec.selector.match_labels.as_ref().unwrap()["workspace.memeloop.dev/workspace-id"],
+        first.id.to_string()
+    );
+    assert_eq!(
+        second_spec.selector.match_labels.as_ref().unwrap()["workspace.memeloop.dev/workspace-id"],
+        second.id.to_string()
+    );
+
+    let first_ingress = first_resources.web_shell_ingress.as_ref().unwrap();
+    let path = &first_ingress.spec.as_ref().unwrap().rules.as_ref().unwrap()[0]
+        .http
+        .as_ref()
+        .unwrap()
+        .paths[0];
+    assert_eq!(
+        path.path.as_deref(),
+        Some("/shell/public-a-8000000000000001/")
+    );
+    assert_eq!(
+        path.backend.service.as_ref().unwrap().name,
+        first.runtime.names().service
+    );
+    let pod = first_spec.template.spec.as_ref().unwrap();
+    let ttyd = pod
+        .containers
+        .iter()
+        .find(|container| container.name == "ttyd")
+        .unwrap();
+    let ttyd_args = ttyd.args.as_ref().unwrap();
+    assert_eq!(
+        ttyd_args[ttyd_args
+            .iter()
+            .position(|arg| arg == "--base-path")
+            .unwrap()
+            + 1],
+        "/shell/public-a-8000000000000001"
+    );
+    assert_eq!(
+        first_resources
+            .cluster_role_binding
+            .as_ref()
+            .unwrap()
+            .metadata
+            .name
+            .as_deref(),
+        Some("mwc-public-a-w-8000000000000001-admin")
+    );
 }
 
 #[test]
@@ -1015,7 +1297,7 @@ fn materializes_values_without_putting_secrets_in_metadata_or_manifest() {
     .unwrap();
     let workspace = workspace(WorkspaceState::Ready);
     let materialized = builder()
-        .materialize_injections(workspace.id, &workspace.short_id, &resolved)
+        .materialize_injections(workspace.id, &workspace.runtime, &resolved)
         .unwrap();
 
     assert_eq!(

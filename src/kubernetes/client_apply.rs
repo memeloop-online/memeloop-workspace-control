@@ -1,3 +1,5 @@
+use crate::workspace_runtime::WorkspaceNamespaceScope;
+use crate::workspaces::Workspace;
 use k8s_openapi::api::{
     apps::v1::StatefulSet,
     core::v1::{ConfigMap, Namespace, PersistentVolumeClaim, Pod, Secret, Service, ServiceAccount},
@@ -8,9 +10,6 @@ use kube::{
     Api,
     api::{DeleteParams, Patch, PatchParams},
 };
-use uuid::Uuid;
-
-use crate::workspaces::Workspace;
 
 use super::super::{DesiredResources, InjectionMaterialization};
 use super::{
@@ -33,28 +32,50 @@ impl KubernetesCoordinator {
             .name
             .as_deref()
             .ok_or(ReconcileError::MissingObjectName)?;
-        self.apply_namespace(namespace_name, workspace.id, desired)
-            .await?;
+        if namespace_name != workspace.runtime.namespace {
+            return Err(ReconcileError::RuntimeIdentityMismatch);
+        }
+        self.apply_namespace(workspace, desired).await?;
         self.apply_access_identity(namespace_name, workspace, desired)
             .await?;
-        self.apply_injections(workspace.id, &desired.injections)
+        self.apply_injections(workspace, &desired.injections)
             .await?;
-        self.apply_workspace_identity(namespace_name, workspace.id, desired)
+        self.apply_workspace_identity(namespace_name, workspace, desired)
             .await?;
         self.apply_workload(namespace_name, workspace, desired)
             .await?;
-        self.apply_network(namespace_name, workspace.id, desired)
-            .await
+        self.apply_network(namespace_name, workspace, desired).await
     }
 
     async fn apply_namespace(
         &self,
-        namespace_name: &str,
-        workspace_id: Uuid,
+        workspace: &Workspace,
         desired: &DesiredResources,
     ) -> Result<(), ReconcileError> {
+        let namespace_name = &workspace.runtime.namespace;
         let namespaces = Api::<Namespace>::all(self.client.clone());
-        verify_existing(&namespaces, namespace_name, &self.builder, workspace_id).await?;
+        if let Some(existing) = namespaces.get_metadata_opt(namespace_name).await? {
+            if workspace.runtime.namespace_scope == WorkspaceNamespaceScope::Shared {
+                self.builder
+                    .verify_installation_ownership(&existing.metadata)?;
+                if let Some(actual) = existing
+                    .metadata
+                    .labels
+                    .as_ref()
+                    .and_then(|labels| labels.get(super::super::WORKSPACE_ID_LABEL))
+                {
+                    return Err(super::super::OwnershipError::LabelMismatch {
+                        key: super::super::WORKSPACE_ID_LABEL,
+                        expected: "absent for a shared namespace".to_owned(),
+                        actual: Some(actual.clone()),
+                    }
+                    .into());
+                }
+            } else {
+                self.builder
+                    .verify_delete_ownership(&existing.metadata, workspace.id)?;
+            }
+        }
         namespaces
             .patch(
                 namespace_name,
@@ -73,20 +94,25 @@ impl KubernetesCoordinator {
     ) -> Result<(), ReconcileError> {
         let workspace_id = workspace.id;
         let apply = PatchParams::apply(FIELD_MANAGER);
+        let names = workspace.runtime.names();
         let service_accounts =
             Api::<ServiceAccount>::namespaced(self.client.clone(), namespace_name);
         let cluster_role_bindings = Api::<ClusterRoleBinding>::all(self.client.clone());
-        let binding_name = self.builder.cluster_admin_binding_name(&workspace.short_id);
+        let binding_name = self.builder.cluster_admin_binding_name(&workspace.runtime);
         if let Some(service_account) = &desired.service_account {
             verify_existing(
                 &service_accounts,
-                "workspace-admin",
+                &names.service_account,
                 &self.builder,
                 workspace_id,
             )
             .await?;
             service_accounts
-                .patch("workspace-admin", &apply, &Patch::Apply(service_account))
+                .patch(
+                    &names.service_account,
+                    &apply,
+                    &Patch::Apply(service_account),
+                )
                 .await?;
         }
         if let Some(binding) = &desired.cluster_role_binding {
@@ -108,11 +134,11 @@ impl KubernetesCoordinator {
                     .delete(&binding_name, &DeleteParams::default())
                     .await?;
             }
-            if let Some(existing) = service_accounts.get_opt("workspace-admin").await? {
+            if let Some(existing) = service_accounts.get_opt(&names.service_account).await? {
                 self.builder
                     .verify_delete_ownership(&existing.metadata, workspace_id)?;
                 service_accounts
-                    .delete("workspace-admin", &DeleteParams::default())
+                    .delete(&names.service_account, &DeleteParams::default())
                     .await?;
             }
         }
@@ -122,21 +148,23 @@ impl KubernetesCoordinator {
     async fn apply_workspace_identity(
         &self,
         namespace_name: &str,
-        workspace_id: Uuid,
+        workspace: &Workspace,
         desired: &DesiredResources,
     ) -> Result<(), ReconcileError> {
+        let workspace_id = workspace.id;
         let apply = PatchParams::apply(FIELD_MANAGER);
+        let names = workspace.runtime.names();
         let secrets = Api::<Secret>::namespaced(self.client.clone(), namespace_name);
         verify_existing(
             &secrets,
-            "workspace-ssh-identity",
+            &names.ssh_identity_secret,
             &self.builder,
             workspace_id,
         )
         .await?;
         secrets
             .patch(
-                "workspace-ssh-identity",
+                &names.ssh_identity_secret,
                 &apply,
                 &Patch::Apply(&desired.ssh_identity),
             )
@@ -145,14 +173,14 @@ impl KubernetesCoordinator {
         let config_maps = Api::<ConfigMap>::namespaced(self.client.clone(), namespace_name);
         verify_existing(
             &config_maps,
-            "workspace-config",
+            &names.workspace_config,
             &self.builder,
             workspace_id,
         )
         .await?;
         config_maps
             .patch(
-                "workspace-config",
+                &names.workspace_config,
                 &apply,
                 &Patch::Apply(&desired.workspace_config),
             )
@@ -167,40 +195,49 @@ impl KubernetesCoordinator {
         desired: &DesiredResources,
     ) -> Result<(), ReconcileError> {
         let workspace_id = workspace.id;
+        let names = workspace.runtime.names();
         let apply = PatchParams::apply(FIELD_MANAGER);
         let services = Api::<Service>::namespaced(self.client.clone(), namespace_name);
-        verify_existing(&services, "workspace", &self.builder, workspace_id).await?;
+        verify_existing(&services, &names.service, &self.builder, workspace_id).await?;
         services
-            .patch("workspace", &apply, &Patch::Apply(&desired.service))
+            .patch(&names.service, &apply, &Patch::Apply(&desired.service))
             .await?;
         if let Some(service) = &desired.internal_ssh_service {
-            verify_existing(&services, "workspace-ssh", &self.builder, workspace_id).await?;
+            verify_existing(&services, &names.ssh_service, &self.builder, workspace_id).await?;
             services
-                .patch("workspace-ssh", &apply, &Patch::Apply(service))
+                .patch(&names.ssh_service, &apply, &Patch::Apply(service))
                 .await?;
-        } else if let Some(existing) = services.get_opt("workspace-ssh").await? {
+        } else if let Some(existing) = services.get_opt(&names.ssh_service).await? {
             self.builder
                 .verify_delete_ownership(&existing.metadata, workspace_id)?;
             services
-                .delete("workspace-ssh", &DeleteParams::default())
+                .delete(&names.ssh_service, &DeleteParams::default())
                 .await?;
         }
         let stateful_sets = Api::<StatefulSet>::namespaced(self.client.clone(), namespace_name);
-        verify_existing(&stateful_sets, "workspace", &self.builder, workspace_id).await?;
+        verify_existing(
+            &stateful_sets,
+            &names.stateful_set,
+            &self.builder,
+            workspace_id,
+        )
+        .await?;
         stateful_sets
-            .patch("workspace", &apply, &Patch::Apply(&desired.stateful_set))
+            .patch(
+                &names.stateful_set,
+                &apply,
+                &Patch::Apply(&desired.stateful_set),
+            )
             .await?;
         let persistent_volume_claims =
             Api::<PersistentVolumeClaim>::namespaced(self.client.clone(), namespace_name);
-        if let Some(existing) = persistent_volume_claims
-            .get_opt("workspace-data-workspace-0")
-            .await?
-        {
+        let pvc_name = names.data_pvc_ordinal_zero();
+        if let Some(existing) = persistent_volume_claims.get_opt(&pvc_name).await? {
             self.builder
                 .verify_delete_ownership(&existing.metadata, workspace_id)?;
             persistent_volume_claims
                 .patch(
-                    "workspace-data-workspace-0",
+                    &pvc_name,
                     &PatchParams::default(),
                     &Patch::Merge(&serde_json::json!({
                         "metadata": {"labels": desired.stateful_set.metadata.labels}
@@ -214,11 +251,12 @@ impl KubernetesCoordinator {
                 | crate::workspaces::WorkspaceState::Restarting
         ) {
             let pods = Api::<Pod>::namespaced(self.client.clone(), namespace_name);
-            if let Some(pod) = pods.get_opt("workspace-0").await? {
+            let pod_name = names.pod_ordinal_zero();
+            if let Some(pod) = pods.get_opt(&pod_name).await? {
                 self.builder
                     .verify_delete_ownership(&pod.metadata, workspace_id)?;
                 if restart_generation_is_stale(&pod, workspace.generation) {
-                    pods.delete("workspace-0", &DeleteParams::default()).await?;
+                    pods.delete(&pod_name, &DeleteParams::default()).await?;
                 }
             }
         }
@@ -228,39 +266,41 @@ impl KubernetesCoordinator {
     async fn apply_network(
         &self,
         namespace_name: &str,
-        workspace_id: Uuid,
+        workspace: &Workspace,
         desired: &DesiredResources,
     ) -> Result<(), ReconcileError> {
+        let workspace_id = workspace.id;
         let apply = PatchParams::apply(FIELD_MANAGER);
+        let names = workspace.runtime.names();
         let network_policies =
             Api::<NetworkPolicy>::namespaced(self.client.clone(), namespace_name);
         verify_existing(
             &network_policies,
-            "workspace-ingress",
+            &names.network_policy,
             &self.builder,
             workspace_id,
         )
         .await?;
         network_policies
             .patch(
-                "workspace-ingress",
+                &names.network_policy,
                 &apply,
                 &Patch::Apply(&desired.network_policy),
             )
             .await?;
         let ingresses = Api::<Ingress>::namespaced(self.client.clone(), namespace_name);
-        if let Some(existing) = ingresses.get_opt("web-shell").await? {
+        if let Some(existing) = ingresses.get_opt(&names.web_shell_ingress).await? {
             self.builder
                 .verify_delete_ownership(&existing.metadata, workspace_id)?;
             if desired.web_shell_ingress.is_none() {
                 ingresses
-                    .delete("web-shell", &DeleteParams::default())
+                    .delete(&names.web_shell_ingress, &DeleteParams::default())
                     .await?;
             }
         }
         if let Some(ingress) = &desired.web_shell_ingress {
             ingresses
-                .patch("web-shell", &apply, &Patch::Apply(ingress))
+                .patch(&names.web_shell_ingress, &apply, &Patch::Apply(ingress))
                 .await?;
         }
         Ok(())
@@ -268,41 +308,40 @@ impl KubernetesCoordinator {
 
     async fn apply_injections(
         &self,
-        workspace_id: Uuid,
+        workspace: &Workspace,
         materialization: &InjectionMaterialization,
     ) -> Result<(), ReconcileError> {
+        let workspace_id = workspace.id;
+        let names = workspace.runtime.names();
         let namespace = materialization
             .file_config_map
             .metadata
             .namespace
             .as_deref()
             .ok_or(ReconcileError::MissingObjectName)?;
+        if namespace != workspace.runtime.namespace {
+            return Err(ReconcileError::RuntimeIdentityMismatch);
+        }
         let apply = PatchParams::apply(FIELD_MANAGER);
         let secrets = Api::<Secret>::namespaced(self.client.clone(), namespace);
         verify_existing(
             &secrets,
-            "workspace-environment-secret",
+            &names.environment_secret,
             &self.builder,
             workspace_id,
         )
         .await?;
         secrets
             .patch(
-                "workspace-environment-secret",
+                &names.environment_secret,
                 &apply,
                 &Patch::Apply(&materialization.environment_secret),
             )
             .await?;
-        verify_existing(
-            &secrets,
-            "workspace-files-secret",
-            &self.builder,
-            workspace_id,
-        )
-        .await?;
+        verify_existing(&secrets, &names.files_secret, &self.builder, workspace_id).await?;
         secrets
             .patch(
-                "workspace-files-secret",
+                &names.files_secret,
                 &apply,
                 &Patch::Apply(&materialization.file_secret),
             )
@@ -310,28 +349,28 @@ impl KubernetesCoordinator {
         let config_maps = Api::<ConfigMap>::namespaced(self.client.clone(), namespace);
         verify_existing(
             &config_maps,
-            "workspace-environment-config",
+            &names.environment_config_map,
             &self.builder,
             workspace_id,
         )
         .await?;
         config_maps
             .patch(
-                "workspace-environment-config",
+                &names.environment_config_map,
                 &apply,
                 &Patch::Apply(&materialization.environment_config_map),
             )
             .await?;
         verify_existing(
             &config_maps,
-            "workspace-files-config",
+            &names.files_config_map,
             &self.builder,
             workspace_id,
         )
         .await?;
         config_maps
             .patch(
-                "workspace-files-config",
+                &names.files_config_map,
                 &apply,
                 &Patch::Apply(&materialization.file_config_map),
             )

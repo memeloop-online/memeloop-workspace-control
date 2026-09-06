@@ -45,6 +45,7 @@ async fn test_app() -> (Router, Database, Uuid) {
         instance_id: "test".to_owned(),
         ssh_public_host: None,
         internal_ssh_host: None,
+        workspace_shared_namespace: None,
         web_shell_public_origin: None,
         port_mapping_public_domain: None,
         prometheus_url: None,

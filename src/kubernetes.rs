@@ -14,6 +14,10 @@ use uuid::Uuid;
 
 use crate::{
     config::InstallationId,
+    workspace_runtime::{
+        WorkspaceNamespaceScope, WorkspaceRuntimeIdentity, WorkspaceRuntimeIdentityError,
+        WorkspaceRuntimeNamingScheme,
+    },
     workspaces::{Workspace, WorkspaceState},
 };
 
@@ -92,18 +96,25 @@ impl ResourceBuilder {
             return Err(BuildError::EmptyImage);
         }
 
-        let namespace_name = self
-            .installation_id
-            .workspace_namespace(&workspace.short_id)?;
+        workspace.runtime.validate_for_workspace(
+            &self.installation_id,
+            workspace.id,
+            &workspace.short_id,
+        )?;
+        let runtime = &workspace.runtime;
         let stable_labels = self.labels(workspace.id);
         let labels = self.workspace_labels(workspace);
+        let namespace_labels = match runtime.namespace_scope {
+            WorkspaceNamespaceScope::Dedicated => labels.clone(),
+            WorkspaceNamespaceScope::Shared => self.installation_labels(),
+        };
         // StatefulSet selectors and volumeClaimTemplates are immutable. Keep those
         // labels limited to the original ownership identity so an upgrade can add
         // observability labels to existing workspaces without replacing storage.
         let selector_labels = pod_labels(&stable_labels);
         let pod_labels = pod_labels(&labels);
         let cluster_access = workspace.template.cluster_access;
-        let cluster_admin_binding_name = self.cluster_admin_binding_name(&workspace.short_id);
+        let cluster_admin_binding_name = self.cluster_admin_binding_name(runtime);
         let replicas = match workspace.state {
             WorkspaceState::Stopping | WorkspaceState::Stopped | WorkspaceState::Failed => 0,
             WorkspaceState::Provisioning
@@ -113,44 +124,34 @@ impl ResourceBuilder {
             WorkspaceState::Deleting | WorkspaceState::Deleted => unreachable!(),
         };
 
-        let injections = materialization::build(&namespace_name, &labels, &[])?;
+        let injections = materialization::build(runtime, &labels, &[])?;
         Ok(DesiredResources {
             namespace: Namespace {
                 metadata: ObjectMeta {
-                    name: Some(namespace_name.clone()),
-                    labels: Some(labels.clone()),
+                    name: Some(runtime.namespace.clone()),
+                    labels: Some(namespace_labels),
                     ..ObjectMeta::default()
                 },
                 ..Namespace::default()
             },
-            service: service(&namespace_name, &labels, &selector_labels),
+            service: service(runtime, &labels, &selector_labels),
             internal_ssh_service: internal_ssh_service(
-                &namespace_name,
+                runtime,
                 &labels,
                 &selector_labels,
                 workspace.template.access_mode,
                 self.internal_ssh_node_port_enabled,
             ),
-            service_account: cluster_admin_service_account(
-                &namespace_name,
-                &labels,
-                cluster_access,
-            ),
+            service_account: cluster_admin_service_account(runtime, &labels, cluster_access),
             cluster_role_binding: cluster_admin_binding(
                 &cluster_admin_binding_name,
-                &namespace_name,
+                runtime,
                 &labels,
                 cluster_access,
             ),
-            stateful_set: self.stateful_set(
-                &namespace_name,
-                &labels,
-                &pod_labels,
-                workspace,
-                replicas,
-            ),
+            stateful_set: self.stateful_set(&labels, &pod_labels, workspace, replicas),
             network_policy: network_policy::build(
-                &namespace_name,
+                runtime,
                 &labels,
                 &selector_labels,
                 &self.higress_namespace,
@@ -163,14 +164,15 @@ impl ResourceBuilder {
             ),
             injections,
             workspace_config: workspace_config(
-                &namespace_name,
+                runtime,
                 &labels,
                 WorkspacePod::from_template(&workspace.template),
             ),
-            ssh_identity: resource_helpers::ssh_identity(&namespace_name, &labels, None),
-            web_shell_ingress: self.web_shell_domain.as_ref().map(|domain| {
-                higress::web_shell_ingress(&namespace_name, &labels, &workspace.short_id, domain)
-            }),
+            ssh_identity: resource_helpers::ssh_identity(runtime, &labels, None),
+            web_shell_ingress: self
+                .web_shell_domain
+                .as_ref()
+                .map(|domain| higress::web_shell_ingress(runtime, &labels, domain)),
         })
     }
 
@@ -186,9 +188,20 @@ impl ResourceBuilder {
         )
     }
 
-    pub(crate) fn cluster_admin_binding_name(&self, workspace_short_id: &str) -> String {
+    pub fn verify_installation_ownership(
+        &self,
+        metadata: &ObjectMeta,
+    ) -> Result<(), OwnershipError> {
+        ownership::verify_installation(metadata, self.installation_id.as_str())
+    }
+
+    pub(crate) fn cluster_admin_binding_name(&self, runtime: &WorkspaceRuntimeIdentity) -> String {
+        let workspace_key = match runtime.naming_scheme {
+            WorkspaceRuntimeNamingScheme::LegacyV1 => runtime.route_key.as_str(),
+            WorkspaceRuntimeNamingScheme::PrefixedV2 => runtime.resource_prefix.as_str(),
+        };
         format!(
-            "mwc-{}-{workspace_short_id}-admin",
+            "mwc-{}-{workspace_key}-admin",
             self.installation_id.as_str()
         )
     }
@@ -196,27 +209,22 @@ impl ResourceBuilder {
     pub fn materialize_injections(
         &self,
         workspace_id: Uuid,
-        workspace_short_id: &str,
+        runtime: &WorkspaceRuntimeIdentity,
         resolved: &[crate::injections::ResolvedInjection],
     ) -> Result<InjectionMaterialization, MaterializationError> {
-        let namespace = self
-            .installation_id
-            .workspace_namespace(workspace_short_id)
-            .map_err(MaterializationError::Config)?;
-        materialization::build(&namespace, &self.labels(workspace_id), resolved)
+        runtime.validate()?;
+        materialization::build(runtime, &self.labels(workspace_id), resolved)
     }
 
     pub fn materialize_ssh_identity(
         &self,
         workspace_id: Uuid,
-        workspace_short_id: &str,
+        runtime: &WorkspaceRuntimeIdentity,
         identity: &crate::storage::WorkspaceSshIdentity,
-    ) -> Result<k8s_openapi::api::core::v1::Secret, crate::config::ConfigError> {
-        let namespace = self
-            .installation_id
-            .workspace_namespace(workspace_short_id)?;
+    ) -> Result<k8s_openapi::api::core::v1::Secret, WorkspaceRuntimeIdentityError> {
+        runtime.validate()?;
         Ok(resource_helpers::ssh_identity(
-            &namespace,
+            runtime,
             &self.labels(workspace_id),
             Some(identity),
         ))
@@ -230,15 +238,18 @@ impl ResourceBuilder {
         let Some(domain) = self.port_mapping_domain.as_deref() else {
             return Ok(None);
         };
-        let namespace = self
-            .installation_id
-            .workspace_namespace(&workspace.short_id)?;
+        workspace.runtime.validate_for_workspace(
+            &self.installation_id,
+            workspace.id,
+            &workspace.short_id,
+        )?;
+        let runtime = &workspace.runtime;
         let labels = self.workspace_labels(workspace);
         let selector_labels = pod_labels(&self.labels(workspace.id));
         let (service, ingress) =
-            port_mappings::resources(&namespace, &labels, &selector_labels, domain, mapping);
+            port_mappings::resources(runtime, &labels, &selector_labels, domain, mapping);
         let network_policy = port_mappings::network_policy(
-            &namespace,
+            runtime,
             &labels,
             &selector_labels,
             &self.higress_namespace,
@@ -250,12 +261,17 @@ impl ResourceBuilder {
     }
 
     fn labels(&self, workspace_id: Uuid) -> BTreeMap<String, String> {
+        let mut labels = self.installation_labels();
+        labels.insert(WORKSPACE_ID_LABEL.to_owned(), workspace_id.to_string());
+        labels
+    }
+
+    fn installation_labels(&self) -> BTreeMap<String, String> {
         BTreeMap::from([
             (
                 OWNER_INSTALLATION_LABEL.to_owned(),
                 self.installation_id.to_string(),
             ),
-            (WORKSPACE_ID_LABEL.to_owned(), workspace_id.to_string()),
             (
                 MANAGED_BY_LABEL.to_owned(),
                 "memeloop-workspace-control".to_owned(),
@@ -278,20 +294,12 @@ impl ResourceBuilder {
 
     fn stateful_set(
         &self,
-        namespace: &str,
         labels: &BTreeMap<String, String>,
         template_labels: &BTreeMap<String, String>,
         workspace: &Workspace,
         replicas: i32,
     ) -> StatefulSet {
-        workload::stateful_set(
-            self,
-            namespace,
-            labels,
-            template_labels,
-            workspace,
-            replicas,
-        )
+        workload::stateful_set(self, labels, template_labels, workspace, replicas)
     }
 }
 
@@ -301,6 +309,8 @@ pub enum BuildError {
     Config(#[from] crate::config::ConfigError),
     #[error(transparent)]
     Materialization(#[from] MaterializationError),
+    #[error(transparent)]
+    RuntimeIdentity(#[from] WorkspaceRuntimeIdentityError),
     #[error("cannot build desired runtime resources while workspace is being deleted")]
     WorkspaceBeingDeleted,
     #[error("workspace image must not be empty")]

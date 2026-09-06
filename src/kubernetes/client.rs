@@ -2,11 +2,9 @@ use std::fmt::Debug;
 
 use k8s_openapi::api::{
     apps::v1::StatefulSet,
-    core::v1::{Namespace, Pod, Secret, Service, ServiceAccount},
-    networking::v1::Ingress,
-    rbac::v1::ClusterRoleBinding,
+    core::v1::{Pod, Secret, Service},
 };
-use kube::{Api, Client, api::DeleteParams};
+use kube::{Api, Client};
 use serde::de::DeserializeOwned;
 use thiserror::Error;
 use uuid::Uuid;
@@ -18,6 +16,8 @@ const FIELD_MANAGER: &str = "memeloop-workspace-control";
 
 #[path = "client_apply.rs"]
 mod apply;
+#[path = "client_delete.rs"]
+mod delete;
 
 #[derive(Clone)]
 pub struct KubernetesCoordinator {
@@ -79,16 +79,14 @@ impl KubernetesCoordinator {
 
     pub async fn has_observed_replicas(
         &self,
-        workspace_short_id: &str,
+        workspace: &Workspace,
         expected: i32,
     ) -> Result<bool, ReconcileError> {
-        let namespace_name = self
-            .builder
-            .installation_id
-            .workspace_namespace(workspace_short_id)?;
+        let namespace_name = &workspace.runtime.namespace;
+        let names = workspace.runtime.names();
         let Some(stateful_set) =
-            Api::<StatefulSet>::namespaced(self.client.clone(), &namespace_name)
-                .get_opt("workspace")
+            Api::<StatefulSet>::namespaced(self.client.clone(), namespace_name)
+                .get_opt(&names.stateful_set)
                 .await?
         else {
             return Ok(false);
@@ -110,73 +108,16 @@ impl KubernetesCoordinator {
             && status.current_revision.is_some()
             && status.current_revision == status.update_revision)
     }
-
-    /// Starts deletion or confirms that Kubernetes has finished removing the namespace.
-    /// The caller must only mark the database row deleted after receiving `Gone`.
-    pub async fn delete_or_confirm(
-        &self,
-        workspace_id: Uuid,
-        workspace_short_id: &str,
-    ) -> Result<DeleteProgress, ReconcileError> {
-        let namespace_name = self
-            .builder
-            .installation_id
-            .workspace_namespace(workspace_short_id)?;
-        let binding_name = self.builder.cluster_admin_binding_name(workspace_short_id);
-        let cluster_role_bindings = Api::<ClusterRoleBinding>::all(self.client.clone());
-        if let Some(binding) = cluster_role_bindings.get_opt(&binding_name).await? {
-            self.builder
-                .verify_delete_ownership(&binding.metadata, workspace_id)?;
-            cluster_role_bindings
-                .delete(&binding_name, &DeleteParams::default())
-                .await?;
-            return Ok(DeleteProgress::DeletionRequested);
-        }
-        let namespaces = Api::<Namespace>::all(self.client.clone());
-        let Some(namespace) = namespaces.get_opt(&namespace_name).await? else {
-            return Ok(DeleteProgress::Gone);
-        };
-
-        self.builder
-            .verify_delete_ownership(&namespace.metadata, workspace_id)?;
-        let service_accounts =
-            Api::<ServiceAccount>::namespaced(self.client.clone(), &namespace_name);
-        if let Some(service_account) = service_accounts.get_opt("workspace-admin").await? {
-            self.builder
-                .verify_delete_ownership(&service_account.metadata, workspace_id)?;
-            service_accounts
-                .delete("workspace-admin", &DeleteParams::default())
-                .await?;
-            return Ok(DeleteProgress::DeletionRequested);
-        }
-        let ingresses = Api::<Ingress>::namespaced(self.client.clone(), &namespace_name);
-        if let Some(ingress) = ingresses.get_opt("web-shell").await? {
-            self.builder
-                .verify_delete_ownership(&ingress.metadata, workspace_id)?;
-            ingresses
-                .delete("web-shell", &DeleteParams::default())
-                .await?;
-            // Keep deletion deliberately staged: do not start Namespace removal
-            // until the externally visible Web Shell route is confirmed gone.
-            return Ok(DeleteProgress::DeletionRequested);
-        }
-        if namespace.metadata.deletion_timestamp.is_some() {
-            return Ok(DeleteProgress::Terminating);
-        }
-        namespaces
-            .delete(&namespace_name, &DeleteParams::default())
-            .await?;
-        Ok(DeleteProgress::DeletionRequested)
-    }
 }
 
 /// Returns the apiserver-assigned SSH NodePort for an internal workspace.
 pub async fn workspace_ssh_node_port(
     client: kube::Client,
-    namespace: &str,
+    workspace: &Workspace,
 ) -> Result<Option<u16>, kube::Error> {
-    let service = Api::<Service>::namespaced(client, namespace)
-        .get_opt("workspace-ssh")
+    let names = workspace.runtime.names();
+    let service = Api::<Service>::namespaced(client, &workspace.runtime.namespace)
+        .get_opt(&names.ssh_service)
         .await?;
     Ok(service.as_ref().and_then(node_port_from_service))
 }
@@ -241,4 +182,6 @@ pub enum ReconcileError {
     MissingPodTemplateMetadata,
     #[error("desired workspace StatefulSet has no workspace container")]
     MissingWorkspaceContainer,
+    #[error("desired Kubernetes resources do not match the persisted workspace runtime identity")]
+    RuntimeIdentityMismatch,
 }

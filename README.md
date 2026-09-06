@@ -102,17 +102,30 @@ memeloop-workspace-control --installation-id internal-a \
 
 Chart 位于 `deploy/helm/memeloop-workspace-control`：
 
-- `mode=sqlite` 渲染单副本 StatefulSet 与独立 RWO PVC。
+- `mode=sqlite` 渲染单副本 StatefulSet 与独立 RWO PVC，并显式保留 StatefulSet
+  删除或缩容后的 claim；`sqlite.existingClaim` 可改为挂载同 Namespace 中的预建 PVC。
 - `mode=postgresql` 渲染 Deployment 与 HPA。
+- `workspace.sharedNamespace` 可让新建的 `prefixed_v2` 工作区使用一个共享 Namespace；
+  默认空值不注入环境变量并继续使用每工作区独立 Namespace；直接注入空字符串会被配置
+  校验拒绝。创建 API 与协调器都会验证共享 Namespace 的 installation ownership，既有
+  工作区不会被重命名或迁移。
 - 公网 SSH 始终只有一条固定 TCPRoute，后端是标准 OpenSSH 跳板 Deployment。
-- 每个工作区在自身 Namespace 创建 `networking.k8s.io/v1` Ingress，将
-  `/shell/<short>/` 原样转发给使用相同 `--base-path` 的 ttyd；Higress external-auth
+- 每个工作区在工作区所在 Namespace 创建 `networking.k8s.io/v1` Ingress，将
+  `/shell/<route-key>/` 原样转发给使用相同 `--base-path` 的 ttyd；legacy route-key
+  为 short-id，`prefixed_v2` route-key 为 `<installation>-<short-id>`；Higress external-auth
   消费一次性 ticket。Web Shell 不依赖 Gateway API CRD 或跨 Namespace ReferenceGrant。
 
 公网 PostgreSQL 示例见 `values.example.yaml`，内网 SQLite 示例见
 `values.internal.example.yaml`。安装前需提供数据库、信封加密、内部鉴权和跳板 host key Secret，并确认管理型 StorageClass 的 `reclaimPolicy` 为 `Delete`。
 Chart 为控制面和标准 OpenSSH 跳板提供了默认 CPU/内存 requests 与 limits；PostgreSQL
 启用 HPA 时若移除控制面 CPU 或内存 request，模板会直接拒绝渲染。
+运行时命名兼容边界、五个既有 Home PVC 的保留要求，以及需要另行授权的停机迁移与
+回滚流程见 [运行时命名与迁移说明](docs/runtime-naming-and-migration.md)。本次实现不执行
+GitOps 或集群迁移。
+
+`sqlite.existingClaim` 可直接用于新安装；已有 SQLite StatefulSet 的 VCT 是不可变字段，
+不能原地切换。迁移必须先让 Retain 策略在现有对象生效并验证，再停写、校验数据库、
+仅删除/重建 StatefulSet 而保留 PVC，完整步骤与 Argo prune 风险见上述说明。
 
 ## 验收
 

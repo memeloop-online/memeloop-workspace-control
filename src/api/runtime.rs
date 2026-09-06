@@ -32,7 +32,7 @@ use pod_views::{
     active_pod_metrics, active_pod_names, has_live_runtime, is_active_pod, newest_events,
     object_workspace_id, pod_event, pod_metrics, pod_metrics_all, pod_runtime,
 };
-use storage_metrics::{StorageMetricBatch, fetch as fetch_storage_metrics};
+use storage_metrics::{StorageIdentity, StorageMetricBatch, fetch as fetch_storage_metrics};
 pub(super) use storage_metrics::{StoragePressure, StorageTelemetry, StorageTelemetryStatus};
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -120,15 +120,15 @@ pub(super) async fn list(
         .clone()
         .ok_or(ApiError::KubernetesUnavailable)?;
     let selector = runtime_selector(&state.config.installation_id, &workspaces);
-    let kubernetes_runtime = fetch_kubernetes_runtime(&state, client, &selector).await?;
+    let kubernetes_runtime = fetch_kubernetes_runtime(state.as_ref(), client, &selector).await?;
+    let storage_identities = workspaces.iter().map(storage_identity).collect::<Vec<_>>();
     let storage_metrics = fetch_storage_metrics(
         state.config.prometheus_url.as_ref(),
-        &state.config.installation_id,
+        &storage_identities,
         &state.observability,
     )
     .await;
     Ok(Json(build_runtime_entries(
-        &state,
         workspaces,
         kubernetes_runtime,
         &storage_metrics,
@@ -218,7 +218,6 @@ fn index_pvc_capacities(pvcs: Vec<PersistentVolumeClaim>) -> PvcCapacityMap {
 }
 
 fn build_runtime_entries(
-    state: &AppState,
     workspaces: Vec<Workspace>,
     mut kubernetes: KubernetesRuntimeBatch,
     storage_metrics: &StorageMetricBatch,
@@ -248,17 +247,17 @@ fn build_runtime_entries(
             } else {
                 (Vec::new(), Vec::new())
             };
-            let namespace = state
-                .config
-                .installation_id
-                .workspace_namespace(&workspace.short_id)
-                .unwrap_or_default();
+            let names = workspace.runtime.names();
             WorkspaceRuntimeEntry {
                 workspace_id,
                 runtime: WorkspaceRuntimeResponse {
                     allocated: workspace.template.resources,
                     pvc_capacity: kubernetes.pvc_capacities.remove(&workspace_id),
-                    storage: storage_metrics.telemetry(&namespace, observed_now),
+                    storage: storage_metrics.telemetry(
+                        &workspace.runtime.namespace,
+                        &names.data_pvc_ordinal_zero(),
+                        observed_now,
+                    ),
                     metrics_available: kubernetes.metrics_available,
                     pods,
                     metrics,
@@ -287,13 +286,13 @@ pub(super) async fn get(
     let kubernetes_request = state
         .observability
         .begin_upstream(crate::observability::UpstreamKind::Kubernetes);
-    let namespace = state
-        .config
-        .installation_id
-        .workspace_namespace(&workspace.short_id)
-        .map_err(|_| ApiError::BadRequest("workspace namespace is invalid"))?;
-    let selector = format!("{WORKSPACE_ID_LABEL}={workspace_id}");
-    let pod_list = Api::<Pod>::namespaced(client.clone(), &namespace)
+    let namespace = &workspace.runtime.namespace;
+    let names = workspace.runtime.names();
+    let selector = format!(
+        "{OWNER_INSTALLATION_LABEL}={},{WORKSPACE_ID_LABEL}={workspace_id}",
+        state.config.installation_id,
+    );
+    let pod_list = Api::<Pod>::namespaced(client.clone(), namespace)
         .list(&ListParams::default().labels(&selector))
         .await
         .map_err(ApiError::Kubernetes)?;
@@ -309,8 +308,11 @@ pub(super) async fn get(
     } else {
         Vec::new()
     };
-    let event_list = Api::<Event>::namespaced(client.clone(), &namespace)
-        .list(&ListParams::default().fields("involvedObject.kind=Pod"))
+    let event_list = Api::<Event>::namespaced(client.clone(), namespace)
+        .list(&ListParams::default().fields(&format!(
+            "involvedObject.kind=Pod,involvedObject.name={}",
+            names.pod_ordinal_zero(),
+        )))
         .await
         .map_err(ApiError::Kubernetes)?;
     let mut events = event_list
@@ -319,14 +321,21 @@ pub(super) async fn get(
         .map(pod_event)
         .collect::<Vec<_>>();
     newest_events(&mut events, 50);
-    let pvc_capacity = Api::<PersistentVolumeClaim>::namespaced(client.clone(), &namespace)
-        .get_opt("workspace-data-workspace-0")
+    let pvc_capacity = Api::<PersistentVolumeClaim>::namespaced(client.clone(), namespace)
+        .get_opt(&names.data_pvc_ordinal_zero())
         .await
         .map_err(ApiError::Kubernetes)?
+        .filter(|pvc| {
+            object_workspace_id(&pvc.metadata.labels) == Some(workspace_id)
+                && pvc.metadata.labels.as_ref().is_some_and(|labels| {
+                    labels.get(OWNER_INSTALLATION_LABEL)
+                        == Some(&state.config.installation_id.to_string())
+                })
+        })
         .and_then(|pvc| pvc.status)
         .and_then(|status| status.capacity)
         .and_then(|capacity| capacity.get("storage").map(|quantity| quantity.0.clone()));
-    let metric_result = pod_metrics(client, &namespace, &selector).await;
+    let metric_result = pod_metrics(client, namespace, &selector).await;
     let (metrics_available, metrics) = match metric_result {
         Ok(metrics) => (
             true,
@@ -344,11 +353,11 @@ pub(super) async fn get(
     kubernetes_request.success();
     let storage = fetch_storage_metrics(
         state.config.prometheus_url.as_ref(),
-        &state.config.installation_id,
+        &[storage_identity(&workspace)],
         &state.observability,
     )
     .await
-    .telemetry(&namespace, unix_timestamp());
+    .telemetry(namespace, &names.data_pvc_ordinal_zero(), unix_timestamp());
     let response = WorkspaceRuntimeResponse {
         allocated: workspace.template.resources,
         pvc_capacity,
@@ -359,6 +368,13 @@ pub(super) async fn get(
         events,
     };
     Ok(Json(response))
+}
+
+fn storage_identity(workspace: &Workspace) -> StorageIdentity {
+    (
+        workspace.runtime.namespace.clone(),
+        workspace.runtime.names().data_pvc_ordinal_zero(),
+    )
 }
 
 fn unix_timestamp() -> i64 {

@@ -151,6 +151,8 @@ pub enum StorageError {
         snapshot: String,
         configured: String,
     },
+    #[error("snapshot row in {table} does not belong to the configured installation")]
+    SnapshotRowInstallationMismatch { table: String },
     #[error("snapshot schema version {0} is newer than this binary")]
     SnapshotSchemaTooNew(i64),
     #[error("snapshot is missing required table {0}")]

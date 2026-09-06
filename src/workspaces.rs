@@ -3,7 +3,7 @@ use thiserror::Error;
 use utoipa::ToSchema;
 use uuid::Uuid;
 
-use crate::templates::WorkspaceTemplateSpec;
+use crate::{templates::WorkspaceTemplateSpec, workspace_runtime::WorkspaceRuntimeIdentity};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
@@ -55,6 +55,7 @@ pub struct Workspace {
     pub owner_id: Uuid,
     pub name: String,
     pub template_id: Option<Uuid>,
+    pub runtime: WorkspaceRuntimeIdentity,
     #[serde(flatten)]
     pub template: WorkspaceTemplateSpec,
     pub state: WorkspaceState,

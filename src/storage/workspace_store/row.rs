@@ -2,13 +2,19 @@ use sqlx::{Row, postgres::PgRow, sqlite::SqliteRow};
 use uuid::Uuid;
 
 use crate::{
+    config::InstallationId,
     storage::StorageError,
     templates::WorkspaceTemplateDocument,
+    workspace_runtime::{
+        WorkspaceNamespaceScope, WorkspaceRuntimeIdentity, WorkspaceRuntimeNamingScheme,
+    },
     workspaces::{Workspace, WorkspaceState},
 };
 
-pub(super) const WORKSPACE_COLUMNS: &str = "id, short_id, organization_id, owner_id, name, \
-    template_id, template_snapshot_yaml, state, generation, created_at, updated_at";
+pub(crate) const WORKSPACE_COLUMNS: &str = "id, short_id, organization_id, owner_id, name, \
+    template_id, template_snapshot_yaml, runtime_naming_scheme, runtime_namespace_scope, \
+    runtime_namespace, runtime_resource_prefix, runtime_route_key, state, generation, created_at, \
+    updated_at";
 
 pub(crate) fn select_workspace_sql(installation: &str, id: &str) -> String {
     format!(
@@ -22,15 +28,30 @@ pub(crate) fn select_workspace_by_short_id_sql(installation: &str, short_id: &st
     )
 }
 
-pub(crate) fn decode_sqlite(row: SqliteRow) -> Result<Workspace, StorageError> {
-    decode_workspace(&row)
+pub(crate) fn select_workspace_by_route_key_sql(installation: &str, route_key: &str) -> String {
+    format!(
+        "SELECT {WORKSPACE_COLUMNS} FROM workspaces WHERE installation_id = {installation} AND runtime_route_key = {route_key}"
+    )
 }
 
-pub(crate) fn decode_postgres(row: PgRow) -> Result<Workspace, StorageError> {
-    decode_workspace(&row)
+pub(crate) fn decode_sqlite(
+    row: SqliteRow,
+    installation_id: &InstallationId,
+) -> Result<Workspace, StorageError> {
+    decode_workspace(&row, installation_id)
 }
 
-fn decode_workspace<R: Row>(row: &R) -> Result<Workspace, StorageError>
+pub(crate) fn decode_postgres(
+    row: PgRow,
+    installation_id: &InstallationId,
+) -> Result<Workspace, StorageError> {
+    decode_workspace(&row, installation_id)
+}
+
+fn decode_workspace<R: Row>(
+    row: &R,
+    installation_id: &InstallationId,
+) -> Result<Workspace, StorageError>
 where
     for<'a> &'a str: sqlx::ColumnIndex<R>,
     String: for<'decode> sqlx::Decode<'decode, R::Database> + sqlx::Type<R::Database>,
@@ -41,13 +62,30 @@ where
     let yaml: String = row.try_get("template_snapshot_yaml")?;
     let document =
         WorkspaceTemplateDocument::parse(&yaml).map_err(|_| StorageError::InvalidWorkspace)?;
+    let id = Uuid::parse_str(&row.try_get::<String, _>("id")?)?;
+    let short_id: String = row.try_get("short_id")?;
+    let naming_scheme: String = row.try_get("runtime_naming_scheme")?;
+    let namespace_scope: String = row.try_get("runtime_namespace_scope")?;
+    let runtime = WorkspaceRuntimeIdentity {
+        naming_scheme: WorkspaceRuntimeNamingScheme::from_database(&naming_scheme)
+            .ok_or(StorageError::InvalidWorkspace)?,
+        namespace_scope: WorkspaceNamespaceScope::from_database(&namespace_scope)
+            .ok_or(StorageError::InvalidWorkspace)?,
+        namespace: row.try_get("runtime_namespace")?,
+        resource_prefix: row.try_get("runtime_resource_prefix")?,
+        route_key: row.try_get("runtime_route_key")?,
+    };
+    runtime
+        .validate_for_workspace(installation_id, id, &short_id)
+        .map_err(|_| StorageError::InvalidWorkspace)?;
     Ok(Workspace {
-        id: Uuid::parse_str(&row.try_get::<String, _>("id")?)?,
-        short_id: row.try_get("short_id")?,
+        id,
+        short_id,
         organization_id: Uuid::parse_str(&row.try_get::<String, _>("organization_id")?)?,
         owner_id: Uuid::parse_str(&row.try_get::<String, _>("owner_id")?)?,
         name: row.try_get("name")?,
         template_id: template_id.map(|id| Uuid::parse_str(&id)).transpose()?,
+        runtime,
         template: document.spec,
         state: WorkspaceState::from_database(&state)
             .ok_or(StorageError::UnknownWorkspaceState(state))?,

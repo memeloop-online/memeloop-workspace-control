@@ -54,7 +54,7 @@ impl Database {
                     .bind(short_id)
                     .fetch_optional(pool)
                     .await?;
-                row.map(decode_sqlite)
+                row.map(|row| decode_sqlite(row, installation_id))
                     .transpose()?
                     .ok_or(StorageError::WorkspaceNotFound)
             }
@@ -67,7 +67,7 @@ impl Database {
                     .bind(short_id)
                     .fetch_optional(pool)
                     .await?;
-                row.map(decode_postgres)
+                row.map(|row| decode_postgres(row, installation_id))
                     .transpose()?
                     .ok_or(StorageError::WorkspaceNotFound)
             }

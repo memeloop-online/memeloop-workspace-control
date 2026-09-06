@@ -16,7 +16,8 @@ mod row;
 mod summary;
 
 pub(super) use row::{
-    decode_postgres, decode_sqlite, select_workspace_by_short_id_sql, select_workspace_sql,
+    WORKSPACE_COLUMNS, decode_postgres, decode_sqlite, select_workspace_by_route_key_sql,
+    select_workspace_by_short_id_sql, select_workspace_sql,
 };
 use summary::{workspace_filter_sql, workspace_page_summary};
 
@@ -34,6 +35,29 @@ pub struct CreateWorkspace {
     pub organization_injection_refs: Option<Vec<String>>,
     #[serde(default)]
     pub user_injection_refs: Option<Vec<String>>,
+}
+
+/// Inputs that are fixed after API and plugin admission has completed.
+///
+/// Keeping these values together makes it explicit that the stored workspace
+/// must use the template and runtime settings the admission step approved.
+pub struct AdmittedWorkspaceCreation<'a> {
+    pub command: CreateWorkspace,
+    pub inline_injections: Option<(&'a EnvelopeCipher, &'a [InjectionItem])>,
+    pub admitted_template_yaml: &'a str,
+    pub shared_namespace: Option<&'a str>,
+    pub allow_cluster_access: bool,
+    pub actor_user_id: Uuid,
+    pub now: i64,
+}
+
+struct WorkspaceCreationOptions<'a> {
+    inline: Option<(&'a EnvelopeCipher, &'a [InjectionItem])>,
+    admitted_template_yaml: Option<&'a str>,
+    shared_namespace: Option<&'a str>,
+    allow_cluster_access: bool,
+    actor_user_id: Uuid,
+    now: i64,
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
@@ -85,7 +109,7 @@ impl Database {
                     .fetch_all(pool)
                     .await?
                     .into_iter()
-                    .map(decode_sqlite)
+                    .map(|row| decode_sqlite(row, installation_id))
                     .collect()
             }
             Self::Postgres {
@@ -110,7 +134,7 @@ impl Database {
                     .fetch_all(pool)
                     .await?
                     .into_iter()
-                    .map(decode_postgres)
+                    .map(|row| decode_postgres(row, installation_id))
                     .collect()
             }
         }
@@ -125,11 +149,14 @@ impl Database {
     ) -> Result<Workspace, StorageError> {
         self.create_workspace_inner(
             command,
-            None,
-            None,
-            allow_cluster_access,
-            actor_user_id,
-            now,
+            WorkspaceCreationOptions {
+                inline: None,
+                admitted_template_yaml: None,
+                shared_namespace: None,
+                allow_cluster_access,
+                actor_user_id,
+                now,
+            },
         )
         .await
     }
@@ -145,31 +172,41 @@ impl Database {
     ) -> Result<Workspace, StorageError> {
         self.create_workspace_inner(
             command,
-            Some((cipher, inline)),
-            None,
-            allow_cluster_access,
-            actor_user_id,
-            now,
+            WorkspaceCreationOptions {
+                inline: Some((cipher, inline)),
+                admitted_template_yaml: None,
+                shared_namespace: None,
+                allow_cluster_access,
+                actor_user_id,
+                now,
+            },
         )
         .await
     }
 
     pub async fn create_workspace_with_admitted_template(
         &self,
-        command: CreateWorkspace,
-        inline: Option<(&EnvelopeCipher, &[InjectionItem])>,
-        admitted_template_yaml: &str,
-        allow_cluster_access: bool,
-        actor_user_id: Uuid,
-        now: i64,
+        creation: AdmittedWorkspaceCreation<'_>,
     ) -> Result<Workspace, StorageError> {
-        self.create_workspace_inner(
+        let AdmittedWorkspaceCreation {
             command,
-            inline,
-            Some(admitted_template_yaml),
+            inline_injections,
+            admitted_template_yaml,
+            shared_namespace,
             allow_cluster_access,
             actor_user_id,
             now,
+        } = creation;
+        self.create_workspace_inner(
+            command,
+            WorkspaceCreationOptions {
+                inline: inline_injections,
+                admitted_template_yaml: Some(admitted_template_yaml),
+                shared_namespace,
+                allow_cluster_access,
+                actor_user_id,
+                now,
+            },
         )
         .await
     }
@@ -177,11 +214,7 @@ impl Database {
     async fn create_workspace_inner(
         &self,
         command: CreateWorkspace,
-        inline: Option<(&EnvelopeCipher, &[InjectionItem])>,
-        admitted_template_yaml: Option<&str>,
-        allow_cluster_access: bool,
-        actor_user_id: Uuid,
-        now: i64,
+        options: WorkspaceCreationOptions<'_>,
     ) -> Result<Workspace, StorageError> {
         if command.name.trim().is_empty() || command.name.len() > 120 {
             return Err(StorageError::InvalidWorkspace);
@@ -194,11 +227,12 @@ impl Database {
         let creation = creation::WorkspaceCreation {
             command: &command,
             injection_refs: &injection_refs,
-            inline,
-            admitted_template_yaml,
-            allow_cluster_access,
-            actor_user_id,
-            now,
+            inline: options.inline,
+            admitted_template_yaml: options.admitted_template_yaml,
+            shared_namespace: options.shared_namespace,
+            allow_cluster_access: options.allow_cluster_access,
+            actor_user_id: options.actor_user_id,
+            now: options.now,
         };
         match self {
             Self::Sqlite {
@@ -239,7 +273,7 @@ impl Database {
                 .bind(workspace_id.to_string())
                 .fetch_optional(pool)
                 .await?
-                .map(decode_sqlite)
+                .map(|row| decode_sqlite(row, installation_id))
                 .transpose()?
                 .ok_or(StorageError::WorkspaceNotFound),
             Self::Postgres {
@@ -250,7 +284,37 @@ impl Database {
                 .bind(workspace_id.to_string())
                 .fetch_optional(pool)
                 .await?
-                .map(decode_postgres)
+                .map(|row| decode_postgres(row, installation_id))
+                .transpose()?
+                .ok_or(StorageError::WorkspaceNotFound),
+        }
+    }
+
+    pub async fn get_workspace_by_route_key(
+        &self,
+        route_key: &str,
+    ) -> Result<Workspace, StorageError> {
+        match self {
+            Self::Sqlite {
+                pool,
+                installation_id,
+            } => sqlx::query(&select_workspace_by_route_key_sql("?1", "?2"))
+                .bind(installation_id.as_str())
+                .bind(route_key)
+                .fetch_optional(pool)
+                .await?
+                .map(|row| decode_sqlite(row, installation_id))
+                .transpose()?
+                .ok_or(StorageError::WorkspaceNotFound),
+            Self::Postgres {
+                pool,
+                installation_id,
+            } => sqlx::query(&select_workspace_by_route_key_sql("$1", "$2"))
+                .bind(installation_id.as_str())
+                .bind(route_key)
+                .fetch_optional(pool)
+                .await?
+                .map(|row| decode_postgres(row, installation_id))
                 .transpose()?
                 .ok_or(StorageError::WorkspaceNotFound),
         }
@@ -277,7 +341,7 @@ impl Database {
             .fetch_all(pool)
             .await?
             .into_iter()
-            .map(decode_sqlite)
+            .map(|row| decode_sqlite(row, installation_id))
             .collect(),
             Self::Postgres {
                 pool,
@@ -291,7 +355,7 @@ impl Database {
             .fetch_all(pool)
             .await?
             .into_iter()
-            .map(decode_postgres)
+            .map(|row| decode_postgres(row, installation_id))
             .collect(),
         }
     }
@@ -349,7 +413,7 @@ impl Database {
             .fetch_all(pool)
             .await?
             .into_iter()
-            .map(decode_sqlite)
+            .map(|row| decode_sqlite(row, installation_id))
             .collect::<Result<Vec<_>, _>>()?,
             Self::Postgres {
                 pool,
@@ -373,7 +437,7 @@ impl Database {
             .fetch_all(pool)
             .await?
             .into_iter()
-            .map(decode_postgres)
+            .map(|row| decode_postgres(row, installation_id))
             .collect::<Result<Vec<_>, _>>()?,
         };
         let mut items = rows;

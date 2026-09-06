@@ -6,16 +6,16 @@ use k8s_openapi::api::networking::v1::{
 };
 
 use super::namespaced_metadata;
+use crate::workspace_runtime::WorkspaceRuntimeIdentity;
 
 pub(super) fn web_shell_ingress(
-    namespace: &str,
+    runtime: &WorkspaceRuntimeIdentity,
     labels: &BTreeMap<String, String>,
-    workspace_short_id: &str,
     domain: &str,
 ) -> Ingress {
-    let path = format!("/shell/{workspace_short_id}/");
+    let names = runtime.names();
     Ingress {
-        metadata: namespaced_metadata("web-shell", namespace, labels),
+        metadata: namespaced_metadata(&names.web_shell_ingress, &runtime.namespace, labels),
         spec: Some(IngressSpec {
             ingress_class_name: Some("nginx".to_owned()),
             rules: Some(vec![IngressRule {
@@ -24,7 +24,7 @@ pub(super) fn web_shell_ingress(
                     paths: vec![HTTPIngressPath {
                         backend: IngressBackend {
                             service: Some(IngressServiceBackend {
-                                name: "workspace".to_owned(),
+                                name: names.service,
                                 port: Some(ServiceBackendPort {
                                     number: Some(7681),
                                     ..ServiceBackendPort::default()
@@ -32,7 +32,7 @@ pub(super) fn web_shell_ingress(
                             }),
                             ..IngressBackend::default()
                         },
-                        path: Some(path),
+                        path: Some(runtime.web_shell_path()),
                         path_type: "Prefix".to_owned(),
                     }],
                 }),

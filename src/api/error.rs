@@ -22,6 +22,7 @@ pub enum ApiError {
     IdempotencyInProgress,
     EncryptionUnavailable,
     WorkspaceNotConnectable,
+    SharedNamespaceConflict,
     KubernetesUnavailable,
     Kubernetes(kube::Error),
     Injection(crate::injections::InjectionError),
@@ -72,6 +73,7 @@ impl ApiError {
             | Self::IdempotencyInProgress
             | Self::EncryptionUnavailable
             | Self::WorkspaceNotConnectable
+            | Self::SharedNamespaceConflict
             | Self::KubernetesUnavailable
             | Self::Kubernetes(_)) => operational_response(error),
             Self::Injection(error) => injection_response(error),
@@ -119,6 +121,11 @@ fn operational_response(error: ApiError) -> ErrorResponse {
             StatusCode::CONFLICT,
             "workspace_not_connectable",
             "new Web Shell and SSH authorization requires a ready workspace",
+        ),
+        ApiError::SharedNamespaceConflict => response(
+            StatusCode::CONFLICT,
+            "shared_namespace_conflict",
+            "the configured shared workspace namespace has conflicting ownership",
         ),
         ApiError::KubernetesUnavailable => response(
             StatusCode::SERVICE_UNAVAILABLE,

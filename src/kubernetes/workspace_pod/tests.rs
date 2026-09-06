@@ -1,7 +1,15 @@
 use std::collections::BTreeSet;
 
 use super::*;
-use crate::{quota::Resources, workspaces::AccessMode};
+use crate::{
+    quota::Resources, workspace_runtime::WorkspaceRuntimeIdentity, workspaces::AccessMode,
+};
+
+fn legacy_names() -> crate::workspace_runtime::WorkspaceResourceNames {
+    WorkspaceRuntimeIdentity::legacy_v1(&"test".parse().unwrap(), "test")
+        .unwrap()
+        .names()
+}
 
 fn template() -> WorkspaceTemplateSpec {
     let mut template = WorkspaceTemplateSpec::standard(
@@ -34,6 +42,7 @@ fn injected_targets_remove_only_legacy_template_environment() {
     let mut container = pod.workspace_container(
         "registry.example/workspace:1",
         ResourceRequirements::default(),
+        &legacy_names(),
     );
     suppress_legacy_environment(
         &template,

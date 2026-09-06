@@ -1,4 +1,4 @@
-pub(super) const SCHEMA_VERSION: i64 = 17;
+pub(super) const SCHEMA_VERSION: i64 = 18;
 pub(super) const MIGRATION_TABLE: &str = "CREATE TABLE IF NOT EXISTS schema_migrations (\
     version BIGINT PRIMARY KEY, applied_at BIGINT NOT NULL\
 )";
@@ -293,3 +293,59 @@ pub(super) const V17_SQLITE_MIGRATIONS: &[&str] =
 
 pub(super) const V17_POSTGRES_MIGRATIONS: &[&str] =
     &["DELETE FROM user_api_keys WHERE position('\"*\"' IN scopes_json) > 0 OR expires_at IS NULL"];
+
+/// Runtime object names are immutable workspace data. Existing workspaces retain the
+/// pre-v18 naming contract, while every workspace created after this migration stores
+/// a v2 identity explicitly.
+pub(super) const V18_SQLITE_MIGRATIONS: &[&str] = &[
+    "ALTER TABLE workspaces ADD COLUMN runtime_naming_scheme TEXT NOT NULL DEFAULT 'legacy_v1'",
+    "ALTER TABLE workspaces ADD COLUMN runtime_namespace_scope TEXT NOT NULL DEFAULT 'dedicated'",
+    "ALTER TABLE workspaces ADD COLUMN runtime_namespace TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE workspaces ADD COLUMN runtime_resource_prefix TEXT NOT NULL DEFAULT 'workspace'",
+    "ALTER TABLE workspaces ADD COLUMN runtime_route_key TEXT NOT NULL DEFAULT ''",
+    "UPDATE workspaces SET runtime_naming_scheme = 'legacy_v1', \
+        runtime_namespace_scope = 'dedicated', \
+        runtime_namespace = 'ws-' || installation_id || '-' || short_id, \
+        runtime_resource_prefix = 'workspace', runtime_route_key = short_id",
+    "CREATE UNIQUE INDEX IF NOT EXISTS workspaces_runtime_route_key_idx \
+        ON workspaces (installation_id, runtime_route_key)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS workspaces_runtime_resource_idx \
+        ON workspaces (installation_id, runtime_namespace, runtime_resource_prefix)",
+];
+
+/// PostgreSQL needs a compatibility trigger while v17 and v18 control-plane
+/// replicas overlap. A v17 writer omits the new runtime columns, so their v18
+/// defaults must be expanded into the exact legacy identity before uniqueness
+/// indexes and readers observe the row.
+pub(super) const V18_POSTGRES_MIGRATIONS: &[&str] = &[
+    "ALTER TABLE workspaces ADD COLUMN runtime_naming_scheme TEXT NOT NULL DEFAULT 'legacy_v1'",
+    "ALTER TABLE workspaces ADD COLUMN runtime_namespace_scope TEXT NOT NULL DEFAULT 'dedicated'",
+    "ALTER TABLE workspaces ADD COLUMN runtime_namespace TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE workspaces ADD COLUMN runtime_resource_prefix TEXT NOT NULL DEFAULT 'workspace'",
+    "ALTER TABLE workspaces ADD COLUMN runtime_route_key TEXT NOT NULL DEFAULT ''",
+    "UPDATE workspaces SET runtime_naming_scheme = 'legacy_v1', \
+        runtime_namespace_scope = 'dedicated', \
+        runtime_namespace = 'ws-' || installation_id || '-' || short_id, \
+        runtime_resource_prefix = 'workspace', runtime_route_key = short_id",
+    "CREATE OR REPLACE FUNCTION workspaces_legacy_runtime_defaults() RETURNS trigger \
+        LANGUAGE plpgsql AS $$ BEGIN \
+        IF NEW.runtime_naming_scheme = 'legacy_v1' \
+            AND NEW.runtime_namespace_scope = 'dedicated' \
+            AND NEW.runtime_namespace = '' \
+            AND NEW.runtime_resource_prefix = 'workspace' \
+            AND NEW.runtime_route_key = '' THEN \
+            NEW.runtime_namespace_scope := 'dedicated'; \
+            NEW.runtime_namespace := 'ws-' || NEW.installation_id || '-' || NEW.short_id; \
+            NEW.runtime_resource_prefix := 'workspace'; \
+            NEW.runtime_route_key := NEW.short_id; \
+        END IF; \
+        RETURN NEW; \
+        END; $$",
+    "CREATE TRIGGER workspaces_legacy_runtime_defaults_before_insert \
+        BEFORE INSERT ON workspaces FOR EACH ROW \
+        EXECUTE FUNCTION workspaces_legacy_runtime_defaults()",
+    "CREATE UNIQUE INDEX IF NOT EXISTS workspaces_runtime_route_key_idx \
+        ON workspaces (installation_id, runtime_route_key)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS workspaces_runtime_resource_idx \
+        ON workspaces (installation_id, runtime_namespace, runtime_resource_prefix)",
+];
