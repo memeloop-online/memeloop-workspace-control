@@ -359,6 +359,8 @@ pub(super) const V19_SQLITE_MIGRATIONS: &[&str] = &[
     "ALTER TABLE workspaces DROP COLUMN runtime_naming_scheme",
     "ALTER TABLE workspaces DROP COLUMN runtime_resource_prefix",
     "ALTER TABLE workspaces DROP COLUMN runtime_route_key",
+    "ALTER TABLE workspace_templates DROP COLUMN runtime_profile",
+    "ALTER TABLE workspaces DROP COLUMN runtime_profile",
 ];
 
 /// The v18 compatibility trigger is deliberately removed with the derived
@@ -372,4 +374,6 @@ pub(super) const V19_POSTGRES_MIGRATIONS: &[&str] = &[
     "ALTER TABLE workspaces DROP COLUMN runtime_naming_scheme",
     "ALTER TABLE workspaces DROP COLUMN runtime_resource_prefix",
     "ALTER TABLE workspaces DROP COLUMN runtime_route_key",
+    "ALTER TABLE workspace_templates DROP COLUMN runtime_profile",
+    "ALTER TABLE workspaces DROP COLUMN runtime_profile",
 ];

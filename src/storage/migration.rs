@@ -20,17 +20,23 @@ const COMMON_MIGRATION_GROUPS: &[MigrationGroup] = &[
 pub(super) async fn migrate(database: &Database) -> Result<(), StorageError> {
     let applied_at = unix_timestamp()?;
     match database {
-        Database::Sqlite { pool, .. } => migrate_sqlite(pool, applied_at).await?,
+        Database::Sqlite {
+            pool,
+            installation_id,
+        } => migrate_sqlite(pool, installation_id, applied_at).await?,
         Database::Postgres {
             pool,
             installation_id,
         } => migrate_postgres(pool, installation_id, applied_at).await?,
     }
-    template_migration::backfill(database).await?;
     database.ensure_installation_identity().await
 }
 
-async fn migrate_sqlite(pool: &SqlitePool, applied_at: i64) -> Result<(), StorageError> {
+async fn migrate_sqlite(
+    pool: &SqlitePool,
+    installation_id: &InstallationId,
+    applied_at: i64,
+) -> Result<(), StorageError> {
     let mut transaction = pool.begin().await?;
     sqlx::query(schema::MIGRATION_TABLE)
         .execute(&mut *transaction)
@@ -52,6 +58,7 @@ async fn migrate_sqlite(pool: &SqlitePool, applied_at: i64) -> Result<(), Storag
         }
     }
     if version < 19 {
+        template_migration::backfill_sqlite(&mut transaction, installation_id.as_str()).await?;
         ensure_sqlite_v19_runtime_is_canonical(&mut transaction).await?;
         for statement in schema::V19_SQLITE_MIGRATIONS {
             sqlx::query(statement).execute(&mut *transaction).await?;
@@ -111,6 +118,7 @@ async fn migrate_postgres(
         }
     }
     if version < 19 {
+        template_migration::backfill_postgres(&mut transaction, installation_id.as_str()).await?;
         ensure_postgres_v19_runtime_is_canonical(&mut transaction).await?;
         for statement in schema::V19_POSTGRES_MIGRATIONS {
             sqlx::query(statement).execute(&mut *transaction).await?;
@@ -200,6 +208,8 @@ mod tests {
 
     async fn restore_sqlite_v18_runtime_schema(pool: &SqlitePool) {
         for statement in [
+            "ALTER TABLE workspace_templates ADD COLUMN runtime_profile TEXT NOT NULL DEFAULT 'standard'",
+            "ALTER TABLE workspaces ADD COLUMN runtime_profile TEXT NOT NULL DEFAULT 'standard'",
             "ALTER TABLE workspaces ADD COLUMN runtime_naming_scheme TEXT NOT NULL DEFAULT 'legacy_v1'",
             "ALTER TABLE workspaces ADD COLUMN runtime_resource_prefix TEXT NOT NULL DEFAULT 'workspace'",
             "ALTER TABLE workspaces ADD COLUMN runtime_route_key TEXT NOT NULL DEFAULT ''",
@@ -216,6 +226,8 @@ mod tests {
 
     async fn restore_postgres_v18_runtime_schema(pool: &PgPool) {
         for statement in [
+            "ALTER TABLE workspace_templates ADD COLUMN runtime_profile TEXT NOT NULL DEFAULT 'standard'",
+            "ALTER TABLE workspaces ADD COLUMN runtime_profile TEXT NOT NULL DEFAULT 'standard'",
             "ALTER TABLE workspaces ADD COLUMN runtime_naming_scheme TEXT NOT NULL DEFAULT 'legacy_v1'",
             "ALTER TABLE workspaces ADD COLUMN runtime_resource_prefix TEXT NOT NULL DEFAULT 'workspace'",
             "ALTER TABLE workspaces ADD COLUMN runtime_route_key TEXT NOT NULL DEFAULT ''",
@@ -233,6 +245,12 @@ mod tests {
     }
 
     async fn downgrade_sqlite_to_v16(pool: &SqlitePool) {
+        for statement in [
+            "ALTER TABLE workspace_templates ADD COLUMN runtime_profile TEXT NOT NULL DEFAULT 'standard'",
+            "ALTER TABLE workspaces ADD COLUMN runtime_profile TEXT NOT NULL DEFAULT 'standard'",
+        ] {
+            sqlx::query(statement).execute(pool).await.unwrap();
+        }
         for column in ["runtime_namespace_scope", "runtime_namespace"] {
             sqlx::query(&format!("ALTER TABLE workspaces DROP COLUMN {column}"))
                 .execute(pool)
@@ -246,6 +264,12 @@ mod tests {
     }
 
     async fn downgrade_postgres_to_v16(pool: &PgPool) {
+        for statement in [
+            "ALTER TABLE workspace_templates ADD COLUMN runtime_profile TEXT NOT NULL DEFAULT 'standard'",
+            "ALTER TABLE workspaces ADD COLUMN runtime_profile TEXT NOT NULL DEFAULT 'standard'",
+        ] {
+            sqlx::query(statement).execute(pool).await.unwrap();
+        }
         for column in ["runtime_namespace_scope", "runtime_namespace"] {
             sqlx::query(&format!("ALTER TABLE workspaces DROP COLUMN {column}"))
                 .execute(pool)
@@ -312,9 +336,18 @@ mod tests {
             "runtime_naming_scheme",
             "runtime_resource_prefix",
             "runtime_route_key",
+            "runtime_profile",
         ] {
             assert!(!columns.contains(&removed.to_owned()));
         }
+        let template_columns = sqlx::query("PRAGMA table_info('workspace_templates')")
+            .fetch_all(pool)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|row| row.try_get::<String, _>("name").unwrap())
+            .collect::<Vec<_>>();
+        assert!(!template_columns.contains(&"runtime_profile".to_owned()));
         assert_eq!(database.schema_version().await.unwrap(), 19);
     }
 
@@ -379,9 +412,18 @@ mod tests {
             "runtime_naming_scheme",
             "runtime_resource_prefix",
             "runtime_route_key",
+            "runtime_profile",
         ] {
             assert!(!workspace_columns.contains(&removed.to_owned()));
         }
+        let template_columns = sqlx::query("PRAGMA table_info('workspace_templates')")
+            .fetch_all(pool)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|row| row.try_get::<String, _>("name").unwrap())
+            .collect::<Vec<_>>();
+        assert!(!template_columns.contains(&"runtime_profile".to_owned()));
         let removed_indexes: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name IN ('workspaces_runtime_route_key_idx', 'workspaces_runtime_resource_idx')",
         )
@@ -675,9 +717,17 @@ mod tests {
             "runtime_naming_scheme",
             "runtime_resource_prefix",
             "runtime_route_key",
+            "runtime_profile",
         ] {
             assert!(!retained_columns.contains(&removed.to_owned()));
         }
+        let template_columns: Vec<String> = sqlx::query_scalar(
+            "SELECT column_name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'workspace_templates'",
+        )
+        .fetch_all(pool)
+        .await
+        .unwrap();
+        assert!(!template_columns.contains(&"runtime_profile".to_owned()));
         let remaining_compatibility_objects: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM pg_trigger WHERE tgrelid = 'workspaces'::regclass AND tgname = 'workspaces_legacy_runtime_defaults_before_insert'",
         )

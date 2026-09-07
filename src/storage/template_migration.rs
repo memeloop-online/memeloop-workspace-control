@@ -5,7 +5,7 @@
 
 use std::collections::BTreeMap;
 
-use sqlx::Row;
+use sqlx::{Postgres, Row, Sqlite, Transaction};
 
 use crate::{
     quota::Resources,
@@ -13,7 +13,7 @@ use crate::{
     workspaces::AccessMode,
 };
 
-use super::{Database, StorageError};
+use super::StorageError;
 
 const NO_PROXY_NODE: &str = "localhost,127.0.0.1,::1,.svc,.cluster.local,10.42.0.0/16,10.43.0.0/16,100.64.0.0/10,.k3s.onetwo.website,npmmirror.com";
 const NO_PROXY_RUST: &str = "localhost,127.0.0.1,::1,.svc,.cluster.local,10.42.0.0/16,10.43.0.0/16,100.64.0.0/10,.k3s.onetwo.website,rsproxy.cn,npmmirror.com";
@@ -38,53 +38,51 @@ pub(super) fn from_legacy(
     Ok(spec)
 }
 
-pub(super) async fn backfill(database: &Database) -> Result<(), StorageError> {
-    match database {
-        Database::Sqlite {
-            pool,
-            installation_id,
-        } => {
-            for table in ["workspace_templates", "workspaces"] {
-                let yaml_column = yaml_column(table);
-                let query = legacy_rows_query(table, yaml_column, "?1");
-                for row in sqlx::query(&query)
-                    .bind(installation_id.as_str())
-                    .fetch_all(pool)
-                    .await?
-                {
-                    let (id, yaml) = legacy_yaml(&row)?;
-                    let update = backfill_query(table, yaml_column, "?1", "?2", "?3");
-                    sqlx::query(&update)
-                        .bind(yaml)
-                        .bind(installation_id.as_str())
-                        .bind(id)
-                        .execute(pool)
-                        .await?;
-                }
-            }
+pub(super) async fn backfill_sqlite(
+    transaction: &mut Transaction<'_, Sqlite>,
+    installation_id: &str,
+) -> Result<(), StorageError> {
+    for table in ["workspace_templates", "workspaces"] {
+        let yaml_column = yaml_column(table);
+        let query = legacy_rows_query(table, yaml_column, "?1");
+        for row in sqlx::query(&query)
+            .bind(installation_id)
+            .fetch_all(&mut **transaction)
+            .await?
+        {
+            let (id, yaml) = legacy_yaml(&row)?;
+            let update = backfill_query(table, yaml_column, "?1", "?2", "?3");
+            sqlx::query(&update)
+                .bind(yaml)
+                .bind(installation_id)
+                .bind(id)
+                .execute(&mut **transaction)
+                .await?;
         }
-        Database::Postgres {
-            pool,
-            installation_id,
-        } => {
-            for table in ["workspace_templates", "workspaces"] {
-                let yaml_column = yaml_column(table);
-                let query = legacy_rows_query(table, yaml_column, "$1");
-                for row in sqlx::query(&query)
-                    .bind(installation_id.as_str())
-                    .fetch_all(pool)
-                    .await?
-                {
-                    let (id, yaml) = legacy_yaml(&row)?;
-                    let update = backfill_query(table, yaml_column, "$1", "$2", "$3");
-                    sqlx::query(&update)
-                        .bind(yaml)
-                        .bind(installation_id.as_str())
-                        .bind(id)
-                        .execute(pool)
-                        .await?;
-                }
-            }
+    }
+    Ok(())
+}
+
+pub(super) async fn backfill_postgres(
+    transaction: &mut Transaction<'_, Postgres>,
+    installation_id: &str,
+) -> Result<(), StorageError> {
+    for table in ["workspace_templates", "workspaces"] {
+        let yaml_column = yaml_column(table);
+        let query = legacy_rows_query(table, yaml_column, "$1");
+        for row in sqlx::query(&query)
+            .bind(installation_id)
+            .fetch_all(&mut **transaction)
+            .await?
+        {
+            let (id, yaml) = legacy_yaml(&row)?;
+            let update = backfill_query(table, yaml_column, "$1", "$2", "$3");
+            sqlx::query(&update)
+                .bind(yaml)
+                .bind(installation_id)
+                .bind(id)
+                .execute(&mut **transaction)
+                .await?;
         }
     }
     Ok(())

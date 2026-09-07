@@ -287,30 +287,14 @@ fn normalize_template_row(
     let Some(object) = row.as_object_mut() else {
         return Ok(row);
     };
-    normalize_runtime_profile(object, schema_version);
+    let historical_profile = object
+        .remove("runtime_profile")
+        .and_then(|value| value.as_str().map(str::to_owned));
     if schema_version < 10 || missing_yaml(object, yaml_key) {
-        let yaml = legacy_template_yaml(object)?;
+        let yaml = legacy_template_yaml(object, historical_profile.as_deref())?;
         object.insert(yaml_key.to_owned(), Value::String(yaml));
     }
     Ok(row)
-}
-
-fn normalize_runtime_profile(object: &mut Map<String, Value>, schema_version: i64) {
-    let profile = object
-        .entry("runtime_profile")
-        .or_insert_with(|| Value::String("standard".to_owned()));
-    if schema_version >= 9 {
-        return;
-    }
-    let canonical = match profile.as_str() {
-        Some("coder_rust_dev" | "coder_token_center_rust_dev") => Some("rust_dev"),
-        Some("coder_node_dev") => Some("node_dev"),
-        Some("coder_cluster_admin") => Some("maintainance"),
-        _ => None,
-    };
-    if let Some(canonical) = canonical {
-        *profile = Value::String(canonical.to_owned());
-    }
 }
 
 fn missing_yaml(object: &Map<String, Value>, yaml_key: &str) -> bool {
@@ -320,7 +304,10 @@ fn missing_yaml(object: &Map<String, Value>, yaml_key: &str) -> bool {
         .is_none_or(str::is_empty)
 }
 
-fn legacy_template_yaml(object: &Map<String, Value>) -> Result<String, StorageError> {
+fn legacy_template_yaml(
+    object: &Map<String, Value>,
+    historical_profile: Option<&str>,
+) -> Result<String, StorageError> {
     let access = string_field(object, "access_mode")
         .and_then(AccessMode::from_database)
         .ok_or(StorageError::InvalidTemplate)?;
@@ -332,7 +319,7 @@ fn legacy_template_yaml(object: &Map<String, Value>) -> Result<String, StorageEr
         disk_gib: unsigned_field(object, "disk_gib")?,
     };
     let spec = super::template_migration::from_legacy(
-        required_string_field(object, "runtime_profile")?,
+        historical_profile.unwrap_or("standard"),
         required_string_field(object, "image")?,
         access,
         resources,
@@ -487,11 +474,11 @@ const EXPORT_QUERIES: &[(&str, &str)] = &[
     ),
     (
         "workspace_templates",
-        "SELECT json_object('id', id, 'installation_id', installation_id, 'organization_id', organization_id, 'name', name, 'image', image, 'access_mode', access_mode, 'cpu_millis', cpu_millis, 'memory_mib', memory_mib, 'gpu_count', gpu_count, 'disk_gib', disk_gib, 'enabled', enabled, 'created_at', created_at, 'updated_at', updated_at, 'runtime_profile', runtime_profile, 'template_yaml', template_yaml) item FROM workspace_templates WHERE installation_id = ?1 ORDER BY id",
+        "SELECT json_object('id', id, 'installation_id', installation_id, 'organization_id', organization_id, 'name', name, 'image', image, 'access_mode', access_mode, 'cpu_millis', cpu_millis, 'memory_mib', memory_mib, 'gpu_count', gpu_count, 'disk_gib', disk_gib, 'enabled', enabled, 'created_at', created_at, 'updated_at', updated_at, 'template_yaml', template_yaml) item FROM workspace_templates WHERE installation_id = ?1 ORDER BY id",
     ),
     (
         "workspaces",
-        "SELECT json_object('id', id, 'installation_id', installation_id, 'short_id', short_id, 'organization_id', organization_id, 'owner_id', owner_id, 'name', name, 'template_id', template_id, 'image', image, 'access_mode', access_mode, 'state', state, 'cpu_millis', cpu_millis, 'memory_mib', memory_mib, 'gpu_count', gpu_count, 'disk_gib', disk_gib, 'generation', generation, 'created_at', created_at, 'updated_at', updated_at, 'deleted_at', deleted_at, 'runtime_profile', runtime_profile, 'template_snapshot_yaml', template_snapshot_yaml, 'runtime_namespace_scope', runtime_namespace_scope, 'runtime_namespace', runtime_namespace) item FROM workspaces WHERE installation_id = ?1 ORDER BY id",
+        "SELECT json_object('id', id, 'installation_id', installation_id, 'short_id', short_id, 'organization_id', organization_id, 'owner_id', owner_id, 'name', name, 'template_id', template_id, 'image', image, 'access_mode', access_mode, 'state', state, 'cpu_millis', cpu_millis, 'memory_mib', memory_mib, 'gpu_count', gpu_count, 'disk_gib', disk_gib, 'generation', generation, 'created_at', created_at, 'updated_at', updated_at, 'deleted_at', deleted_at, 'template_snapshot_yaml', template_snapshot_yaml, 'runtime_namespace_scope', runtime_namespace_scope, 'runtime_namespace', runtime_namespace) item FROM workspaces WHERE installation_id = ?1 ORDER BY id",
     ),
     (
         "workspace_port_mappings",
@@ -547,10 +534,9 @@ mod tests {
                 "id": "legacy", "installation_id": "snapshot-test", "short_id": "abc123",
                 "name": "Legacy", "image": "registry.example/dev:latest",
                 "access_mode": "internal", "cpu_millis": 1000, "memory_mib": 2048,
-                "gpu_count": 0, "disk_gib": 20
+                "gpu_count": 0, "disk_gib": 20, "runtime_profile": "coder_rust_dev"
             })];
             let normalized = normalize_snapshot_rows(table, &rows, 7).unwrap();
-            assert_eq!(normalized[0]["runtime_profile"], "standard");
             let yaml_key = if table == "workspace_templates" {
                 "template_yaml"
             } else {
@@ -562,7 +548,14 @@ mod tests {
                     .unwrap()
                     .contains("WorkspaceTemplate")
             );
-            assert!(rows[0].get("runtime_profile").is_none());
+            assert!(normalized[0].get("runtime_profile").is_none());
+            assert!(
+                normalized[0][yaml_key]
+                    .as_str()
+                    .unwrap()
+                    .contains("rust-dev")
+            );
+            assert!(rows[0].get("runtime_profile").is_some());
             if table == "workspaces" {
                 for legacy_field in [
                     "runtime_naming_scheme",
