@@ -31,9 +31,8 @@ async fn postgres_updates_a_locked_stopped_workspace_image() {
     scoped_url
         .query_pairs_mut()
         .append_pair("options", &format!("-c search_path={schema}"));
-    let installation_id = format!("image-update-pg-{}", Uuid::now_v7().simple())
-        .parse()
-        .unwrap();
+    let suffix = &Uuid::now_v7().simple().to_string()[..11];
+    let installation_id = format!("image-pg-{suffix}").parse().unwrap();
     let database = Database::connect(scoped_url.as_str(), installation_id)
         .await
         .unwrap();
