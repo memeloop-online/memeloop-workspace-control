@@ -1,14 +1,10 @@
 use std::collections::BTreeSet;
 
 use super::*;
-use crate::{
-    quota::Resources, workspace_runtime::WorkspaceRuntimeIdentity, workspaces::AccessMode,
-};
+use crate::{quota::Resources, workspace_runtime::WorkspaceResourceNames, workspaces::AccessMode};
 
-fn legacy_names() -> crate::workspace_runtime::WorkspaceResourceNames {
-    WorkspaceRuntimeIdentity::legacy_v1(&"test".parse().unwrap(), "test")
-        .unwrap()
-        .names()
+fn legacy_names() -> WorkspaceResourceNames {
+    WorkspaceResourceNames::for_prefix("w-test")
 }
 
 fn template() -> WorkspaceTemplateSpec {

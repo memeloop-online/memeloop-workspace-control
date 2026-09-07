@@ -10,7 +10,11 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use super::{BuildError, InjectionMaterialization, OwnershipError, ResourceBuilder};
-use crate::workspaces::Workspace;
+use crate::{
+    config::InstallationId,
+    workspace_runtime::{WorkspaceRuntimeIdentityError, WorkspaceRuntimeNames},
+    workspaces::Workspace,
+};
 
 const FIELD_MANAGER: &str = "memeloop-workspace-control";
 
@@ -83,10 +87,10 @@ impl KubernetesCoordinator {
         expected: i32,
     ) -> Result<bool, ReconcileError> {
         let namespace_name = &workspace.runtime.namespace;
-        let names = workspace.runtime.names();
+        let names = self.builder.runtime_names(workspace)?;
         let Some(stateful_set) =
             Api::<StatefulSet>::namespaced(self.client.clone(), namespace_name)
-                .get_opt(&names.stateful_set)
+                .get_opt(&names.resources.stateful_set)
                 .await?
         else {
             return Ok(false);
@@ -113,11 +117,17 @@ impl KubernetesCoordinator {
 /// Returns the apiserver-assigned SSH NodePort for an internal workspace.
 pub async fn workspace_ssh_node_port(
     client: kube::Client,
+    installation_id: &InstallationId,
     workspace: &Workspace,
 ) -> Result<Option<u16>, kube::Error> {
-    let names = workspace.runtime.names();
+    let names = WorkspaceRuntimeNames::for_workspace(
+        installation_id,
+        &workspace.runtime,
+        &workspace.short_id,
+    )
+    .map_err(|error| kube::Error::Service(error.to_string().into()))?;
     let service = Api::<Service>::namespaced(client, &workspace.runtime.namespace)
-        .get_opt(&names.ssh_service)
+        .get_opt(&names.resources.ssh_service)
         .await?;
     Ok(service.as_ref().and_then(node_port_from_service))
 }
@@ -170,6 +180,8 @@ pub enum ReconcileError {
     Build(#[from] BuildError),
     #[error(transparent)]
     Materialization(#[from] crate::kubernetes::MaterializationError),
+    #[error(transparent)]
+    RuntimeIdentity(#[from] WorkspaceRuntimeIdentityError),
     #[error(transparent)]
     Ownership(#[from] OwnershipError),
     #[error(transparent)]

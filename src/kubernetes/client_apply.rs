@@ -94,11 +94,12 @@ impl KubernetesCoordinator {
     ) -> Result<(), ReconcileError> {
         let workspace_id = workspace.id;
         let apply = PatchParams::apply(FIELD_MANAGER);
-        let names = workspace.runtime.names();
+        let runtime_names = self.builder.runtime_names(workspace)?;
+        let names = &runtime_names.resources;
         let service_accounts =
             Api::<ServiceAccount>::namespaced(self.client.clone(), namespace_name);
         let cluster_role_bindings = Api::<ClusterRoleBinding>::all(self.client.clone());
-        let binding_name = self.builder.cluster_admin_binding_name(&workspace.runtime);
+        let binding_name = self.builder.cluster_admin_binding_name(workspace)?;
         if let Some(service_account) = &desired.service_account {
             verify_existing(
                 &service_accounts,
@@ -153,7 +154,8 @@ impl KubernetesCoordinator {
     ) -> Result<(), ReconcileError> {
         let workspace_id = workspace.id;
         let apply = PatchParams::apply(FIELD_MANAGER);
-        let names = workspace.runtime.names();
+        let runtime_names = self.builder.runtime_names(workspace)?;
+        let names = &runtime_names.resources;
         let secrets = Api::<Secret>::namespaced(self.client.clone(), namespace_name);
         verify_existing(
             &secrets,
@@ -195,7 +197,8 @@ impl KubernetesCoordinator {
         desired: &DesiredResources,
     ) -> Result<(), ReconcileError> {
         let workspace_id = workspace.id;
-        let names = workspace.runtime.names();
+        let runtime_names = self.builder.runtime_names(workspace)?;
+        let names = &runtime_names.resources;
         let apply = PatchParams::apply(FIELD_MANAGER);
         let services = Api::<Service>::namespaced(self.client.clone(), namespace_name);
         verify_existing(&services, &names.service, &self.builder, workspace_id).await?;
@@ -271,7 +274,8 @@ impl KubernetesCoordinator {
     ) -> Result<(), ReconcileError> {
         let workspace_id = workspace.id;
         let apply = PatchParams::apply(FIELD_MANAGER);
-        let names = workspace.runtime.names();
+        let runtime_names = self.builder.runtime_names(workspace)?;
+        let names = &runtime_names.resources;
         let network_policies =
             Api::<NetworkPolicy>::namespaced(self.client.clone(), namespace_name);
         verify_existing(
@@ -312,7 +316,8 @@ impl KubernetesCoordinator {
         materialization: &InjectionMaterialization,
     ) -> Result<(), ReconcileError> {
         let workspace_id = workspace.id;
-        let names = workspace.runtime.names();
+        let runtime_names = self.builder.runtime_names(workspace)?;
+        let names = &runtime_names.resources;
         let namespace = materialization
             .file_config_map
             .metadata

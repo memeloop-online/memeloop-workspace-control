@@ -12,8 +12,8 @@ use thiserror::Error;
 use crate::injections::{
     InjectionKind, InjectionScope, InjectionValue, ResolvedInjection, ResolvedInjectionSummary,
 };
-use crate::workspace_runtime::WorkspaceRuntimeIdentity;
 use crate::workspace_runtime::WorkspaceRuntimeIdentityError;
+use crate::workspace_runtime::WorkspaceRuntimeNames;
 
 use super::namespaced_metadata;
 
@@ -172,11 +172,10 @@ impl MaterializedData {
 }
 
 pub(super) fn build(
-    runtime: &WorkspaceRuntimeIdentity,
+    runtime: &WorkspaceRuntimeNames,
     labels: &BTreeMap<String, String>,
     resolved: &[ResolvedInjection],
 ) -> Result<InjectionMaterialization, MaterializationError> {
-    let names = runtime.names();
     let mut data = MaterializedData::default();
     for (index, item) in resolved.iter().enumerate() {
         data.insert(index, item)?;
@@ -198,14 +197,18 @@ pub(super) fn build(
 
     Ok(InjectionMaterialization {
         environment_secret: Secret {
-            metadata: namespaced_metadata(&names.environment_secret, &runtime.namespace, labels),
+            metadata: namespaced_metadata(
+                &runtime.resources.environment_secret,
+                &runtime.namespace,
+                labels,
+            ),
             data: Some(data.secret_environment),
             type_: Some("Opaque".to_owned()),
             ..Secret::default()
         },
         environment_config_map: ConfigMap {
             metadata: namespaced_metadata(
-                &names.environment_config_map,
+                &runtime.resources.environment_config_map,
                 &runtime.namespace,
                 labels,
             ),
@@ -213,13 +216,21 @@ pub(super) fn build(
             ..ConfigMap::default()
         },
         file_secret: Secret {
-            metadata: namespaced_metadata(&names.files_secret, &runtime.namespace, labels),
+            metadata: namespaced_metadata(
+                &runtime.resources.files_secret,
+                &runtime.namespace,
+                labels,
+            ),
             data: Some(data.secret_files),
             type_: Some("Opaque".to_owned()),
             ..Secret::default()
         },
         file_config_map: ConfigMap {
-            metadata: namespaced_metadata(&names.files_config_map, &runtime.namespace, labels),
+            metadata: namespaced_metadata(
+                &runtime.resources.files_config_map,
+                &runtime.namespace,
+                labels,
+            ),
             data: Some(data.config_files),
             binary_data: Some(data.config_binary_files),
             ..ConfigMap::default()
@@ -288,15 +299,14 @@ pub enum MaterializationError {
 mod tests {
     use super::*;
     use crate::injections::{InjectionItem, InjectionValue};
-    use crate::workspace_runtime::{WorkspaceNamespaceScope, WorkspaceRuntimeNamingScheme};
+    use crate::workspace_runtime::WorkspaceRuntimeNames;
 
-    fn runtime() -> WorkspaceRuntimeIdentity {
-        WorkspaceRuntimeIdentity {
-            naming_scheme: WorkspaceRuntimeNamingScheme::LegacyV1,
-            namespace_scope: WorkspaceNamespaceScope::Dedicated,
+    fn runtime() -> WorkspaceRuntimeNames {
+        WorkspaceRuntimeNames {
             namespace: "workspace-test".to_owned(),
-            resource_prefix: "workspace".to_owned(),
-            route_key: "test".to_owned(),
+            resource_prefix: "w-test".to_owned(),
+            route_key: "test-test".to_owned(),
+            resources: crate::workspace_runtime::WorkspaceResourceNames::for_prefix("w-test"),
         }
     }
 

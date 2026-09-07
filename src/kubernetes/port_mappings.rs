@@ -13,7 +13,7 @@ use k8s_openapi::{
     apimachinery::pkg::{apis::meta::v1::LabelSelector, util::intstr::IntOrString},
 };
 
-use crate::{storage::PortMapping, workspace_runtime::WorkspaceRuntimeIdentity};
+use crate::{storage::PortMapping, workspace_runtime::WorkspaceRuntimeNames};
 
 use super::{namespaced_metadata, network_policy::ingress_rule_with_ip_blocks};
 
@@ -22,7 +22,7 @@ pub const PORT_MAPPING_ID_LABEL: &str = "workspace.memeloop.dev/port-mapping-id"
 /// Names are derived from UUIDs, never user input.  The Service is ClusterIP
 /// only; its port and targetPort both point at the workspace pod port.
 pub fn resources(
-    runtime: &WorkspaceRuntimeIdentity,
+    runtime: &WorkspaceRuntimeNames,
     labels: &BTreeMap<String, String>,
     pod_labels: &BTreeMap<String, String>,
     wildcard_domain: &str,
@@ -104,7 +104,7 @@ pub fn hostname(mapping: &PortMapping, wildcard_domain: &str) -> String {
 /// declared application port to Higress.  It never opens it to a node, host or
 /// arbitrary namespace.
 pub fn network_policy(
-    runtime: &WorkspaceRuntimeIdentity,
+    runtime: &WorkspaceRuntimeNames,
     labels: &BTreeMap<String, String>,
     pod_labels: &BTreeMap<String, String>,
     higress_namespace: &str,
@@ -148,16 +148,15 @@ fn mapping_labels(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::workspace_runtime::{WorkspaceNamespaceScope, WorkspaceRuntimeNamingScheme};
+    use crate::workspace_runtime::WorkspaceRuntimeNames;
     use uuid::Uuid;
 
-    fn runtime() -> WorkspaceRuntimeIdentity {
-        WorkspaceRuntimeIdentity {
-            naming_scheme: WorkspaceRuntimeNamingScheme::LegacyV1,
-            namespace_scope: WorkspaceNamespaceScope::Dedicated,
+    fn runtime() -> WorkspaceRuntimeNames {
+        WorkspaceRuntimeNames {
             namespace: "workspace".to_owned(),
-            resource_prefix: "workspace".to_owned(),
-            route_key: "test".to_owned(),
+            resource_prefix: "w-test".to_owned(),
+            route_key: "test-test".to_owned(),
+            resources: crate::workspace_runtime::WorkspaceResourceNames::for_prefix("w-test"),
         }
     }
     #[test]

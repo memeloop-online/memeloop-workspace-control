@@ -42,6 +42,12 @@ pub(super) async fn workspace_response(
     expose_connection: bool,
 ) -> Result<WorkspaceResponse, ApiError> {
     let namespace = workspace.runtime.namespace.clone();
+    let runtime_names = crate::workspace_runtime::WorkspaceRuntimeNames::for_workspace(
+        &state.config.installation_id,
+        &workspace.runtime,
+        &workspace.short_id,
+    )
+    .map_err(|_| ApiError::BadRequest("workspace runtime identity is invalid"))?;
     let connectable = expose_connection && workspace.state == WorkspaceState::Ready;
     let internal_endpoint = ssh_endpoint(state, &workspace, &namespace, connectable).await?;
     let (ssh_command, ssh_config) = ssh_commands(
@@ -56,7 +62,7 @@ pub(super) async fn workspace_response(
                 .config
                 .web_shell_public_origin
                 .as_ref()
-                .map(|origin| format!("{origin}{}", workspace.runtime.web_shell_path()))
+                .map(|origin| format!("{origin}{}", runtime_names.web_shell_path()))
         })
         .flatten();
     let injection_sources = injection_sources(state, &workspace).await?;
@@ -103,12 +109,17 @@ async fn ssh_endpoint(
     namespace: &str,
     connectable: bool,
 ) -> Result<Option<(String, u16)>, ApiError> {
+    let runtime_names = crate::workspace_runtime::WorkspaceRuntimeNames::for_workspace(
+        &state.config.installation_id,
+        &workspace.runtime,
+        &workspace.short_id,
+    )
+    .map_err(|_| ApiError::BadRequest("workspace runtime identity is invalid"))?;
     let cluster = || {
         (
             format!(
                 "{}.{}.svc.cluster.local",
-                workspace.runtime.names().service,
-                namespace
+                runtime_names.resources.service, namespace
             ),
             2222,
         )
@@ -127,10 +138,14 @@ async fn ssh_endpoint(
         .clone()
         .ok_or(ApiError::KubernetesUnavailable)?;
     Ok(
-        crate::kubernetes::workspace_ssh_node_port(client, workspace)
-            .await
-            .map_err(ApiError::Kubernetes)?
-            .map(|port| (host.clone(), port)),
+        crate::kubernetes::workspace_ssh_node_port(
+            client,
+            &state.config.installation_id,
+            workspace,
+        )
+        .await
+        .map_err(ApiError::Kubernetes)?
+        .map(|port| (host.clone(), port)),
     )
 }
 

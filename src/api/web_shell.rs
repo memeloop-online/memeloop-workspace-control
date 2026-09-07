@@ -59,7 +59,13 @@ pub(super) async fn issue(
         .await?;
     let path = format!(
         "{}?ticket={}",
-        workspace.runtime.web_shell_path(),
+        crate::workspace_runtime::WorkspaceRuntimeNames::for_workspace(
+            &state.config.installation_id,
+            &workspace.runtime,
+            &workspace.short_id,
+        )
+        .map_err(|_| ApiError::BadRequest("workspace runtime identity is invalid"))?
+        .web_shell_path(),
         issued.ticket
     );
     let web_shell_url = state
@@ -105,14 +111,10 @@ pub(super) async fn authorize(
     {
         Some(value) => value.parse::<Uuid>().map_err(|_| ApiError::Unauthorized)?,
         None => {
-            let route_key = forwarded_uri
-                .and_then(workspace_route_key_from_uri)
+            let short_id = forwarded_uri
+                .and_then(|uri| workspace_short_id_from_uri(uri, &state.config.installation_id))
                 .ok_or(ApiError::Unauthorized)?;
-            state
-                .database
-                .get_workspace_by_route_key(route_key)
-                .await?
-                .id
+            state.database.get_workspace_by_short_id(short_id).await?.id
         }
     };
     let ticket = headers
@@ -163,27 +165,35 @@ fn ticket_from_uri(uri: &str) -> Option<&str> {
     })
 }
 
-fn workspace_route_key_from_uri(uri: &str) -> Option<&str> {
+fn workspace_short_id_from_uri<'a>(
+    uri: &'a str,
+    installation_id: &crate::config::InstallationId,
+) -> Option<&'a str> {
     let path = uri.split_once('?').map_or(uri, |(path, _)| path);
     let mut segments = path.trim_matches('/').split('/');
     (segments.next()? == "shell")
         .then(|| segments.next())
         .flatten()
         .filter(|route_key| {
-            !route_key.is_empty()
-                && route_key.len() <= 63
-                && route_key
-                    .bytes()
-                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
-                && route_key
-                    .as_bytes()
-                    .first()
-                    .is_some_and(u8::is_ascii_alphanumeric)
-                && route_key
-                    .as_bytes()
-                    .last()
-                    .is_some_and(u8::is_ascii_alphanumeric)
+            route_key
+                .strip_prefix(&format!("{}-", installation_id.as_str()))
+                .is_some_and(|short_id| {
+                    !short_id.is_empty()
+                        && short_id.len() <= 40
+                        && short_id
+                            .bytes()
+                            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
+                        && short_id
+                            .as_bytes()
+                            .first()
+                            .is_some_and(u8::is_ascii_alphanumeric)
+                        && short_id
+                            .as_bytes()
+                            .last()
+                            .is_some_and(u8::is_ascii_alphanumeric)
+                })
         })
+        .and_then(|route_key| route_key.strip_prefix(&format!("{}-", installation_id.as_str())))
 }
 
 fn is_ttyd_websocket_uri(uri: &str) -> bool {
@@ -205,18 +215,30 @@ mod tests {
         );
         assert_eq!(ticket_from_uri("/shell/abc/"), None);
         assert_eq!(
-            workspace_route_key_from_uri("/shell/01abcdef/?ticket=one"),
+            workspace_short_id_from_uri(
+                "/shell/public-a-01abcdef/?ticket=one",
+                &"public-a".parse().unwrap()
+            ),
             Some("01abcdef")
         );
         assert_eq!(
-            workspace_route_key_from_uri("/shell/public-a-89abcdef01234567/ws"),
-            Some("public-a-89abcdef01234567")
-        );
-        assert_eq!(
-            workspace_route_key_from_uri("/shell/89abcdef01234567/ws"),
+            workspace_short_id_from_uri(
+                "/shell/public-a-89abcdef01234567/ws",
+                &"public-a".parse().unwrap()
+            ),
             Some("89abcdef01234567")
         );
-        assert_eq!(workspace_route_key_from_uri("/shell/not_an_id/ws"), None);
+        assert_eq!(
+            workspace_short_id_from_uri("/shell/89abcdef01234567/ws", &"public-a".parse().unwrap()),
+            None
+        );
+        assert_eq!(
+            workspace_short_id_from_uri(
+                "/shell/public-a-not_an_id/ws",
+                &"public-a".parse().unwrap()
+            ),
+            None
+        );
         assert!(is_ttyd_websocket_uri("/shell/01abcdef/ws?ticket=A_b-09"));
         assert!(!is_ttyd_websocket_uri("/shell/01abcdef/?ticket=A_b-09"));
     }

@@ -43,7 +43,12 @@ impl WorkspaceReconcileHandler {
         let resolved = self.resolve_workspace_injections(workspace).await?;
         let materialization = self
             .builder
-            .materialize_injections(workspace.id, &workspace.runtime, &resolved)
+            .materialize_injections(
+                workspace.id,
+                &workspace.short_id,
+                &workspace.runtime,
+                &resolved,
+            )
             .map_err(job_error)?;
         let identity = self
             .database
@@ -52,7 +57,12 @@ impl WorkspaceReconcileHandler {
             .map_err(job_error)?;
         let ssh_identity = self
             .builder
-            .materialize_ssh_identity(workspace.id, &workspace.runtime, &identity)
+            .materialize_ssh_identity(
+                workspace.id,
+                &workspace.short_id,
+                &workspace.runtime,
+                &identity,
+            )
             .map_err(job_error)?;
         self.coordinator
             .reconcile_with_injections(workspace, materialization, ssh_identity)

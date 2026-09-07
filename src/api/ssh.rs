@@ -82,7 +82,14 @@ pub(super) async fn authorized_key(
     let user_id = authorized_user.ok_or(ApiError::Unauthorized)?;
     let target = format!(
         "{}.{}.svc.cluster.local:2222",
-        workspace.runtime.names().service,
+        crate::workspace_runtime::WorkspaceRuntimeNames::for_workspace(
+            &state.config.installation_id,
+            &workspace.runtime,
+            &workspace.short_id,
+        )
+        .map_err(|_| ApiError::Unauthorized)?
+        .resources
+        .service,
         workspace.runtime.namespace,
     );
     let line = format!(

@@ -259,8 +259,10 @@ mod coordinator_tests {
             owner_id: Uuid::now_v7(),
             name: "test".to_owned(),
             template_id: None,
-            runtime: WorkspaceRuntimeIdentity::legacy_v1(&"public-a".parse().unwrap(), "01jabc")
-                .unwrap(),
+            runtime: WorkspaceRuntimeIdentity {
+                namespace_scope: crate::workspace_runtime::WorkspaceNamespaceScope::Dedicated,
+                namespace: "ws-public-a-01jabc".to_owned(),
+            },
             template: WorkspaceTemplateSpec::standard(
                 "example/workspace:1",
                 AccessMode::Public,
@@ -281,13 +283,10 @@ mod coordinator_tests {
     fn shared_workspace(id: Uuid) -> Workspace {
         let mut workspace = legacy_workspace(id);
         workspace.short_id = "8000000000000001".to_owned();
-        workspace.runtime = WorkspaceRuntimeIdentity::prefixed_v2(
-            &"public-a".parse().unwrap(),
-            id,
-            &workspace.short_id,
-            Some("workspace-pool"),
-        )
-        .unwrap();
+        workspace.runtime = WorkspaceRuntimeIdentity {
+            namespace_scope: crate::workspace_runtime::WorkspaceNamespaceScope::Shared,
+            namespace: "workspace-pool".to_owned(),
+        };
         workspace
     }
 

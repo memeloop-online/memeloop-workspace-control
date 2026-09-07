@@ -16,7 +16,8 @@ use k8s_openapi::{
 };
 
 use crate::{
-    templates::WorkspaceStoragePolicy, workspace_runtime::WorkspaceResourceNames,
+    templates::WorkspaceStoragePolicy,
+    workspace_runtime::{WorkspaceResourceNames, WorkspaceRuntimeNames},
     workspaces::Workspace,
 };
 
@@ -28,16 +29,16 @@ use super::{
 
 pub(super) fn stateful_set(
     builder: &ResourceBuilder,
+    runtime: &WorkspaceRuntimeNames,
     labels: &BTreeMap<String, String>,
     template_labels: &BTreeMap<String, String>,
     workspace: &Workspace,
     replicas: i32,
 ) -> StatefulSet {
-    let runtime = &workspace.runtime;
-    let names = runtime.names();
+    let names = &runtime.resources;
     let stable_labels = builder.labels(workspace.id);
     let pod = WorkspacePod::from_template(&workspace.template);
-    let containers = containers(builder, pod, workspace, &names);
+    let containers = containers(builder, pod, workspace, names, &runtime.route_key);
     StatefulSet {
         metadata: namespaced_metadata(&names.stateful_set, &runtime.namespace, labels),
         spec: Some(StatefulSetSpec {
@@ -75,6 +76,7 @@ fn containers(
     pod: WorkspacePod<'_>,
     workspace: &Workspace,
     names: &WorkspaceResourceNames,
+    route_key: &str,
 ) -> Vec<Container> {
     let mut containers = vec![pod.workspace_container(
         &workspace.template.image,
@@ -84,7 +86,7 @@ fn containers(
     if let Some(buildkit) = pod.buildkit_container() {
         containers.push(buildkit);
     }
-    containers.push(ttyd_container(builder, pod, &workspace.runtime.route_key));
+    containers.push(ttyd_container(builder, pod, route_key));
     containers
 }
 

@@ -121,7 +121,11 @@ pub(super) async fn list(
         .ok_or(ApiError::KubernetesUnavailable)?;
     let selector = runtime_selector(&state.config.installation_id, &workspaces);
     let kubernetes_runtime = fetch_kubernetes_runtime(state.as_ref(), client, &selector).await?;
-    let storage_identities = workspaces.iter().map(storage_identity).collect::<Vec<_>>();
+    let storage_identities = workspaces
+        .iter()
+        .map(|workspace| storage_identity(&state.config.installation_id, workspace))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| ApiError::BadRequest("workspace runtime identity is invalid"))?;
     let storage_metrics = fetch_storage_metrics(
         state.config.prometheus_url.as_ref(),
         &storage_identities,
@@ -129,6 +133,7 @@ pub(super) async fn list(
     )
     .await;
     Ok(Json(build_runtime_entries(
+        &state.config.installation_id,
         workspaces,
         kubernetes_runtime,
         &storage_metrics,
@@ -218,6 +223,7 @@ fn index_pvc_capacities(pvcs: Vec<PersistentVolumeClaim>) -> PvcCapacityMap {
 }
 
 fn build_runtime_entries(
+    installation_id: &InstallationId,
     workspaces: Vec<Workspace>,
     mut kubernetes: KubernetesRuntimeBatch,
     storage_metrics: &StorageMetricBatch,
@@ -247,7 +253,12 @@ fn build_runtime_entries(
             } else {
                 (Vec::new(), Vec::new())
             };
-            let names = workspace.runtime.names();
+            let names = crate::workspace_runtime::WorkspaceRuntimeNames::for_workspace(
+                installation_id,
+                &workspace.runtime,
+                &workspace.short_id,
+            )
+            .expect("workspace runtime identity was validated before runtime observation");
             WorkspaceRuntimeEntry {
                 workspace_id,
                 runtime: WorkspaceRuntimeResponse {
@@ -255,7 +266,7 @@ fn build_runtime_entries(
                     pvc_capacity: kubernetes.pvc_capacities.remove(&workspace_id),
                     storage: storage_metrics.telemetry(
                         &workspace.runtime.namespace,
-                        &names.data_pvc_ordinal_zero(),
+                        &names.resources.data_pvc_ordinal_zero(),
                         observed_now,
                     ),
                     metrics_available: kubernetes.metrics_available,
@@ -287,7 +298,12 @@ pub(super) async fn get(
         .observability
         .begin_upstream(crate::observability::UpstreamKind::Kubernetes);
     let namespace = &workspace.runtime.namespace;
-    let names = workspace.runtime.names();
+    let names = crate::workspace_runtime::WorkspaceRuntimeNames::for_workspace(
+        &state.config.installation_id,
+        &workspace.runtime,
+        &workspace.short_id,
+    )
+    .map_err(|_| ApiError::BadRequest("workspace runtime identity is invalid"))?;
     let selector = format!(
         "{OWNER_INSTALLATION_LABEL}={},{WORKSPACE_ID_LABEL}={workspace_id}",
         state.config.installation_id,
@@ -311,7 +327,7 @@ pub(super) async fn get(
     let event_list = Api::<Event>::namespaced(client.clone(), namespace)
         .list(&ListParams::default().fields(&format!(
             "involvedObject.kind=Pod,involvedObject.name={}",
-            names.pod_ordinal_zero(),
+            names.resources.pod_ordinal_zero(),
         )))
         .await
         .map_err(ApiError::Kubernetes)?;
@@ -322,7 +338,7 @@ pub(super) async fn get(
         .collect::<Vec<_>>();
     newest_events(&mut events, 50);
     let pvc_capacity = Api::<PersistentVolumeClaim>::namespaced(client.clone(), namespace)
-        .get_opt(&names.data_pvc_ordinal_zero())
+        .get_opt(&names.resources.data_pvc_ordinal_zero())
         .await
         .map_err(ApiError::Kubernetes)?
         .filter(|pvc| {
@@ -353,11 +369,16 @@ pub(super) async fn get(
     kubernetes_request.success();
     let storage = fetch_storage_metrics(
         state.config.prometheus_url.as_ref(),
-        &[storage_identity(&workspace)],
+        &[storage_identity(&state.config.installation_id, &workspace)
+            .map_err(|_| ApiError::BadRequest("workspace runtime identity is invalid"))?],
         &state.observability,
     )
     .await
-    .telemetry(namespace, &names.data_pvc_ordinal_zero(), unix_timestamp());
+    .telemetry(
+        namespace,
+        &names.resources.data_pvc_ordinal_zero(),
+        unix_timestamp(),
+    );
     let response = WorkspaceRuntimeResponse {
         allocated: workspace.template.resources,
         pvc_capacity,
@@ -370,11 +391,20 @@ pub(super) async fn get(
     Ok(Json(response))
 }
 
-fn storage_identity(workspace: &Workspace) -> StorageIdentity {
-    (
+fn storage_identity(
+    installation_id: &InstallationId,
+    workspace: &Workspace,
+) -> Result<StorageIdentity, crate::workspace_runtime::WorkspaceRuntimeIdentityError> {
+    Ok((
         workspace.runtime.namespace.clone(),
-        workspace.runtime.names().data_pvc_ordinal_zero(),
-    )
+        crate::workspace_runtime::WorkspaceRuntimeNames::for_workspace(
+            installation_id,
+            &workspace.runtime,
+            &workspace.short_id,
+        )?
+        .resources
+        .data_pvc_ordinal_zero(),
+    ))
 }
 
 fn unix_timestamp() -> i64 {

@@ -7,30 +7,6 @@ use crate::config::InstallationId;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
-pub enum WorkspaceRuntimeNamingScheme {
-    LegacyV1,
-    PrefixedV2,
-}
-
-impl WorkspaceRuntimeNamingScheme {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::LegacyV1 => "legacy_v1",
-            Self::PrefixedV2 => "prefixed_v2",
-        }
-    }
-
-    pub fn from_database(value: &str) -> Option<Self> {
-        match value {
-            "legacy_v1" => Some(Self::LegacyV1),
-            "prefixed_v2" => Some(Self::PrefixedV2),
-            _ => None,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "snake_case")]
 pub enum WorkspaceNamespaceScope {
     Dedicated,
     Shared,
@@ -53,81 +29,45 @@ impl WorkspaceNamespaceScope {
     }
 }
 
-/// Immutable placement and naming data captured when a workspace is created.
+/// Immutable runtime placement captured when a workspace is created.
 ///
-/// Reconcilers must consume this value from the database. They must never derive
-/// an existing workspace's namespace or object names from current deployment
-/// configuration, because doing so could orphan or overwrite its PVC.
+/// Object names and public routes deliberately are not persisted here. They
+/// are a pure function of the installation and workspace short id.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct WorkspaceRuntimeIdentity {
-    pub naming_scheme: WorkspaceRuntimeNamingScheme,
     pub namespace_scope: WorkspaceNamespaceScope,
     pub namespace: String,
-    pub resource_prefix: String,
-    pub route_key: String,
 }
 
 impl WorkspaceRuntimeIdentity {
-    pub fn legacy_v1(
-        installation_id: &InstallationId,
-        workspace_short_id: &str,
-    ) -> Result<Self, WorkspaceRuntimeIdentityError> {
-        let identity = Self {
-            naming_scheme: WorkspaceRuntimeNamingScheme::LegacyV1,
-            namespace_scope: WorkspaceNamespaceScope::Dedicated,
-            namespace: installation_id
-                .workspace_namespace(workspace_short_id)
-                .map_err(|_| WorkspaceRuntimeIdentityError::InvalidIdentity)?,
-            resource_prefix: "workspace".to_owned(),
-            route_key: workspace_short_id.to_owned(),
-        };
-        identity.validate()?;
-        Ok(identity)
-    }
-
-    pub fn prefixed_v2(
+    pub fn new(
         installation_id: &InstallationId,
         workspace_id: Uuid,
         workspace_short_id: &str,
         shared_namespace: Option<&str>,
     ) -> Result<Self, WorkspaceRuntimeIdentityError> {
-        let namespace = match shared_namespace {
-            Some(namespace) => namespace.to_owned(),
-            None => installation_id
-                .workspace_namespace(workspace_short_id)
-                .map_err(|_| WorkspaceRuntimeIdentityError::InvalidIdentity)?,
-        };
+        if workspace_short_id != workspace_short_id_for(workspace_id) {
+            return Err(WorkspaceRuntimeIdentityError::InvalidIdentity);
+        }
         let identity = Self {
-            naming_scheme: WorkspaceRuntimeNamingScheme::PrefixedV2,
             namespace_scope: if shared_namespace.is_some() {
                 WorkspaceNamespaceScope::Shared
             } else {
                 WorkspaceNamespaceScope::Dedicated
             },
-            namespace,
-            resource_prefix: format!("w-{workspace_short_id}"),
-            route_key: format!("{}-{workspace_short_id}", installation_id.as_str()),
+            namespace: match shared_namespace {
+                Some(namespace) => namespace.to_owned(),
+                None => installation_id
+                    .workspace_namespace(workspace_short_id)
+                    .map_err(|_| WorkspaceRuntimeIdentityError::InvalidIdentity)?,
+            },
         };
         identity.validate_for_workspace(installation_id, workspace_id, workspace_short_id)?;
         Ok(identity)
     }
 
     pub fn validate(&self) -> Result<(), WorkspaceRuntimeIdentityError> {
-        valid_dns_label(&self.namespace, 63)?;
-        valid_dns_label(&self.resource_prefix, 40)?;
-        valid_dns_label(&self.route_key, 63)?;
-        match self.naming_scheme {
-            WorkspaceRuntimeNamingScheme::LegacyV1
-                if self.namespace_scope != WorkspaceNamespaceScope::Dedicated
-                    || self.resource_prefix != "workspace" =>
-            {
-                Err(WorkspaceRuntimeIdentityError::InvalidIdentity)
-            }
-            _ => {
-                self.names().validate()?;
-                Ok(())
-            }
-        }
+        valid_dns_label(&self.namespace, 63)
     }
 
     pub fn validate_for_workspace(
@@ -137,51 +77,62 @@ impl WorkspaceRuntimeIdentity {
         workspace_short_id: &str,
     ) -> Result<(), WorkspaceRuntimeIdentityError> {
         self.validate()?;
-        match self.naming_scheme {
-            WorkspaceRuntimeNamingScheme::LegacyV1 => {
-                let expected_namespace = installation_id
-                    .workspace_namespace(workspace_short_id)
-                    .map_err(|_| WorkspaceRuntimeIdentityError::InvalidIdentity)?;
-                if self.namespace_scope != WorkspaceNamespaceScope::Dedicated
-                    || self.namespace != expected_namespace
-                    || self.resource_prefix != "workspace"
-                    || self.route_key != workspace_short_id
-                {
-                    return Err(WorkspaceRuntimeIdentityError::InvalidIdentity);
-                }
-            }
-            WorkspaceRuntimeNamingScheme::PrefixedV2 => {
-                if workspace_short_id != workspace_short_id_for(workspace_id)
-                    || self.resource_prefix != format!("w-{workspace_short_id}")
-                    || self.route_key
-                        != format!("{}-{workspace_short_id}", installation_id.as_str())
-                {
-                    return Err(WorkspaceRuntimeIdentityError::InvalidIdentity);
-                }
-                if self.namespace_scope == WorkspaceNamespaceScope::Dedicated
-                    && self.namespace
-                        != installation_id
-                            .workspace_namespace(workspace_short_id)
-                            .map_err(|_| WorkspaceRuntimeIdentityError::InvalidIdentity)?
-                {
-                    return Err(WorkspaceRuntimeIdentityError::InvalidIdentity);
-                }
+        if workspace_short_id != workspace_short_id_for(workspace_id) {
+            return Err(WorkspaceRuntimeIdentityError::InvalidIdentity);
+        }
+        if self.namespace_scope == WorkspaceNamespaceScope::Dedicated {
+            let expected_namespace = installation_id
+                .workspace_namespace(workspace_short_id)
+                .map_err(|_| WorkspaceRuntimeIdentityError::InvalidIdentity)?;
+            if self.namespace != expected_namespace {
+                return Err(WorkspaceRuntimeIdentityError::InvalidIdentity);
             }
         }
         Ok(())
     }
+}
 
-    pub fn names(&self) -> WorkspaceResourceNames {
-        match self.naming_scheme {
-            WorkspaceRuntimeNamingScheme::LegacyV1 => WorkspaceResourceNames::legacy(),
-            WorkspaceRuntimeNamingScheme::PrefixedV2 => {
-                WorkspaceResourceNames::prefixed(&self.resource_prefix)
-            }
-        }
+/// Canonical, non-persisted names for one workspace runtime.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkspaceRuntimeNames {
+    pub namespace: String,
+    pub resource_prefix: String,
+    pub route_key: String,
+    pub resources: WorkspaceResourceNames,
+}
+
+impl WorkspaceRuntimeNames {
+    pub fn for_workspace(
+        installation_id: &InstallationId,
+        runtime: &WorkspaceRuntimeIdentity,
+        workspace_short_id: &str,
+    ) -> Result<Self, WorkspaceRuntimeIdentityError> {
+        runtime.validate()?;
+        valid_dns_label(workspace_short_id, 40)?;
+        let resource_prefix = format!("w-{workspace_short_id}");
+        let route_key = format!("{}-{workspace_short_id}", installation_id.as_str());
+        valid_dns_label(&resource_prefix, 40)?;
+        valid_dns_label(&route_key, 63)?;
+        let resources = WorkspaceResourceNames::for_prefix(&resource_prefix);
+        resources.validate()?;
+        Ok(Self {
+            namespace: runtime.namespace.clone(),
+            resource_prefix,
+            route_key,
+            resources,
+        })
     }
 
     pub fn web_shell_path(&self) -> String {
         format!("/shell/{}/", self.route_key)
+    }
+
+    pub fn cluster_admin_binding_name(&self, installation_id: &InstallationId) -> String {
+        format!(
+            "mwc-{}-{}-admin",
+            installation_id.as_str(),
+            self.resource_prefix
+        )
     }
 }
 
@@ -212,25 +163,7 @@ pub struct WorkspaceResourceNames {
 }
 
 impl WorkspaceResourceNames {
-    fn legacy() -> Self {
-        Self {
-            stateful_set: "workspace".to_owned(),
-            service: "workspace".to_owned(),
-            ssh_service: "workspace-ssh".to_owned(),
-            service_account: "workspace-admin".to_owned(),
-            workspace_config: "workspace-config".to_owned(),
-            ssh_identity_secret: "workspace-ssh-identity".to_owned(),
-            environment_secret: "workspace-environment-secret".to_owned(),
-            environment_config_map: "workspace-environment-config".to_owned(),
-            files_secret: "workspace-files-secret".to_owned(),
-            files_config_map: "workspace-files-config".to_owned(),
-            network_policy: "workspace-ingress".to_owned(),
-            web_shell_ingress: "web-shell".to_owned(),
-            data_claim_template: "workspace-data".to_owned(),
-        }
-    }
-
-    fn prefixed(prefix: &str) -> Self {
+    pub fn for_prefix(prefix: &str) -> Self {
         let named = |suffix: &str| format!("{prefix}-{suffix}");
         Self {
             stateful_set: prefix.to_owned(),
@@ -245,7 +178,7 @@ impl WorkspaceResourceNames {
             files_config_map: named("files-config"),
             network_policy: named("ingress"),
             web_shell_ingress: named("web-shell"),
-            data_claim_template: "workspace-data".to_owned(),
+            data_claim_template: named("data"),
         }
     }
 
@@ -306,144 +239,67 @@ pub enum WorkspaceRuntimeIdentityError {
 mod tests {
     use super::*;
 
-    #[test]
-    fn legacy_names_remain_byte_for_byte_compatible() {
-        let installation = "k3si-7032544955".parse().unwrap();
-        let identity = WorkspaceRuntimeIdentity::legacy_v1(&installation, "01a04415").unwrap();
-        let names = identity.names();
-        assert_eq!(identity.namespace, "ws-k3si-7032544955-01a04415");
-        assert_eq!(names.stateful_set, "workspace");
-        assert_eq!(names.service, "workspace");
-        assert_eq!(names.ssh_service, "workspace-ssh");
-        assert_eq!(names.data_pvc_ordinal_zero(), "workspace-data-workspace-0");
-        assert_eq!(identity.web_shell_path(), "/shell/01a04415/");
+    fn workspace_id() -> Uuid {
+        Uuid::parse_str("018f0000-0000-7000-8000-000000000001").unwrap()
     }
 
     #[test]
-    fn prefixed_names_do_not_collide_in_one_namespace() {
+    fn canonical_names_are_prefixed_and_bound_to_the_installation() {
         let installation = "internal-a".parse().unwrap();
-        let first_id = Uuid::parse_str("018f0000-0000-7000-8000-000000000001").unwrap();
-        let second_id = Uuid::parse_str("018f0000-0000-7000-8000-000000000002").unwrap();
-        let first = WorkspaceRuntimeIdentity::prefixed_v2(
-            &installation,
-            first_id,
-            "8000000000000001",
-            Some("ws-internal-a"),
-        )
-        .unwrap();
-        let second = WorkspaceRuntimeIdentity::prefixed_v2(
-            &installation,
-            second_id,
-            "8000000000000002",
-            Some("ws-internal-a"),
-        )
-        .unwrap();
-        assert_eq!(first.namespace, second.namespace);
-        assert_ne!(first.names().stateful_set, second.names().stateful_set);
-        assert_ne!(
-            first.names().data_pvc_ordinal_zero(),
-            second.names().data_pvc_ordinal_zero()
+        let short_id = workspace_short_id_for(workspace_id());
+        let runtime =
+            WorkspaceRuntimeIdentity::new(&installation, workspace_id(), &short_id, None).unwrap();
+        let names =
+            WorkspaceRuntimeNames::for_workspace(&installation, &runtime, &short_id).unwrap();
+        assert_eq!(names.namespace, "ws-internal-a-8000000000000001");
+        assert_eq!(names.resources.stateful_set, "w-8000000000000001");
+        assert_eq!(
+            names.resources.data_pvc_ordinal_zero(),
+            "w-8000000000000001-data-w-8000000000000001-0"
         );
-        first.validate().unwrap();
-        second.validate().unwrap();
-    }
-
-    #[test]
-    fn prefixed_identity_rejects_a_short_id_from_another_workspace() {
-        let installation = "internal-a".parse().unwrap();
-        let id = Uuid::parse_str("018f0000-0000-7000-8000-000000000001").unwrap();
-        assert!(
-            WorkspaceRuntimeIdentity::prefixed_v2(
-                &installation,
-                id,
-                "8000000000000002",
-                Some("ws-internal-a"),
-            )
-            .is_err()
+        assert_eq!(
+            names.web_shell_path(),
+            "/shell/internal-a-8000000000000001/"
         );
     }
 
     #[test]
-    fn complete_validation_rejects_tampered_legacy_identity_fields() {
+    fn identity_rejects_a_short_id_from_another_workspace() {
         let installation = "internal-a".parse().unwrap();
-        let mut identity =
-            WorkspaceRuntimeIdentity::legacy_v1(&installation, "8000000000000001").unwrap();
-        let workspace_id = Uuid::parse_str("018f0000-0000-7000-8000-000000000001").unwrap();
-
-        let mutations: [fn(&mut WorkspaceRuntimeIdentity); 4] = [
-            |identity: &mut WorkspaceRuntimeIdentity| {
-                identity.namespace_scope = WorkspaceNamespaceScope::Shared
-            },
-            |identity: &mut WorkspaceRuntimeIdentity| {
-                identity.namespace = "other-namespace".to_owned()
-            },
-            |identity: &mut WorkspaceRuntimeIdentity| identity.resource_prefix = "other".to_owned(),
-            |identity: &mut WorkspaceRuntimeIdentity| identity.route_key = "other".to_owned(),
-        ];
-        for mutate in mutations {
-            let mut tampered = identity.clone();
-            mutate(&mut tampered);
-            assert!(
-                tampered
-                    .validate_for_workspace(&installation, workspace_id, "8000000000000001")
-                    .is_err()
-            );
-        }
-
-        identity.naming_scheme = WorkspaceRuntimeNamingScheme::PrefixedV2;
         assert!(
-            identity
-                .validate_for_workspace(&installation, workspace_id, "8000000000000001")
+            WorkspaceRuntimeIdentity::new(&installation, workspace_id(), "8000000000000002", None,)
                 .is_err()
         );
     }
 
     #[test]
-    fn complete_validation_binds_prefixed_identity_to_installation_and_workspace() {
+    fn dedicated_identity_rejects_a_tampered_namespace() {
         let installation = "internal-a".parse().unwrap();
-        let other_installation = "internal-b".parse().unwrap();
-        let workspace_id = Uuid::parse_str("018f0000-0000-7000-8000-000000000001").unwrap();
-        let short_id = workspace_short_id_for(workspace_id);
-        let identity =
-            WorkspaceRuntimeIdentity::prefixed_v2(&installation, workspace_id, &short_id, None)
-                .unwrap();
-
+        let short_id = workspace_short_id_for(workspace_id());
+        let mut runtime =
+            WorkspaceRuntimeIdentity::new(&installation, workspace_id(), &short_id, None).unwrap();
+        runtime.namespace = "other-namespace".to_owned();
         assert!(
-            identity
-                .validate_for_workspace(&other_installation, workspace_id, &short_id)
+            runtime
+                .validate_for_workspace(&installation, workspace_id(), &short_id)
                 .is_err()
         );
-        assert!(
-            identity
-                .validate_for_workspace(&installation, workspace_id, "8000000000000002")
-                .is_err()
-        );
-        let mutations: [fn(&mut WorkspaceRuntimeIdentity); 3] = [
-            |identity: &mut WorkspaceRuntimeIdentity| {
-                identity.namespace = "other-namespace".to_owned()
-            },
-            |identity: &mut WorkspaceRuntimeIdentity| identity.resource_prefix = "other".to_owned(),
-            |identity: &mut WorkspaceRuntimeIdentity| identity.route_key = "other".to_owned(),
-        ];
-        for mutate in mutations {
-            let mut tampered = identity.clone();
-            mutate(&mut tampered);
-            assert!(
-                tampered
-                    .validate_for_workspace(&installation, workspace_id, &short_id)
-                    .is_err()
-            );
-        }
+    }
 
-        let shared = WorkspaceRuntimeIdentity::prefixed_v2(
+    #[test]
+    fn shared_identity_keeps_its_placement_but_not_its_names() {
+        let installation = "internal-a".parse().unwrap();
+        let short_id = workspace_short_id_for(workspace_id());
+        let runtime = WorkspaceRuntimeIdentity::new(
             &installation,
-            workspace_id,
+            workspace_id(),
             &short_id,
             Some("persisted-shared-namespace"),
         )
         .unwrap();
-        shared
-            .validate_for_workspace(&installation, workspace_id, &short_id)
-            .unwrap();
+        let names =
+            WorkspaceRuntimeNames::for_workspace(&installation, &runtime, &short_id).unwrap();
+        assert_eq!(names.namespace, "persisted-shared-namespace");
+        assert_eq!(names.resource_prefix, "w-8000000000000001");
     }
 }

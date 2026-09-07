@@ -123,7 +123,14 @@ pub async fn execute_database(
                 .await?;
             println!(
                 "canonicalized stopped workspace {} as {} in {}",
-                workspace.id, workspace.runtime.resource_prefix, workspace.runtime.namespace
+                workspace.id,
+                crate::workspace_runtime::WorkspaceRuntimeNames::for_workspace(
+                    database.installation_id(),
+                    &workspace.runtime,
+                    &workspace.short_id,
+                )?
+                .resource_prefix,
+                workspace.runtime.namespace
             );
         }
     }

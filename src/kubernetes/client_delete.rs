@@ -29,8 +29,9 @@ impl KubernetesCoordinator {
     ) -> Result<DeleteProgress, ReconcileError> {
         let workspace_id = workspace.id;
         let namespace_name = &workspace.runtime.namespace;
-        let names = workspace.runtime.names();
-        let binding_name = self.builder.cluster_admin_binding_name(&workspace.runtime);
+        let runtime_names = self.builder.runtime_names(workspace)?;
+        let names = &runtime_names.resources;
+        let binding_name = self.builder.cluster_admin_binding_name(workspace)?;
         let cluster_role_bindings = Api::<ClusterRoleBinding>::all(self.client.clone());
         if delete_owned_if_present(
             &cluster_role_bindings,

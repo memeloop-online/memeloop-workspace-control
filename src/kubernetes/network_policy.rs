@@ -9,11 +9,11 @@ use k8s_openapi::{
 };
 
 use super::namespaced_metadata;
-use crate::{workspace_runtime::WorkspaceRuntimeIdentity, workspaces::AccessMode};
+use crate::{workspace_runtime::WorkspaceRuntimeNames, workspaces::AccessMode};
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn build(
-    runtime: &WorkspaceRuntimeIdentity,
+    runtime: &WorkspaceRuntimeNames,
     ownership_labels: &BTreeMap<String, String>,
     pod_labels: &BTreeMap<String, String>,
     higress_namespace: &str,
@@ -24,13 +24,16 @@ pub(super) fn build(
     access_mode: AccessMode,
     internal_ssh_node_port_enabled: bool,
 ) -> NetworkPolicy {
-    let names = runtime.names();
     let ssh_rule = match access_mode {
         AccessMode::Public => ingress_rule(jump_host_namespace, jump_host_pod_labels, 2222),
         AccessMode::Internal => internal_cluster_ssh_rule(internal_ssh_node_port_enabled),
     };
     NetworkPolicy {
-        metadata: namespaced_metadata(&names.network_policy, &runtime.namespace, ownership_labels),
+        metadata: namespaced_metadata(
+            &runtime.resources.network_policy,
+            &runtime.namespace,
+            ownership_labels,
+        ),
         spec: Some(NetworkPolicySpec {
             pod_selector: Some(LabelSelector {
                 match_labels: Some(pod_labels.clone()),
