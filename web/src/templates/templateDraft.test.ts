@@ -93,3 +93,19 @@ test("explicit storage-policy boundaries match the backend contract", () => {
   belowMinimum.storagePolicy.home_reserve_mib = "63";
   assert.throws(() => templateDraftToYaml(belowMinimum), TemplateDraftError);
 });
+
+test("template form rejects unknown fields at every schema object level", () => {
+  const yaml = templateDraftToYaml({ ...emptyTemplateDraft(), name: "strict" });
+  const cases = [
+    yaml.replace("spec:\n", "arbitrary_typo: true\nspec:\n"),
+    yaml.replace("  name: strict\n", "  name: strict\n  arbitrary_typo: true\n"),
+    yaml.replace("  image: \"\"\n", "  arbitrary_typo: true\n  image: \"\"\n"),
+    yaml.replace("    cpu_millis: 2000\n", "    arbitrary_typo: true\n    cpu_millis: 2000\n"),
+    yaml.replace("    cpu_millis: 500\n", "    arbitrary_typo: true\n    cpu_millis: 500\n"),
+    yaml.replace("    runtime_tmp_memory_mib: 512\n", "    arbitrary_typo: true\n    runtime_tmp_memory_mib: 512\n"),
+  ];
+
+  for (const candidate of cases) {
+    assert.throws(() => templateDraftFromYaml(candidate), /unknown field .*arbitrary_typo/u);
+  }
+});

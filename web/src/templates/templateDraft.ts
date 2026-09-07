@@ -61,6 +61,44 @@ export interface TemplateDraft {
   nodeSelector: string;
 }
 
+type TemplateFieldSchema = { readonly [field: string]: TemplateFieldSchema | null };
+
+const TEMPLATE_FIELD_SCHEMA: TemplateFieldSchema = {
+  apiVersion: null,
+  kind: null,
+  metadata: { name: null },
+  spec: {
+    image: null,
+    access_mode: null,
+    resources: {
+      cpu_millis: null,
+      memory_mib: null,
+      gpu_count: null,
+      disk_gib: null,
+    },
+    pod_requests: {
+      cpu_millis: null,
+      memory_mib: null,
+      ephemeral_storage_mib: null,
+    },
+    ephemeral_storage_limit_mib: null,
+    workspace_user: null,
+    workspace_home: null,
+    buildkit: null,
+    storage_policy: {
+      runtime_tmp_memory_mib: null,
+      build_scratch_gib: null,
+      buildkit_cache_gib: null,
+      codex_scratch_gib: null,
+      home_reserve_mib: null,
+    },
+    cluster_access: null,
+    required_node_names: null,
+    preferred_node_names: null,
+    node_selector: null,
+  },
+};
+
 export type TemplateDraftErrorCode =
   | "invalid_template_number"
   | "resource_request_exceeds_limit"
@@ -146,34 +184,40 @@ export function templateDraftToYaml(draft: TemplateDraft): string {
 }
 
 export function templateDraftFromYaml(yaml: string): TemplateDraft {
-  const value = parse(yaml) as { metadata?: { name?: unknown }; spec?: Record<string, any> };
-  if (!value.metadata?.name || !value.spec) throw new Error("Invalid WorkspaceTemplate YAML");
-  const spec = value.spec;
+  const value = knownFields(parse(yaml), TEMPLATE_FIELD_SCHEMA, "document");
+  const metadata = requiredRecord(value.metadata);
+  const spec = requiredRecord(value.spec);
+  const resources = requiredRecord(spec.resources);
+  const podRequests = requiredRecord(spec.pod_requests);
+  const storagePolicy = spec.storage_policy === undefined
+    ? DEFAULT_STORAGE_POLICY
+    : parseStoragePolicy(spec.storage_policy);
+  if (!metadata.name) throw new Error("Invalid WorkspaceTemplate YAML");
   return {
-    name: String(value.metadata.name),
+    name: String(metadata.name),
     image: String(spec.image ?? ""),
     accessMode: spec.access_mode === "public" ? "public" : "internal",
-    cpu: numberText(spec.resources?.cpu_millis),
-    memory: numberText(spec.resources?.memory_mib),
-    gpu: numberText(spec.resources?.gpu_count),
-    disk: numberText(spec.resources?.disk_gib),
-    requestCpu: numberText(spec.pod_requests?.cpu_millis),
-    requestMemory: numberText(spec.pod_requests?.memory_mib),
-    requestEphemeral: optionalNumberText(spec.pod_requests?.ephemeral_storage_mib),
+    cpu: numberText(resources.cpu_millis),
+    memory: numberText(resources.memory_mib),
+    gpu: numberText(resources.gpu_count),
+    disk: numberText(resources.disk_gib),
+    requestCpu: numberText(podRequests.cpu_millis),
+    requestMemory: numberText(podRequests.memory_mib),
+    requestEphemeral: optionalNumberText(podRequests.ephemeral_storage_mib),
     limitEphemeral: optionalNumberText(spec.ephemeral_storage_limit_mib),
     user: String(spec.workspace_user ?? ""),
     home: String(spec.workspace_home ?? ""),
     buildkit: Boolean(spec.buildkit),
-    storagePolicy: storagePolicyDraft(parseStoragePolicy(spec.storage_policy)),
+    storagePolicy: storagePolicyDraft(storagePolicy),
     clusterAccess: Boolean(spec.cluster_access),
-    requiredNodes: (spec.required_node_names ?? []).join(", "),
-    preferredNodes: (spec.preferred_node_names ?? []).join(", "),
+    requiredNodes: listText(spec.required_node_names),
+    preferredNodes: listText(spec.preferred_node_names),
     nodeSelector: formatPairs(spec.node_selector),
   };
 }
 
 function parseStoragePolicy(value: unknown): WorkspaceStoragePolicy {
-  const policy = value && typeof value === "object" ? value as Partial<WorkspaceStoragePolicy> : {};
+  const policy = requiredRecord(value);
   return {
     runtime_tmp_memory_mib: Number(policy.runtime_tmp_memory_mib ?? DEFAULT_STORAGE_POLICY.runtime_tmp_memory_mib),
     build_scratch_gib: Number(policy.build_scratch_gib ?? DEFAULT_STORAGE_POLICY.build_scratch_gib),
@@ -181,6 +225,25 @@ function parseStoragePolicy(value: unknown): WorkspaceStoragePolicy {
     codex_scratch_gib: Number(policy.codex_scratch_gib ?? DEFAULT_STORAGE_POLICY.codex_scratch_gib),
     home_reserve_mib: policy.home_reserve_mib == null ? null : Number(policy.home_reserve_mib),
   };
+}
+
+function requiredRecord(value: unknown): Record<string, unknown> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Invalid WorkspaceTemplate YAML");
+  }
+  return value as Record<string, unknown>;
+}
+
+function knownFields(value: unknown, schema: TemplateFieldSchema, path: string): Record<string, unknown> {
+  const record = requiredRecord(value);
+  for (const key of Object.keys(record)) {
+    if (!Object.prototype.hasOwnProperty.call(schema, key)) {
+      throw new Error(`Invalid WorkspaceTemplate YAML: unknown field ${path}.${key}`);
+    }
+    const nested = schema[key];
+    if (nested !== null) knownFields(record[key], nested, `${path}.${key}`);
+  }
+  return record;
 }
 
 function storagePolicyDraft(policy: WorkspaceStoragePolicy): TemplateStoragePolicyDraft {
@@ -215,6 +278,10 @@ function numberText(value: unknown) {
 
 function optionalNumberText(value: unknown) {
   return value === undefined || value === null ? "" : String(value);
+}
+
+function listText(value: unknown) {
+  return Array.isArray(value) ? value.join(", ") : "";
 }
 
 function csv(value: string) {
