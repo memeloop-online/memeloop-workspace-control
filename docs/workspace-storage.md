@@ -35,8 +35,8 @@ explicitly, and start it again; the empty path is then linked to the bounded lay
   an active compiler or linker.
 - Stop scales the StatefulSet to zero. Kubernetes removes the Pod and all build, temporary,
   BuildKit, Codex scratch, and connection-runtime volumes; the Home PVC remains.
-- Start creates clean Pod-lifetime volumes and re-materializes current keys, kubeconfig, files, and
-  environment declarations. Restart has the same scratch cleanup semantics.
+- Start creates clean Pod-lifetime volumes and re-materializes current keys, kubeconfig, and
+  template-selected credential and file injections. Restart has the same scratch cleanup semantics.
 - Delete removes the workspace Namespace, Home PVC, Secrets, ConfigMaps, routes, and runtime data
   through the normal ownership-checked deletion flow.
 

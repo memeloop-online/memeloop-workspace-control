@@ -98,7 +98,7 @@ export function InjectionEditorForm({
         </>}
         {fixedTemplate ? (
           <label className="wide">
-            <FieldTitle label={t("templateSelector")} help={t("templateEnvironmentSelectorHelp")} />
+            <FieldTitle label={t("templateSelector")} help={t("templateInjectionSelectorHelp")} />
             <input readOnly value={fixedTemplate.name} />
           </label>
         ) : <TemplateSelectorAutocomplete draft={draft} update={update} templates={templates} />}

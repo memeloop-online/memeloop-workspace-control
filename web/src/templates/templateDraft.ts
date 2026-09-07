@@ -53,7 +53,6 @@ export interface TemplateDraft {
   limitEphemeral: string;
   user: string;
   home: string;
-  preserveHome: boolean;
   buildkit: boolean;
   storagePolicy: TemplateStoragePolicyDraft;
   clusterAccess: boolean;
@@ -91,7 +90,6 @@ export function emptyTemplateDraft(): TemplateDraft {
     limitEphemeral: "14592",
     user: "workspace",
     home: "/workspace",
-    preserveHome: false,
     buildkit: false,
     storagePolicy: storagePolicyDraft(DEFAULT_STORAGE_POLICY),
     clusterAccess: false,
@@ -135,7 +133,6 @@ export function templateDraftToYaml(draft: TemplateDraft): string {
     pod_requests: { cpu_millis: requestCpu, memory_mib: requestMemory },
     workspace_user: draft.user,
     workspace_home: draft.home,
-    preserve_home_ownership: draft.preserveHome,
     buildkit: draft.buildkit,
     storage_policy: storagePolicy,
     cluster_access: draft.clusterAccess,
@@ -149,9 +146,10 @@ export function templateDraftToYaml(draft: TemplateDraft): string {
 }
 
 export function templateDraftFromYaml(yaml: string): TemplateDraft {
-  const value = parse(yaml) as Record<string, any>;
-  if (!value?.metadata?.name || !value?.spec) throw new Error("Invalid WorkspaceTemplate YAML");
+  const value = parse(yaml) as { metadata?: { name?: unknown }; spec?: Record<string, any> };
+  if (!value.metadata?.name || !value.spec) throw new Error("Invalid WorkspaceTemplate YAML");
   const spec = value.spec;
+  rejectRemovedTemplateFields(spec);
   return {
     name: String(value.metadata.name),
     image: String(spec.image ?? ""),
@@ -166,7 +164,6 @@ export function templateDraftFromYaml(yaml: string): TemplateDraft {
     limitEphemeral: optionalNumberText(spec.ephemeral_storage_limit_mib),
     user: String(spec.workspace_user ?? ""),
     home: String(spec.workspace_home ?? ""),
-    preserveHome: Boolean(spec.preserve_home_ownership ?? spec.preserve_home_root),
     buildkit: Boolean(spec.buildkit),
     storagePolicy: storagePolicyDraft(parseStoragePolicy(spec.storage_policy)),
     clusterAccess: Boolean(spec.cluster_access),
@@ -174,6 +171,11 @@ export function templateDraftFromYaml(yaml: string): TemplateDraft {
     preferredNodes: (spec.preferred_node_names ?? []).join(", "),
     nodeSelector: formatPairs(spec.node_selector),
   };
+}
+
+function rejectRemovedTemplateFields(spec: Record<string, unknown>) {
+  const removed = ["environment", "preserve_home_ownership", "preserve_home_root"].filter((key) => key in spec);
+  if (removed.length) throw new Error(`Removed WorkspaceTemplate fields: ${removed.join(", ")}`);
 }
 
 function parseStoragePolicy(value: unknown): WorkspaceStoragePolicy {

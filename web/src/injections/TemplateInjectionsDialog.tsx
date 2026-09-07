@@ -139,8 +139,8 @@ export function TemplateInjectionsDialog({
       <div className="dialog-surface">
         <header className="dialog-heading">
           <div>
-            <h3 id={titleId}>{t("manageTemplateEnvironmentFiles")} · {template.name}</h3>
-            <p id={descriptionId}>{t("templateEnvironmentDialogHelp")}</p>
+            <h3 id={titleId}>{t("manageTemplateInjections")} · {template.name}</h3>
+            <p id={descriptionId}>{t("templateInjectionDialogHelp")}</p>
           </div>
           <button type="button" className="button" data-dialog-autofocus onClick={requestClose} disabled={saving} aria-label={t("close")}>{t("close")}</button>
         </header>
@@ -150,7 +150,7 @@ export function TemplateInjectionsDialog({
             <input className="credential-search" type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder={t("searchCredentials")} aria-label={t("searchCredentials")} />
             <div className="credential-scroll">
               {loading && <div className="empty compact">{t("loading")}</div>}
-              {!loading && filteredItems.length === 0 && <div className="empty compact">{t("noTemplateEnvironmentFiles")}</div>}
+              {!loading && filteredItems.length === 0 && <div className="empty compact">{t("noTemplateInjections")}</div>}
               {!loading && filteredItems.map((item) => (
                 <button type="button" className={`injection-row${selectedKey === item.key ? " selected" : ""}`} aria-pressed={selectedKey === item.key} key={item.key} onClick={() => selectItem(item)}>
                   <span className="kind-icon">{kindGlyph(item.kind)}</span>

@@ -163,7 +163,6 @@ export function TemplateEditor({ api, organizationId, templates, canGrantCluster
               <NumberField label={`${t("codexScratch")} (GiB)`} help={t("codexScratchHelp")} value={draft.storagePolicy.codex_scratch_gib} policy={TEMPLATE_NUMBER_POLICIES.codexScratch} update={(codex_scratch_gib) => setDraft({ ...draft, storagePolicy: { ...draft.storagePolicy, codex_scratch_gib } })} />
               <NumberField optional label={`${t("homeReserve")} (MiB)`} help={t("homeReserveHelp")} value={draft.storagePolicy.home_reserve_mib} policy={TEMPLATE_NUMBER_POLICIES.homeReserve} update={(home_reserve_mib) => setDraft({ ...draft, storagePolicy: { ...draft.storagePolicy, home_reserve_mib } })} />
             </fieldset>
-            <Check label={t("preserveHomeOwnership")} help={t("preserveHomeOwnershipHelp")} checked={draft.preserveHome} update={(preserveHome) => setDraft({ ...draft, preserveHome })} />
             <Check label="BuildKit" help={t("buildkitHelp")} checked={draft.buildkit} update={(buildkit) => setDraft({ ...draft, buildkit })} />
             <Check label={t("maintenanceAccess")} help={t("maintenanceAccessHelp")} checked={draft.clusterAccess} disabled={!canGrantClusterAccess} update={(clusterAccess) => setDraft({ ...draft, clusterAccess })} />
             <label className="wide"><Field label={t("requiredNodes")} help={t("nodeListHelp")} /><input value={draft.requiredNodes} onChange={(event) => setDraft({ ...draft, requiredNodes: event.target.value })} placeholder="westlake, haixia" /></label>
@@ -172,8 +171,8 @@ export function TemplateEditor({ api, organizationId, templates, canGrantCluster
           </div>
         )}
         <div className="template-injection-actions">
-          <button ref={manageButtonRef} type="button" className="button" aria-haspopup="dialog" aria-describedby={!selected ? "template-injections-disabled-help" : undefined} disabled={!selected || saving} onClick={() => setManagingInjections(true)}>{t("manageTemplateEnvironmentFiles")}</button>
-          {!selected && <small id="template-injections-disabled-help">{t("saveTemplateBeforeEnvironmentFiles")}</small>}
+          <button ref={manageButtonRef} type="button" className="button" aria-haspopup="dialog" aria-describedby={!selected ? "template-injections-disabled-help" : undefined} disabled={!selected || saving} onClick={() => setManagingInjections(true)}>{t("manageTemplateInjections")}</button>
+          {!selected && <small id="template-injections-disabled-help">{t("saveTemplateBeforeInjections")}</small>}
         </div>
         <div className="form-actions">
           <button className="button primary" disabled={saving}>{saving ? t("saving") : selectedId ? t("saveChanges") : t("createTemplate")}</button>

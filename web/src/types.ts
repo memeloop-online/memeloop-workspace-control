@@ -144,14 +144,12 @@ export interface WorkspaceTemplate {
   ephemeral_storage_limit_mib: number | null;
   workspace_user: string;
   workspace_home: string;
-  preserve_home_ownership: boolean;
   buildkit: boolean;
   storage_policy: WorkspaceStoragePolicy;
   cluster_access: boolean;
   required_node_names: string[];
   preferred_node_names: string[];
   node_selector: Record<string, string>;
-  environment: Record<string, string>;
   yaml: string;
   enabled: boolean;
 }
@@ -225,14 +223,12 @@ export interface Workspace {
   ephemeral_storage_limit_mib: number | null;
   workspace_user: string;
   workspace_home: string;
-  preserve_home_ownership: boolean;
   buildkit: boolean;
   storage_policy: WorkspaceStoragePolicy;
   cluster_access: boolean;
   required_node_names: string[];
   preferred_node_names: string[];
   node_selector: Record<string, string>;
-  environment: Record<string, string>;
   state: WorkspaceState;
   resources: Resources;
   generation: number;
