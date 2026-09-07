@@ -70,6 +70,7 @@ fn sshd_set_env_quotes_spaces_and_quotation_marks() {
             .contains("\"BUILDKIT_HOST=unix:///run/mwc-buildkit/runtime/buildkit/buildkitd.sock\"")
     );
     assert!(config.contains(
-        "\"PATH=/run/mwc-buildkit/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\""
+        "\"PATH=/run/mwc-buildkit/bin:/home/node-dev/.local/bin:/home/node-dev/.local/share/pnpm:/home/node-dev/.cargo/bin:/usr/local/cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\""
     ));
+    assert!(!config.contains("CARGO_HOME="));
 }

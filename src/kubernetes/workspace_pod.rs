@@ -259,11 +259,13 @@ impl<'a> WorkspacePod<'a> {
         let mut environment = vec![
             env(
                 "PATH",
-                "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+                &format!(
+                    "{}/.local/bin:{}/.local/share/pnpm:{}/.cargo/bin:/usr/local/cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+                    self.home, self.home, self.home,
+                ),
             ),
             env("HOME", self.home),
             env("RUSTUP_HOME", "/usr/local/rustup"),
-            env("CARGO_HOME", "/usr/local/cargo"),
             env("TMPDIR", &format!("{BUILD_SCRATCH}/tmp")),
             env("TMP", &format!("{BUILD_SCRATCH}/tmp")),
             env("TEMP", &format!("{BUILD_SCRATCH}/tmp")),
@@ -276,7 +278,10 @@ impl<'a> WorkspacePod<'a> {
         if self.template.buildkit {
             environment[0] = env(
                 "PATH",
-                "/run/mwc-buildkit/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+                &format!(
+                    "/run/mwc-buildkit/bin:{}/.local/bin:{}/.local/share/pnpm:{}/.cargo/bin:/usr/local/cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+                    self.home, self.home, self.home,
+                ),
             );
             environment.push(env(
                 "BUILDKIT_HOST",

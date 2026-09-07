@@ -999,12 +999,13 @@ fn node_template_reuses_the_existing_image_with_platform_bootstrap() {
             .contains("AllowUsers node-dev")
     );
     assert!(
-        resources.workspace_config.data.as_ref().unwrap()["sshd_config"].contains("StrictModes no")
+        resources.workspace_config.data.as_ref().unwrap()["sshd_config"]
+            .contains("StrictModes yes")
     );
     let sshd_config = &resources.workspace_config.data.as_ref().unwrap()["sshd_config"];
     assert_eq!(sshd_config.matches("SetEnv ").count(), 1);
     assert!(sshd_config.contains(
-        "\"PATH=/home/node-dev/.local/bin:/home/node-dev/.local/share/pnpm:/home/node-dev/.cargo/bin:/usr/local/cargo/bin:/run/mwc-buildkit/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin\""
+        "\"PATH=/run/mwc-buildkit/bin:/home/node-dev/.local/bin:/home/node-dev/.local/share/pnpm:/home/node-dev/.cargo/bin:/usr/local/cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\""
     ));
     assert!(sshd_config.contains("\"RUSTUP_HOME=/usr/local/rustup\""));
     assert!(
@@ -1037,7 +1038,7 @@ fn node_template_reuses_the_existing_image_with_platform_bootstrap() {
     assert!(bootstrap.contains("secret) mode=384"));
     assert!(bootstrap.contains("config_map) mode=420"));
     assert!(bootstrap.contains("prepare_runtime_sshd_config"));
-    assert!(bootstrap.contains("HOME|PATH|RUSTUP_HOME|TMPDIR"));
+    assert!(bootstrap.contains("PATH|HOME|RUSTUP_HOME|CARGO_HOME|TMPDIR"));
     assert!(bootstrap.contains("$workspace_root/.codex/tmp"));
     assert!(bootstrap.contains("$codex_scratch/tmp"));
     assert!(bootstrap.contains("mark_home_degraded"));

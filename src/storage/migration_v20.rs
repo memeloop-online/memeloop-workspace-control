@@ -109,7 +109,7 @@ async fn has_active_lease_sqlite(
     now: i64,
 ) -> Result<bool, StorageError> {
     Ok(sqlx::query_scalar::<_, i64>(
-        "SELECT COUNT(*) FROM workspace_leases WHERE workspace_id = ?1 AND lease_expires_at > ?2",
+        "SELECT COUNT(*) FROM workspace_leases WHERE workspace_id = ?1 AND lease_expires_at >= ?2",
     )
     .bind(workspace)
     .bind(now)
@@ -124,7 +124,7 @@ async fn has_active_lease_postgres(
     now: i64,
 ) -> Result<bool, StorageError> {
     Ok(sqlx::query_scalar::<_, i64>(
-        "SELECT lease_expires_at FROM workspace_leases WHERE workspace_id = $1 AND lease_expires_at > $2 FOR SHARE",
+        "SELECT lease_expires_at FROM workspace_leases WHERE workspace_id = $1 AND lease_expires_at >= $2 FOR SHARE",
     )
     .bind(workspace)
     .bind(now)
@@ -183,7 +183,8 @@ async fn update_response_sqlite(
     connection: &mut SqliteConnection,
     row: sqlx::sqlite::SqliteRow,
 ) -> Result<(), StorageError> {
-    let response = cleanse_response(&row.try_get::<String, _>("response_json")?)?;
+    let scope: String = row.try_get("scope")?;
+    let response = cleanse_response(&scope, &row.try_get::<String, _>("response_json")?)?;
     sqlx::query("UPDATE idempotency_keys SET response_json = ?1 WHERE installation_id = ?2 AND scope = ?3 AND key = ?4")
         .bind(response).bind(row.try_get::<String, _>("installation_id")?).bind(row.try_get::<String, _>("scope")?).bind(row.try_get::<String, _>("key")?)
         .execute(&mut *connection).await?;
@@ -194,7 +195,8 @@ async fn update_response_postgres(
     connection: &mut PgConnection,
     row: sqlx::postgres::PgRow,
 ) -> Result<(), StorageError> {
-    let response = cleanse_response(&row.try_get::<String, _>("response_json")?)?;
+    let scope: String = row.try_get("scope")?;
+    let response = cleanse_response(&scope, &row.try_get::<String, _>("response_json")?)?;
     sqlx::query("UPDATE idempotency_keys SET response_json = $1 WHERE installation_id = $2 AND scope = $3 AND key = $4")
         .bind(response).bind(row.try_get::<String, _>("installation_id")?).bind(row.try_get::<String, _>("scope")?).bind(row.try_get::<String, _>("key")?)
         .execute(&mut *connection).await?;
@@ -231,16 +233,37 @@ fn cleanse_yaml(yaml: &str, invalid: StorageError) -> Result<String, StorageErro
         .map_err(|_| invalid)
 }
 
-fn cleanse_response(value: &str) -> Result<String, StorageError> {
+fn cleanse_response(scope: &str, value: &str) -> Result<String, StorageError> {
     let mut value: serde_json::Value =
         serde_json::from_str(value).map_err(|_| StorageError::SchemaUpgradeDataInvalid)?;
-    let serde_json::Value::Object(response) = &mut value else {
+    let is_workspace_response = matches!(
+        scope.rsplit_once(':').map(|(_, operation)| operation),
+        Some("create-workspace" | "workspace-action" | "workspace-image-update")
+    );
+    let is_template_response = matches!(
+        scope.rsplit_once(':').map(|(_, operation)| operation),
+        Some("create-template" | "replace-template" | "set-template-enabled")
+    );
+    if !is_workspace_response && !is_template_response {
         return Ok(value.to_string());
-    };
-    if let Some(workspace) = response.get_mut("workspace") {
-        cleanse_response_spec(workspace)?;
     }
-    if response.contains_key("yaml") && response.contains_key("enabled") {
+    let serde_json::Value::Object(response) = &mut value else {
+        return Err(StorageError::SchemaUpgradeDataInvalid);
+    };
+    if is_workspace_response {
+        cleanse_response_spec(
+            response
+                .get_mut("workspace")
+                .ok_or(StorageError::SchemaUpgradeDataInvalid)?,
+        )?;
+    }
+    if is_template_response {
+        let yaml = response
+            .get("yaml")
+            .and_then(serde_json::Value::as_str)
+            .ok_or(StorageError::SchemaUpgradeDataInvalid)?;
+        let yaml = cleanse_yaml(yaml, StorageError::InvalidTemplate)?;
+        response.insert("yaml".to_owned(), serde_json::Value::String(yaml));
         cleanse_response_spec(&mut value)?;
     }
     serde_json::to_string(&value).map_err(StorageError::from)
@@ -334,12 +357,42 @@ mod tests {
     #[test]
     fn response_cleanup_is_structural_and_never_deletes_unrelated_environment_values() {
         let unrelated = r#"{"environment":{"TOKEN":"secret"},"result":"ok"}"#;
-        assert_eq!(cleanse_response(unrelated).unwrap(), unrelated);
+        assert_eq!(
+            cleanse_response("actor:other-operation", unrelated).unwrap(),
+            unrelated
+        );
         let workspace = r#"{"workspace":{"access_mode":"internal","resources":{},"pod_requests":{},"environment":{}}}"#;
-        assert!(!cleanse_response(workspace).unwrap().contains("environment"));
+        assert!(
+            !cleanse_response("actor:create-workspace", workspace)
+                .unwrap()
+                .contains("environment")
+        );
         let legacy_secret = r#"{"workspace":{"access_mode":"internal","resources":{},"pod_requests":{},"environment":{"TOKEN":"secret"}}}"#;
         assert!(matches!(
-            cleanse_response(legacy_secret),
+            cleanse_response("actor:create-workspace", legacy_secret),
+            Err(StorageError::SchemaUpgradeDataInvalid)
+        ));
+
+        let yaml = yaml_with_legacy_spec("environment: {}\n");
+        let template = serde_json::json!({
+            "access_mode": "internal",
+            "resources": {},
+            "pod_requests": {},
+            "enabled": true,
+            "yaml": yaml,
+        });
+        let migrated = cleanse_response("actor:create-template", &template.to_string()).unwrap();
+        assert!(!migrated.contains("environment:"));
+        let nonempty_yaml = yaml_with_legacy_spec("environment: {TOKEN: secret}\n");
+        let nonempty_template = serde_json::json!({
+            "access_mode": "internal",
+            "resources": {},
+            "pod_requests": {},
+            "enabled": true,
+            "yaml": nonempty_yaml,
+        });
+        assert!(matches!(
+            cleanse_response("actor:create-template", &nonempty_template.to_string()),
             Err(StorageError::SchemaUpgradeDataInvalid)
         ));
     }
@@ -373,7 +426,26 @@ mod tests {
     #[tokio::test]
     async fn sqlite_v19_bridge_commits_clean_templates_and_rolls_back_bad_environment() {
         let valid = yaml_with_legacy_spec("preserve_home_ownership: true\n  environment: {}\n");
-        let database = v19_sqlite_with_template(valid).await;
+        let database = v19_sqlite_with_template(valid.clone()).await;
+        let Database::Sqlite { pool, .. } = &database else {
+            unreachable!();
+        };
+        let response = serde_json::json!({
+            "access_mode": "internal",
+            "resources": {},
+            "pod_requests": {},
+            "enabled": true,
+            "yaml": valid,
+        });
+        sqlx::query("INSERT INTO idempotency_keys (installation_id, scope, key, request_hash, response_json, status_code, created_at, expires_at) VALUES (?1, ?2, ?3, ?4, ?5, 200, 1, 2)")
+            .bind("v20-bridge")
+            .bind("actor:create-template")
+            .bind("response")
+            .bind("hash")
+            .bind(response.to_string())
+            .execute(pool)
+            .await
+            .unwrap();
         database.migrate().await.unwrap();
         assert_eq!(database.schema_version().await.unwrap(), 20);
         let Database::Sqlite { pool, .. } = &database else {
@@ -384,6 +456,14 @@ mod tests {
             .await
             .unwrap();
         assert!(!yaml.contains("preserve_home_ownership"));
+        let response: String = sqlx::query_scalar(
+            "SELECT response_json FROM idempotency_keys WHERE scope = 'actor:create-template'",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        assert!(!response.contains("preserve_home_ownership"));
+        assert!(!response.contains("environment:"));
 
         let invalid = yaml_with_legacy_spec("environment: {TOKEN: secret}\n");
         let failed = v19_sqlite_with_template(invalid).await;
@@ -392,5 +472,104 @@ mod tests {
             Err(StorageError::SchemaUpgradeDataInvalid)
         ));
         assert_eq!(failed.schema_version().await.unwrap(), 19);
+        let Database::Sqlite { pool, .. } = &failed else {
+            unreachable!();
+        };
+        let yaml: String = sqlx::query_scalar("SELECT template_yaml FROM workspace_templates")
+            .fetch_one(pool)
+            .await
+            .unwrap();
+        assert!(yaml.contains("environment: {TOKEN: secret}"));
+    }
+
+    #[tokio::test]
+    async fn active_workspace_lease_defers_reconcile_scheduling() {
+        let database = Database::connect("sqlite::memory:", "v20-lease".parse().unwrap())
+            .await
+            .unwrap();
+        database.migrate().await.unwrap();
+        let Database::Sqlite { pool, .. } = &database else {
+            unreachable!();
+        };
+        sqlx::query("INSERT INTO workspace_leases (installation_id, workspace_id, lease_owner, lease_expires_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5)")
+            .bind("v20-lease")
+            .bind("workspace")
+            .bind("bridge")
+            .bind(11_i64)
+            .bind(1_i64)
+            .execute(pool)
+            .await
+            .unwrap();
+        let mut connection = pool.acquire().await.unwrap();
+        assert!(
+            has_active_lease_sqlite(&mut connection, "workspace", 10)
+                .await
+                .unwrap()
+        );
+        assert!(
+            has_active_lease_sqlite(&mut connection, "workspace", 11)
+                .await
+                .unwrap()
+        );
+        assert!(
+            !has_active_lease_sqlite(&mut connection, "workspace", 12)
+                .await
+                .unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn sqlite_v19_bridge_does_not_enqueue_reconcile_for_active_lease() {
+        let yaml = yaml_with_legacy_spec("environment: {}\n");
+        let database = v19_sqlite_with_template(yaml.clone()).await;
+        let Database::Sqlite { pool, .. } = &database else {
+            unreachable!();
+        };
+        let organization = Uuid::now_v7();
+        let owner = Uuid::now_v7();
+        let workspace = Uuid::now_v7();
+        sqlx::query("INSERT INTO users (id, installation_id, display_name, token_hash, system_admin, disabled, created_at) VALUES (?1, ?2, 'owner', 'hash', 0, 0, 1)")
+            .bind(owner.to_string())
+            .bind("v20-bridge")
+            .execute(pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO organizations (id, installation_id, name, created_at) VALUES (?1, ?2, 'organization', 1)")
+            .bind(organization.to_string())
+            .bind("v20-bridge")
+            .execute(pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO workspaces (id, installation_id, short_id, organization_id, owner_id, name, template_id, image, access_mode, state, cpu_millis, memory_mib, gpu_count, disk_gib, generation, created_at, updated_at, deleted_at, template_snapshot_yaml, runtime_namespace_scope, runtime_namespace) VALUES (?1, ?2, 'active', ?3, ?4, 'active', NULL, 'registry.example/workspace:1', 'internal', 'ready', 1000, 1024, 0, 20, 4, 1, 1, NULL, ?5, 'organization', 'workspace-organization')")
+            .bind(workspace.to_string())
+            .bind("v20-bridge")
+            .bind(organization.to_string())
+            .bind(owner.to_string())
+            .bind(yaml)
+            .execute(pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO workspace_leases (installation_id, workspace_id, lease_owner, lease_expires_at, updated_at) VALUES (?1, ?2, 'worker', ?3, 1)")
+            .bind("v20-bridge")
+            .bind(workspace.to_string())
+            .bind(i64::MAX)
+            .execute(pool)
+            .await
+            .unwrap();
+
+        database.migrate().await.unwrap();
+
+        let generation: i64 = sqlx::query_scalar("SELECT generation FROM workspaces WHERE id = ?1")
+            .bind(workspace.to_string())
+            .fetch_one(pool)
+            .await
+            .unwrap();
+        let jobs: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM jobs WHERE workspace_id = ?1")
+            .bind(workspace.to_string())
+            .fetch_one(pool)
+            .await
+            .unwrap();
+        assert_eq!(generation, 5);
+        assert_eq!(jobs, 0);
     }
 }
