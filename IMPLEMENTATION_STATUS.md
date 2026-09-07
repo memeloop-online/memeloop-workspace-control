@@ -14,7 +14,7 @@ naming model and contain no compatibility scheme or old generic workspace object
 
 - [x] Export a mode-0600 encrypted schema-v17 control-plane snapshot and inventory all four live
   workspace rows, Namespaces, PVC/PV bindings, capacities, images, and running workloads.
-- [ ] Publish and deploy a bounded transition release that can atomically move one stopped
+- [x] Publish and deploy a bounded transition release that can atomically move one stopped
   workspace row to canonical runtime identity without exposing sensitive database values.
 - [ ] Migrate one workspace at a time: stop; prove Pod absence; create the canonical PVC; copy and
   verify data; remove the old selector-owning StatefulSet; switch database identity; reconcile;
@@ -26,6 +26,28 @@ naming model and contain no compatibility scheme or old generic workspace object
   failure.
 - [ ] Publish the final four images, update GitOps, verify Argo health and production behavior, then
   record all revisions, digests, backup identifiers, and migration evidence here.
+
+Current production checkpoint (continue here after compaction; do not repeat earlier evidence):
+
+- Transition product revision `9e29a3806c008392a46cf6753c975e73574bc43a` passed GitHub Actions
+  run `34077513206`; the deployed control-plane image digest is
+  `sha256:3470086bc5ff9634437ecffc56e779a2c0c7b819b9d694fec4cf3e96cf48463d`.
+- GitOps revision `08bac4ca5722c22495c305fdb1c45297898d9099` declares that exact revision and
+  digest. Argo source refresh was temporarily blocked by repo-server GitHub transport failures; the
+  live StatefulSet was set to the already-committed immutable digest and is Ready.
+- `maintainance` (`01a06170-582c-70f0-bd2d-c9ca6aa2b1b5`) is fully canonical. It uses
+  `w-bd2dc9ca6aa2b1b5`, PVC `workspace-data-w-bd2dc9ca6aa2b1b5-0`, and preserved NodePort
+  `31871`. File manifests matched before cutover; SSH command execution, the one-time Web Shell URL,
+  restart persistence, and host-key continuity passed. All old generic objects and the source PVC
+  were removed after those gates; the canonical workload remained Ready.
+- `tiddlywiki-dev` (`01a06174-8ce2-7d52-b268-ff46894a14b9`) is stopped with no workspace Pod.
+  Longhorn snapshot `mwc-canon-b268ff46894a14b9-20260907` is ready. Target PVC
+  `workspace-data-w-b268ff46894a14b9-0` is Bound and Job `mwc-copy-b268ff46894a14b9` is copying
+  and verifying data. The source PVC, old StatefulSet, NodePort `30953`, and database runtime row
+  remain unchanged until the copy verifier passes.
+- The requested toolchain refresh is a separate post-data-migration gate: keep the original image
+  for each PVC cutover, then build and canary newer Codex CLI, GitHub CLI, Rust, Node.js, and
+  BuildKit versions before rolling them into migrated workspaces.
 
 Safety invariants:
 
