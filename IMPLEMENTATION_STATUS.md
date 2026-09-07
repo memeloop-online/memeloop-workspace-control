@@ -42,12 +42,30 @@ Current production checkpoint (continue here after compaction; do not repeat ear
   were removed after those gates; the canonical workload remained Ready.
 - `tiddlywiki-dev` (`01a06174-8ce2-7d52-b268-ff46894a14b9`) is stopped with no workspace Pod.
   Longhorn snapshot `mwc-canon-b268ff46894a14b9-20260907` is ready. Target PVC
-  `workspace-data-w-b268ff46894a14b9-0` is Bound and Job `mwc-copy-b268ff46894a14b9` is copying
-  and verifying data. The source PVC, old StatefulSet, NodePort `30953`, and database runtime row
-  remain unchanged until the copy verifier passes.
-- The requested toolchain refresh is a separate post-data-migration gate: keep the original image
-  for each PVC cutover, then build and canary newer Codex CLI, GitHub CLI, Rust, Node.js, and
-  BuildKit versions before rolling them into migrated workspaces.
+  `workspace-data-w-b268ff46894a14b9-0` is Bound. The copy finished with equal entry counts. The
+  first archive check differed only because the two filesystem mount roots have different mtimes;
+  read-only Job `mwc-verify-tree-b268ff46894a14b9` now hashes the complete tree below the mount
+  root, including file data, ownership, mode, links, ACLs and xattrs. The source PVC, old
+  StatefulSet, NodePort `30953`, and database runtime row remain unchanged until it passes.
+- `game-forking` (`01a06180-f1c9-7a01-9764-5a0fb4771b1d`) is stopped with no workspace Pod.
+  Snapshot `mwc-canon-97645a0fb4771b1d-20260907` and canonical 60-GiB target PVC
+  `workspace-data-w-97645a0fb4771b1d-0` are ready. Its source-side tree hash is complete; the
+  target-side reader is paused in place while tiddlywiki receives the Longhorn read bandwidth.
+  Its old StatefulSet, source PVC, database row and NodePort `30732` remain unchanged.
+- `rust-dev-test` (`01a06180-f652-7cd3-b405-d2441a1ee149`) is fully canonical and Ready on the
+  retained original Longhorn volume under PVC `workspace-data-w-b405d2441a1ee149-0`. SSH, Web
+  Shell, NodePort `32671`, host-key continuity and restart persistence passed; old generic objects
+  were removed.
+- The v19 transition source is locally complete through `086b36a`: canonical names are derived,
+  redundant runtime columns and `runtime_profile` are dropped, the one-time transition command is
+  removed, and BuildKit is pinned to verified v0.33.0 digest
+  `sha256:80b15f0735e87bab7bf59ec4d695dfb4a7cfb25521cf56dc75d6f256285b63ef`.
+- Toolchain images passed internal Forgejo CI and are immutable in Harbor: Rust commit `0416764`
+  digest `sha256:e71597592feacc4adb69643931af3bf4ee7f3f1060aac302c2a8f595a105a4b3`, Node commit
+  `d866f4d` digest `sha256:4b938d6210d5f2bebbd43d96c51d23d969ee0f47540d6e369931a1c756b2bc12`, and maintenance
+  commit `22c45c3` digest `sha256:9b9f6cfc8bd2197fdc9a2e69ada3a8b7d0bdc129ba33908f584ce0e49a88b2e8`.
+  The full MWC canary and template/workspace promotion remain gated on PVC cutover and exact
+  in-cluster image-contract checks.
 
 Safety invariants:
 
