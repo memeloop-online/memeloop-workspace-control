@@ -5,8 +5,7 @@
 The public and internal listeners expose the same Kubernetes probe contracts:
 
 - `GET /livez` returns `200` while the process and Tokio runtime can serve HTTP. It does not call
-  the database, Kubernetes, Prometheus, Webhooks, or plugins. `/healthz` remains as a compatibility
-  alias.
+  the database, Kubernetes, Prometheus, Webhooks, or plugins.
 - `GET /readyz` performs a database ping with a two-second timeout. It returns `503` when the
   authoritative database cannot be reached. Kubernetes or Prometheus degradation does not remove
   the control plane from service, so operators can still inspect state and perform cleanup.

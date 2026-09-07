@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use axum::{
     Router,
+    http::StatusCode,
     routing::{get, post},
 };
 
@@ -35,8 +36,9 @@ type ApiRouter = Router<Arc<AppState>>;
 fn system_and_identity_routes(router: ApiRouter) -> ApiRouter {
     router
         .route("/livez", get(health))
-        .route("/healthz", get(health))
         .route("/readyz", get(ready))
+        // Keep the removed probe path out of the SPA fallback so stale clients get a clear 404.
+        .route("/healthz", get(|| async { StatusCode::NOT_FOUND }))
         .route("/api/v1/system/info", get(system_info))
         .route("/api/v1/me", get(auth::me))
         .route(

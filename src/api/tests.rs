@@ -42,7 +42,7 @@ async fn test_app() -> Router {
 #[tokio::test]
 async fn health_endpoint_is_available() {
     let app = test_app().await;
-    for path in ["/livez", "/healthz", "/readyz"] {
+    for path in ["/livez", "/readyz"] {
         let response = app
             .clone()
             .oneshot(Request::get(path).body(Body::empty()).unwrap())
@@ -50,6 +50,12 @@ async fn health_endpoint_is_available() {
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK, "{path}");
     }
+
+    let response = app
+        .oneshot(Request::get("/healthz").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
