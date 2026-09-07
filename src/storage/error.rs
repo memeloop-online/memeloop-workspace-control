@@ -142,6 +142,8 @@ pub enum StorageError {
     Clock,
     #[error("database version is not supported by this release")]
     UnsupportedDatabaseVersion,
+    #[error("database schema upgrade data is invalid")]
+    SchemaUpgradeDataInvalid,
     #[error("workspace SSH identity is invalid")]
     InvalidSshIdentity,
     #[error("database snapshots can only be exported from SQLite mode")]

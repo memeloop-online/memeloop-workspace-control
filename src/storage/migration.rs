@@ -36,6 +36,14 @@ async fn migrate_sqlite(
     let version = current_sqlite_version(&mut transaction).await?;
     match version {
         schema::SCHEMA_VERSION => {}
+        19 => {
+            super::migration_v20::upgrade_sqlite(&mut transaction, applied_at).await?;
+            sqlx::query("INSERT INTO schema_migrations (version, applied_at) VALUES (?1, ?2)")
+                .bind(schema::SCHEMA_VERSION)
+                .bind(applied_at)
+                .execute(&mut *transaction)
+                .await?;
+        }
         0 if has_application_tables == 0 => {
             for statement in schema::BASELINE {
                 sqlx::query(statement).execute(&mut *transaction).await?;
@@ -79,6 +87,14 @@ async fn migrate_postgres(
             .await?;
     match version {
         schema::SCHEMA_VERSION => {}
+        19 => {
+            super::migration_v20::upgrade_postgres(&mut transaction, applied_at).await?;
+            sqlx::query("INSERT INTO schema_migrations (version, applied_at) VALUES ($1, $2)")
+                .bind(schema::SCHEMA_VERSION)
+                .bind(applied_at)
+                .execute(&mut *transaction)
+                .await?;
+        }
         0 if has_application_tables == 0 => {
             for statement in schema::BASELINE {
                 sqlx::query(statement).execute(&mut *transaction).await?;

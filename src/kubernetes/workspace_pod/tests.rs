@@ -8,7 +8,7 @@ fn resource_names() -> WorkspaceResourceNames {
 }
 
 fn template() -> WorkspaceTemplateSpec {
-    let mut template = WorkspaceTemplateSpec::standard(
+    let template = WorkspaceTemplateSpec::standard(
         "registry.example/workspace:1",
         AccessMode::Internal,
         Resources {
@@ -19,20 +19,10 @@ fn template() -> WorkspaceTemplateSpec {
         },
     );
     template
-        .environment
-        .insert("HOME".to_owned(), "/previous home".to_owned());
-    template.environment.insert(
-        "MWC_WORKSPACE_HOME".to_owned(),
-        "/must-not-shadow-platform".to_owned(),
-    );
-    template
-        .environment
-        .insert("INJECTED_TOKEN".to_owned(), "previous".to_owned());
-    template
 }
 
 #[test]
-fn injected_targets_remove_only_previous_template_environment() {
+fn injected_targets_do_not_remove_canonical_platform_environment() {
     let template = template();
     let pod = WorkspacePod::from_template(&template);
     let mut container = pod.workspace_container(
@@ -43,11 +33,7 @@ fn injected_targets_remove_only_previous_template_environment() {
     apply_injected_environment_overrides(
         &template,
         &mut container,
-        &BTreeSet::from([
-            "HOME".to_owned(),
-            "INJECTED_TOKEN".to_owned(),
-            "MWC_WORKSPACE_HOME".to_owned(),
-        ]),
+        &BTreeSet::from(["HOME".to_owned(), "MWC_WORKSPACE_HOME".to_owned()]),
     );
 
     let environment = container.env.unwrap();
@@ -67,7 +53,6 @@ fn injected_targets_remove_only_previous_template_environment() {
             .collect::<Vec<_>>(),
         [Some("/workspace")]
     );
-    assert!(environment.iter().all(|item| item.name != "INJECTED_TOKEN"));
 }
 
 #[test]
@@ -76,9 +61,6 @@ fn sshd_set_env_quotes_spaces_and_quotation_marks() {
     template.workspace_home = "/home/node-dev".to_owned();
     template.cluster_access = true;
     template.buildkit = true;
-    template
-        .environment
-        .insert("TOOL_FLAGS".to_owned(), "--name \"hello world\"".to_owned());
     let config = WorkspacePod::from_template(&template).ssh_set_env();
     assert!(config.contains("\"HOME=/home/node-dev\""));
     assert!(config.contains("\"RUSTUP_HOME=/usr/local/rustup\""));
@@ -87,24 +69,7 @@ fn sshd_set_env_quotes_spaces_and_quotation_marks() {
         config
             .contains("\"BUILDKIT_HOST=unix:///run/mwc-buildkit/runtime/buildkit/buildkitd.sock\"")
     );
-    assert!(config.contains("\"TOOL_FLAGS=--name \\\"hello world\\\"\""));
     assert!(config.contains(
-        "\"PATH=/home/node-dev/.local/bin:/home/node-dev/.local/share/pnpm:/home/node-dev/.cargo/bin:/usr/local/cargo/bin:/run/mwc-buildkit/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\""
-    ));
-}
-
-#[test]
-fn sshd_set_env_sets_a_complete_path_for_non_buildkit_images() {
-    let mut template = template();
-    template.workspace_home = "/home/rust-dev".to_owned();
-    template.environment.insert(
-        "PATH".to_owned(),
-        "/opt/workspace-tools:/usr/local/bin:/bin".to_owned(),
-    );
-
-    let config = WorkspacePod::from_template(&template).ssh_set_env();
-
-    assert!(config.contains(
-        "\"PATH=/home/rust-dev/.local/bin:/home/rust-dev/.local/share/pnpm:/home/rust-dev/.cargo/bin:/usr/local/cargo/bin:/run/mwc-buildkit/bin:/opt/workspace-tools:/usr/local/bin:/bin\""
+        "\"PATH=/run/mwc-buildkit/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\""
     ));
 }

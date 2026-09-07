@@ -39,8 +39,6 @@ pub struct WorkspaceTemplateSpec {
     pub ephemeral_storage_limit_mib: Option<u64>,
     pub workspace_user: String,
     pub workspace_home: String,
-    #[serde(default, alias = "preserve_home_root")]
-    pub preserve_home_ownership: bool,
     #[serde(default)]
     pub buildkit: bool,
     #[serde(default)]
@@ -53,9 +51,6 @@ pub struct WorkspaceTemplateSpec {
     pub preferred_node_names: Vec<String>,
     #[serde(default)]
     pub node_selector: BTreeMap<String, String>,
-    #[serde(default)]
-    #[schema(ignore)]
-    pub environment: BTreeMap<String, String>,
 }
 
 /// Bounded, Pod-lifetime storage for data that can be regenerated safely.
@@ -152,17 +147,8 @@ impl WorkspaceTemplateDocument {
         self.spec.validate()
     }
 
-    /// Validates a template submitted through the current authoring API.
-    ///
-    /// Historical templates and workspace snapshots may still contain `environment`, so regular
-    /// parsing remains backward compatible. New mutable environment data belongs to the encrypted,
-    /// selector-aware injection cascade instead.
     pub fn validate_authoring(&self) -> Result<(), TemplateError> {
-        self.validate()?;
-        if !self.spec.environment.is_empty() {
-            return Err(TemplateError::ReadOnlyEnvironment);
-        }
-        Ok(())
+        self.validate()
     }
 }
 
@@ -207,13 +193,6 @@ impl WorkspaceTemplateSpec {
         {
             return Err(TemplateError::Scheduling);
         }
-        if self
-            .environment
-            .iter()
-            .any(|(key, value)| !valid_env_name(key) || !valid_environment_value(value))
-        {
-            return Err(TemplateError::Environment);
-        }
         self.storage_policy.validate(self.resources.disk_gib)?;
         Ok(())
     }
@@ -235,22 +214,14 @@ impl WorkspaceTemplateSpec {
             ephemeral_storage_limit_mib: Some(14_592),
             workspace_user: "workspace".to_owned(),
             workspace_home: "/workspace".to_owned(),
-            preserve_home_ownership: false,
             buildkit: false,
             storage_policy: WorkspaceStoragePolicy::default(),
             cluster_access: false,
             required_node_names: Vec::new(),
             preferred_node_names: Vec::new(),
             node_selector: BTreeMap::new(),
-            environment: BTreeMap::new(),
         }
     }
-}
-
-fn valid_env_name(value: &str) -> bool {
-    let mut characters = value.chars();
-    matches!(characters.next(), Some(first) if first == '_' || first.is_ascii_alphabetic())
-        && characters.all(|character| character == '_' || character.is_ascii_alphanumeric())
 }
 
 fn valid_workspace_user(value: &str) -> bool {
@@ -282,10 +253,6 @@ fn valid_selector_part(value: &str) -> bool {
         && !value
             .chars()
             .any(|character| character.is_control() || character.is_whitespace())
-}
-
-fn valid_environment_value(value: &str) -> bool {
-    value.len() <= 4_096 && !value.chars().any(char::is_control)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]

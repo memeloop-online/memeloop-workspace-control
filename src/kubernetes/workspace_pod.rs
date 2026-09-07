@@ -3,8 +3,7 @@ use std::collections::BTreeMap;
 use k8s_openapi::{
     api::core::v1::{
         Affinity, Container, ContainerPort, EnvVar, ExecAction, LocalObjectReference, NodeAffinity,
-        NodeSelector, PodSecurityContext, PreferredSchedulingTerm, Probe, ResourceRequirements,
-        SeccompProfile, VolumeMount,
+        NodeSelector, PreferredSchedulingTerm, Probe, ResourceRequirements, VolumeMount,
     },
     apimachinery::pkg::api::resource::Quantity,
 };
@@ -26,14 +25,11 @@ const BOOTSTRAP: &str = "/etc/workspace-platform/mwc-workspace-bootstrap";
 const BUILD_SCRATCH: &str = "/var/lib/mwc/build-scratch";
 const CODEX_SCRATCH: &str = "/var/lib/mwc/codex-scratch";
 const BUILDKIT_VOLUME_MOUNT: &str = "/run/mwc-buildkit";
-const BUILDKIT_BIN: &str = "/run/mwc-buildkit/bin";
 const BUILDKIT_RUNTIME: &str = "/run/mwc-buildkit/runtime";
-const DEFAULT_SSH_PATH: &str = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
-const INTERNAL_PLATFORM_ENVIRONMENT: [&str; 7] = [
+const INTERNAL_PLATFORM_ENVIRONMENT: [&str; 6] = [
     "MWC_WORKSPACE_USER",
     "MWC_WORKSPACE_HOME",
     "MWC_IN_CLUSTER_KUBECONFIG",
-    "MWC_PRESERVE_HOME_ROOT",
     "MWC_BUILDKIT_ENABLED",
     "MWC_BUILD_SCRATCH",
     "MWC_HOME_RESERVE_MIB",
@@ -66,51 +62,24 @@ impl<'a> WorkspacePod<'a> {
     }
 
     pub fn ssh_strict_modes(self) -> &'static str {
-        if self.template.preserve_home_ownership {
-            // Migrated Coder PVC roots are intentionally root:1000/2775. The platform owns the
-            // generated authorized_keys file and keeps it 0600, so retaining the previous root
-            // metadata requires disabling only sshd's parent-directory ownership check.
-            "no"
-        } else {
-            "yes"
-        }
+        "yes"
     }
 
     pub fn ssh_set_env(self) -> String {
-        let mut environment = self.template.environment.clone();
-        let configured_path = environment.remove("PATH");
-        environment.insert("PATH".to_owned(), self.ssh_path(configured_path.as_deref()));
-        for variable in self.session_platform_env() {
-            if let Some(value) = variable.value {
-                environment.insert(variable.name, value);
-            }
-        }
-        let assignments = environment
+        let assignments = self
+            .session_platform_env()
             .into_iter()
-            .map(|(name, value)| sshd_argument(&name, &value))
+            .filter_map(|variable| {
+                variable
+                    .value
+                    .map(|value| sshd_argument(&variable.name, &value))
+            })
             .collect::<Vec<_>>();
         if assignments.is_empty() {
             String::new()
         } else {
             format!("SetEnv {}\n", assignments.join(" "))
         }
-    }
-
-    fn ssh_path(self, configured_path: Option<&str>) -> String {
-        let mut entries = vec![
-            format!("{}/.local/bin", self.home),
-            format!("{}/.local/share/pnpm", self.home),
-            format!("{}/.cargo/bin", self.home),
-            "/usr/local/cargo/bin".to_owned(),
-            BUILDKIT_BIN.to_owned(),
-        ];
-        let configured_path = configured_path.unwrap_or(DEFAULT_SSH_PATH);
-        for entry in configured_path.split(':').filter(|entry| !entry.is_empty()) {
-            if !entries.iter().any(|existing| existing == entry) {
-                entries.push(entry.to_owned());
-            }
-        }
-        entries.join(":")
     }
 
     pub fn resource_limits(&self) -> BTreeMap<String, Quantity> {
@@ -158,8 +127,7 @@ impl<'a> WorkspacePod<'a> {
         resources: ResourceRequirements,
         names: &WorkspaceResourceNames,
     ) -> Container {
-        let mut env = self.platform_env();
-        env.extend(self.development_env());
+        let env = self.platform_env();
         Container {
             name: "workspace".to_owned(),
             image: Some(image.to_owned()),
@@ -235,19 +203,8 @@ impl<'a> WorkspacePod<'a> {
         (!self.template.node_selector.is_empty()).then(|| self.template.node_selector.clone())
     }
 
-    pub fn pod_security_context(&self) -> Option<PodSecurityContext> {
-        (self.template.preserve_home_ownership
-            || self.template.buildkit
-            || self.template.cluster_access)
-            .then(|| PodSecurityContext {
-                fs_group: Some(1000),
-                fs_group_change_policy: Some("OnRootMismatch".to_owned()),
-                seccomp_profile: Some(SeccompProfile {
-                    type_: "RuntimeDefault".to_owned(),
-                    ..SeccompProfile::default()
-                }),
-                ..PodSecurityContext::default()
-            })
+    pub fn pod_security_context(&self) -> Option<k8s_openapi::api::core::v1::PodSecurityContext> {
+        None
     }
 
     pub fn image_pull_secrets(&self) -> Option<Vec<LocalObjectReference>> {
@@ -277,14 +234,6 @@ impl<'a> WorkspacePod<'a> {
                 },
             ),
             env(
-                "MWC_PRESERVE_HOME_ROOT",
-                if self.template.preserve_home_ownership {
-                    "true"
-                } else {
-                    "false"
-                },
-            ),
-            env(
                 "MWC_BUILDKIT_ENABLED",
                 if self.template.buildkit {
                     "true"
@@ -306,21 +255,15 @@ impl<'a> WorkspacePod<'a> {
         environment
     }
 
-    fn development_env(&self) -> Vec<EnvVar> {
-        self.template
-            .environment
-            .iter()
-            .filter(|(name, _)| !self.is_platform_environment(name))
-            .map(|(name, value)| env(name, value))
-            .collect()
-    }
-
     fn session_platform_env(self) -> Vec<EnvVar> {
-        let path = self.ssh_path(self.template.environment.get("PATH").map(String::as_str));
         let mut environment = vec![
+            env(
+                "PATH",
+                "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+            ),
             env("HOME", self.home),
-            env("PATH", &path),
             env("RUSTUP_HOME", "/usr/local/rustup"),
+            env("CARGO_HOME", "/usr/local/cargo"),
             env("TMPDIR", &format!("{BUILD_SCRATCH}/tmp")),
             env("TMP", &format!("{BUILD_SCRATCH}/tmp")),
             env("TEMP", &format!("{BUILD_SCRATCH}/tmp")),
@@ -331,6 +274,10 @@ impl<'a> WorkspacePod<'a> {
             environment.push(env("KUBECONFIG", "/run/mwc-ssh/kubeconfig"));
         }
         if self.template.buildkit {
+            environment[0] = env(
+                "PATH",
+                "/run/mwc-buildkit/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+            );
             environment.push(env(
                 "BUILDKIT_HOST",
                 &format!("unix://{BUILDKIT_RUNTIME}/buildkit/buildkitd.sock"),
@@ -341,16 +288,10 @@ impl<'a> WorkspacePod<'a> {
 
     fn is_platform_environment(self, name: &str) -> bool {
         INTERNAL_PLATFORM_ENVIRONMENT.contains(&name)
-            || name == "HOME"
+            || matches!(name, "PATH" | "HOME" | "RUSTUP_HOME" | "CARGO_HOME")
             || matches!(
                 name,
-                "PATH"
-                    | "RUSTUP_HOME"
-                    | "TMPDIR"
-                    | "TMP"
-                    | "TEMP"
-                    | "XDG_CACHE_HOME"
-                    | "CARGO_TARGET_DIR"
+                "TMPDIR" | "TMP" | "TEMP" | "XDG_CACHE_HOME" | "CARGO_TARGET_DIR"
             )
             || self.template.cluster_access && name == "KUBECONFIG"
             || self.template.buildkit && name == "BUILDKIT_HOST"

@@ -98,24 +98,12 @@ fn node_template(image: &str, resources: Resources) -> WorkspaceTemplateSpec {
     let mut template = WorkspaceTemplateSpec::standard(image, AccessMode::Public, resources);
     template.workspace_user = "node-dev".to_owned();
     template.workspace_home = "/home/node-dev".to_owned();
-    template.preserve_home_ownership = true;
     template.buildkit = true;
     template.pod_requests.cpu_millis = 1_000;
     template.pod_requests.memory_mib = 1_024;
     template.pod_requests.ephemeral_storage_mib = Some(256);
     template.ephemeral_storage_limit_mib = Some(1_024);
     template.required_node_names = vec!["westlake".to_owned(), "haixia".to_owned()];
-    template.environment.extend([
-        ("HOME".to_owned(), "/home/node-dev".to_owned()),
-        (
-            "PATH".to_owned(),
-            "/usr/local/bin:/usr/local/sbin:/home/node-dev/.local/bin:/home/node-dev/.local/share/pnpm:/usr/sbin:/usr/bin:/sbin:/bin".to_owned(),
-        ),
-        (
-            "BUILDKIT_HOST".to_owned(),
-            "unix:///home/node-dev/.cache/buildkit/runtime/buildkit/buildkitd.sock".to_owned(),
-        ),
-    ]);
     template
 }
 
@@ -123,7 +111,6 @@ fn rust_template(image: &str, resources: Resources) -> WorkspaceTemplateSpec {
     let mut template = WorkspaceTemplateSpec::standard(image, AccessMode::Public, resources);
     template.workspace_user = "rust-dev".to_owned();
     template.workspace_home = "/home/rust-dev".to_owned();
-    template.preserve_home_ownership = true;
     template.buildkit = true;
     template.pod_requests.cpu_millis = 2_000;
     template.pod_requests.memory_mib = 4_096;
@@ -585,10 +572,6 @@ fn only_templates_requesting_cluster_access_receive_an_owned_cluster_admin_ident
     workspace.template.cluster_access = true;
     workspace.template.workspace_user = "cluster-admin".to_owned();
     workspace.template.workspace_home = "/home/cluster-admin".to_owned();
-    workspace.template.environment.insert(
-        "KUBECONFIG".to_owned(),
-        "/home/cluster-admin/.mwc/kubeconfig".to_owned(),
-    );
     let workspace_id = workspace.id;
     let resources = builder().build(&workspace).unwrap();
     let names = runtime_names(&workspace);

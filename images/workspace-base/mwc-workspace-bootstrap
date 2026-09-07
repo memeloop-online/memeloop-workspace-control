@@ -9,6 +9,7 @@ runtime_dir=/run/mwc-ssh
 authorized_keys="$runtime_dir/authorized_keys"
 build_scratch=${MWC_BUILD_SCRATCH:-/var/lib/mwc/build-scratch}
 codex_scratch=/var/lib/mwc/codex-scratch
+buildkit_runtime=/run/mwc-buildkit
 manifest=/var/run/workspace-injections/config/workspace-files.json
 environment_manifest=/var/run/workspace-injections/config/workspace-environment.json
 kubeconfig="$runtime_dir/kubeconfig"
@@ -30,20 +31,22 @@ prepare_layout() {
     if [ -d "$state_dir" ] || find "$workspace_root" -mindepth 1 -maxdepth 1 -print -quit | grep -q .; then
         home_has_data=true
     fi
-    if [ "${MWC_PRESERVE_HOME_ROOT:-false}" = true ]; then
-        # A migrated Coder PVC root is intentionally root:1000/2775. Do not rewrite it;
-        # only create and own platform-managed children beneath that mount.
-        :
-    else
-        install -d -m 0750 -o "$workspace_user" -g "$workspace_group" "$workspace_root"
-    fi
+    # Normalize only the Home mount inode. Never recurse into durable user data.
+    chown "$workspace_user:$workspace_group" "$workspace_root"
+    chmod 0750 "$workspace_root"
     # Pod-lifetime volumes back these paths. Home contains durable user data only.
     install -d -m 1777 -o "$workspace_user" -g "$workspace_group" /tmp /var/tmp
     install -d -m 0700 -o "$workspace_user" -g "$workspace_group" \
         "$build_scratch" "$build_scratch/bin" "$build_scratch/tmp" "$build_scratch/cache" \
         "$build_scratch/cargo-target" "$build_scratch/cargo-registry" \
-        "$build_scratch/cargo-git" "$codex_scratch" "$codex_scratch/tmp" \
-        "$codex_scratch/dot-tmp"
+        "$build_scratch/cargo-git" "$codex_scratch"
+    if [ "${MWC_BUILDKIT_ENABLED:-false}" = true ]; then
+        install -d -m 0700 -o 1000 -g 1000 \
+            "$buildkit_runtime/bin" "$buildkit_runtime/config" "$buildkit_runtime/runtime" \
+            "$buildkit_runtime/state" "$buildkit_runtime/tmp"
+    fi
+    install -d -m 0700 -o "$workspace_user" -g "$workspace_group" \
+        "$codex_scratch/tmp" "$codex_scratch/dot-tmp"
     if [ "$home_has_data" = true ]; then
         durable_dir_best_effort "$state_dir"
         regenerable_link_best_effort "$workspace_root/.cache" "$build_scratch/cache"
@@ -314,7 +317,7 @@ prepare_runtime_sshd_config() {
         object=$(printf '%s' "$entry" | jq -r '.object')
         data_key=$(printf '%s' "$entry" | jq -r '.data_key')
         case "$name" in
-            HOME|PATH|RUSTUP_HOME|TMPDIR|TMP|TEMP|XDG_CACHE_HOME|CARGO_TARGET_DIR|MWC_WORKSPACE_USER|MWC_WORKSPACE_HOME|MWC_IN_CLUSTER_KUBECONFIG|MWC_PRESERVE_HOME_ROOT|MWC_BUILDKIT_ENABLED|MWC_BUILD_SCRATCH|MWC_HOME_RESERVE_MIB)
+            PATH|HOME|RUSTUP_HOME|CARGO_HOME|TMPDIR|TMP|TEMP|XDG_CACHE_HOME|CARGO_TARGET_DIR|MWC_WORKSPACE_USER|MWC_WORKSPACE_HOME|MWC_IN_CLUSTER_KUBECONFIG|MWC_BUILDKIT_ENABLED|MWC_BUILD_SCRATCH|MWC_HOME_RESERVE_MIB)
                 continue
                 ;;
             KUBECONFIG)

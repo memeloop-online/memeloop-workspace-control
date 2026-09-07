@@ -574,7 +574,6 @@ async fn image_allowlist_and_template_contract_are_admitted_atomically() {
     let mut template_spec = WorkspaceTemplateSpec::standard(image, AccessMode::Internal, resources);
     template_spec.workspace_user = "rust-dev".to_owned();
     template_spec.workspace_home = "/home/rust-dev".to_owned();
-    template_spec.preserve_home_ownership = true;
     let mut privileged_spec = template_spec.clone();
     privileged_spec.cluster_access = true;
     assert!(matches!(

@@ -247,33 +247,6 @@ async fn management_api_enforces_system_and_organization_boundaries() {
     let template_yaml = WorkspaceTemplateDocument::new("Standard", template_spec.clone())
         .to_yaml()
         .unwrap();
-    let mut injected_environment_spec = template_spec.clone();
-    injected_environment_spec
-        .environment
-        .insert("INJECTED_TOKEN".to_owned(), "must-use-injection".to_owned());
-    let injected_environment_yaml =
-        WorkspaceTemplateDocument::new("Injected environment", injected_environment_spec)
-            .to_yaml()
-            .unwrap();
-    let rejected_environment = app
-        .clone()
-        .oneshot(
-            authenticated(Request::post("/api/v1/templates"), ADMIN_TOKEN)
-                .header("content-type", "application/json")
-                .header("idempotency-key", "reject-template-environment")
-                .body(Body::from(
-                    json!({
-                        "organization_id": organization.id,
-                        "yaml": injected_environment_yaml.clone()
-                    })
-                    .to_string(),
-                ))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(rejected_environment.status(), StatusCode::BAD_REQUEST);
-
     let template = app
         .clone()
         .oneshot(
@@ -293,27 +266,6 @@ async fn management_api_enforces_system_and_organization_boundaries() {
         .unwrap();
     assert_eq!(template.status(), StatusCode::CREATED);
     let template_id = body_json(template).await["id"].as_str().unwrap().to_owned();
-
-    let rejected_environment_replace = app
-        .clone()
-        .oneshot(
-            authenticated(
-                Request::put(format!("/api/v1/templates/{template_id}")),
-                ADMIN_TOKEN,
-            )
-            .header("content-type", "application/json")
-            .header("idempotency-key", "reject-template-environment-replace")
-            .body(Body::from(
-                json!({"yaml": injected_environment_yaml}).to_string(),
-            ))
-            .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(
-        rejected_environment_replace.status(),
-        StatusCode::BAD_REQUEST
-    );
 
     let templates = app
         .clone()
