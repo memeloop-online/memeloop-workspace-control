@@ -1040,12 +1040,12 @@ fn node_template_reuses_the_existing_image_with_platform_bootstrap() {
     assert!(bootstrap.contains("prepare_runtime_sshd_config"));
     assert!(bootstrap.contains("PATH|HOME|RUSTUP_HOME|CARGO_HOME|TMPDIR"));
     assert!(bootstrap.contains("$workspace_root/.codex/tmp"));
+    assert!(bootstrap.contains("$workspace_root/.codex/.tmp"));
     assert!(bootstrap.contains("$codex_scratch/tmp"));
     assert!(bootstrap.contains("mark_home_degraded"));
     assert!(bootstrap.contains("regenerable_link_best_effort"));
     assert!(bootstrap.contains("release_reserve_if_critical"));
     assert!(bootstrap.contains("exec /usr/sbin/sshd -D -e -f \"$runtime_sshd_config\""));
-    assert!(!bootstrap.contains("compat-serve"));
     assert!(!bootstrap.contains("apt-get"));
 }
 

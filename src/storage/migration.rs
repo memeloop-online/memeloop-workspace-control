@@ -36,14 +36,6 @@ async fn migrate_sqlite(
     let version = current_sqlite_version(&mut transaction).await?;
     match version {
         schema::SCHEMA_VERSION => {}
-        19 => {
-            super::migration_v20::upgrade_sqlite(&mut transaction, applied_at).await?;
-            sqlx::query("INSERT INTO schema_migrations (version, applied_at) VALUES (?1, ?2)")
-                .bind(schema::SCHEMA_VERSION)
-                .bind(applied_at)
-                .execute(&mut *transaction)
-                .await?;
-        }
         0 if has_application_tables == 0 => {
             for statement in schema::BASELINE {
                 sqlx::query(statement).execute(&mut *transaction).await?;
@@ -87,14 +79,6 @@ async fn migrate_postgres(
             .await?;
     match version {
         schema::SCHEMA_VERSION => {}
-        19 => {
-            super::migration_v20::upgrade_postgres(&mut transaction, applied_at).await?;
-            sqlx::query("INSERT INTO schema_migrations (version, applied_at) VALUES ($1, $2)")
-                .bind(schema::SCHEMA_VERSION)
-                .bind(applied_at)
-                .execute(&mut *transaction)
-                .await?;
-        }
         0 if has_application_tables == 0 => {
             for statement in schema::BASELINE {
                 sqlx::query(statement).execute(&mut *transaction).await?;
@@ -147,7 +131,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn earlier_sqlite_database_is_rejected_without_conversion() {
+    async fn non_current_sqlite_database_is_rejected_without_conversion() {
         let installation: InstallationId = "schema-test".parse().unwrap();
         let database = Database::connect("sqlite::memory:", installation)
             .await
@@ -159,7 +143,7 @@ mod tests {
             .execute(pool)
             .await
             .unwrap();
-        sqlx::query("INSERT INTO schema_migrations (version, applied_at) VALUES (18, 1)")
+        sqlx::query("INSERT INTO schema_migrations (version, applied_at) VALUES (19, 1)")
             .execute(pool)
             .await
             .unwrap();
@@ -167,5 +151,6 @@ mod tests {
             database.migrate().await,
             Err(StorageError::UnsupportedDatabaseVersion)
         ));
+        assert_eq!(database.schema_version().await.unwrap(), 19);
     }
 }

@@ -17,15 +17,12 @@ be patched from `volumeClaimTemplates` to an explicit claim because that field i
 roll out and verify the Retain policy while leaving `sqlite.existingClaim` empty. In a separately
 controlled window, stop the only database writer, check SQLite integrity, delete/recreate the
 StatefulSet without deleting its retained PVC, and set `sqlite.existingClaim` to that exact claim
-name. Verify the recreated Pod mounts the recorded PVC/PV/CSI handle before allowing writes. See the
-migration document for the Argo prune and rollback constraints.
+name. Verify the recreated Pod mounts the recorded PVC/PV/CSI handle before allowing writes.
 
 Set `workspace.sharedNamespace` to place newly created workspaces in one
 installation-owned Namespace. The default empty value preserves dedicated Namespace placement.
 Existing workspaces keep their persisted runtime identity and are never moved by changing this
-value. See
-the operational migration runbook for the separately
-authorized downtime, snapshot/restore or prebind, Argo prune, and rollback procedures.
+value.
 
 The Helm default does not emit `MWC_WORKSPACE_SHARED_NAMESPACE`. Setting that environment variable
 directly to an empty string is not equivalent to leaving it unset: application validation rejects

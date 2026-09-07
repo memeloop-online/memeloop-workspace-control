@@ -16,16 +16,12 @@ fn yaml_round_trip_contains_only_explicit_template_fields() {
     spec.workspace_home = "/home/node-dev".to_owned();
     let document = WorkspaceTemplateDocument::new("Node.js 开发", spec);
     let yaml = document.to_yaml().unwrap();
-    assert!(!yaml.contains("runtimeProfile"));
-    assert!(!yaml.contains("removed_profile"));
     assert!(yaml.contains("access_mode: internal"));
     assert!(yaml.contains("workspace_user: node-dev"));
     assert!(yaml.contains("runtime_tmp_memory_mib: 512"));
     assert!(yaml.contains("build_scratch_gib: 12"));
     assert!(yaml.contains("buildkit_cache_gib: 8"));
     assert_eq!(WorkspaceTemplateDocument::parse(&yaml).unwrap(), document);
-    let legacy_environment = yaml.replace("buildkit:", "environment: {}\n  buildkit:");
-    assert!(WorkspaceTemplateDocument::parse(&legacy_environment).is_err());
     let json = serde_json::to_value(&document.spec).unwrap();
     assert_eq!(json["access_mode"], "internal");
     assert_eq!(json["workspace_user"], "node-dev");

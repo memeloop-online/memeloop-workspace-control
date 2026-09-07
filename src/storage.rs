@@ -22,7 +22,6 @@ mod job_types;
 mod leases;
 mod metrics_store;
 mod migration;
-mod migration_v20;
 mod plugin_package_store;
 mod plugin_store;
 mod port_mappings;

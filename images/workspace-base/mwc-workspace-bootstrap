@@ -136,7 +136,7 @@ prepare_regenerable_link() {
     if [ -d "$link_path" ] && [ -z "$(ls -A "$link_path")" ]; then
         rmdir "$link_path"
     elif [ -e "$link_path" ]; then
-        # Existing migrated caches are never deleted implicitly. Operators can remove them while
+        # Existing non-empty caches are never deleted implicitly. Operators can remove them while
         # the workspace is stopped; the next start will replace the empty path with this link.
         return
     fi

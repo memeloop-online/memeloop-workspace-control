@@ -120,8 +120,8 @@ operate another log store.
 
 ServiceMonitor and PrometheusRule reuse Prometheus Operator. Dashboards reuse Grafana. Home PVC
 capacity and snapshots reuse kubelet metrics and Longhorn. Logs reuse Promtail and Loki. Alert
-routing reuses Alertmanager. No part of the health, metrics or diagnostics implementation depends
-on Tailscale, Coder or Coder Premium.
+routing reuses Alertmanager. Health, metrics, and diagnostics use these deployed Kubernetes and
+observability components.
 
 For large public installations, use PostgreSQL and multiple identical control-plane replicas.
 SQLite remains single-replica. Keep BuildKit disabled in templates that do not build images, and do

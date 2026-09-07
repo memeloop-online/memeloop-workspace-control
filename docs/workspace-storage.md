@@ -25,8 +25,8 @@ This limit is containment, not reservation. New templates request 2 GiB for the 
 container, editable in the template form or YAML source. When enabled, BuildKit requests 1 GiB
 separately and its limit follows the configured BuildKit cache boundary.
 
-For a new or cleaned Home, MWC links regenerable cache paths into build scratch. A migrated
-non-empty cache is never deleted or replaced automatically. Stop the workspace, clean that cache
+For a new or cleaned Home, MWC links regenerable cache paths into build scratch. A non-empty
+cache is never deleted or replaced automatically. Stop the workspace, clean that cache
 explicitly, and start it again; the empty path is then linked to the bounded layer.
 
 ## Lifecycle and cleanup
@@ -66,8 +66,7 @@ rules to this installation's active workspace nodes prevents unrelated-node aler
 alert with `installation_id`. These node alerts cover eviction risk that an individual
 `emptyDir.sizeLimit` cannot prevent.
 
-MWC intentionally has no workspace agent. Connectivity therefore does not share the failure mode
-of a Home-backed Coder agent: native SSH is standard OpenSSH, and Web Shell is
+MWC intentionally has no workspace agent. Native SSH is standard OpenSSH, and Web Shell is
 browser → Higress → ttyd → localhost OpenSSH. BuildKit is a regular sidecar and cannot gate sshd
 startup if its own bounded volume fails. Workspace Services continue publishing the Pod endpoint
 for this recovery channel even while an optional sidecar reports unready.
@@ -100,8 +99,8 @@ lose threads or corrupt state.
 - OpenSSH, ttyd, BuildKit, and control-plane stdout/stderr remain ordinary Kubernetes container
   logs and can be collected by the cluster's existing Loki pipeline.
 
-No Tailscale or Coder Premium capability is required. MWC uses only Kubernetes, Longhorn,
-Prometheus/Grafana/Alertmanager/Loki, Higress, standard OpenSSH, and ttyd.
+MWC uses Kubernetes, Longhorn, Prometheus/Grafana/Alertmanager/Loki, Higress, standard OpenSSH,
+and ttyd.
 
 Kubelet PVC series identify the workspace Namespace. Grafana can attach workspace, organization,
 and owner dimensions from kube-state-metrics without adding unbounded labels to MWC metrics:

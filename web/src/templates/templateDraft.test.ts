@@ -31,21 +31,6 @@ test("numeric policies reject values that do not align to their domain step", ()
   );
 });
 
-test("template YAML rejects removed fields and never emits them", () => {
-  const yaml = templateDraftToYaml({ ...emptyTemplateDraft(), name: "historical" });
-  assert.doesNotMatch(yaml, /(?:environment|preserve_home_ownership|preserve_home_root):/u);
-  for (const removed of [
-    "environment:\n    SHOULD_NOT_SURVIVE: value",
-    "preserve_home_ownership: true",
-    "preserve_home_root: true",
-  ]) {
-    assert.throws(
-      () => templateDraftFromYaml(yaml.replace("spec:\n", `spec:\n  ${removed}\n`)),
-      /Removed WorkspaceTemplate fields/u,
-    );
-  }
-});
-
 test("template form normalization preserves the bounded storage policy", () => {
   const draft = emptyTemplateDraft();
   draft.name = "storage";

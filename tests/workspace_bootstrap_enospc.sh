@@ -2,12 +2,17 @@
 set -eu
 
 install -d /etc/ssh/platform /etc/workspace-platform /workspace/.mwc
-install -d -m 0750 -o workspace -g workspace /workspace/.codex /workspace/.codex/sessions
+install -d -m 0750 -o workspace -g workspace /workspace/.codex /workspace/.codex/sessions /workspace/.codex/logs
 install -d -m 0750 -o root -g root /workspace/.codex/.tmp
 install -d -m 0750 -o root -g root /workspace/.codex/tmp/arg0/stale-root-owned
 printf '%s\n' stale > /workspace/.codex/.tmp/stale
 printf '%s\n' stale > /workspace/.codex/tmp/arg0/stale-root-owned/lock
 printf '%s\n' keep > /workspace/.codex/sessions/keep
+printf '%s\n' keep > /workspace/.codex/logs/keep
+printf '%s\n' keep > /workspace/.codex/state.sqlite
+printf '%s\n' keep > /workspace/.codex/state.sqlite-wal
+printf '%s\n' keep > /workspace/.codex/config.toml
+printf '%s\n' keep > /workspace/.codex/auth.json
 ssh-keygen -q -t ed25519 -N '' -f /etc/ssh/platform/ssh_host_ed25519_key
 # Exercise the common Debian service-account state that previously rejected public keys before
 # AuthorizedKeysFile was consulted.
@@ -53,6 +58,11 @@ test "$(readlink /workspace/.codex/tmp)" = /var/lib/mwc/codex-scratch/tmp
 test ! -e /var/lib/mwc/codex-scratch/dot-tmp/stale
 test ! -e /var/lib/mwc/codex-scratch/tmp/arg0
 test -s /workspace/.codex/sessions/keep
+test -s /workspace/.codex/logs/keep
+test -s /workspace/.codex/state.sqlite
+test -s /workspace/.codex/state.sqlite-wal
+test -s /workspace/.codex/config.toml
+test -s /workspace/.codex/auth.json
 
 # A stale symlink or regular file must be removed without following it, while the durable
 # session directory remains untouched.
@@ -65,6 +75,11 @@ MWC_HOME_RESERVE_MIB=1 \
 test -L /workspace/.codex/.tmp
 test "$(readlink /workspace/.codex/.tmp)" = /var/lib/mwc/codex-scratch/dot-tmp
 test -s /workspace/.codex/sessions/keep
+test -s /workspace/.codex/logs/keep
+test -s /workspace/.codex/state.sqlite
+test -s /workspace/.codex/state.sqlite-wal
+test -s /workspace/.codex/config.toml
+test -s /workspace/.codex/auth.json
 
 rm -f /workspace/.codex/.tmp
 printf '%s\n' stale-file > /workspace/.codex/.tmp
@@ -74,3 +89,9 @@ MWC_HOME_RESERVE_MIB=1 \
   /usr/local/bin/mwc-workspace-bootstrap prepare
 test -L /workspace/.codex/.tmp
 test "$(readlink /workspace/.codex/.tmp)" = /var/lib/mwc/codex-scratch/dot-tmp
+test -s /workspace/.codex/sessions/keep
+test -s /workspace/.codex/logs/keep
+test -s /workspace/.codex/state.sqlite
+test -s /workspace/.codex/state.sqlite-wal
+test -s /workspace/.codex/config.toml
+test -s /workspace/.codex/auth.json

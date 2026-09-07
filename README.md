@@ -118,10 +118,6 @@ Chart 位于 `deploy/helm/memeloop-workspace-control`：
 `values.internal.example.yaml`。安装前需提供数据库、信封加密、内部鉴权和跳板 host key Secret，并确认管理型 StorageClass 的 `reclaimPolicy` 为 `Delete`。
 Chart 为控制面和标准 OpenSSH 跳板提供了默认 CPU/内存 requests 与 limits；PostgreSQL
 启用 HPA 时若移除控制面 CPU 或内存 request，模板会直接拒绝渲染。
-运行时命名兼容边界、五个既有 Home PVC 的保留要求，以及需要另行授权的停机迁移与
-回滚流程见 [运行时命名与迁移说明](docs/runtime-naming-and-migration.md)。本次实现不执行
-GitOps 或集群迁移。
-
 `sqlite.existingClaim` 可直接用于新安装；已有 SQLite StatefulSet 的 VCT 是不可变字段，
 不能原地切换。迁移必须先让 Retain 策略在现有对象生效并验证，再停写、校验数据库、
 仅删除/重建 StatefulSet 而保留 PVC，完整步骤与 Argo prune 风险见上述说明。

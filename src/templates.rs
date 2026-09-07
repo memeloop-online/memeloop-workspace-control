@@ -273,10 +273,6 @@ pub enum TemplateError {
     WorkspaceIdentity,
     #[error("template scheduling constraints are invalid")]
     Scheduling,
-    #[error("template environment is invalid")]
-    Environment,
-    #[error("template environment is read-only compatibility data; use injection items")]
-    ReadOnlyEnvironment,
     #[error("template storage policy is invalid")]
     StoragePolicy,
 }

@@ -149,7 +149,6 @@ export function templateDraftFromYaml(yaml: string): TemplateDraft {
   const value = parse(yaml) as { metadata?: { name?: unknown }; spec?: Record<string, any> };
   if (!value.metadata?.name || !value.spec) throw new Error("Invalid WorkspaceTemplate YAML");
   const spec = value.spec;
-  rejectRemovedTemplateFields(spec);
   return {
     name: String(value.metadata.name),
     image: String(spec.image ?? ""),
@@ -171,11 +170,6 @@ export function templateDraftFromYaml(yaml: string): TemplateDraft {
     preferredNodes: (spec.preferred_node_names ?? []).join(", "),
     nodeSelector: formatPairs(spec.node_selector),
   };
-}
-
-function rejectRemovedTemplateFields(spec: Record<string, unknown>) {
-  const removed = ["environment", "preserve_home_ownership", "preserve_home_root"].filter((key) => key in spec);
-  if (removed.length) throw new Error(`Removed WorkspaceTemplate fields: ${removed.join(", ")}`);
 }
 
 function parseStoragePolicy(value: unknown): WorkspaceStoragePolicy {
