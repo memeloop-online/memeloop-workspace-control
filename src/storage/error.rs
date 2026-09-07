@@ -74,6 +74,10 @@ pub enum StorageError {
     InvalidWorkspaceInjectionRefs,
     #[error("workspace image is not enabled by the image allowlist")]
     ImageNotAllowed,
+    #[error("workspace image must be an exact image reference pinned to a lowercase sha256 digest")]
+    InvalidWorkspaceImageUpdate,
+    #[error("workspace image can only be changed while stopped and at the expected generation")]
+    WorkspaceImageUpdateConflict,
     #[error("workspace template was not found or is disabled")]
     TemplateNotFound,
     #[error("workspace template is invalid")]

@@ -8,7 +8,7 @@ use axum::{
 use super::{
     AppState, admin, auth, catalog, diagnostics, events, health, injections, metrics, openapi,
     organizations, plugins, port_mappings, ready, runtime, ssh, system_info, ui, user_quota,
-    web_shell, webhooks, workspaces,
+    web_shell, webhooks, workspace_image_update, workspaces,
 };
 
 pub(super) fn router(state: Arc<AppState>) -> Router {
@@ -193,6 +193,10 @@ fn workspace_routes(router: ApiRouter) -> ApiRouter {
             get(workspaces::list).post(workspaces::create),
         )
         .route("/api/v1/workspaces/{workspace_id}", get(workspaces::get))
+        .route(
+            "/api/v1/workspaces/{workspace_id}/image",
+            axum::routing::put(workspace_image_update::update),
+        )
         .route("/api/v1/workspace-runtimes", get(runtime::list))
         .route(
             "/api/v1/workspaces/{workspace_id}/runtime",

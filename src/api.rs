@@ -33,6 +33,7 @@ mod user_quota;
 mod web_shell;
 mod webhooks;
 mod workspace_creation;
+mod workspace_image_update;
 mod workspace_response;
 mod workspaces;
 
@@ -252,17 +253,18 @@ async fn system_info(State(state): State<Arc<AppState>>) -> Json<SystemInfoRespo
         workspaces::get,
         runtime::list,
         runtime::get,
-        workspaces::action
-        ,port_mappings::list
-        ,port_mappings::create
-        ,port_mappings::open
-        ,port_mappings::delete
-        ,web_shell::issue,
-        web_shell::authorize
-        ,webhooks::list
-        ,webhooks::create
-        ,ssh::authorized_key
-        ,ssh::login_users
+        workspaces::action,
+        workspace_image_update::update,
+        port_mappings::list,
+        port_mappings::create,
+        port_mappings::open,
+        port_mappings::delete,
+        web_shell::issue,
+        web_shell::authorize,
+        webhooks::list,
+        webhooks::create,
+        ssh::authorized_key,
+        ssh::login_users
     ),
     components(schemas(
         HealthResponse,
@@ -289,6 +291,7 @@ async fn system_info(State(state): State<Arc<AppState>>) -> Json<SystemInfoRespo
         crate::storage::CreateOrganization,
         crate::storage::CreateWorkspace,
         workspaces::CreateWorkspaceRequest,
+        workspace_image_update::UpdateWorkspaceImageRequest,
         crate::workspaces::Workspace,
         crate::workspaces::WorkspaceState,
         crate::workspaces::AccessMode,

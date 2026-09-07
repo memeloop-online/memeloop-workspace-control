@@ -261,6 +261,16 @@ fn workspace_storage_response(error: &StorageError) -> Option<ErrorResponse> {
             "image_not_allowed",
             "workspace image is disabled or does not satisfy Image Contract v1",
         ),
+        StorageError::InvalidWorkspaceImageUpdate => response(
+            StatusCode::BAD_REQUEST,
+            "invalid_workspace_image_update",
+            "workspace image must be pinned to an exact lowercase sha256 digest",
+        ),
+        StorageError::WorkspaceImageUpdateConflict => response(
+            StatusCode::CONFLICT,
+            "workspace_image_update_conflict",
+            "workspace must be stopped and at the expected generation before its image can change",
+        ),
         StorageError::TemplateNotFound => response(
             StatusCode::UNPROCESSABLE_ENTITY,
             "template_not_found",

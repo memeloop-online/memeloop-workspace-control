@@ -36,6 +36,7 @@ mod webhook_store;
 mod workspace_actions;
 mod workspace_admission;
 mod workspace_events;
+mod workspace_image_update;
 mod workspace_injection_refs;
 mod workspace_store;
 
