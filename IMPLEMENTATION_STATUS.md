@@ -43,16 +43,16 @@ product terminology.
 
 ## Current deployed release
 
-- Product revision: `1576ff8cba941974fb0a8f8a2f12312da8a5e609`.
-- GitHub Actions run `34144332446` passed the complete frontend, Rust, SQLite,
+- Product revision: `554a13033800ec10d31b0c4d1a3758623a187290`.
+- GitHub Actions run `34155589876` passed the complete frontend, Rust, SQLite,
   PostgreSQL, bootstrap, Helm, image-contract, publication, and provenance suite.
 - Control-plane image:
-  `sha256:b81e128fed0a1291f266496658091f2e474f7af640e496a6838549256b57a42a`.
+  `sha256:d0bba81f16f9daa5f64239ba575152befba964451a3c4cc89deafbe25e7a1308`.
 - ttyd image:
-  `sha256:ff261f623020a2dd8b8a2d3a11d2e1a41e782bc560802cd3fae307c5a76aa75e`.
+  `sha256:6746fbe74acdec35f899ff7d82ba71989c7c6c0e22f609550665ea3a7fc11bdd`.
 - Workspace-base image:
-  `sha256:d1b86968c441b5b0ee17b1560d170d0246867892f9bc1ba8d82d1f870c6d0f2b`.
-- GitOps commit `39aa3f2` pins the exact revision and image digests. Argo CD reports the
+  `sha256:b4d263e2cf4cc8b7818399a24beca87c9c4f5791dbfde4b390c3f9210f402590`.
+- GitOps commit `3c290f3` pins the exact revision and image digests. Argo CD reports the
   application Synced/Healthy. Public `/metrics` returns 404; the internal 8081 endpoint serves
   OpenMetrics; `/livez` and `/readyz` return HTTP 200.
 - The stable `workspace-data` claim-template name is deployed. PVC identity remains unique through
@@ -88,15 +88,17 @@ product terminology.
 
 ## Active closeout
 
-- `tiddlywiki-dev` and `game-forking` were stopped through the API, upgraded through the audited
-  stopped-workspace image endpoint, and started on the latest Node/Rust and BuildKit images. Their
-  canonical PVCs are unchanged. Both are Ready; Node/Codex/gh/Helm and retained `.codex` state were
-  verified over host-key-checked SSH on `tiddlywiki-dev`.
-- A real SSH check found that sshd's generated `SetEnv PATH` omits `/usr/local/cargo/bin`, although
-  the Rust binaries are present in the image. A source fix and regression test are in progress.
-- Codex reports a permission warning while pruning stale entries under its dedicated ephemeral
-  scratch volume. Ownership is being checked separately from the persistent `.codex` session and
-  log state; persistent `.codex` data must not be deleted or moved to an ephemeral volume.
+- `tiddlywiki-dev` and `game-forking` are Ready on the latest Node/Rust, BuildKit and ttyd images.
+  Their canonical PVCs and SSH host keys are unchanged. Host-key-checked SSH verified Node 24.20,
+  Rust/Cargo 1.98.1, Codex CLI 0.153.4 and retained `.codex/sessions`.
+- Codex argument-zero scratch now uses Pod-lifetime storage at `/var/lib/mwc/codex-scratch/tmp`;
+  `.codex/tmp` and `.codex/.tmp` point there while sessions, logs, SQLite and WAL remain durable.
+  The old cleanup warning is gone. Web Shell passed a real ticket, WebSocket, resize and command
+  interaction test; ticket replay returned 401 and logs contain no `execvp failed`.
+- Source `49644f6` contains the schema-20 bridge and removes template environment/ownership fields
+  from the product model and UI. It has not been pushed or deployed yet. The bridge transaction
+  rejects non-empty old environment data, preserves unrelated idempotency JSON, and avoids
+  scheduling a workspace with an active coordination lease.
 - Another Codex task is actively using ports `31871` and `32671`. Normal `.codex` session, WAL,
   and log writes are expected and safe. Do not stop, restart, or switch those two workspaces until
   that task reports completion.
@@ -107,15 +109,18 @@ product terminology.
 
 ## Next actions
 
-1. Land and verify the generated SSH environment fix, publish the resulting control image, and
-   deploy it through GitOps.
-2. Restart only `tiddlywiki-dev` and `game-forking`, then verify Rust/Cargo PATH, Codex scratch
-   permissions, ttyd, SSH, image IDs, and retained data.
-3. Coordinate a short window for `maintainance` and `rust-dev-test`, which remain in active use by
-   another Codex CLI task; promote and validate them without cleaning `.codex`.
-4. Add the final workspace-base image policy and disable superseded policies only after no
-   workspace references them.
-5. Perform one final database/Kubernetes/source acceptance pass and update this checkpoint. Do not
+1. Push source `49644f6`, run the complete GitHub CI/image publication suite, and record exact
+   digests. Do not deploy schema 20 while ports `31871` and `32671` are borrowed.
+2. After the borrowing task explicitly finishes, stop and snapshot `maintainance` and
+   `rust-dev-test`, deploy the schema-20 bridge, and verify database migration plus all four
+   workspace reconciliations without cleaning durable `.codex` state.
+3. Upgrade the remaining two workspaces to the final development images through the audited API,
+   verify SSH/Web Shell/PVC/host-key continuity, then disable their superseded image policies.
+4. After live schema 20 and cleaned records are verified, remove the one-release 19-to-20 bridge
+   code and old key literals so source and naming contain no transitional model.
+5. Replace broad Higress source CIDRs with verified edge-node `/32` addresses in a staged GitOps
+   rollout. Public WebSocket and port mappings must pass while unrelated Pod access to 7681 fails.
+6. Perform one final database/Kubernetes/source acceptance pass and update this checkpoint. Do not
    repeat completed migration, CI, observability, or terminology audits without new contrary
    evidence.
 
