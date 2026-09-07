@@ -79,7 +79,7 @@ mod coordinator_tests {
     #[tokio::test]
     async fn deletion_removes_owned_cluster_binding_then_service_account_then_namespace() {
         let workspace_id = Uuid::now_v7();
-        let workspace = legacy_workspace(workspace_id);
+        let workspace = dedicated_workspace(workspace_id);
         let mock = Arc::new(DeleteMock::new("public-a", workspace_id));
         let coordinator = coordinator(mock.clone());
 
@@ -126,7 +126,7 @@ mod coordinator_tests {
     #[tokio::test]
     async fn deletion_never_removes_another_installations_cluster_binding() {
         let workspace_id = Uuid::now_v7();
-        let workspace = legacy_workspace(workspace_id);
+        let workspace = dedicated_workspace(workspace_id);
         let mock = Arc::new(DeleteMock::new("other", workspace_id));
         let coordinator = coordinator(mock.clone());
         assert!(matches!(
@@ -251,7 +251,7 @@ mod coordinator_tests {
         assert_no_pvc_delete(&mock);
     }
 
-    fn legacy_workspace(id: Uuid) -> Workspace {
+    fn dedicated_workspace(id: Uuid) -> Workspace {
         Workspace {
             id,
             short_id: "01jabc".to_owned(),
@@ -281,7 +281,7 @@ mod coordinator_tests {
     }
 
     fn shared_workspace(id: Uuid) -> Workspace {
-        let mut workspace = legacy_workspace(id);
+        let mut workspace = dedicated_workspace(id);
         workspace.short_id = "8000000000000001".to_owned();
         workspace.runtime = WorkspaceRuntimeIdentity {
             namespace_scope: crate::workspace_runtime::WorkspaceNamespaceScope::Shared,

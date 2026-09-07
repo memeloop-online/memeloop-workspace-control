@@ -10,6 +10,10 @@ use uuid::Uuid;
 use wasmtime::component::Component;
 use wasmtime::{Config, Engine};
 
+mod contributions;
+
+use contributions::declared_contributions;
+
 use crate::{storage::Database, templates::WorkspaceTemplateSpec};
 
 use super::{ConfigurationSchema, PluginError, PluginManifest, discover};
@@ -379,24 +383,4 @@ impl PluginRuntime {
             .map_err(|_| PluginError::ExecutionFailed)?
             .map_err(|_| PluginError::ExecutionFailed)?
     }
-}
-
-fn declared_contributions(manifest: &PluginManifest) -> Vec<String> {
-    let mut contributions = Vec::new();
-    if manifest.workspace_create_policy {
-        contributions.push("workspace_create_policy".to_owned());
-    }
-    if manifest.configuration.is_some() {
-        contributions.push("configuration".to_owned());
-    }
-    if !manifest.ui_surfaces.is_empty() {
-        contributions.push("ui_surfaces".to_owned());
-    }
-    if !manifest.api_routes.is_empty() {
-        contributions.push("api_routes".to_owned());
-    }
-    if !manifest.api_middleware.is_empty() {
-        contributions.push("api_middleware".to_owned());
-    }
-    contributions
 }

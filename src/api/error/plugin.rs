@@ -1,6 +1,7 @@
 use axum::http::StatusCode;
 
-use super::{ErrorResponse, response};
+use super::ErrorResponse;
+use super::responses::response;
 
 pub(super) fn plugin_response(error: crate::plugins::PluginError) -> ErrorResponse {
     match error {
