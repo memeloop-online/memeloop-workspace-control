@@ -97,8 +97,8 @@ API responses and OpenSSH command transcripts as acceptance evidence.
    temporarily make only the database unavailable and confirm liveness remains `200` while
    readiness becomes `503` within two seconds.
 2. Enable `monitoring.serviceMonitor.enabled`, then confirm Prometheus discovers the existing
-   internal Service on named port `auth`. `/metrics` must use the OpenMetrics content type, end in
-   `# EOF`, and contain HTTP count/latency/error, active request/stream, upstream, durable queue,
+   internal Service on named port `auth`. The internal listener's `/metrics` must use the
+   OpenMetrics content type, end in `# EOF`, and contain HTTP count/latency/error, active request/stream, upstream, durable queue,
    process RSS, allocator and bounded component-memory families.
 3. Exercise a templated workspace API route with two different workspace UUIDs. Confirm the
    resulting `mwc_http_requests_total` series contains the route template and neither UUID.

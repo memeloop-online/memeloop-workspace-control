@@ -15,9 +15,11 @@ The Helm chart uses `/livez` for liveness and `/readyz` for readiness.
 
 ## OpenMetrics and Grafana
 
-`GET /metrics` returns OpenMetrics 1.0 text and terminates with `# EOF`. A scrape performs one job
-count query and one workspace aggregation; it does not call the Kubernetes API once per workspace.
-The optional ServiceMonitor scrapes the existing internal Service on port `8081`. It creates no
+`GET /metrics` on the internal listener (`8081`) returns OpenMetrics 1.0 text and terminates with
+`# EOF`. The business listener (`8080`) does not expose this path and returns `404`, so metrics are
+not anonymously available through a public API or Higress route. A scrape performs one job count
+query and one workspace aggregation; it does not call the Kubernetes API once per workspace. The
+optional ServiceMonitor scrapes the existing internal Service on port `8081`. It creates no
 NodePort, hostPort, extra listener, or public route. When NetworkPolicy is enabled, only the
 configured `monitoring.serviceMonitor.namespace` is added as a scrape source.
 

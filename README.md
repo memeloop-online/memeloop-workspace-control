@@ -47,7 +47,7 @@ export MWC_TTYD_IMAGE='tsl0922/ttyd:1.7.7'
 - `GET /readyz`
 - `GET /api/v1/system/info`
 - `GET /api/v1/openapi.json`
-- `GET /metrics`
+- `GET /metrics`（仅内部 8081 监听器；业务 8080 监听器返回 404）
 
 Prometheus/Grafana 指标、Loki 标签和大规模部署的抓取成本约束见
 [可观测性说明](docs/OBSERVABILITY.md)。

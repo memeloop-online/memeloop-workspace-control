@@ -37,7 +37,6 @@ fn system_and_identity_routes(router: ApiRouter) -> ApiRouter {
         .route("/livez", get(health))
         .route("/healthz", get(health))
         .route("/readyz", get(ready))
-        .route("/metrics", get(metrics::prometheus))
         .route("/api/v1/system/info", get(system_info))
         .route("/api/v1/me", get(auth::me))
         .route(

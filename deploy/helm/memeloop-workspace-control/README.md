@@ -36,11 +36,13 @@ repeats the same check to close the race. A missing Namespace is allowed for the
 create. RBAC, quota/policy, and StorageClass failures remain ordinary fail-closed reconciliation
 errors rather than claims made by this ownership preflight.
 
-The service exposes OpenMetrics at `/metrics`, including HTTP latency/errors, active streams,
-upstream calls, durable queues, process/allocator memory, plugin state, and platform/per-user
-workspace aggregates. Set `monitoring.serviceMonitor.enabled=true` when the Prometheus Operator is
-installed; it scrapes the existing internal Service and the chart permits its configured monitoring
-namespace through NetworkPolicy. After a metrics adapter maps
+The internal listener on port `8081` exposes OpenMetrics at `/metrics`, including HTTP
+latency/errors, active streams, upstream calls, durable queues, process/allocator memory, plugin
+state, and platform/per-user workspace aggregates. The business listener on port `8080` does not
+serve `/metrics`; anonymous public requests receive `404`. Set
+`monitoring.serviceMonitor.enabled=true` when the Prometheus Operator is installed; it scrapes the
+existing internal Service and the chart permits its configured monitoring namespace through
+NetworkPolicy. After a metrics adapter maps
 `rate(mwc_http_requests_total)` to `mwc_http_requests_per_second` and publishes
 `mwc_jobs_pending`, PostgreSQL installations can enable `autoscaling.customMetrics` so the HPA
 uses request rate and task backlog in addition to CPU and memory.

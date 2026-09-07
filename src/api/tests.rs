@@ -198,7 +198,7 @@ async fn public_listener_does_not_expose_internal_routes_or_spa_fallback_for_api
 }
 
 #[tokio::test]
-async fn info_and_metrics_expose_only_operational_metadata() {
+async fn info_exposes_only_operational_metadata() {
     let app = test_app().await;
     let response = app
         .clone()
@@ -215,10 +215,31 @@ async fn info_and_metrics_expose_only_operational_metadata() {
     assert_eq!(body["api_version"], "v1");
     assert_eq!(body["database_mode"], "sqlite");
     assert_eq!(body.as_object().unwrap().len(), 3);
-    let metrics = app
+}
+
+#[tokio::test]
+async fn public_listener_hides_metrics_but_internal_listener_serves_openmetrics() {
+    let state = Arc::new(test_state().await);
+    let public = router(state.clone());
+    let public_metrics = public
         .oneshot(Request::get("/metrics").body(Body::empty()).unwrap())
         .await
         .unwrap();
+    assert_eq!(public_metrics.status(), StatusCode::NOT_FOUND);
+    assert_ne!(
+        public_metrics.headers().get("content-type"),
+        Some(
+            &"application/openmetrics-text; version=1.0.0; charset=utf-8"
+                .parse()
+                .unwrap()
+        )
+    );
+
+    let metrics = internal_router(state)
+        .oneshot(Request::get("/metrics").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(metrics.status(), StatusCode::OK);
     assert_eq!(
         metrics.headers()["content-type"],
         "application/openmetrics-text; version=1.0.0; charset=utf-8"
@@ -249,7 +270,8 @@ async fn info_and_metrics_expose_only_operational_metadata() {
 
 #[tokio::test]
 async fn metrics_use_route_templates_instead_of_concrete_identifiers() {
-    let app = test_app().await;
+    let state = Arc::new(test_state().await);
+    let app = router(state.clone());
     let concrete_id = "018f0f5d-55cc-7f2d-912f-7c4d5d2f8490";
     let response = app
         .clone()
@@ -261,7 +283,7 @@ async fn metrics_use_route_templates_instead_of_concrete_identifiers() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-    let metrics = app
+    let metrics = internal_router(state)
         .oneshot(Request::get("/metrics").body(Body::empty()).unwrap())
         .await
         .unwrap();

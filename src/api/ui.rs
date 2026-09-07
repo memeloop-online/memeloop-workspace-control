@@ -15,6 +15,16 @@ pub(super) async fn asset(uri: Uri) -> Response<Body> {
     } else {
         requested
     };
+    // Metrics are served only by the internal listener. Keep the public listener's
+    // SPA fallback from turning an anonymous `/metrics` request into a successful
+    // UI response that looks like an operational endpoint.
+    if path == "metrics" {
+        return Response::builder()
+            .status(StatusCode::NOT_FOUND)
+            .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+            .body(Body::from("not found"))
+            .unwrap_or_else(|_| Response::new(Body::empty()));
+    }
     if let Some(asset) = UiAssets::get(path) {
         return response(path, asset.data.into_owned(), StatusCode::OK);
     }
