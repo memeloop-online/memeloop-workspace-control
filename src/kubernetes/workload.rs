@@ -57,13 +57,13 @@ pub(super) fn stateful_set(
                     )])),
                     ..ObjectMeta::default()
                 }),
-                spec: Some(pod_spec(pod, workspace, containers, &names)),
+                spec: Some(pod_spec(pod, workspace, containers, names)),
             },
             volume_claim_templates: Some(vec![workspace_claim(
                 builder,
                 stable_labels,
                 workspace,
-                &names,
+                names,
             )]),
             ..StatefulSetSpec::default()
         }),

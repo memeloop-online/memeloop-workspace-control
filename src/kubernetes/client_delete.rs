@@ -46,7 +46,7 @@ impl KubernetesCoordinator {
 
         if workspace.runtime.namespace_scope == WorkspaceNamespaceScope::Shared {
             return self
-                .delete_shared_workspace_resources(workspace, &names)
+                .delete_shared_workspace_resources(workspace, names)
                 .await;
         }
 

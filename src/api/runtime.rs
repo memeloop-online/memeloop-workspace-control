@@ -308,64 +308,17 @@ pub(super) async fn get(
         "{OWNER_INSTALLATION_LABEL}={},{WORKSPACE_ID_LABEL}={workspace_id}",
         state.config.installation_id,
     );
-    let pod_list = Api::<Pod>::namespaced(client.clone(), namespace)
-        .list(&ListParams::default().labels(&selector))
-        .await
-        .map_err(ApiError::Kubernetes)?;
     let show_runtime = has_live_runtime(workspace.state);
-    let active_pod_names = active_pod_names(&pod_list.items);
-    let pods = if show_runtime {
-        pod_list
-            .items
-            .iter()
-            .filter(|pod| is_active_pod(pod))
-            .map(pod_runtime)
-            .collect()
-    } else {
-        Vec::new()
-    };
-    let event_list = Api::<Event>::namespaced(client.clone(), namespace)
-        .list(&ListParams::default().fields(&format!(
-            "involvedObject.kind=Pod,involvedObject.name={}",
-            names.resources.pod_ordinal_zero(),
-        )))
-        .await
-        .map_err(ApiError::Kubernetes)?;
-    let mut events = event_list
-        .items
-        .into_iter()
-        .map(pod_event)
-        .collect::<Vec<_>>();
-    newest_events(&mut events, 50);
-    let pvc_capacity = Api::<PersistentVolumeClaim>::namespaced(client.clone(), namespace)
-        .get_opt(&names.resources.data_pvc_ordinal_zero())
-        .await
-        .map_err(ApiError::Kubernetes)?
-        .filter(|pvc| {
-            object_workspace_id(&pvc.metadata.labels) == Some(workspace_id)
-                && pvc.metadata.labels.as_ref().is_some_and(|labels| {
-                    labels.get(OWNER_INSTALLATION_LABEL)
-                        == Some(&state.config.installation_id.to_string())
-                })
-        })
-        .and_then(|pvc| pvc.status)
-        .and_then(|status| status.capacity)
-        .and_then(|capacity| capacity.get("storage").map(|quantity| quantity.0.clone()));
-    let metric_result = pod_metrics(client, namespace, &selector).await;
-    let (metrics_available, metrics) = match metric_result {
-        Ok(metrics) => (
-            true,
-            if show_runtime {
-                active_pod_metrics(&metrics, &active_pod_names)
-            } else {
-                Vec::new()
-            },
-        ),
-        Err(error) => {
-            tracing::debug!(%error, "metrics.k8s.io is unavailable");
-            (false, Vec::new())
-        }
-    };
+    let details = fetch_workspace_runtime_details(
+        &client,
+        namespace,
+        &names,
+        &selector,
+        workspace_id,
+        show_runtime,
+        &state.config.installation_id.to_string(),
+    )
+    .await?;
     kubernetes_request.success();
     let storage = fetch_storage_metrics(
         state.config.prometheus_url.as_ref(),
@@ -381,14 +334,102 @@ pub(super) async fn get(
     );
     let response = WorkspaceRuntimeResponse {
         allocated: workspace.template.resources,
-        pvc_capacity,
+        pvc_capacity: details.pvc_capacity,
         storage,
+        metrics_available: details.metrics_available,
+        pods: details.pods,
+        metrics: details.metrics,
+        events: details.events,
+    };
+    Ok(Json(response))
+}
+
+struct WorkspaceRuntimeDetails {
+    pvc_capacity: Option<String>,
+    metrics_available: bool,
+    pods: Vec<PodRuntime>,
+    metrics: Vec<PodMetric>,
+    events: Vec<PodEvent>,
+}
+
+async fn fetch_workspace_runtime_details(
+    client: &Client,
+    namespace: &str,
+    names: &crate::workspace_runtime::WorkspaceRuntimeNames,
+    selector: &str,
+    workspace_id: Uuid,
+    show_runtime: bool,
+    installation_id: &str,
+) -> Result<WorkspaceRuntimeDetails, ApiError> {
+    let pod_list = Api::<Pod>::namespaced(client.clone(), namespace)
+        .list(&ListParams::default().labels(selector))
+        .await
+        .map_err(ApiError::Kubernetes)?;
+    let active_pod_names = active_pod_names(&pod_list.items);
+    let pods = if show_runtime {
+        pod_list
+            .items
+            .iter()
+            .filter(|pod| is_active_pod(pod))
+            .map(pod_runtime)
+            .collect()
+    } else {
+        Vec::new()
+    };
+
+    let event_list = Api::<Event>::namespaced(client.clone(), namespace)
+        .list(&ListParams::default().fields(&format!(
+            "involvedObject.kind=Pod,involvedObject.name={}",
+            names.resources.pod_ordinal_zero(),
+        )))
+        .await
+        .map_err(ApiError::Kubernetes)?;
+    let mut events = event_list
+        .items
+        .into_iter()
+        .map(pod_event)
+        .collect::<Vec<_>>();
+    newest_events(&mut events, 50);
+
+    let pvc_capacity = Api::<PersistentVolumeClaim>::namespaced(client.clone(), namespace)
+        .get_opt(&names.resources.data_pvc_ordinal_zero())
+        .await
+        .map_err(ApiError::Kubernetes)?
+        .filter(|pvc| {
+            object_workspace_id(&pvc.metadata.labels) == Some(workspace_id)
+                && pvc.metadata.labels.as_ref().is_some_and(|labels| {
+                    labels
+                        .get(OWNER_INSTALLATION_LABEL)
+                        .is_some_and(|value| value == installation_id)
+                })
+        })
+        .and_then(|pvc| pvc.status)
+        .and_then(|status| status.capacity)
+        .and_then(|capacity| capacity.get("storage").map(|quantity| quantity.0.clone()));
+
+    let metric_result = pod_metrics(client.clone(), namespace, selector).await;
+    let (metrics_available, metrics) = match metric_result {
+        Ok(metrics) => (
+            true,
+            if show_runtime {
+                active_pod_metrics(&metrics, &active_pod_names)
+            } else {
+                Vec::new()
+            },
+        ),
+        Err(error) => {
+            tracing::debug!(%error, "metrics.k8s.io is unavailable");
+            (false, Vec::new())
+        }
+    };
+
+    Ok(WorkspaceRuntimeDetails {
+        pvc_capacity,
         metrics_available,
         pods,
         metrics,
         events,
-    };
-    Ok(Json(response))
+    })
 }
 
 fn storage_identity(
