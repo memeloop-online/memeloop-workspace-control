@@ -2,9 +2,9 @@ use super::*;
 
 #[test]
 fn parses_vector_and_rejects_wrong_pvc() {
-    let pvc = "workspace-data-workspace-0";
+    let pvc = "workspace-data-w-workspace-0";
     let identities = BTreeSet::from([("shared".to_owned(), pvc.to_owned())]);
-    let body = br#"{"status":"success","data":{"resultType":"vector","result":[{"metric":{"namespace":"shared","persistentvolumeclaim":"workspace-data-workspace-0"},"value":[1787980000,"1073741824"]}]}}"#;
+    let body = br#"{"status":"success","data":{"resultType":"vector","result":[{"metric":{"namespace":"shared","persistentvolumeclaim":"workspace-data-w-workspace-0"},"value":[1787980000,"1073741824"]}]}}"#;
     let samples = parse_response(body, &identities).unwrap();
     assert_eq!(
         samples[&("shared".to_owned(), pvc.to_owned())].value,

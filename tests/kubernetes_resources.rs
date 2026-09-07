@@ -266,7 +266,7 @@ fn runtime_resource_names_are_derived_from_the_workspace_short_id() {
     assert_eq!(names.resources.pod_ordinal_zero(), "w-800000000001abcd-0");
     assert_eq!(
         names.resources.data_pvc_ordinal_zero(),
-        "w-800000000001abcd-data-w-800000000001abcd-0"
+        "workspace-data-w-800000000001abcd-0"
     );
     let pod = stateful_spec.template.spec.as_ref().unwrap();
     assert_eq!(

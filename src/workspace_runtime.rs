@@ -178,7 +178,10 @@ impl WorkspaceResourceNames {
             files_config_map: named("files-config"),
             network_policy: named("ingress"),
             web_shell_ingress: named("web-shell"),
-            data_claim_template: named("data"),
+            // Keep the claim-template name stable across workspace identity changes. The
+            // StatefulSet name is part of the generated PVC name, so shared namespaces still
+            // get one collision-free PVC per workspace.
+            data_claim_template: "workspace-data".to_owned(),
         }
     }
 
@@ -253,13 +256,51 @@ mod tests {
             WorkspaceRuntimeNames::for_workspace(&installation, &runtime, &short_id).unwrap();
         assert_eq!(names.namespace, "ws-internal-a-8000000000000001");
         assert_eq!(names.resources.stateful_set, "w-8000000000000001");
+        assert_eq!(names.resources.data_claim_template, "workspace-data");
         assert_eq!(
             names.resources.data_pvc_ordinal_zero(),
-            "w-8000000000000001-data-w-8000000000000001-0"
+            "workspace-data-w-8000000000000001-0"
         );
         assert_eq!(
             names.web_shell_path(),
             "/shell/internal-a-8000000000000001/"
+        );
+    }
+
+    #[test]
+    fn claim_template_is_stable_while_pvc_names_are_unique_per_workspace() {
+        let installation = "internal-a".parse().unwrap();
+        let first_id = workspace_id();
+        let second_id = Uuid::parse_str("018f0000-0000-7000-8000-000000000002").unwrap();
+        let first_short_id = workspace_short_id_for(first_id);
+        let second_short_id = workspace_short_id_for(second_id);
+        let first_runtime =
+            WorkspaceRuntimeIdentity::new(&installation, first_id, &first_short_id, None).unwrap();
+        let second_runtime =
+            WorkspaceRuntimeIdentity::new(&installation, second_id, &second_short_id, None)
+                .unwrap();
+        let first_names =
+            WorkspaceRuntimeNames::for_workspace(&installation, &first_runtime, &first_short_id)
+                .unwrap();
+        let second_names =
+            WorkspaceRuntimeNames::for_workspace(&installation, &second_runtime, &second_short_id)
+                .unwrap();
+
+        assert_eq!(
+            first_names.resources.data_claim_template,
+            second_names.resources.data_claim_template
+        );
+        assert_eq!(
+            first_names.resources.data_pvc_ordinal_zero(),
+            "workspace-data-w-8000000000000001-0"
+        );
+        assert_eq!(
+            second_names.resources.data_pvc_ordinal_zero(),
+            "workspace-data-w-8000000000000002-0"
+        );
+        assert_ne!(
+            first_names.resources.data_pvc_ordinal_zero(),
+            second_names.resources.data_pvc_ordinal_zero()
         );
     }
 

@@ -178,7 +178,7 @@ mod coordinator_tests {
         assert_eq!(
             deletes,
             [
-                "/api/v1/namespaces/workspace-pool/persistentvolumeclaims/w-8000000000000001-data-w-8000000000000001-0"
+                "/api/v1/namespaces/workspace-pool/persistentvolumeclaims/workspace-data-w-8000000000000001-0"
             ]
         );
     }
@@ -352,7 +352,7 @@ mod coordinator_tests {
                 .push((method.to_string(), uri.to_string()));
             let pods_path = "/api/v1/namespaces/workspace-pool/pods";
             let target_pod_path = "/api/v1/namespaces/workspace-pool/pods/w-8000000000000001-0";
-            let pvc_path = "/api/v1/namespaces/workspace-pool/persistentvolumeclaims/w-8000000000000001-data-w-8000000000000001-0";
+            let pvc_path = "/api/v1/namespaces/workspace-pool/persistentvolumeclaims/workspace-data-w-8000000000000001-0";
             if method == Method::GET && path == target_pod_path {
                 return if self.pod_exists.load(Ordering::SeqCst) {
                     json_response(StatusCode::OK, self.target_pod())
@@ -377,9 +377,9 @@ mod coordinator_tests {
                         },
                         "spec": {
                             "volumes": [{
-                                "name": "w-8000000000000001-data",
+                                "name": "workspace-data",
                                 "persistentVolumeClaim": {
-                                    "claimName": "w-8000000000000001-data-w-8000000000000001-0",
+                                    "claimName": "workspace-data-w-8000000000000001-0",
                                 },
                             }],
                         },
@@ -403,7 +403,7 @@ mod coordinator_tests {
                             "apiVersion": "v1",
                             "kind": "PersistentVolumeClaim",
                             "metadata": {
-                                "name": "w-8000000000000001-data-w-8000000000000001-0",
+                                "name": "workspace-data-w-8000000000000001-0",
                                 "namespace": "workspace-pool",
                                 "labels": ownership_labels("public-a", self.workspace_id),
                             },
@@ -613,7 +613,7 @@ mod coordinator_tests {
             method != Method::DELETE.as_str()
                 || path
                     .trim_end_matches('?')
-                    != "/api/v1/namespaces/workspace-pool/persistentvolumeclaims/w-8000000000000001-data-w-8000000000000001-0"
+                    != "/api/v1/namespaces/workspace-pool/persistentvolumeclaims/workspace-data-w-8000000000000001-0"
         }));
     }
 
