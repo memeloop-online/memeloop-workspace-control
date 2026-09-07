@@ -70,6 +70,8 @@ pub enum StorageError {
     PortMappingNotFound,
     #[error("workspace name and image must not be empty")]
     InvalidWorkspace,
+    #[error("workspace runtime migration requires a stopped workspace with no active jobs")]
+    WorkspaceRuntimeMigrationUnsafe,
     #[error("workspace injection references are invalid or duplicated")]
     InvalidWorkspaceInjectionRefs,
     #[error("workspace image is not enabled by the image allowlist")]

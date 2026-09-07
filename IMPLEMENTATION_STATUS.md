@@ -4,7 +4,35 @@ This file is the durable continuation checkpoint for active implementation work.
 compaction, continue from **Next action**; do not repeat the completed audits below unless a new
 failure supplies contradictory evidence.
 
-Last updated: 2026-09-06
+Last updated: 2026-09-07
+
+## Active goal: complete canonical runtime migration
+
+The user approved the production migration on 2026-09-07. Completion means the live database,
+Kubernetes resources, source tree, tests, documentation, and product terminology use one runtime
+naming model and contain no compatibility scheme or old generic workspace object names.
+
+- [x] Export a mode-0600 encrypted schema-v17 control-plane snapshot and inventory all four live
+  workspace rows, Namespaces, PVC/PV bindings, capacities, images, and running workloads.
+- [ ] Publish and deploy a bounded transition release that can atomically move one stopped
+  workspace row to canonical runtime identity without exposing sensitive database values.
+- [ ] Migrate one workspace at a time: stop; prove Pod absence; create the canonical PVC; copy and
+  verify data; remove the old selector-owning StatefulSet; switch database identity; reconcile;
+  start; verify SSH, Web Shell, storage, injections, and runtime telemetry.
+- [ ] Remove old Kubernetes objects and PVCs only after each canonical workload and retained backup
+  passes its rollback gate.
+- [ ] Replace the transition release with the final single-model schema and code, remove
+  compatibility branches, triggers, and fields, and make a case-insensitive source-tree scan a CI
+  failure.
+- [ ] Publish the final four images, update GitOps, verify Argo health and production behavior, then
+  record all revisions, digests, backup identifiers, and migration evidence here.
+
+Safety invariants:
+
+- The old and canonical StatefulSets must never coexist because their selectors overlap.
+- The source PVC is never deleted before the target workload passes data and connection checks.
+- Control-plane SQLite writer fencing is required for any offline database operation.
+- Secret, token, certificate, and decrypted injection values must never enter logs or this file.
 
 ## Completed goal: collision-free runtime identity and migration safety
 
