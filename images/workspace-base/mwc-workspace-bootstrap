@@ -42,7 +42,8 @@ prepare_layout() {
     install -d -m 0700 -o "$workspace_user" -g "$workspace_group" \
         "$build_scratch" "$build_scratch/bin" "$build_scratch/tmp" "$build_scratch/cache" \
         "$build_scratch/cargo-target" "$build_scratch/cargo-registry" \
-        "$build_scratch/cargo-git" "$codex_scratch"
+        "$build_scratch/cargo-git" "$codex_scratch" "$codex_scratch/tmp" \
+        "$codex_scratch/dot-tmp"
     if [ "$home_has_data" = true ]; then
         durable_dir_best_effort "$state_dir"
         regenerable_link_best_effort "$workspace_root/.cache" "$build_scratch/cache"
@@ -54,7 +55,8 @@ prepare_layout() {
         prepare_regenerable_link "$workspace_root/.cargo/registry" "$build_scratch/cargo-registry"
         prepare_regenerable_link "$workspace_root/.cargo/git" "$build_scratch/cargo-git"
     fi
-    codex_scratch_link_best_effort "$workspace_root/.codex/.tmp" "$codex_scratch"
+    codex_scratch_link_best_effort "$workspace_root/.codex/tmp" "$codex_scratch/tmp"
+    codex_scratch_link_best_effort "$workspace_root/.codex/.tmp" "$codex_scratch/dot-tmp"
     if [ "${MWC_BUILDKIT_ENABLED:-false}" = true ]; then
         regenerable_link_best_effort \
             "$workspace_root/.local/bin/buildctl" "/run/mwc-buildkit/bin/buildctl"
@@ -312,7 +314,7 @@ prepare_runtime_sshd_config() {
         object=$(printf '%s' "$entry" | jq -r '.object')
         data_key=$(printf '%s' "$entry" | jq -r '.data_key')
         case "$name" in
-            HOME|TMPDIR|TMP|TEMP|XDG_CACHE_HOME|CARGO_TARGET_DIR|MWC_WORKSPACE_USER|MWC_WORKSPACE_HOME|MWC_IN_CLUSTER_KUBECONFIG|MWC_PRESERVE_HOME_ROOT|MWC_BUILDKIT_ENABLED|MWC_BUILD_SCRATCH|MWC_HOME_RESERVE_MIB)
+            HOME|PATH|RUSTUP_HOME|TMPDIR|TMP|TEMP|XDG_CACHE_HOME|CARGO_TARGET_DIR|MWC_WORKSPACE_USER|MWC_WORKSPACE_HOME|MWC_IN_CLUSTER_KUBECONFIG|MWC_PRESERVE_HOME_ROOT|MWC_BUILDKIT_ENABLED|MWC_BUILD_SCRATCH|MWC_HOME_RESERVE_MIB)
                 continue
                 ;;
             KUBECONFIG)
@@ -328,9 +330,6 @@ prepare_runtime_sshd_config() {
             *) echo "invalid environment injection object" >&2; exit 1 ;;
         esac
         value=$(cat "$source")
-        if [ "$name" = PATH ]; then
-            value="$workspace_root/.local/bin:$workspace_root/.local/share/pnpm:$workspace_root/.cargo/bin:/usr/local/cargo/bin:/run/mwc-buildkit/bin:$value"
-        fi
         escaped=$(printf '%s=%s' "$name" "$value" | sed 's/\\/\\\\/g; s/"/\\"/g')
         printf 'SetEnv "%s"\n' "$escaped" >> "$runtime_sshd_config"
     done

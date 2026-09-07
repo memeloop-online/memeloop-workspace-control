@@ -316,8 +316,11 @@ impl<'a> WorkspacePod<'a> {
     }
 
     fn session_platform_env(self) -> Vec<EnvVar> {
+        let path = self.ssh_path(self.template.environment.get("PATH").map(String::as_str));
         let mut environment = vec![
             env("HOME", self.home),
+            env("PATH", &path),
+            env("RUSTUP_HOME", "/usr/local/rustup"),
             env("TMPDIR", &format!("{BUILD_SCRATCH}/tmp")),
             env("TMP", &format!("{BUILD_SCRATCH}/tmp")),
             env("TEMP", &format!("{BUILD_SCRATCH}/tmp")),
@@ -341,7 +344,13 @@ impl<'a> WorkspacePod<'a> {
             || name == "HOME"
             || matches!(
                 name,
-                "TMPDIR" | "TMP" | "TEMP" | "XDG_CACHE_HOME" | "CARGO_TARGET_DIR"
+                "PATH"
+                    | "RUSTUP_HOME"
+                    | "TMPDIR"
+                    | "TMP"
+                    | "TEMP"
+                    | "XDG_CACHE_HOME"
+                    | "CARGO_TARGET_DIR"
             )
             || self.template.cluster_access && name == "KUBECONFIG"
             || self.template.buildkit && name == "BUILDKIT_HOST"

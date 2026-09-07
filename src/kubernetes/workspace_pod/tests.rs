@@ -81,6 +81,7 @@ fn sshd_set_env_quotes_spaces_and_quotation_marks() {
         .insert("TOOL_FLAGS".to_owned(), "--name \"hello world\"".to_owned());
     let config = WorkspacePod::from_template(&template).ssh_set_env();
     assert!(config.contains("\"HOME=/home/node-dev\""));
+    assert!(config.contains("\"RUSTUP_HOME=/usr/local/rustup\""));
     assert!(config.contains("\"KUBECONFIG=/run/mwc-ssh/kubeconfig\""));
     assert!(
         config

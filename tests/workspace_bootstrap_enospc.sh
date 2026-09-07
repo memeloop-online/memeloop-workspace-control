@@ -4,7 +4,9 @@ set -eu
 install -d /etc/ssh/platform /etc/workspace-platform /workspace/.mwc
 install -d -m 0750 -o workspace -g workspace /workspace/.codex /workspace/.codex/sessions
 install -d -m 0750 -o root -g root /workspace/.codex/.tmp
+install -d -m 0750 -o root -g root /workspace/.codex/tmp/arg0/stale-root-owned
 printf '%s\n' stale > /workspace/.codex/.tmp/stale
+printf '%s\n' stale > /workspace/.codex/tmp/arg0/stale-root-owned/lock
 printf '%s\n' keep > /workspace/.codex/sessions/keep
 ssh-keygen -q -t ed25519 -N '' -f /etc/ssh/platform/ssh_host_ed25519_key
 # Exercise the common Debian service-account state that previously rejected public keys before
@@ -45,8 +47,11 @@ test ! -e /workspace/.mwc/storage-reserve
 test "$(df -P /workspace | awk 'NR == 2 {print $5}')" != "100%"
 test -s /run/mwc-ssh/storage-banner
 test -L /workspace/.codex/.tmp
-test "$(readlink /workspace/.codex/.tmp)" = /var/lib/mwc/codex-scratch
-test ! -e /var/lib/mwc/codex-scratch/stale
+test "$(readlink /workspace/.codex/.tmp)" = /var/lib/mwc/codex-scratch/dot-tmp
+test -L /workspace/.codex/tmp
+test "$(readlink /workspace/.codex/tmp)" = /var/lib/mwc/codex-scratch/tmp
+test ! -e /var/lib/mwc/codex-scratch/dot-tmp/stale
+test ! -e /var/lib/mwc/codex-scratch/tmp/arg0
 test -s /workspace/.codex/sessions/keep
 
 # A stale symlink or regular file must be removed without following it, while the durable
@@ -58,7 +63,7 @@ MWC_WORKSPACE_HOME=/workspace \
 MWC_HOME_RESERVE_MIB=1 \
   /usr/local/bin/mwc-workspace-bootstrap prepare
 test -L /workspace/.codex/.tmp
-test "$(readlink /workspace/.codex/.tmp)" = /var/lib/mwc/codex-scratch
+test "$(readlink /workspace/.codex/.tmp)" = /var/lib/mwc/codex-scratch/dot-tmp
 test -s /workspace/.codex/sessions/keep
 
 rm -f /workspace/.codex/.tmp
@@ -68,4 +73,4 @@ MWC_WORKSPACE_HOME=/workspace \
 MWC_HOME_RESERVE_MIB=1 \
   /usr/local/bin/mwc-workspace-bootstrap prepare
 test -L /workspace/.codex/.tmp
-test "$(readlink /workspace/.codex/.tmp)" = /var/lib/mwc/codex-scratch
+test "$(readlink /workspace/.codex/.tmp)" = /var/lib/mwc/codex-scratch/dot-tmp
