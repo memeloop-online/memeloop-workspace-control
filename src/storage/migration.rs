@@ -51,6 +51,12 @@ async fn migrate_sqlite(pool: &SqlitePool, applied_at: i64) -> Result<(), Storag
             sqlx::query(statement).execute(&mut *transaction).await?;
         }
     }
+    if version < 19 {
+        ensure_sqlite_v19_runtime_is_canonical(&mut transaction).await?;
+        for statement in schema::V19_SQLITE_MIGRATIONS {
+            sqlx::query(statement).execute(&mut *transaction).await?;
+        }
+    }
     if version < schema::SCHEMA_VERSION {
         sqlx::query("INSERT INTO schema_migrations (version, applied_at) VALUES (?1, ?2)")
             .bind(schema::SCHEMA_VERSION)
@@ -104,6 +110,12 @@ async fn migrate_postgres(
             sqlx::query(statement).execute(&mut *transaction).await?;
         }
     }
+    if version < 19 {
+        ensure_postgres_v19_runtime_is_canonical(&mut transaction).await?;
+        for statement in schema::V19_POSTGRES_MIGRATIONS {
+            sqlx::query(statement).execute(&mut *transaction).await?;
+        }
+    }
     if version < schema::SCHEMA_VERSION {
         sqlx::query("INSERT INTO schema_migrations (version, applied_at) VALUES ($1, $2)")
             .bind(schema::SCHEMA_VERSION)
@@ -112,6 +124,60 @@ async fn migrate_postgres(
             .await?;
     }
     transaction.commit().await?;
+    Ok(())
+}
+
+/// The dropped v18 fields must be recoverable from the remaining immutable
+/// placement data. Dedicated namespaces have a deterministic name; shared
+/// namespaces are intentionally retained as validated persisted placement.
+async fn ensure_sqlite_v19_runtime_is_canonical(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+) -> Result<(), StorageError> {
+    let invalid_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM workspaces WHERE \
+         runtime_naming_scheme <> 'prefixed_v2' \
+         OR runtime_namespace_scope NOT IN ('dedicated', 'shared') \
+         OR runtime_resource_prefix <> ('w-' || short_id) \
+         OR runtime_route_key <> (installation_id || '-' || short_id) \
+         OR short_id <> substr(replace(lower(id), '-', ''), 17, 16) \
+         OR (runtime_namespace_scope = 'dedicated' \
+             AND runtime_namespace <> ('ws-' || installation_id || '-' || short_id)) \
+         OR (runtime_namespace_scope = 'shared' AND (\
+             runtime_namespace = '' \
+             OR length(runtime_namespace) > 63 \
+             OR runtime_namespace GLOB '*[^a-z0-9-]*' \
+             OR substr(runtime_namespace, 1, 1) NOT GLOB '[a-z0-9]' \
+             OR substr(runtime_namespace, -1, 1) NOT GLOB '[a-z0-9]'\
+         ))",
+    )
+    .fetch_one(&mut **transaction)
+    .await?;
+    if invalid_count != 0 {
+        return Err(StorageError::WorkspaceRuntimeMigrationUnsafe);
+    }
+    Ok(())
+}
+
+async fn ensure_postgres_v19_runtime_is_canonical(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+) -> Result<(), StorageError> {
+    let invalid_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM workspaces WHERE \
+         runtime_naming_scheme <> 'prefixed_v2' \
+         OR runtime_namespace_scope NOT IN ('dedicated', 'shared') \
+         OR runtime_resource_prefix <> ('w-' || short_id) \
+         OR runtime_route_key <> (installation_id || '-' || short_id) \
+         OR short_id <> substr(replace(lower(id), '-', ''), 17, 16) \
+         OR (runtime_namespace_scope = 'dedicated' \
+             AND runtime_namespace <> ('ws-' || installation_id || '-' || short_id)) \
+         OR (runtime_namespace_scope = 'shared' \
+             AND runtime_namespace !~ '^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$')",
+    )
+    .fetch_one(&mut **transaction)
+    .await?;
+    if invalid_count != 0 {
+        return Err(StorageError::WorkspaceRuntimeMigrationUnsafe);
+    }
     Ok(())
 }
 
@@ -132,65 +198,61 @@ mod tests {
 
     const WILDCARD_TOKEN: &str = "wildcard-migration-token-0000000000000000000000";
 
-    async fn downgrade_sqlite_runtime_schema(pool: &SqlitePool, version: i64) {
-        sqlx::query("DROP INDEX workspaces_runtime_resource_idx")
-            .execute(pool)
-            .await
-            .unwrap();
-        sqlx::query("DROP INDEX workspaces_runtime_route_key_idx")
-            .execute(pool)
-            .await
-            .unwrap();
-        for column in [
-            "runtime_naming_scheme",
-            "runtime_namespace_scope",
-            "runtime_namespace",
-            "runtime_resource_prefix",
-            "runtime_route_key",
+    async fn restore_sqlite_v18_runtime_schema(pool: &SqlitePool) {
+        for statement in [
+            "ALTER TABLE workspaces ADD COLUMN runtime_naming_scheme TEXT NOT NULL DEFAULT 'legacy_v1'",
+            "ALTER TABLE workspaces ADD COLUMN runtime_resource_prefix TEXT NOT NULL DEFAULT 'workspace'",
+            "ALTER TABLE workspaces ADD COLUMN runtime_route_key TEXT NOT NULL DEFAULT ''",
+            "CREATE UNIQUE INDEX workspaces_runtime_route_key_idx ON workspaces (installation_id, runtime_route_key)",
+            "CREATE UNIQUE INDEX workspaces_runtime_resource_idx ON workspaces (installation_id, runtime_namespace, runtime_resource_prefix)",
         ] {
-            sqlx::query(&format!("ALTER TABLE workspaces DROP COLUMN {column}"))
-                .execute(pool)
-                .await
-                .unwrap();
+            sqlx::query(statement).execute(pool).await.unwrap();
         }
-        sqlx::query("UPDATE schema_migrations SET version = ?1 WHERE version = 18")
-            .bind(version)
+        sqlx::query("UPDATE schema_migrations SET version = 18 WHERE version = 19")
             .execute(pool)
             .await
             .unwrap();
     }
 
-    async fn downgrade_postgres_runtime_schema(pool: &PgPool, version: i64) {
-        sqlx::query("DROP TRIGGER workspaces_legacy_runtime_defaults_before_insert ON workspaces")
-            .execute(pool)
-            .await
-            .unwrap();
-        sqlx::query("DROP FUNCTION workspaces_legacy_runtime_defaults()")
-            .execute(pool)
-            .await
-            .unwrap();
-        sqlx::query("DROP INDEX workspaces_runtime_resource_idx")
-            .execute(pool)
-            .await
-            .unwrap();
-        sqlx::query("DROP INDEX workspaces_runtime_route_key_idx")
-            .execute(pool)
-            .await
-            .unwrap();
-        for column in [
-            "runtime_naming_scheme",
-            "runtime_namespace_scope",
-            "runtime_namespace",
-            "runtime_resource_prefix",
-            "runtime_route_key",
+    async fn restore_postgres_v18_runtime_schema(pool: &PgPool) {
+        for statement in [
+            "ALTER TABLE workspaces ADD COLUMN runtime_naming_scheme TEXT NOT NULL DEFAULT 'legacy_v1'",
+            "ALTER TABLE workspaces ADD COLUMN runtime_resource_prefix TEXT NOT NULL DEFAULT 'workspace'",
+            "ALTER TABLE workspaces ADD COLUMN runtime_route_key TEXT NOT NULL DEFAULT ''",
+            "CREATE OR REPLACE FUNCTION workspaces_legacy_runtime_defaults() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END; $$",
+            "CREATE TRIGGER workspaces_legacy_runtime_defaults_before_insert BEFORE INSERT ON workspaces FOR EACH ROW EXECUTE FUNCTION workspaces_legacy_runtime_defaults()",
+            "CREATE UNIQUE INDEX workspaces_runtime_route_key_idx ON workspaces (installation_id, runtime_route_key)",
+            "CREATE UNIQUE INDEX workspaces_runtime_resource_idx ON workspaces (installation_id, runtime_namespace, runtime_resource_prefix)",
         ] {
+            sqlx::query(statement).execute(pool).await.unwrap();
+        }
+        sqlx::query("UPDATE schema_migrations SET version = 18 WHERE version = 19")
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+
+    async fn downgrade_sqlite_to_v16(pool: &SqlitePool) {
+        for column in ["runtime_namespace_scope", "runtime_namespace"] {
             sqlx::query(&format!("ALTER TABLE workspaces DROP COLUMN {column}"))
                 .execute(pool)
                 .await
                 .unwrap();
         }
-        sqlx::query("UPDATE schema_migrations SET version = $1 WHERE version = 18")
-            .bind(version)
+        sqlx::query("UPDATE schema_migrations SET version = 16 WHERE version = 19")
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+
+    async fn downgrade_postgres_to_v16(pool: &PgPool) {
+        for column in ["runtime_namespace_scope", "runtime_namespace"] {
+            sqlx::query(&format!("ALTER TABLE workspaces DROP COLUMN {column}"))
+                .execute(pool)
+                .await
+                .unwrap();
+        }
+        sqlx::query("UPDATE schema_migrations SET version = 16 WHERE version = 19")
             .execute(pool)
             .await
             .unwrap();
@@ -216,7 +278,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(columns, ["installation_id", "organization_id", "role"]);
-        assert_eq!(database.schema_version().await.unwrap(), 18);
+        assert_eq!(database.schema_version().await.unwrap(), 19);
 
         database.migrate().await.unwrap();
         let index_count: i64 = sqlx::query_scalar(
@@ -229,7 +291,35 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sqlite_v18_backfills_legacy_runtime_identity_and_route_index() {
+    async fn sqlite_empty_database_initializes_the_v19_runtime_schema() {
+        let database = Database::connect("sqlite::memory:", "schema-v19-empty".parse().unwrap())
+            .await
+            .unwrap();
+        database.migrate().await.unwrap();
+        let Database::Sqlite { pool, .. } = &database else {
+            unreachable!("the test database is SQLite");
+        };
+        let columns = sqlx::query("PRAGMA table_info('workspaces')")
+            .fetch_all(pool)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|row| row.try_get::<String, _>("name").unwrap())
+            .collect::<Vec<_>>();
+        assert!(columns.contains(&"runtime_namespace_scope".to_owned()));
+        assert!(columns.contains(&"runtime_namespace".to_owned()));
+        for removed in [
+            "runtime_naming_scheme",
+            "runtime_resource_prefix",
+            "runtime_route_key",
+        ] {
+            assert!(!columns.contains(&removed.to_owned()));
+        }
+        assert_eq!(database.schema_version().await.unwrap(), 19);
+    }
+
+    #[tokio::test]
+    async fn sqlite_v18_to_v19_drops_derived_runtime_identity_and_is_idempotent() {
         let database = Database::connect("sqlite::memory:", "legacy-install".parse().unwrap())
             .await
             .unwrap();
@@ -237,9 +327,11 @@ mod tests {
         let Database::Sqlite { pool, .. } = &database else {
             unreachable!("the test database is SQLite");
         };
+        restore_sqlite_v18_runtime_schema(pool).await;
         let user_id = Uuid::now_v7().to_string();
         let organization_id = Uuid::now_v7().to_string();
-        let workspace_id = Uuid::now_v7().to_string();
+        let workspace_id = Uuid::now_v7();
+        let short_id = workspace_id.simple().to_string()[16..].to_owned();
         sqlx::query("INSERT INTO users (id, installation_id, display_name, token_hash, system_admin, disabled, created_at) VALUES (?1, 'legacy-install', 'Legacy user', 'legacy-hash', 0, 0, 1)")
             .bind(&user_id)
             .execute(pool)
@@ -250,61 +342,120 @@ mod tests {
             .execute(pool)
             .await
             .unwrap();
-        sqlx::query("INSERT INTO workspaces (id, installation_id, short_id, organization_id, owner_id, name, image, access_mode, state, cpu_millis, memory_mib, gpu_count, disk_gib, generation, created_at, updated_at) VALUES (?1, 'legacy-install', 'abc123', ?2, ?3, 'Legacy workspace', 'registry.example/legacy:1', 'internal', 'ready', 1000, 2048, 0, 20, 1, 1, 1)")
-            .bind(&workspace_id)
+        sqlx::query("INSERT INTO workspaces (id, installation_id, short_id, organization_id, owner_id, name, image, access_mode, state, cpu_millis, memory_mib, gpu_count, disk_gib, generation, created_at, updated_at, runtime_naming_scheme, runtime_namespace_scope, runtime_namespace, runtime_resource_prefix, runtime_route_key) VALUES (?1, 'legacy-install', ?2, ?3, ?4, 'Canonical workspace', 'registry.example/canonical:1', 'internal', 'ready', 1000, 2048, 0, 20, 1, 1, 1, 'prefixed_v2', 'shared', 'shared-runtime', ?5, ?6)")
+            .bind(workspace_id.to_string())
+            .bind(&short_id)
             .bind(&organization_id)
             .bind(&user_id)
+            .bind(format!("w-{short_id}"))
+            .bind(format!("legacy-install-{short_id}"))
             .execute(pool)
             .await
             .unwrap();
-        downgrade_sqlite_runtime_schema(pool, 17).await;
 
         database.migrate().await.unwrap();
 
-        let identity: (String, String, String, String, String) = sqlx::query_as(
-            "SELECT runtime_naming_scheme, runtime_namespace_scope, runtime_namespace, runtime_resource_prefix, runtime_route_key FROM workspaces WHERE id = ?1",
-        )
-        .bind(&workspace_id)
-        .fetch_one(pool)
-        .await
-        .unwrap();
-        assert_eq!(
-            identity,
-            (
-                "legacy_v1".to_owned(),
-                "dedicated".to_owned(),
-                "ws-legacy-install-abc123".to_owned(),
-                "workspace".to_owned(),
-                "abc123".to_owned(),
-            )
-        );
-        let index_columns = sqlx::query("PRAGMA index_info('workspaces_runtime_route_key_idx')")
+        let workspace_columns = sqlx::query("PRAGMA table_info('workspaces')")
             .fetch_all(pool)
             .await
             .unwrap()
             .into_iter()
             .map(|row| row.try_get::<String, _>("name").unwrap())
             .collect::<Vec<_>>();
-        assert_eq!(index_columns, ["installation_id", "runtime_route_key"]);
-        let resource_index_columns =
-            sqlx::query("PRAGMA index_info('workspaces_runtime_resource_idx')")
-                .fetch_all(pool)
-                .await
-                .unwrap()
-                .into_iter()
-                .map(|row| row.try_get::<String, _>("name").unwrap())
-                .collect::<Vec<_>>();
+        assert!(workspace_columns.contains(&"runtime_namespace_scope".to_owned()));
+        assert!(workspace_columns.contains(&"runtime_namespace".to_owned()));
+        let placement: (String, String) = sqlx::query_as(
+            "SELECT runtime_namespace_scope, runtime_namespace FROM workspaces WHERE id = ?1",
+        )
+        .bind(workspace_id.to_string())
+        .fetch_one(pool)
+        .await
+        .unwrap();
         assert_eq!(
-            resource_index_columns,
-            [
-                "installation_id",
-                "runtime_namespace",
-                "runtime_resource_prefix"
-            ]
+            placement,
+            ("shared".to_owned(), "shared-runtime".to_owned())
         );
-        assert_eq!(database.schema_version().await.unwrap(), 18);
+        for removed in [
+            "runtime_naming_scheme",
+            "runtime_resource_prefix",
+            "runtime_route_key",
+        ] {
+            assert!(!workspace_columns.contains(&removed.to_owned()));
+        }
+        let removed_indexes: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name IN ('workspaces_runtime_route_key_idx', 'workspaces_runtime_resource_idx')",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        assert_eq!(removed_indexes, 0);
+        assert_eq!(database.schema_version().await.unwrap(), 19);
 
         database.migrate().await.unwrap();
+        assert_eq!(database.schema_version().await.unwrap(), 19);
+    }
+
+    #[tokio::test]
+    async fn sqlite_v19_rejects_noncanonical_v18_runtime_and_rolls_back() {
+        let database = Database::connect("sqlite::memory:", "legacy-install".parse().unwrap())
+            .await
+            .unwrap();
+        database.migrate().await.unwrap();
+        let Database::Sqlite { pool, .. } = &database else {
+            unreachable!("the test database is SQLite");
+        };
+        restore_sqlite_v18_runtime_schema(pool).await;
+        let user_id = Uuid::now_v7().to_string();
+        let organization_id = Uuid::now_v7().to_string();
+        let workspace_id = Uuid::now_v7();
+        let short_id = workspace_id.simple().to_string()[16..].to_owned();
+        sqlx::query("INSERT INTO users (id, installation_id, display_name, token_hash, system_admin, disabled, created_at) VALUES (?1, 'legacy-install', 'Legacy user', 'legacy-hash', 0, 0, 1)")
+            .bind(&user_id)
+            .execute(pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO organizations (id, installation_id, name, created_at) VALUES (?1, 'legacy-install', 'Legacy org', 1)")
+            .bind(&organization_id)
+            .execute(pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO workspaces (id, installation_id, short_id, organization_id, owner_id, name, image, access_mode, state, cpu_millis, memory_mib, gpu_count, disk_gib, generation, created_at, updated_at, runtime_naming_scheme, runtime_namespace_scope, runtime_namespace, runtime_resource_prefix, runtime_route_key) VALUES (?1, 'legacy-install', ?2, ?3, ?4, 'Legacy workspace', 'registry.example/legacy:1', 'internal', 'ready', 1000, 2048, 0, 20, 1, 1, 1, 'legacy_v1', 'dedicated', ?5, 'workspace', ?2)")
+            .bind(workspace_id.to_string())
+            .bind(&short_id)
+            .bind(&organization_id)
+            .bind(&user_id)
+            .bind(format!("ws-legacy-install-{short_id}"))
+            .execute(pool)
+            .await
+            .unwrap();
+
+        assert!(matches!(
+            database.migrate().await,
+            Err(StorageError::WorkspaceRuntimeMigrationUnsafe)
+        ));
+        let retained_columns = sqlx::query("PRAGMA table_info('workspaces')")
+            .fetch_all(pool)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|row| row.try_get::<String, _>("name").unwrap())
+            .collect::<Vec<_>>();
+        for retained in [
+            "runtime_naming_scheme",
+            "runtime_namespace_scope",
+            "runtime_namespace",
+            "runtime_resource_prefix",
+            "runtime_route_key",
+        ] {
+            assert!(retained_columns.contains(&retained.to_owned()));
+        }
+        let retained_indexes: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name IN ('workspaces_runtime_route_key_idx', 'workspaces_runtime_resource_idx')",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        assert_eq!(retained_indexes, 2);
         assert_eq!(database.schema_version().await.unwrap(), 18);
     }
 
@@ -343,7 +494,7 @@ mod tests {
             .execute(pool)
             .await
             .unwrap();
-        downgrade_sqlite_runtime_schema(pool, 16).await;
+        downgrade_sqlite_to_v16(pool).await;
 
         database.migrate().await.unwrap();
         let remaining: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM user_api_keys")
@@ -423,7 +574,7 @@ mod tests {
             .execute(pool)
             .await
             .unwrap();
-        downgrade_postgres_runtime_schema(pool, 16).await;
+        downgrade_postgres_to_v16(pool).await;
 
         database.migrate().await.unwrap();
         let remaining: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM user_api_keys")
@@ -455,7 +606,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn postgres_v18_backfills_legacy_runtime_identity_and_route_index() {
+    async fn postgres_v18_to_v19_drops_derived_fields_and_compatibility_trigger() {
         let Ok(database_url) = std::env::var("MWC_TEST_POSTGRES_URL") else {
             eprintln!(
                 "skipping PostgreSQL runtime migration test: MWC_TEST_POSTGRES_URL is not set"
@@ -483,9 +634,11 @@ mod tests {
         let Database::Postgres { pool, .. } = &database else {
             unreachable!("the test database is PostgreSQL");
         };
+        restore_postgres_v18_runtime_schema(pool).await;
         let user_id = Uuid::now_v7().to_string();
         let organization_id = Uuid::now_v7().to_string();
-        let workspace_id = Uuid::now_v7().to_string();
+        let workspace_id = Uuid::now_v7();
+        let short_id = workspace_id.simple().to_string()[16..].to_owned();
         sqlx::query("INSERT INTO users (id, installation_id, display_name, token_hash, system_admin, disabled, created_at) VALUES ($1, 'legacy-install', 'Legacy user', 'legacy-hash', 0, 0, 1)")
             .bind(&user_id)
             .execute(pool)
@@ -496,81 +649,53 @@ mod tests {
             .execute(pool)
             .await
             .unwrap();
-        sqlx::query("INSERT INTO workspaces (id, installation_id, short_id, organization_id, owner_id, name, image, access_mode, state, cpu_millis, memory_mib, gpu_count, disk_gib, generation, created_at, updated_at) VALUES ($1, 'legacy-install', 'abc123', $2, $3, 'Legacy workspace', 'registry.example/legacy:1', 'internal', 'ready', 1000, 2048, 0, 20, 1, 1, 1)")
-            .bind(&workspace_id)
+        sqlx::query("INSERT INTO workspaces (id, installation_id, short_id, organization_id, owner_id, name, image, access_mode, state, cpu_millis, memory_mib, gpu_count, disk_gib, generation, created_at, updated_at, runtime_naming_scheme, runtime_namespace_scope, runtime_namespace, runtime_resource_prefix, runtime_route_key) VALUES ($1, 'legacy-install', $2, $3, $4, 'Canonical workspace', 'registry.example/canonical:1', 'internal', 'ready', 1000, 2048, 0, 20, 1, 1, 1, 'prefixed_v2', 'dedicated', $5, $6, $7)")
+            .bind(workspace_id.to_string())
+            .bind(&short_id)
             .bind(&organization_id)
             .bind(&user_id)
+            .bind(format!("ws-legacy-install-{short_id}"))
+            .bind(format!("w-{short_id}"))
+            .bind(format!("legacy-install-{short_id}"))
             .execute(pool)
             .await
             .unwrap();
-        downgrade_postgres_runtime_schema(pool, 17).await;
 
         database.migrate().await.unwrap();
 
-        let identity: (String, String, String, String, String) = sqlx::query_as(
-            "SELECT runtime_naming_scheme, runtime_namespace_scope, runtime_namespace, runtime_resource_prefix, runtime_route_key FROM workspaces WHERE id = $1",
+        let retained_columns: Vec<String> = sqlx::query_scalar(
+            "SELECT column_name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'workspaces'",
         )
-        .bind(&workspace_id)
-        .fetch_one(pool)
+        .fetch_all(pool)
         .await
         .unwrap();
-        assert_eq!(
-            identity,
-            (
-                "legacy_v1".to_owned(),
-                "dedicated".to_owned(),
-                "ws-legacy-install-abc123".to_owned(),
-                "workspace".to_owned(),
-                "abc123".to_owned(),
-            )
-        );
-        let index_definition: String = sqlx::query_scalar(
-            "SELECT indexdef FROM pg_indexes WHERE schemaname = current_schema() AND indexname = 'workspaces_runtime_route_key_idx'",
+        assert!(retained_columns.contains(&"runtime_namespace_scope".to_owned()));
+        assert!(retained_columns.contains(&"runtime_namespace".to_owned()));
+        for removed in [
+            "runtime_naming_scheme",
+            "runtime_resource_prefix",
+            "runtime_route_key",
+        ] {
+            assert!(!retained_columns.contains(&removed.to_owned()));
+        }
+        let remaining_compatibility_objects: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM pg_trigger WHERE tgrelid = 'workspaces'::regclass AND tgname = 'workspaces_legacy_runtime_defaults_before_insert'",
         )
         .fetch_one(pool)
         .await
         .unwrap();
-        assert!(index_definition.contains("(installation_id, runtime_route_key)"));
-        let resource_index_definition: String = sqlx::query_scalar(
-            "SELECT indexdef FROM pg_indexes WHERE schemaname = current_schema() AND indexname = 'workspaces_runtime_resource_idx'",
+        assert_eq!(remaining_compatibility_objects, 0);
+        let remaining_function: bool = sqlx::query_scalar(
+            "SELECT to_regprocedure('workspaces_legacy_runtime_defaults()') IS NOT NULL",
         )
         .fetch_one(pool)
         .await
         .unwrap();
-        assert!(
-            resource_index_definition
-                .contains("(installation_id, runtime_namespace, runtime_resource_prefix)")
-        );
+        assert!(!remaining_function);
+        assert_eq!(database.schema_version().await.unwrap(), 19);
 
-        // A v17 replica can still be writing while the v18 migration rolls out.
-        // Its INSERT does not name runtime columns; the trigger must materialize
-        // the precise legacy identity instead of leaving v18 defaults empty.
-        let rolling_upgrade_workspace_id = Uuid::now_v7().to_string();
-        sqlx::query("INSERT INTO workspaces (id, installation_id, short_id, organization_id, owner_id, name, image, access_mode, state, cpu_millis, memory_mib, gpu_count, disk_gib, generation, created_at, updated_at) VALUES ($1, 'legacy-install', 'abc124', $2, $3, 'Rolling upgrade workspace', 'registry.example/legacy:1', 'internal', 'ready', 1000, 2048, 0, 20, 1, 1, 1)")
-            .bind(&rolling_upgrade_workspace_id)
-            .bind(&organization_id)
-            .bind(&user_id)
-            .execute(pool)
-            .await
-            .unwrap();
-        let rolling_upgrade_identity: (String, String, String, String, String) = sqlx::query_as(
-            "SELECT runtime_naming_scheme, runtime_namespace_scope, runtime_namespace, runtime_resource_prefix, runtime_route_key FROM workspaces WHERE id = $1",
-        )
-        .bind(&rolling_upgrade_workspace_id)
-        .fetch_one(pool)
-        .await
-        .unwrap();
-        assert_eq!(
-            rolling_upgrade_identity,
-            (
-                "legacy_v1".to_owned(),
-                "dedicated".to_owned(),
-                "ws-legacy-install-abc124".to_owned(),
-                "workspace".to_owned(),
-                "abc124".to_owned(),
-            )
-        );
-        assert_eq!(database.schema_version().await.unwrap(), 18);
+        database.migrate().await.unwrap();
+        assert_eq!(database.schema_version().await.unwrap(), 19);
 
         drop(database);
         sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
@@ -615,7 +740,7 @@ mod tests {
         .await
         .unwrap();
         assert!(index_definition.contains("(installation_id, organization_id, role)",));
-        assert_eq!(database.schema_version().await.unwrap(), 18);
+        assert_eq!(database.schema_version().await.unwrap(), 19);
 
         drop(database);
         sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))

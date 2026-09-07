@@ -1,4 +1,4 @@
-pub(super) const SCHEMA_VERSION: i64 = 18;
+pub(super) const SCHEMA_VERSION: i64 = 19;
 pub(super) const MIGRATION_TABLE: &str = "CREATE TABLE IF NOT EXISTS schema_migrations (\
     version BIGINT PRIMARY KEY, applied_at BIGINT NOT NULL\
 )";
@@ -348,4 +348,28 @@ pub(super) const V18_POSTGRES_MIGRATIONS: &[&str] = &[
         ON workspaces (installation_id, runtime_route_key)",
     "CREATE UNIQUE INDEX IF NOT EXISTS workspaces_runtime_resource_idx \
         ON workspaces (installation_id, runtime_namespace, runtime_resource_prefix)",
+];
+
+/// Version 19 makes the canonical v2 resource and route names derived data.  The
+/// migration runner verifies that every persisted identity already agrees with
+/// those formulas before executing this DDL.
+pub(super) const V19_SQLITE_MIGRATIONS: &[&str] = &[
+    "DROP INDEX IF EXISTS workspaces_runtime_resource_idx",
+    "DROP INDEX IF EXISTS workspaces_runtime_route_key_idx",
+    "ALTER TABLE workspaces DROP COLUMN runtime_naming_scheme",
+    "ALTER TABLE workspaces DROP COLUMN runtime_resource_prefix",
+    "ALTER TABLE workspaces DROP COLUMN runtime_route_key",
+];
+
+/// The v18 compatibility trigger is deliberately removed with the derived
+/// runtime fields. Once v19 is applied, every writer derives these values from
+/// the persisted namespace placement instead of storing them.
+pub(super) const V19_POSTGRES_MIGRATIONS: &[&str] = &[
+    "DROP TRIGGER IF EXISTS workspaces_legacy_runtime_defaults_before_insert ON workspaces",
+    "DROP FUNCTION IF EXISTS workspaces_legacy_runtime_defaults()",
+    "DROP INDEX IF EXISTS workspaces_runtime_resource_idx",
+    "DROP INDEX IF EXISTS workspaces_runtime_route_key_idx",
+    "ALTER TABLE workspaces DROP COLUMN runtime_naming_scheme",
+    "ALTER TABLE workspaces DROP COLUMN runtime_resource_prefix",
+    "ALTER TABLE workspaces DROP COLUMN runtime_route_key",
 ];
