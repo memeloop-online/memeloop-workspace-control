@@ -9,8 +9,10 @@ printf '%s\n' stale > /workspace/.codex/.tmp/stale
 printf '%s\n' stale > /workspace/.codex/tmp/arg0/stale-root-owned/lock
 printf '%s\n' keep > /workspace/.codex/sessions/keep
 printf '%s\n' keep > /workspace/.codex/logs/keep
-printf '%s\n' keep > /workspace/.codex/state.sqlite
-printf '%s\n' keep > /workspace/.codex/state.sqlite-wal
+printf '%s\n' keep > /workspace/.codex/logs_2.sqlite
+printf '%s\n' keep > /workspace/.codex/logs_2.sqlite-shm
+printf '%s\n' keep > /workspace/.codex/logs_2.sqlite-wal
+printf '%s\n' keep > /workspace/.codex/session_index.jsonl
 printf '%s\n' keep > /workspace/.codex/config.toml
 printf '%s\n' keep > /workspace/.codex/auth.json
 ssh-keygen -q -t ed25519 -N '' -f /etc/ssh/platform/ssh_host_ed25519_key
@@ -59,8 +61,10 @@ test ! -e /var/lib/mwc/codex-scratch/dot-tmp/stale
 test ! -e /var/lib/mwc/codex-scratch/tmp/arg0
 test -s /workspace/.codex/sessions/keep
 test -s /workspace/.codex/logs/keep
-test -s /workspace/.codex/state.sqlite
-test -s /workspace/.codex/state.sqlite-wal
+test -s /workspace/.codex/logs_2.sqlite
+test -s /workspace/.codex/logs_2.sqlite-shm
+test -s /workspace/.codex/logs_2.sqlite-wal
+test -s /workspace/.codex/session_index.jsonl
 test -s /workspace/.codex/config.toml
 test -s /workspace/.codex/auth.json
 
@@ -76,8 +80,10 @@ test -L /workspace/.codex/.tmp
 test "$(readlink /workspace/.codex/.tmp)" = /var/lib/mwc/codex-scratch/dot-tmp
 test -s /workspace/.codex/sessions/keep
 test -s /workspace/.codex/logs/keep
-test -s /workspace/.codex/state.sqlite
-test -s /workspace/.codex/state.sqlite-wal
+test -s /workspace/.codex/logs_2.sqlite
+test -s /workspace/.codex/logs_2.sqlite-shm
+test -s /workspace/.codex/logs_2.sqlite-wal
+test -s /workspace/.codex/session_index.jsonl
 test -s /workspace/.codex/config.toml
 test -s /workspace/.codex/auth.json
 
@@ -91,7 +97,9 @@ test -L /workspace/.codex/.tmp
 test "$(readlink /workspace/.codex/.tmp)" = /var/lib/mwc/codex-scratch/dot-tmp
 test -s /workspace/.codex/sessions/keep
 test -s /workspace/.codex/logs/keep
-test -s /workspace/.codex/state.sqlite
-test -s /workspace/.codex/state.sqlite-wal
+test -s /workspace/.codex/logs_2.sqlite
+test -s /workspace/.codex/logs_2.sqlite-shm
+test -s /workspace/.codex/logs_2.sqlite-wal
+test -s /workspace/.codex/session_index.jsonl
 test -s /workspace/.codex/config.toml
 test -s /workspace/.codex/auth.json
