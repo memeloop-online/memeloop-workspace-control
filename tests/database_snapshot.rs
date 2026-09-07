@@ -85,8 +85,8 @@ async fn sqlite_snapshot_contains_ciphertext_and_resets_only_pending_work() {
     install_snapshot_plugin(&database, user.user_id).await;
 
     let snapshot = database.export_snapshot(200).await.unwrap();
-    assert_eq!(snapshot.format_version, 1);
-    assert_eq!(snapshot.schema_version, 18);
+    assert_eq!(snapshot.format_version, 2);
+    assert_eq!(snapshot.schema_version, 19);
     assert_eq!(snapshot.installation_id, "snapshot-test");
     assert_eq!(snapshot.tables["injection_items"].len(), 1);
     assert!(snapshot.tables.contains_key("workspace_injection_refs"));
@@ -95,28 +95,39 @@ async fn sqlite_snapshot_contains_ciphertext_and_resets_only_pending_work() {
     assert_eq!(snapshot.tables["plugin_assets"].len(), 1);
     assert_eq!(snapshot.tables["plugin_catalog_metadata"].len(), 1);
     let workspace_row = &snapshot.tables["workspaces"][0];
-    assert_eq!(workspace_row["runtime_naming_scheme"], "prefixed_v2");
     assert_eq!(workspace_row["runtime_namespace_scope"], "dedicated");
     assert_eq!(
         workspace_row["runtime_namespace"],
         format!("ws-snapshot-test-{}", workspace.short_id)
     );
-    assert_eq!(
-        workspace_row["runtime_resource_prefix"],
-        format!("w-{}", workspace.short_id)
-    );
-    assert_eq!(
-        workspace_row["runtime_route_key"],
-        workspace.runtime.route_key
-    );
+    for legacy_field in [
+        "runtime_naming_scheme",
+        "runtime_resource_prefix",
+        "runtime_route_key",
+    ] {
+        assert!(workspace_row.get(legacy_field).is_none());
+    }
+    let route_key = format!("snapshot-test-{}", workspace.short_id);
     assert_eq!(
         database
-            .get_workspace_by_route_key(&workspace.runtime.route_key)
+            .get_workspace_by_route_key(&route_key)
             .await
             .unwrap()
             .runtime,
         workspace.runtime
     );
+    assert!(matches!(
+        database
+            .get_workspace_by_route_key(&workspace.short_id)
+            .await,
+        Err(StorageError::WorkspaceNotFound)
+    ));
+    assert!(matches!(
+        database
+            .get_workspace_by_route_key(&format!("other-installation-{}", workspace.short_id))
+            .await,
+        Err(StorageError::WorkspaceNotFound)
+    ));
     let asset = &snapshot.tables["plugin_assets"][0];
     assert!(asset.get("content_bytes").is_none());
     assert_eq!(
@@ -226,11 +237,8 @@ async fn postgres_import_restores_dynamic_plugin_package_and_assets_when_configu
     // syntactically-valid snapshot row that could target another resource.
     // Every failure must roll the whole import transaction back.
     for (field, value) in [
-        ("runtime_naming_scheme", "legacy_v1"),
         ("runtime_namespace_scope", "invalid"),
         ("runtime_namespace", "other-namespace"),
-        ("runtime_resource_prefix", "other"),
-        ("runtime_route_key", "other"),
     ] {
         let mut invalid_snapshot = snapshot.clone();
         let workspace = invalid_snapshot.tables.get_mut("workspaces").unwrap()[0]
@@ -259,32 +267,29 @@ async fn postgres_import_restores_dynamic_plugin_package_and_assets_when_configu
         assert_eq!(organization_count, 0);
     }
 
-    // The migration trigger recognizes a v17 writer by this default shape.
-    // A v18 snapshot that explicitly supplies it is untrusted input and must
-    // be rejected before INSERT, rather than silently rewritten by the trigger.
-    let mut v18_default_runtime_snapshot = snapshot.clone();
-    let workspace_row = v18_default_runtime_snapshot
-        .tables
-        .get_mut("workspaces")
-        .unwrap()[0]
-        .as_object_mut()
-        .unwrap();
-    for (field, value) in [
-        ("runtime_naming_scheme", "legacy_v1"),
-        ("runtime_namespace_scope", "dedicated"),
-        ("runtime_namespace", ""),
-        ("runtime_resource_prefix", "workspace"),
-        ("runtime_route_key", ""),
+    // A v2 snapshot is a single runtime model. Supplying a removed dual-model
+    // field is untrusted input and must be rejected before INSERT.
+    for legacy_field in [
+        "runtime_naming_scheme",
+        "runtime_resource_prefix",
+        "runtime_route_key",
     ] {
-        workspace_row.insert(
-            field.to_owned(),
-            serde_json::Value::String(value.to_owned()),
-        );
+        let mut legacy_runtime_snapshot = snapshot.clone();
+        legacy_runtime_snapshot
+            .tables
+            .get_mut("workspaces")
+            .unwrap()[0]
+            .as_object_mut()
+            .unwrap()
+            .insert(
+                legacy_field.to_owned(),
+                serde_json::Value::String("untrusted".to_owned()),
+            );
+        assert!(matches!(
+            target.import_snapshot(&legacy_runtime_snapshot).await,
+            Err(StorageError::InvalidWorkspace)
+        ));
     }
-    assert!(matches!(
-        target.import_snapshot(&v18_default_runtime_snapshot).await,
-        Err(StorageError::InvalidWorkspace)
-    ));
 
     let mut foreign_row_snapshot = snapshot.clone();
     for row in foreign_row_snapshot.tables.get_mut("users").unwrap() {
@@ -362,7 +367,7 @@ async fn postgres_import_restores_dynamic_plugin_package_and_assets_when_configu
     assert!(target.plugin_catalog_revision().await.unwrap() >= 1);
     assert_eq!(
         target
-            .get_workspace_by_route_key(&workspace.runtime.route_key)
+            .get_workspace_by_route_key(&format!("snapshot-pg-{}", workspace.short_id))
             .await
             .unwrap()
             .runtime,

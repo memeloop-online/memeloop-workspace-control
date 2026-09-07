@@ -5,16 +5,13 @@ use crate::{
     config::InstallationId,
     storage::StorageError,
     templates::WorkspaceTemplateDocument,
-    workspace_runtime::{
-        WorkspaceNamespaceScope, WorkspaceRuntimeIdentity, WorkspaceRuntimeNamingScheme,
-    },
+    workspace_runtime::{WorkspaceNamespaceScope, WorkspaceRuntimeIdentity},
     workspaces::{Workspace, WorkspaceState},
 };
 
 pub(crate) const WORKSPACE_COLUMNS: &str = "id, short_id, organization_id, owner_id, name, \
-    template_id, template_snapshot_yaml, runtime_naming_scheme, runtime_namespace_scope, \
-    runtime_namespace, runtime_resource_prefix, runtime_route_key, state, generation, created_at, \
-    updated_at";
+    template_id, template_snapshot_yaml, runtime_namespace_scope, runtime_namespace, state, \
+    generation, created_at, updated_at";
 
 pub(crate) fn select_workspace_sql(installation: &str, id: &str) -> String {
     format!(
@@ -30,7 +27,10 @@ pub(crate) fn select_workspace_by_short_id_sql(installation: &str, short_id: &st
 
 pub(crate) fn select_workspace_by_route_key_sql(installation: &str, route_key: &str) -> String {
     format!(
-        "SELECT {WORKSPACE_COLUMNS} FROM workspaces WHERE installation_id = {installation} AND runtime_route_key = {route_key}"
+        "SELECT {WORKSPACE_COLUMNS} FROM workspaces WHERE installation_id = {installation} \
+         AND length({route_key}) = length({installation}) + 17 \
+         AND {route_key} = {installation} || '-' || short_id \
+         AND short_id = substr({route_key}, length({installation}) + 2)"
     )
 }
 
@@ -64,16 +64,11 @@ where
         WorkspaceTemplateDocument::parse(&yaml).map_err(|_| StorageError::InvalidWorkspace)?;
     let id = Uuid::parse_str(&row.try_get::<String, _>("id")?)?;
     let short_id: String = row.try_get("short_id")?;
-    let naming_scheme: String = row.try_get("runtime_naming_scheme")?;
     let namespace_scope: String = row.try_get("runtime_namespace_scope")?;
     let runtime = WorkspaceRuntimeIdentity {
-        naming_scheme: WorkspaceRuntimeNamingScheme::from_database(&naming_scheme)
-            .ok_or(StorageError::InvalidWorkspace)?,
         namespace_scope: WorkspaceNamespaceScope::from_database(&namespace_scope)
             .ok_or(StorageError::InvalidWorkspace)?,
         namespace: row.try_get("runtime_namespace")?,
-        resource_prefix: row.try_get("runtime_resource_prefix")?,
-        route_key: row.try_get("runtime_route_key")?,
     };
     runtime
         .validate_for_workspace(installation_id, id, &short_id)

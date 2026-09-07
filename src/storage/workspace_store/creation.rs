@@ -121,9 +121,8 @@ fn build_workspace(
     let installation_id = installation_id
         .parse::<InstallationId>()
         .map_err(|_| StorageError::InvalidWorkspace)?;
-    let runtime =
-        WorkspaceRuntimeIdentity::prefixed_v2(&installation_id, id, &short_id, shared_namespace)
-            .map_err(|_| StorageError::InvalidWorkspace)?;
+    let runtime = WorkspaceRuntimeIdentity::new(&installation_id, id, &short_id, shared_namespace)
+        .map_err(|_| StorageError::InvalidWorkspace)?;
     Ok(Workspace {
         id,
         short_id,
@@ -160,8 +159,8 @@ async fn insert_sqlite(
     yaml: &str,
     now: i64,
 ) -> Result<(), StorageError> {
-    sqlx::query("INSERT INTO workspaces (id, installation_id, short_id, organization_id, owner_id, name, template_id, image, access_mode, state, cpu_millis, memory_mib, gpu_count, disk_gib, generation, created_at, updated_at, deleted_at, template_snapshot_yaml, runtime_naming_scheme, runtime_namespace_scope, runtime_namespace, runtime_resource_prefix, runtime_route_key) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,1,?15,?15,NULL,?16,?17,?18,?19,?20,?21)")
-        .bind(workspace.id.to_string()).bind(installation_id).bind(&workspace.short_id).bind(workspace.organization_id.to_string()).bind(workspace.owner_id.to_string()).bind(&workspace.name).bind(workspace.template_id.map(|id| id.to_string())).bind(&workspace.template.image).bind(workspace.template.access_mode.as_str()).bind(workspace.state.as_str()).bind(as_i64(workspace.template.resources.cpu_millis)?).bind(as_i64(workspace.template.resources.memory_mib)?).bind(i64::from(workspace.template.resources.gpu_count)).bind(as_i64(workspace.template.resources.disk_gib)?).bind(now).bind(yaml).bind(workspace.runtime.naming_scheme.as_str()).bind(workspace.runtime.namespace_scope.as_str()).bind(&workspace.runtime.namespace).bind(&workspace.runtime.resource_prefix).bind(&workspace.runtime.route_key).execute(&mut *connection).await?;
+    sqlx::query("INSERT INTO workspaces (id, installation_id, short_id, organization_id, owner_id, name, template_id, image, access_mode, state, cpu_millis, memory_mib, gpu_count, disk_gib, generation, created_at, updated_at, deleted_at, template_snapshot_yaml, runtime_namespace_scope, runtime_namespace) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,1,?15,?15,NULL,?16,?17,?18)")
+        .bind(workspace.id.to_string()).bind(installation_id).bind(&workspace.short_id).bind(workspace.organization_id.to_string()).bind(workspace.owner_id.to_string()).bind(&workspace.name).bind(workspace.template_id.map(|id| id.to_string())).bind(&workspace.template.image).bind(workspace.template.access_mode.as_str()).bind(workspace.state.as_str()).bind(as_i64(workspace.template.resources.cpu_millis)?).bind(as_i64(workspace.template.resources.memory_mib)?).bind(i64::from(workspace.template.resources.gpu_count)).bind(as_i64(workspace.template.resources.disk_gib)?).bind(now).bind(yaml).bind(workspace.runtime.namespace_scope.as_str()).bind(&workspace.runtime.namespace).execute(&mut *connection).await?;
     Ok(())
 }
 
@@ -172,8 +171,8 @@ async fn insert_postgres(
     yaml: &str,
     now: i64,
 ) -> Result<(), StorageError> {
-    sqlx::query("INSERT INTO workspaces (id, installation_id, short_id, organization_id, owner_id, name, template_id, image, access_mode, state, cpu_millis, memory_mib, gpu_count, disk_gib, generation, created_at, updated_at, deleted_at, template_snapshot_yaml, runtime_naming_scheme, runtime_namespace_scope, runtime_namespace, runtime_resource_prefix, runtime_route_key) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,1,$15,$15,NULL,$16,$17,$18,$19,$20,$21)")
-        .bind(workspace.id.to_string()).bind(installation_id).bind(&workspace.short_id).bind(workspace.organization_id.to_string()).bind(workspace.owner_id.to_string()).bind(&workspace.name).bind(workspace.template_id.map(|id| id.to_string())).bind(&workspace.template.image).bind(workspace.template.access_mode.as_str()).bind(workspace.state.as_str()).bind(as_i64(workspace.template.resources.cpu_millis)?).bind(as_i64(workspace.template.resources.memory_mib)?).bind(i64::from(workspace.template.resources.gpu_count)).bind(as_i64(workspace.template.resources.disk_gib)?).bind(now).bind(yaml).bind(workspace.runtime.naming_scheme.as_str()).bind(workspace.runtime.namespace_scope.as_str()).bind(&workspace.runtime.namespace).bind(&workspace.runtime.resource_prefix).bind(&workspace.runtime.route_key).execute(&mut *connection).await?;
+    sqlx::query("INSERT INTO workspaces (id, installation_id, short_id, organization_id, owner_id, name, template_id, image, access_mode, state, cpu_millis, memory_mib, gpu_count, disk_gib, generation, created_at, updated_at, deleted_at, template_snapshot_yaml, runtime_namespace_scope, runtime_namespace) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,1,$15,$15,NULL,$16,$17,$18)")
+        .bind(workspace.id.to_string()).bind(installation_id).bind(&workspace.short_id).bind(workspace.organization_id.to_string()).bind(workspace.owner_id.to_string()).bind(&workspace.name).bind(workspace.template_id.map(|id| id.to_string())).bind(&workspace.template.image).bind(workspace.template.access_mode.as_str()).bind(workspace.state.as_str()).bind(as_i64(workspace.template.resources.cpu_millis)?).bind(as_i64(workspace.template.resources.memory_mib)?).bind(i64::from(workspace.template.resources.gpu_count)).bind(as_i64(workspace.template.resources.disk_gib)?).bind(now).bind(yaml).bind(workspace.runtime.namespace_scope.as_str()).bind(&workspace.runtime.namespace).execute(&mut *connection).await?;
     Ok(())
 }
 

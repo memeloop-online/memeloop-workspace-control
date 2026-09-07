@@ -8,9 +8,7 @@ use crate::{
     config::InstallationId,
     quota::Resources,
     templates::WorkspaceTemplateDocument,
-    workspace_runtime::{
-        WorkspaceNamespaceScope, WorkspaceRuntimeIdentity, WorkspaceRuntimeNamingScheme,
-    },
+    workspace_runtime::{WorkspaceNamespaceScope, WorkspaceRuntimeIdentity},
     workspaces::AccessMode,
 };
 use uuid::Uuid;
@@ -19,7 +17,7 @@ use super::{Database, StorageError};
 
 mod plugin_state;
 
-const SNAPSHOT_FORMAT_VERSION: u32 = 1;
+const SNAPSHOT_FORMAT_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DatabaseSnapshot {
@@ -186,20 +184,23 @@ fn validate_snapshot_workspace_rows(
         let id = Uuid::parse_str(&required_workspace_string_field(object, "id")?)
             .map_err(|_| StorageError::InvalidWorkspace)?;
         let short_id = required_workspace_string_field(object, "short_id")?;
-        let naming_scheme = WorkspaceRuntimeNamingScheme::from_database(
-            &required_workspace_string_field(object, "runtime_naming_scheme")?,
-        )
-        .ok_or(StorageError::InvalidWorkspace)?;
+        if [
+            "runtime_naming_scheme",
+            "runtime_resource_prefix",
+            "runtime_route_key",
+        ]
+        .iter()
+        .any(|field| object.contains_key(*field))
+        {
+            return Err(StorageError::InvalidWorkspace);
+        }
         let namespace_scope = WorkspaceNamespaceScope::from_database(
             &required_workspace_string_field(object, "runtime_namespace_scope")?,
         )
         .ok_or(StorageError::InvalidWorkspace)?;
         let runtime = WorkspaceRuntimeIdentity {
-            naming_scheme,
             namespace_scope,
             namespace: required_workspace_string_field(object, "runtime_namespace")?,
-            resource_prefix: required_workspace_string_field(object, "runtime_resource_prefix")?,
-            route_key: required_workspace_string_field(object, "runtime_route_key")?,
         };
         runtime
             .validate_for_workspace(installation_id, id, &short_id)
@@ -272,12 +273,7 @@ fn normalize_workspace_rows(
     rows.iter()
         .cloned()
         .map(|row| {
-            let mut row = normalize_template_row(row, schema_version, "template_snapshot_yaml")?;
-            if schema_version < 18
-                && let Some(object) = row.as_object_mut()
-            {
-                add_legacy_workspace_runtime(object)?;
-            }
+            let row = normalize_template_row(row, schema_version, "template_snapshot_yaml")?;
             Ok(row)
         })
         .collect()
@@ -362,29 +358,6 @@ fn unsigned_field(object: &Map<String, Value>, key: &str) -> Result<u64, Storage
         .get(key)
         .and_then(Value::as_u64)
         .ok_or(StorageError::InvalidTemplate)
-}
-
-fn add_legacy_workspace_runtime(object: &mut Map<String, Value>) -> Result<(), StorageError> {
-    let installation_id = required_workspace_string_field(object, "installation_id")?;
-    let short_id = required_workspace_string_field(object, "short_id")?;
-    object.insert(
-        "runtime_naming_scheme".to_owned(),
-        Value::String("legacy_v1".to_owned()),
-    );
-    object.insert(
-        "runtime_namespace_scope".to_owned(),
-        Value::String("dedicated".to_owned()),
-    );
-    object.insert(
-        "runtime_namespace".to_owned(),
-        Value::String(format!("ws-{installation_id}-{short_id}")),
-    );
-    object.insert(
-        "runtime_resource_prefix".to_owned(),
-        Value::String("workspace".to_owned()),
-    );
-    object.insert("runtime_route_key".to_owned(), Value::String(short_id));
-    Ok(())
 }
 
 fn required_workspace_string_field(
@@ -518,7 +491,7 @@ const EXPORT_QUERIES: &[(&str, &str)] = &[
     ),
     (
         "workspaces",
-        "SELECT json_object('id', id, 'installation_id', installation_id, 'short_id', short_id, 'organization_id', organization_id, 'owner_id', owner_id, 'name', name, 'template_id', template_id, 'image', image, 'access_mode', access_mode, 'state', state, 'cpu_millis', cpu_millis, 'memory_mib', memory_mib, 'gpu_count', gpu_count, 'disk_gib', disk_gib, 'generation', generation, 'created_at', created_at, 'updated_at', updated_at, 'deleted_at', deleted_at, 'runtime_profile', runtime_profile, 'template_snapshot_yaml', template_snapshot_yaml, 'runtime_naming_scheme', runtime_naming_scheme, 'runtime_namespace_scope', runtime_namespace_scope, 'runtime_namespace', runtime_namespace, 'runtime_resource_prefix', runtime_resource_prefix, 'runtime_route_key', runtime_route_key) item FROM workspaces WHERE installation_id = ?1 ORDER BY id",
+        "SELECT json_object('id', id, 'installation_id', installation_id, 'short_id', short_id, 'organization_id', organization_id, 'owner_id', owner_id, 'name', name, 'template_id', template_id, 'image', image, 'access_mode', access_mode, 'state', state, 'cpu_millis', cpu_millis, 'memory_mib', memory_mib, 'gpu_count', gpu_count, 'disk_gib', disk_gib, 'generation', generation, 'created_at', created_at, 'updated_at', updated_at, 'deleted_at', deleted_at, 'runtime_profile', runtime_profile, 'template_snapshot_yaml', template_snapshot_yaml, 'runtime_namespace_scope', runtime_namespace_scope, 'runtime_namespace', runtime_namespace) item FROM workspaces WHERE installation_id = ?1 ORDER BY id",
     ),
     (
         "workspace_port_mappings",
@@ -591,14 +564,13 @@ mod tests {
             );
             assert!(rows[0].get("runtime_profile").is_none());
             if table == "workspaces" {
-                assert_eq!(normalized[0]["runtime_naming_scheme"], "legacy_v1");
-                assert_eq!(normalized[0]["runtime_namespace_scope"], "dedicated");
-                assert_eq!(
-                    normalized[0]["runtime_namespace"],
-                    "ws-snapshot-test-abc123"
-                );
-                assert_eq!(normalized[0]["runtime_resource_prefix"], "workspace");
-                assert_eq!(normalized[0]["runtime_route_key"], "abc123");
+                for legacy_field in [
+                    "runtime_naming_scheme",
+                    "runtime_resource_prefix",
+                    "runtime_route_key",
+                ] {
+                    assert!(normalized[0].get(legacy_field).is_none());
+                }
             }
         }
     }
@@ -629,17 +601,38 @@ mod tests {
     }
 
     #[test]
-    fn v18_default_runtime_identity_is_rejected_before_insert() {
+    fn single_model_runtime_identity_is_validated_before_insert() {
         let installation: InstallationId = "snapshot-test".parse().unwrap();
         let id = Uuid::parse_str("018f0000-0000-7000-8000-000000000001").unwrap();
         let short_id = workspace_short_id_for(id);
         let rows = vec![serde_json::json!({
             "id": id, "installation_id": installation.as_str(), "short_id": short_id,
-            "runtime_naming_scheme": "legacy_v1", "runtime_namespace_scope": "dedicated",
-            "runtime_namespace": "", "runtime_resource_prefix": "workspace",
-            "runtime_route_key": ""
+            "runtime_namespace_scope": "dedicated", "runtime_namespace": ""
         })];
         assert!(validate_snapshot_workspace_rows(&rows, &installation).is_err());
+    }
+
+    #[test]
+    fn removed_dual_model_runtime_fields_are_rejected() {
+        let installation: InstallationId = "snapshot-test".parse().unwrap();
+        let id = Uuid::parse_str("018f0000-0000-7000-8000-000000000001").unwrap();
+        let short_id = workspace_short_id_for(id);
+        let namespace = installation.workspace_namespace(&short_id).unwrap();
+        for legacy_field in [
+            "runtime_naming_scheme",
+            "runtime_resource_prefix",
+            "runtime_route_key",
+        ] {
+            let mut row = serde_json::json!({
+                "id": id, "installation_id": installation.as_str(), "short_id": short_id.clone(),
+                "runtime_namespace_scope": "dedicated", "runtime_namespace": namespace.clone()
+            });
+            row.as_object_mut().unwrap().insert(
+                legacy_field.to_owned(),
+                serde_json::Value::String("untrusted".to_owned()),
+            );
+            assert!(validate_snapshot_workspace_rows(&[row], &installation).is_err());
+        }
     }
 
     #[test]
