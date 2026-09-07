@@ -116,8 +116,8 @@ mod coordinator_tests {
         assert_eq!(
             deletes,
             [
-                "/apis/rbac.authorization.k8s.io/v1/clusterrolebindings/mwc-public-a-01jabc-admin",
-                "/api/v1/namespaces/ws-public-a-01jabc/serviceaccounts/workspace-admin",
+                "/apis/rbac.authorization.k8s.io/v1/clusterrolebindings/mwc-public-a-w-01jabc-admin",
+                "/api/v1/namespaces/ws-public-a-01jabc/serviceaccounts/w-01jabc-admin",
                 "/api/v1/namespaces/ws-public-a-01jabc",
             ]
         );
@@ -178,7 +178,7 @@ mod coordinator_tests {
         assert_eq!(
             deletes,
             [
-                "/api/v1/namespaces/workspace-pool/persistentvolumeclaims/workspace-data-w-8000000000000001-0"
+                "/api/v1/namespaces/workspace-pool/persistentvolumeclaims/w-8000000000000001-data-w-8000000000000001-0"
             ]
         );
     }
@@ -352,7 +352,7 @@ mod coordinator_tests {
                 .push((method.to_string(), uri.to_string()));
             let pods_path = "/api/v1/namespaces/workspace-pool/pods";
             let target_pod_path = "/api/v1/namespaces/workspace-pool/pods/w-8000000000000001-0";
-            let pvc_path = "/api/v1/namespaces/workspace-pool/persistentvolumeclaims/workspace-data-w-8000000000000001-0";
+            let pvc_path = "/api/v1/namespaces/workspace-pool/persistentvolumeclaims/w-8000000000000001-data-w-8000000000000001-0";
             if method == Method::GET && path == target_pod_path {
                 return if self.pod_exists.load(Ordering::SeqCst) {
                     json_response(StatusCode::OK, self.target_pod())
@@ -377,9 +377,9 @@ mod coordinator_tests {
                         },
                         "spec": {
                             "volumes": [{
-                                "name": "workspace-data",
+                                "name": "w-8000000000000001-data",
                                 "persistentVolumeClaim": {
-                                    "claimName": "workspace-data-w-8000000000000001-0",
+                                    "claimName": "w-8000000000000001-data-w-8000000000000001-0",
                                 },
                             }],
                         },
@@ -403,7 +403,7 @@ mod coordinator_tests {
                             "apiVersion": "v1",
                             "kind": "PersistentVolumeClaim",
                             "metadata": {
-                                "name": "workspace-data-w-8000000000000001-0",
+                                "name": "w-8000000000000001-data-w-8000000000000001-0",
                                 "namespace": "workspace-pool",
                                 "labels": ownership_labels("public-a", self.workspace_id),
                             },
@@ -470,13 +470,11 @@ mod coordinator_tests {
                 .lock()
                 .unwrap()
                 .push((method.to_string(), uri.to_string()));
-            let binding_path =
-                "/apis/rbac.authorization.k8s.io/v1/clusterrolebindings/mwc-public-a-01jabc-admin";
+            let binding_path = "/apis/rbac.authorization.k8s.io/v1/clusterrolebindings/mwc-public-a-w-01jabc-admin";
             let namespace_path = "/api/v1/namespaces/ws-public-a-01jabc";
             let service_account_path =
-                "/api/v1/namespaces/ws-public-a-01jabc/serviceaccounts/workspace-admin";
-            let ingress_path =
-                "/apis/networking.k8s.io/v1/namespaces/ws-public-a-01jabc/ingresses/web-shell";
+                "/api/v1/namespaces/ws-public-a-01jabc/serviceaccounts/w-01jabc-admin";
+            let ingress_path = "/apis/networking.k8s.io/v1/namespaces/ws-public-a-01jabc/ingresses/w-01jabc-web-shell";
             match (method, path) {
                 (&Method::GET, value) if value == binding_path => {
                     if self.binding_exists.load(Ordering::SeqCst) {
@@ -486,7 +484,7 @@ mod coordinator_tests {
                                 "apiVersion": "rbac.authorization.k8s.io/v1",
                                 "kind": "ClusterRoleBinding",
                                 "metadata": {
-                                    "name": "mwc-public-a-01jabc-admin",
+                                    "name": "mwc-public-a-w-01jabc-admin",
                                     "labels": ownership_labels(&self.binding_owner, self.workspace_id),
                                 },
                                 "roleRef": {
@@ -533,7 +531,7 @@ mod coordinator_tests {
                                 "apiVersion": "v1",
                                 "kind": "ServiceAccount",
                                 "metadata": {
-                                    "name": "workspace-admin",
+                                    "name": "w-01jabc-admin",
                                     "namespace": "ws-public-a-01jabc",
                                     "labels": ownership_labels("public-a", self.workspace_id),
                                 },
@@ -615,7 +613,7 @@ mod coordinator_tests {
             method != Method::DELETE.as_str()
                 || path
                     .trim_end_matches('?')
-                    != "/api/v1/namespaces/workspace-pool/persistentvolumeclaims/workspace-data-w-8000000000000001-0"
+                    != "/api/v1/namespaces/workspace-pool/persistentvolumeclaims/w-8000000000000001-data-w-8000000000000001-0"
         }));
     }
 
