@@ -8,7 +8,7 @@ fn resource_names() -> WorkspaceResourceNames {
 }
 
 fn template() -> WorkspaceTemplateSpec {
-    let template = WorkspaceTemplateSpec::standard(
+    WorkspaceTemplateSpec::standard(
         "registry.example/workspace:1",
         AccessMode::Internal,
         Resources {
@@ -17,8 +17,7 @@ fn template() -> WorkspaceTemplateSpec {
             gpu_count: 0,
             disk_gib: 10,
         },
-    );
-    template
+    )
 }
 
 #[test]
