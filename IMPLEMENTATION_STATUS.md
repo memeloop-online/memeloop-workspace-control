@@ -95,10 +95,16 @@ product terminology.
   `.codex/tmp` and `.codex/.tmp` point there while sessions, logs, SQLite and WAL remain durable.
   The old cleanup warning is gone. Web Shell passed a real ticket, WebSocket, resize and command
   interaction test; ticket replay returned 401 and logs contain no `execvp failed`.
-- Source `49644f6` contains the schema-20 bridge and removes template environment/ownership fields
-  from the product model and UI. It has not been pushed or deployed yet. The bridge transaction
+- Source `54bd4c5` contains the schema-20 bridge and removes template environment/ownership fields
+  from the product model and UI. GitHub Actions run `34163836250` passed the complete suite and
+  published attested images. The release is intentionally not deployed yet. The bridge transaction
   rejects non-empty old environment data, preserves unrelated idempotency JSON, and avoids
   scheduling a workspace with an active coordination lease.
+- Published image digests for the pending bridge release are:
+  - control plane: `sha256:ead3563710ac0c196e1575e1c9a82ab9fdc30410a66b479fce7df53f1e20094a`;
+  - workspace base: `sha256:bfd8ec19f693d1ccff258bf7c6d3c69b9798e34f8dbbcc7b9ce30ef96184712c`;
+  - ttyd: `sha256:83a512e43b3f624e4476cde2cbf08f8b3c6b6b6c1b089de9cfdfc74b4b99d6ce`;
+  - SSH jump host: `sha256:1b2729514fde871412e1fefb0719e855a4bde1c02cc52e6e71b32518084601d2`.
 - Another Codex task is actively using ports `31871` and `32671`. Normal `.codex` session, WAL,
   and log writes are expected and safe. Do not stop, restart, or switch those two workspaces until
   that task reports completion.
@@ -109,8 +115,8 @@ product terminology.
 
 ## Next actions
 
-1. Push source `49644f6`, run the complete GitHub CI/image publication suite, and record exact
-   digests. Do not deploy schema 20 while ports `31871` and `32671` are borrowed.
+1. Do not deploy the already-published schema-20 release while ports `31871` and `32671` are
+   borrowed.
 2. After the borrowing task explicitly finishes, stop and snapshot `maintainance` and
    `rust-dev-test`, deploy the schema-20 bridge, and verify database migration plus all four
    workspace reconciliations without cleaning durable `.codex` state.
@@ -118,8 +124,10 @@ product terminology.
    verify SSH/Web Shell/PVC/host-key continuity, then disable their superseded image policies.
 4. After live schema 20 and cleaned records are verified, remove the one-release 19-to-20 bridge
    code and old key literals so source and naming contain no transitional model.
-5. Replace broad Higress source CIDRs with verified edge-node `/32` addresses in a staged GitOps
-   rollout. Public WebSocket and port mappings must pass while unrelated Pod access to 7681 fails.
+5. Replace broad Higress source CIDRs with verified per-node CNI gateway `/32` addresses in a
+   staged GitOps rollout. A live WebSocket to a westlake workspace proved the backend source as
+   `10.42.3.1`, not the gateway's Tailnet address. Public WebSocket and port mappings must pass
+   while unrelated Pod access to 7681 fails; new cluster nodes must add their gateway `/32`.
 6. Perform one final database/Kubernetes/source acceptance pass and update this checkpoint. Do not
    repeat completed migration, CI, observability, or terminology audits without new contrary
    evidence.
