@@ -16,6 +16,7 @@ use memeloop_workspace_control::{
         CreateOrganization, CreateWorkspace, CreateWorkspaceTemplate, Database, InjectionScopeRef,
     },
     templates::{WorkspaceTemplateDocument, WorkspaceTemplateSpec},
+    workspace_runtime::WorkspaceRuntimeNames,
     workspaces::{AccessMode, WorkspaceObservation},
 };
 use tower::ServiceExt;
@@ -111,7 +112,7 @@ async fn authorized_keys_command_returns_only_restricted_workspace_target() {
 
     let mut state = AppState::with_cipher(
         AppConfig {
-            installation_id,
+            installation_id: installation_id.clone(),
             listen_address: SocketAddr::from(([127, 0, 0, 1], 0)),
             database_url: "sqlite::memory:".to_owned(),
             replica_count: 1,
@@ -152,10 +153,15 @@ async fn authorized_keys_command_returns_only_restricted_workspace_target() {
     )
     .unwrap();
     assert!(line.starts_with("restrict,port-forwarding,permitopen=\""));
+    let runtime_names = WorkspaceRuntimeNames::for_workspace(
+        &installation_id,
+        &workspace.runtime,
+        &workspace.short_id,
+    )
+    .unwrap();
     assert!(line.contains(&format!(
         "{}.{}.svc.cluster.local:2222",
-        workspace.runtime.names().service,
-        workspace.runtime.namespace,
+        runtime_names.resources.service, workspace.runtime.namespace,
     )));
     assert!(line.contains("ssh-ed25519 AQIDBA=="));
 

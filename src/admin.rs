@@ -77,11 +77,6 @@ pub enum DatabaseCommand {
         #[arg(long, env = "MWC_DESTINATION_DATABASE_URL", hide_env_values = true)]
         destination_url: String,
     },
-    /// Move one stopped workspace to the collision-free runtime identity.
-    CanonicalizeWorkspaceRuntime {
-        #[arg(long)]
-        workspace_id: uuid::Uuid,
-    },
 }
 
 pub async fn execute_database(
@@ -115,22 +110,6 @@ pub async fn execute_database(
             println!(
                 "migrated installation {} from SQLite to PostgreSQL",
                 database.installation_id()
-            );
-        }
-        DatabaseCommand::CanonicalizeWorkspaceRuntime { workspace_id } => {
-            let workspace = database
-                .canonicalize_workspace_runtime(workspace_id, unix_timestamp()?)
-                .await?;
-            println!(
-                "canonicalized stopped workspace {} as {} in {}",
-                workspace.id,
-                crate::workspace_runtime::WorkspaceRuntimeNames::for_workspace(
-                    database.installation_id(),
-                    &workspace.runtime,
-                    &workspace.short_id,
-                )?
-                .resource_prefix,
-                workspace.runtime.namespace
             );
         }
     }

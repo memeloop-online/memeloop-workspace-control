@@ -8,7 +8,7 @@ use memeloop_workspace_control::{
         Database, IdempotencyDecision, InjectionScopeRef, StorageError,
     },
     templates::{WorkspaceTemplateDocument, WorkspaceTemplateSpec},
-    workspace_runtime::{WorkspaceNamespaceScope, WorkspaceRuntimeNamingScheme},
+    workspace_runtime::{WorkspaceNamespaceScope, WorkspaceRuntimeNames},
     workspaces::{AccessMode, WorkspaceAction, WorkspaceObservation, WorkspaceState},
 };
 use std::collections::BTreeMap;
@@ -334,20 +334,22 @@ async fn workspace_runtime_identity_is_persisted_for_shared_namespace_creation()
         .unwrap();
 
     assert_eq!(
-        workspace.runtime.naming_scheme,
-        WorkspaceRuntimeNamingScheme::PrefixedV2
-    );
-    assert_eq!(
         workspace.runtime.namespace_scope,
         WorkspaceNamespaceScope::Shared
     );
     assert_eq!(workspace.runtime.namespace, "workspace-pool");
+    let runtime_names = WorkspaceRuntimeNames::for_workspace(
+        &"business-test".parse().unwrap(),
+        &workspace.runtime,
+        &workspace.short_id,
+    )
+    .unwrap();
     assert_eq!(
-        workspace.runtime.resource_prefix,
+        runtime_names.resource_prefix,
         format!("w-{}", workspace.short_id)
     );
     assert_eq!(
-        workspace.runtime.route_key,
+        runtime_names.route_key,
         format!("business-test-{}", workspace.short_id)
     );
     assert_eq!(
@@ -356,7 +358,7 @@ async fn workspace_runtime_identity_is_persisted_for_shared_namespace_creation()
     );
     assert_eq!(
         database
-            .get_workspace_by_route_key(&workspace.runtime.route_key)
+            .get_workspace_by_route_key(&runtime_names.route_key)
             .await
             .unwrap()
             .id,

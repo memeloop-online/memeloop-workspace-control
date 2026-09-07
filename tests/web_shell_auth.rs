@@ -15,6 +15,7 @@ use memeloop_workspace_control::{
     quota::Resources,
     storage::{CreateOrganization, CreateWorkspace, CreateWorkspaceTemplate, Database},
     templates::{WorkspaceTemplateDocument, WorkspaceTemplateSpec},
+    workspace_runtime::WorkspaceRuntimeNames,
     workspaces::{AccessMode, WorkspaceObservation},
 };
 use serde_json::Value;
@@ -116,6 +117,13 @@ async fn browser_access_tickets_are_scoped_and_consumed_once() {
         .issue_port_mapping_ticket(&mapping, user.user_id, now)
         .await
         .unwrap();
+    let web_shell_path = WorkspaceRuntimeNames::for_workspace(
+        &installation_id,
+        &workspace.runtime,
+        &workspace.short_id,
+    )
+    .unwrap()
+    .web_shell_path();
 
     let mut state = AppState::new(
         AppConfig {
@@ -161,10 +169,7 @@ async fn browser_access_tickets_are_scoped_and_consumed_once() {
         body["web_shell_url"]
             .as_str()
             .unwrap()
-            .starts_with(&format!(
-                "https://shell.example.com{}",
-                workspace.runtime.web_shell_path()
-            ))
+            .starts_with(&format!("https://shell.example.com{}", web_shell_path))
     );
     assert!(body["web_shell_url"].as_str().unwrap().contains(ticket));
 
@@ -173,7 +178,7 @@ async fn browser_access_tickets_are_scoped_and_consumed_once() {
             .header("authorization", format!("Bearer {INTERNAL_TOKEN}"))
             .header(
                 "x-forwarded-uri",
-                format!("{}ws?ticket={ticket}", workspace.runtime.web_shell_path()),
+                format!("{}ws?ticket={ticket}", web_shell_path),
             )
             .body(Body::empty())
             .unwrap()
@@ -184,7 +189,7 @@ async fn browser_access_tickets_are_scoped_and_consumed_once() {
             Request::get("/api/v1/internal/web-shell/authorize")
                 .header(
                     "x-forwarded-uri",
-                    format!("{}?ticket={ticket}", workspace.runtime.web_shell_path()),
+                    format!("{}?ticket={ticket}", web_shell_path),
                 )
                 .body(Body::empty())
                 .unwrap(),

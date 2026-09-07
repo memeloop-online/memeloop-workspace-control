@@ -6,7 +6,7 @@ use memeloop_workspace_control::{
     },
     quota::Resources,
     templates::WorkspaceTemplateSpec,
-    workspace_runtime::WorkspaceRuntimeIdentity,
+    workspace_runtime::{WorkspaceRuntimeIdentity, WorkspaceRuntimeNames},
     workspaces::{AccessMode, Workspace, WorkspaceState},
 };
 use std::collections::BTreeMap;
@@ -37,15 +37,16 @@ fn builder() -> ResourceBuilder {
 }
 
 fn workspace(state: WorkspaceState) -> Workspace {
-    let id = Uuid::now_v7();
+    let id = Uuid::parse_str("00000000-0000-7000-8000-00000001abcd").unwrap();
+    let short_id = "800000000001abcd".to_owned();
     Workspace {
         id,
-        short_id: "01jabc".to_owned(),
+        short_id: short_id.clone(),
         organization_id: Uuid::now_v7(),
         owner_id: Uuid::now_v7(),
         name: "test-workspace".to_owned(),
         template_id: Some(Uuid::now_v7()),
-        runtime: WorkspaceRuntimeIdentity::legacy_v1(&"public-a".parse().unwrap(), "01jabc")
+        runtime: WorkspaceRuntimeIdentity::new(&"public-a".parse().unwrap(), id, &short_id, None)
             .unwrap(),
         template: WorkspaceTemplateSpec::standard(
             "registry.example/workspace:1",
@@ -68,7 +69,7 @@ fn shared_workspace(short_id: &str, id: Uuid) -> Workspace {
     let mut workspace = workspace(WorkspaceState::Ready);
     workspace.id = id;
     workspace.short_id = short_id.to_owned();
-    workspace.runtime = WorkspaceRuntimeIdentity::prefixed_v2(
+    workspace.runtime = WorkspaceRuntimeIdentity::new(
         &"public-a".parse().unwrap(),
         id,
         short_id,
@@ -78,6 +79,15 @@ fn shared_workspace(short_id: &str, id: Uuid) -> Workspace {
     workspace.template.access_mode = AccessMode::Internal;
     workspace.template.cluster_access = true;
     workspace
+}
+
+fn runtime_names(workspace: &Workspace) -> WorkspaceRuntimeNames {
+    WorkspaceRuntimeNames::for_workspace(
+        &"public-a".parse().unwrap(),
+        &workspace.runtime,
+        &workspace.short_id,
+    )
+    .unwrap()
 }
 
 fn metadata_name(metadata: &k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta) -> &str {
@@ -175,81 +185,94 @@ fn observability_labels_do_not_change_statefulset_immutable_fields() {
 }
 
 #[test]
-fn legacy_runtime_keeps_every_desired_resource_name_and_reference_byte_compatible() {
+fn runtime_resource_names_are_derived_from_the_workspace_short_id() {
     let mut workspace = workspace(WorkspaceState::Ready);
     workspace.template.access_mode = AccessMode::Internal;
     workspace.template.cluster_access = true;
     let mut resource_builder = builder();
     resource_builder.internal_ssh_node_port_enabled = true;
     let resources = resource_builder.build(&workspace).unwrap();
+    let names = runtime_names(&workspace);
 
     assert_eq!(
         metadata_name(&resources.namespace.metadata),
-        "ws-public-a-01jabc"
+        "ws-public-a-800000000001abcd"
     );
-    assert_eq!(metadata_name(&resources.stateful_set.metadata), "workspace");
-    assert_eq!(metadata_name(&resources.service.metadata), "workspace");
+    assert_eq!(
+        metadata_name(&resources.stateful_set.metadata),
+        names.resources.stateful_set
+    );
+    assert_eq!(
+        metadata_name(&resources.service.metadata),
+        names.resources.service
+    );
     assert_eq!(
         metadata_name(&resources.internal_ssh_service.as_ref().unwrap().metadata),
-        "workspace-ssh"
+        names.resources.ssh_service
     );
     assert_eq!(
         metadata_name(&resources.service_account.as_ref().unwrap().metadata),
-        "workspace-admin"
+        names.resources.service_account
     );
     assert_eq!(
         metadata_name(&resources.cluster_role_binding.as_ref().unwrap().metadata),
-        "mwc-public-a-01jabc-admin"
+        names.cluster_admin_binding_name(&"public-a".parse().unwrap())
     );
     assert_eq!(
         metadata_name(&resources.workspace_config.metadata),
-        "workspace-config"
+        names.resources.workspace_config
     );
     assert_eq!(
         metadata_name(&resources.ssh_identity.metadata),
-        "workspace-ssh-identity"
+        names.resources.ssh_identity_secret
     );
     assert_eq!(
         metadata_name(&resources.network_policy.metadata),
-        "workspace-ingress"
+        names.resources.network_policy
     );
     assert_eq!(
         metadata_name(&resources.web_shell_ingress.as_ref().unwrap().metadata),
-        "web-shell"
+        names.resources.web_shell_ingress
     );
     assert_eq!(
         metadata_name(&resources.injections.environment_secret.metadata),
-        "workspace-environment-secret"
+        names.resources.environment_secret
     );
     assert_eq!(
         metadata_name(&resources.injections.environment_config_map.metadata),
-        "workspace-environment-config"
+        names.resources.environment_config_map
     );
     assert_eq!(
         metadata_name(&resources.injections.file_secret.metadata),
-        "workspace-files-secret"
+        names.resources.files_secret
     );
     assert_eq!(
         metadata_name(&resources.injections.file_config_map.metadata),
-        "workspace-files-config"
+        names.resources.files_config_map
     );
 
     let stateful_spec = resources.stateful_set.spec.as_ref().unwrap();
-    assert_eq!(stateful_spec.service_name.as_deref(), Some("workspace"));
+    assert_eq!(
+        stateful_spec.service_name.as_deref(),
+        Some(names.resources.service.as_str())
+    );
     assert_eq!(
         stateful_spec.volume_claim_templates.as_ref().unwrap()[0]
             .metadata
             .name
             .as_deref(),
-        Some("workspace-data")
+        Some(names.resources.data_claim_template.as_str())
     );
-    assert_eq!(workspace.runtime.names().pod_ordinal_zero(), "workspace-0");
+    assert_eq!(names.resources.pod_ordinal_zero(), "w-800000000001abcd-0");
     assert_eq!(
-        workspace.runtime.names().data_pvc_ordinal_zero(),
-        "workspace-data-workspace-0"
+        names.resources.data_pvc_ordinal_zero(),
+        "w-800000000001abcd-data-w-800000000001abcd-0"
     );
     let pod = stateful_spec.template.spec.as_ref().unwrap();
-    assert_eq!(pod.service_account_name.as_deref(), Some("workspace-admin"));
+    assert_eq!(
+        pod.service_account_name.as_deref(),
+        Some(names.resources.service_account.as_str())
+    );
     let ingress_path = &resources
         .web_shell_ingress
         .as_ref()
@@ -264,10 +287,13 @@ fn legacy_runtime_keeps_every_desired_resource_name_and_reference_byte_compatibl
         .as_ref()
         .unwrap()
         .paths[0];
-    assert_eq!(ingress_path.path.as_deref(), Some("/shell/01jabc/"));
+    assert_eq!(
+        ingress_path.path.as_deref(),
+        Some(names.web_shell_path().as_str())
+    );
     assert_eq!(
         ingress_path.backend.service.as_ref().unwrap().name,
-        "workspace"
+        names.resources.service
     );
 }
 
@@ -360,23 +386,23 @@ fn prefixed_workspaces_share_a_namespace_without_resource_or_selector_collisions
         assert_ne!(first_names[key], second_names[key], "{key} collided");
     }
     assert_ne!(
-        first.runtime.names().pod_ordinal_zero(),
-        second.runtime.names().pod_ordinal_zero()
+        runtime_names(&first).resources.pod_ordinal_zero(),
+        runtime_names(&second).resources.pod_ordinal_zero()
     );
     assert_ne!(
-        first.runtime.names().data_pvc_ordinal_zero(),
-        second.runtime.names().data_pvc_ordinal_zero()
+        runtime_names(&first).resources.data_pvc_ordinal_zero(),
+        runtime_names(&second).resources.data_pvc_ordinal_zero()
     );
 
     let first_spec = first_resources.stateful_set.spec.as_ref().unwrap();
     let second_spec = second_resources.stateful_set.spec.as_ref().unwrap();
     assert_eq!(
         first_spec.service_name.as_deref(),
-        Some(first.runtime.names().service.as_str())
+        Some(runtime_names(&first).resources.service.as_str())
     );
     assert_eq!(
         second_spec.service_name.as_deref(),
-        Some(second.runtime.names().service.as_str())
+        Some(runtime_names(&second).resources.service.as_str())
     );
     assert_ne!(
         first_spec.selector.match_labels,
@@ -403,7 +429,7 @@ fn prefixed_workspaces_share_a_namespace_without_resource_or_selector_collisions
     );
     assert_eq!(
         path.backend.service.as_ref().unwrap().name,
-        first.runtime.names().service
+        runtime_names(&first).resources.service
     );
     let pod = first_spec.template.spec.as_ref().unwrap();
     let ttyd = pod
@@ -565,29 +591,34 @@ fn only_templates_requesting_cluster_access_receive_an_owned_cluster_admin_ident
     );
     let workspace_id = workspace.id;
     let resources = builder().build(&workspace).unwrap();
+    let names = runtime_names(&workspace);
 
     let service_account = resources.service_account.unwrap();
     assert_eq!(
         service_account.metadata.name.as_deref(),
-        Some("workspace-admin")
+        Some(names.resources.service_account.as_str())
     );
     assert_eq!(
         service_account.metadata.namespace.as_deref(),
-        Some("ws-public-a-01jabc")
+        Some(names.namespace.as_str())
     );
     assert_eq!(service_account.automount_service_account_token, Some(true));
 
     let binding = resources.cluster_role_binding.unwrap();
     assert_eq!(
         binding.metadata.name.as_deref(),
-        Some("mwc-public-a-01jabc-admin")
+        Some(
+            names
+                .cluster_admin_binding_name(&"public-a".parse().unwrap())
+                .as_str()
+        )
     );
     assert_eq!(binding.role_ref.kind, "ClusterRole");
     assert_eq!(binding.role_ref.name, "cluster-admin");
     let subject = &binding.subjects.unwrap()[0];
     assert_eq!(subject.kind, "ServiceAccount");
-    assert_eq!(subject.name, "workspace-admin");
-    assert_eq!(subject.namespace.as_deref(), Some("ws-public-a-01jabc"));
+    assert_eq!(subject.name, names.resources.service_account);
+    assert_eq!(subject.namespace.as_deref(), Some(names.namespace.as_str()));
     builder()
         .verify_delete_ownership(&binding.metadata, workspace_id)
         .unwrap();
@@ -604,7 +635,10 @@ fn only_templates_requesting_cluster_access_receive_an_owned_cluster_admin_ident
     ));
 
     let pod = resources.stateful_set.spec.unwrap().template.spec.unwrap();
-    assert_eq!(pod.service_account_name.as_deref(), Some("workspace-admin"));
+    assert_eq!(
+        pod.service_account_name.as_deref(),
+        Some(names.resources.service_account.as_str())
+    );
     assert_eq!(pod.automount_service_account_token, Some(true));
     let workspace_container = pod
         .containers
@@ -708,9 +742,10 @@ fn templates_without_cluster_access_never_receive_a_service_account_token() {
 fn builds_isolated_single_replica_workspace_with_standard_components() {
     let workspace = workspace(WorkspaceState::Ready);
     let resources = builder().build(&workspace).unwrap();
+    let names = runtime_names(&workspace);
     assert_eq!(
         resources.namespace.metadata.name.as_deref(),
-        Some("ws-public-a-01jabc")
+        Some(names.namespace.as_str())
     );
     let namespace_labels = resources.namespace.metadata.labels.as_ref().unwrap();
     assert_eq!(
@@ -759,7 +794,10 @@ fn builds_isolated_single_replica_workspace_with_standard_components() {
         .iter()
         .position(|argument| argument == "--base-path")
         .unwrap();
-    assert_eq!(ttyd_args[base_path_index + 1], "/shell/01jabc");
+    assert_eq!(
+        ttyd_args[base_path_index + 1],
+        names.web_shell_path().trim_end_matches('/')
+    );
     assert_eq!(
         containers[1].volume_mounts.as_ref().unwrap()[0].name,
         "runtime-ssh"
@@ -805,11 +843,11 @@ fn builds_isolated_single_replica_workspace_with_standard_components() {
     let web_shell_ingress = resources.web_shell_ingress.as_ref().unwrap();
     assert_eq!(
         web_shell_ingress.metadata.name.as_deref(),
-        Some("web-shell")
+        Some(names.resources.web_shell_ingress.as_str())
     );
     assert_eq!(
         web_shell_ingress.metadata.namespace.as_deref(),
-        Some("ws-public-a-01jabc")
+        Some(names.namespace.as_str())
     );
     let web_shell_labels = web_shell_ingress.metadata.labels.as_ref().unwrap();
     assert_eq!(web_shell_labels[OWNER_INSTALLATION_LABEL], "public-a");
@@ -822,10 +860,13 @@ fn builds_isolated_single_replica_workspace_with_standard_components() {
     let web_shell_rule = &web_shell_spec.rules.as_ref().unwrap()[0];
     assert_eq!(web_shell_rule.host.as_deref(), Some("shell.example.com"));
     let web_shell_path = &web_shell_rule.http.as_ref().unwrap().paths[0];
-    assert_eq!(web_shell_path.path.as_deref(), Some("/shell/01jabc/"));
+    assert_eq!(
+        web_shell_path.path.as_deref(),
+        Some(names.web_shell_path().as_str())
+    );
     assert_eq!(web_shell_path.path_type, "Prefix");
     let web_shell_backend = web_shell_path.backend.service.as_ref().unwrap();
-    assert_eq!(web_shell_backend.name, "workspace");
+    assert_eq!(web_shell_backend.name, names.resources.service);
     assert_eq!(web_shell_backend.port.as_ref().unwrap().number, Some(7681));
     let ingress = resources.network_policy.spec.unwrap().ingress.unwrap();
     assert!(ingress.iter().all(|rule| {
@@ -873,6 +914,7 @@ fn node_template_reuses_the_existing_image_with_platform_bootstrap() {
         },
     );
 
+    let names = runtime_names(&workspace);
     let resources = builder().build(&workspace).unwrap();
     let pod = resources
         .stateful_set
@@ -911,11 +953,9 @@ fn node_template_reuses_the_existing_image_with_platform_bootstrap() {
         )
     );
     assert_eq!(readiness.period_seconds, Some(10));
-    assert!(
-        dev.volume_mounts.as_ref().unwrap().iter().any(|mount| {
-            mount.name == "workspace-data" && mount.mount_path == "/home/node-dev"
-        })
-    );
+    assert!(dev.volume_mounts.as_ref().unwrap().iter().any(|mount| {
+        mount.name == names.resources.data_claim_template && mount.mount_path == "/home/node-dev"
+    }));
     let quantities = dev.resources.as_ref().unwrap();
     assert_eq!(quantities.requests.as_ref().unwrap()["cpu"].0, "1000m");
     assert_eq!(quantities.requests.as_ref().unwrap()["memory"].0, "1024Mi");
@@ -1018,6 +1058,7 @@ fn regenerable_data_uses_bounded_pod_lifetime_storage() {
     workspace.template.storage_policy.buildkit_cache_gib = 9;
     workspace.template.storage_policy.codex_scratch_gib = 3;
 
+    let names = runtime_names(&workspace);
     let resources = builder().build(&workspace).unwrap();
     let pod = resources.stateful_set.spec.unwrap().template.spec.unwrap();
     let volume = |name: &str| {
@@ -1075,7 +1116,8 @@ fn regenerable_data_uses_bounded_pod_lifetime_storage() {
         mount.name == "buildkit-cache" && mount.mount_path == "/run/mwc-buildkit"
     }));
     assert!(!mounts.iter().any(|mount| {
-        mount.name == "workspace-data" && matches!(mount.mount_path.as_str(), "/tmp" | "/var/tmp")
+        mount.name == names.resources.data_claim_template
+            && matches!(mount.mount_path.as_str(), "/tmp" | "/var/tmp")
     }));
     let ttyd = pod
         .containers
@@ -1146,7 +1188,7 @@ fn regenerable_data_uses_bounded_pod_lifetime_storage() {
             .unwrap()
             .iter()
             .any(|mount| {
-                mount.name == "workspace-data"
+                mount.name == names.resources.data_claim_template
                     && matches!(mount.mount_path.as_str(), "/tmp" | "/var/tmp")
             })
     );
@@ -1190,6 +1232,7 @@ fn rust_template_uses_the_single_canonical_rust_home() {
             disk_gib: 50,
         },
     );
+    let names = runtime_names(&workspace);
     let resources = builder().build(&workspace).unwrap();
     let mounts = resources
         .stateful_set
@@ -1204,13 +1247,12 @@ fn rust_template_uses_the_single_canonical_rust_home() {
         .unwrap()
         .volume_mounts
         .unwrap();
-    assert!(
-        mounts.iter().any(|mount| {
-            mount.name == "workspace-data" && mount.mount_path == "/home/rust-dev"
-        })
-    );
+    assert!(mounts.iter().any(|mount| {
+        mount.name == names.resources.data_claim_template && mount.mount_path == "/home/rust-dev"
+    }));
     assert!(!mounts.iter().any(|mount| {
-        mount.name == "workspace-data" && mount.mount_path == "/home/token-center-dev"
+        mount.name == names.resources.data_claim_template
+            && mount.mount_path == "/home/token-center-dev"
     }));
 }
 
@@ -1297,7 +1339,12 @@ fn materializes_values_without_putting_secrets_in_metadata_or_manifest() {
     .unwrap();
     let workspace = workspace(WorkspaceState::Ready);
     let materialized = builder()
-        .materialize_injections(workspace.id, &workspace.runtime, &resolved)
+        .materialize_injections(
+            workspace.id,
+            &workspace.short_id,
+            &workspace.runtime,
+            &resolved,
+        )
         .unwrap();
 
     assert_eq!(

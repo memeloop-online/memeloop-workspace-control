@@ -153,7 +153,7 @@ async fn ensure_sqlite_v19_runtime_is_canonical(
     .fetch_one(&mut **transaction)
     .await?;
     if invalid_count != 0 {
-        return Err(StorageError::WorkspaceRuntimeMigrationUnsafe);
+        return Err(StorageError::WorkspaceRuntimeSchemaIncompatible);
     }
     Ok(())
 }
@@ -176,7 +176,7 @@ async fn ensure_postgres_v19_runtime_is_canonical(
     .fetch_one(&mut **transaction)
     .await?;
     if invalid_count != 0 {
-        return Err(StorageError::WorkspaceRuntimeMigrationUnsafe);
+        return Err(StorageError::WorkspaceRuntimeSchemaIncompatible);
     }
     Ok(())
 }
@@ -431,7 +431,7 @@ mod tests {
 
         assert!(matches!(
             database.migrate().await,
-            Err(StorageError::WorkspaceRuntimeMigrationUnsafe)
+            Err(StorageError::WorkspaceRuntimeSchemaIncompatible)
         ));
         let retained_columns = sqlx::query("PRAGMA table_info('workspaces')")
             .fetch_all(pool)
