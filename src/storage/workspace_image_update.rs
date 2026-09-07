@@ -301,7 +301,7 @@ fn validate_pinned_image(image: &str) -> Result<(), StorageError> {
         || digest.len() != 64
         || !digest
             .bytes()
-            .all(|byte| byte.is_ascii_digit() || (byte as char).is_ascii_lowercase())
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
     {
         return Err(StorageError::InvalidWorkspaceImageUpdate);
     }
@@ -480,13 +480,26 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn rejects_unpinned_or_stale_updates_without_writing() {
+    async fn rejects_unpinned_nonhex_or_stale_updates_without_writing() {
         let (database, stopped, admin) = stopped_workspace().await;
         assert!(matches!(
             database
                 .update_stopped_workspace_image(
                     stopped.id,
                     "registry.example/workspace:next",
+                    stopped.generation,
+                    admin,
+                    7
+                )
+                .await,
+            Err(StorageError::InvalidWorkspaceImageUpdate)
+        ));
+        let nonhex_digest = format!("registry.example/workspace@sha256:{}g", "a".repeat(63));
+        assert!(matches!(
+            database
+                .update_stopped_workspace_image(
+                    stopped.id,
+                    &nonhex_digest,
                     stopped.generation,
                     admin,
                     7
