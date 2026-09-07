@@ -15,7 +15,6 @@ pub(super) use export::export_tables;
 #[cfg(test)]
 mod tests;
 
-const DYNAMIC_PLUGIN_SCHEMA_VERSION: i64 = 13;
 const MAX_PACKAGES: usize = 32;
 const MAX_ASSETS: usize = MAX_PACKAGES * 64;
 const MAX_MANIFEST_BYTES: usize = 1024 * 1024;
@@ -23,11 +22,6 @@ const MAX_COMPONENT_BYTES: usize = 64 * 1024 * 1024;
 const MAX_ASSET_BYTES: usize = 2 * 1024 * 1024;
 const MAX_PACKAGE_BYTES: usize = 80 * 1024 * 1024;
 const MAX_TOTAL_BYTES: usize = MAX_PACKAGES * MAX_PACKAGE_BYTES;
-const TABLES: [&str; 3] = [
-    "plugin_packages",
-    "plugin_assets",
-    "plugin_catalog_metadata",
-];
 type AssetContent = (String, Vec<u8>);
 type AssetsByPath = BTreeMap<String, AssetContent>;
 type AssetsByPlugin = BTreeMap<String, AssetsByPath>;
@@ -69,16 +63,9 @@ struct CatalogSnapshot {
     revision: i64,
 }
 
-pub(super) fn is_plugin_table(table: &str) -> bool {
-    TABLES.contains(&table)
-}
-
 pub(super) fn prepare_import(
     snapshot: &DatabaseSnapshot,
 ) -> Result<Option<BTreeMap<String, Vec<Value>>>, StorageError> {
-    if snapshot.schema_version < DYNAMIC_PLUGIN_SCHEMA_VERSION {
-        return Ok(None);
-    }
     let package_rows = required_table(snapshot, "plugin_packages")?;
     let asset_rows = required_table(snapshot, "plugin_assets")?;
     let catalog_rows = required_table(snapshot, "plugin_catalog_metadata")?;

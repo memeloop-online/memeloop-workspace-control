@@ -70,8 +70,6 @@ pub enum StorageError {
     PortMappingNotFound,
     #[error("workspace name and image must not be empty")]
     InvalidWorkspace,
-    #[error("workspace runtime rows are incompatible with the current schema")]
-    WorkspaceRuntimeSchemaIncompatible,
     #[error("workspace injection references are invalid or duplicated")]
     InvalidWorkspaceInjectionRefs,
     #[error("workspace image is not enabled by the image allowlist")]
@@ -138,6 +136,8 @@ pub enum StorageError {
     WebhookNotFound,
     #[error("system clock is invalid")]
     Clock,
+    #[error("database version is not supported by this release")]
+    UnsupportedDatabaseVersion,
     #[error("workspace SSH identity is invalid")]
     InvalidSshIdentity,
     #[error("database snapshots can only be exported from SQLite mode")]
@@ -155,8 +155,8 @@ pub enum StorageError {
     },
     #[error("snapshot row in {table} does not belong to the configured installation")]
     SnapshotRowInstallationMismatch { table: String },
-    #[error("snapshot schema version {0} is newer than this binary")]
-    SnapshotSchemaTooNew(i64),
+    #[error("snapshot schema version is not supported by this release")]
+    UnsupportedSnapshotSchema,
     #[error("snapshot is missing required table {0}")]
     SnapshotMissingTable(String),
     #[error("snapshot contains invalid dynamic plugin state")]

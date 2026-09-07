@@ -66,7 +66,7 @@ impl<'a> WorkspacePod<'a> {
     pub fn ssh_strict_modes(self) -> &'static str {
         if self.template.preserve_home_ownership {
             // Migrated Coder PVC roots are intentionally root:1000/2775. The platform owns the
-            // generated authorized_keys file and keeps it 0600, so retaining the legacy root
+            // generated authorized_keys file and keeps it 0600, so retaining the previous root
             // metadata requires disabling only sshd's parent-directory ownership check.
             "no"
         } else {
@@ -353,7 +353,7 @@ impl<'a> WorkspacePod<'a> {
     }
 }
 
-pub(super) fn suppress_legacy_environment(
+pub(super) fn apply_injected_environment_overrides(
     template: &WorkspaceTemplateSpec,
     container: &mut Container,
     injected_targets: &std::collections::BTreeSet<String>,

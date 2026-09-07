@@ -31,24 +31,3 @@ test("a fixed template selector cannot be changed by form state", () => {
     "fixed-template",
   );
 });
-
-test("legacy labels.template_id is normalized into the sole template selector", () => {
-  const draft = draftFromStored({
-    key: "settings",
-    kind: "config_file",
-    target: "/workspace/settings",
-    scope: "organization",
-    scope_id: "org",
-    sensitive: false,
-    locked: false,
-    version: 1,
-    file_mode: 0o644,
-    owner: null,
-    group: null,
-    template_selector: null,
-    labels: { template_id: "template-a", access_mode: "internal" },
-    updated_at: 1,
-  });
-  assert.equal(draft.template_selector, "template-a");
-  assert.deepEqual(draft.labels, { access_mode: "internal" });
-});

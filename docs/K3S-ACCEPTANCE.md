@@ -59,10 +59,10 @@ For an installation configured with a shared workspace Namespace, set
 `K3S_WORKSPACE_NAMESPACE_SCOPE=shared` and provide `K3S_WORKSPACE_SHARED_NAMESPACE`. Before the
 first shared workspace is reconciled, the Namespace may not exist; the verifier reports
 `shared:pending`. Once it exists, it must have the requested installation owner and managed-by
-labels and no workspace, organization, or user ownership labels. Existing legacy dedicated
+labels and no workspace, organization, or user ownership labels. Existing dedicated
 Namespaces may coexist and must retain their installation prefix and workspace ID.
 
-After an API delete reaches `deleted`, use dedicated mode to prove that a legacy or prefixed
+After an API delete reaches `deleted`, use dedicated mode to prove that a
 dedicated Namespace and all workspace-labelled objects are gone:
 
 ```bash
@@ -143,8 +143,7 @@ Issue a one-time Web Shell ticket, open the returned URL through Higress and exe
 interactive input. Reload or reconnect with the consumed ticket and confirm rejection, then issue
 a fresh ticket and confirm a new session succeeds. Confirm only Higress can reach port 7681 and
 terminal bytes do not traverse the control-plane API. Confirm ttyd HTML assets and the WebSocket
-upgrade both remain below `/shell/<route-key>/`; no URL prefix rewrite is allowed. For legacy
-workspaces the route key is the short ID; `prefixed_v2` includes the installation identity.
+upgrade both remain below `/shell/<installation>-<short-id>/`; no URL prefix rewrite is allowed.
 
 ## Injection cascade
 

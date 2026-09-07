@@ -148,7 +148,7 @@ case "$K3S_WORKSPACE_NAMESPACE_SCOPE" in
         (.metadata.labels[$workspace] // "" | length == 0)
       )] | length' <<<"$workspace_namespaces")
     if [[ $invalid_namespaces != 0 ]]; then
-      printf 'legacy dedicated namespace lacks the installation prefix or workspace ID\n' >&2
+      printf 'canonical dedicated namespace lacks the installation prefix or workspace ID\n' >&2
       exit 1
     fi
     ;;

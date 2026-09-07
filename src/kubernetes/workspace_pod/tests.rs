@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 use super::*;
 use crate::{quota::Resources, workspace_runtime::WorkspaceResourceNames, workspaces::AccessMode};
 
-fn legacy_names() -> WorkspaceResourceNames {
+fn resource_names() -> WorkspaceResourceNames {
     WorkspaceResourceNames::for_prefix("w-test")
 }
 
@@ -20,32 +20,32 @@ fn template() -> WorkspaceTemplateSpec {
     );
     template
         .environment
-        .insert("HOME".to_owned(), "/legacy home".to_owned());
+        .insert("HOME".to_owned(), "/previous home".to_owned());
     template.environment.insert(
         "MWC_WORKSPACE_HOME".to_owned(),
         "/must-not-shadow-platform".to_owned(),
     );
     template
         .environment
-        .insert("LEGACY_TOKEN".to_owned(), "legacy".to_owned());
+        .insert("INJECTED_TOKEN".to_owned(), "previous".to_owned());
     template
 }
 
 #[test]
-fn injected_targets_remove_only_legacy_template_environment() {
+fn injected_targets_remove_only_previous_template_environment() {
     let template = template();
     let pod = WorkspacePod::from_template(&template);
     let mut container = pod.workspace_container(
         "registry.example/workspace:1",
         ResourceRequirements::default(),
-        &legacy_names(),
+        &resource_names(),
     );
-    suppress_legacy_environment(
+    apply_injected_environment_overrides(
         &template,
         &mut container,
         &BTreeSet::from([
             "HOME".to_owned(),
-            "LEGACY_TOKEN".to_owned(),
+            "INJECTED_TOKEN".to_owned(),
             "MWC_WORKSPACE_HOME".to_owned(),
         ]),
     );
@@ -67,7 +67,7 @@ fn injected_targets_remove_only_legacy_template_environment() {
             .collect::<Vec<_>>(),
         [Some("/workspace")]
     );
-    assert!(environment.iter().all(|item| item.name != "LEGACY_TOKEN"));
+    assert!(environment.iter().all(|item| item.name != "INJECTED_TOKEN"));
 }
 
 #[test]

@@ -20,11 +20,11 @@ StatefulSet without deleting its retained PVC, and set `sqlite.existingClaim` to
 name. Verify the recreated Pod mounts the recorded PVC/PV/CSI handle before allowing writes. See the
 migration document for the Argo prune and rollback constraints.
 
-Set `workspace.sharedNamespace` to place newly created `prefixed_v2` workspaces in one
+Set `workspace.sharedNamespace` to place newly created workspaces in one
 installation-owned Namespace. The default empty value preserves dedicated Namespace placement.
 Existing workspaces keep their persisted runtime identity and are never moved by changing this
 value. See
-`docs/runtime-naming-and-migration.md` for the five-PVC legacy boundary and the separately
+the operational migration runbook for the separately
 authorized downtime, snapshot/restore or prebind, Argo prune, and rollback procedures.
 
 The Helm default does not emit `MWC_WORKSPACE_SHARED_NAMESPACE`. Setting that environment variable
@@ -62,7 +62,7 @@ for the storage bands follows `monitoring.prometheusRule.warningFor` and
 `workspace.memeloop.dev/owner-installation` and `workspace.memeloop.dev/workspace-id` Pod labels
 from kube-state-metrics and joins matching Pods to
 `kube_pod_spec_volumes_persistentvolumeclaims_info`. The workspace UUID is only a filter and is not
-copied into recording or alert labels. This covers legacy dedicated, prefixed dedicated, and
+copied into recording or alert labels. This covers dedicated and shared
 prefixed shared-Namespace workspaces while their Pod object exists. Stopped workspaces have no Pod,
 so they intentionally have no Home-usage series or capacity alert; inspect their PVC/storage volume
 directly during stopped maintenance. Before enabling these rules, use a known running workspace to

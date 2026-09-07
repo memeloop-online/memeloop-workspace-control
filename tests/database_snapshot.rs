@@ -100,12 +100,12 @@ async fn sqlite_snapshot_contains_ciphertext_and_resets_only_pending_work() {
         workspace_row["runtime_namespace"],
         format!("ws-snapshot-test-{}", workspace.short_id)
     );
-    for legacy_field in [
+    for removed_field in [
         "runtime_naming_scheme",
         "runtime_resource_prefix",
         "runtime_route_key",
     ] {
-        assert!(workspace_row.get(legacy_field).is_none());
+        assert!(workspace_row.get(removed_field).is_none());
     }
     let route_key = format!("snapshot-test-{}", workspace.short_id);
     assert_eq!(
@@ -269,24 +269,24 @@ async fn postgres_import_restores_dynamic_plugin_package_and_assets_when_configu
 
     // A v2 snapshot is a single runtime model. Supplying a removed dual-model
     // field is untrusted input and must be rejected before INSERT.
-    for legacy_field in [
+    for removed_field in [
         "runtime_naming_scheme",
         "runtime_resource_prefix",
         "runtime_route_key",
     ] {
-        let mut legacy_runtime_snapshot = snapshot.clone();
-        legacy_runtime_snapshot
+        let mut rejected_runtime_snapshot = snapshot.clone();
+        rejected_runtime_snapshot
             .tables
             .get_mut("workspaces")
             .unwrap()[0]
             .as_object_mut()
             .unwrap()
             .insert(
-                legacy_field.to_owned(),
+                removed_field.to_owned(),
                 serde_json::Value::String("untrusted".to_owned()),
             );
         assert!(matches!(
-            target.import_snapshot(&legacy_runtime_snapshot).await,
+            target.import_snapshot(&rejected_runtime_snapshot).await,
             Err(StorageError::InvalidWorkspace)
         ));
     }

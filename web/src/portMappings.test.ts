@@ -21,7 +21,7 @@ test("prefers HTTPS mapping URLs", () => {
   assert.equal(mappingUrl({ id: "a", internal_port: 3000, display_name: null, status: "provisioning", https_url: null }), null);
 });
 
-test("does not turn a legacy or non-HTTPS field into a browser destination", () => {
+test("does not turn a non-HTTPS field into a browser destination", () => {
   assert.equal(
     mappingUrl({ id: "a", internal_port: 3000, display_name: null, status: "ready", https_url: null, url: "http://x" } as PortMapping),
     null,

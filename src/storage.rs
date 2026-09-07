@@ -28,7 +28,6 @@ mod port_mappings;
 mod schema;
 mod ssh_access;
 mod ssh_identity;
-mod template_migration;
 mod template_store;
 mod transfer;
 mod user_settings;

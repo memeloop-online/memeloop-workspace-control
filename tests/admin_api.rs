@@ -247,12 +247,12 @@ async fn management_api_enforces_system_and_organization_boundaries() {
     let template_yaml = WorkspaceTemplateDocument::new("Standard", template_spec.clone())
         .to_yaml()
         .unwrap();
-    let mut legacy_environment_spec = template_spec.clone();
-    legacy_environment_spec
+    let mut injected_environment_spec = template_spec.clone();
+    injected_environment_spec
         .environment
-        .insert("LEGACY_TOKEN".to_owned(), "must-use-injection".to_owned());
-    let legacy_environment_yaml =
-        WorkspaceTemplateDocument::new("Legacy environment", legacy_environment_spec)
+        .insert("INJECTED_TOKEN".to_owned(), "must-use-injection".to_owned());
+    let injected_environment_yaml =
+        WorkspaceTemplateDocument::new("Injected environment", injected_environment_spec)
             .to_yaml()
             .unwrap();
     let rejected_environment = app
@@ -264,7 +264,7 @@ async fn management_api_enforces_system_and_organization_boundaries() {
                 .body(Body::from(
                     json!({
                         "organization_id": organization.id,
-                        "yaml": legacy_environment_yaml.clone()
+                        "yaml": injected_environment_yaml.clone()
                     })
                     .to_string(),
                 ))
@@ -304,7 +304,7 @@ async fn management_api_enforces_system_and_organization_boundaries() {
             .header("content-type", "application/json")
             .header("idempotency-key", "reject-template-environment-replace")
             .body(Body::from(
-                json!({"yaml": legacy_environment_yaml}).to_string(),
+                json!({"yaml": injected_environment_yaml}).to_string(),
             ))
             .unwrap(),
         )

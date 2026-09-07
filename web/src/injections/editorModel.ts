@@ -24,9 +24,8 @@ export function emptyInjectionDraft(templateSelector: string | null = null): Inj
 }
 
 export function draftFromStored(item: StoredInjection): InjectionEditorDraft {
-  const { template_id: legacyTemplateSelector, ...labels } = item.labels;
   return {
-    ...emptyInjectionDraft(item.template_selector ?? legacyTemplateSelector ?? null),
+    ...emptyInjectionDraft(item.template_selector),
     key: item.key,
     kind: item.kind,
     target: item.target,
@@ -36,7 +35,7 @@ export function draftFromStored(item: StoredInjection): InjectionEditorDraft {
     fileMode: item.file_mode === null ? "" : item.file_mode.toString(8).padStart(3, "0"),
     owner: item.owner,
     group: item.group,
-    labels,
+    labels: { ...item.labels },
   };
 }
 

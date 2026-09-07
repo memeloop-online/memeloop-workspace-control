@@ -62,6 +62,14 @@ jobs:
           cache-dependency-path: web/package-lock.json
       - run: npm ci && npm run check && npm test && npm run build
         working-directory: web
+      - name: Enforce the current data-model vocabulary
+        run: |
+          for prohibited in 'leg''acy' 'leg''acy_v1' 'pre''fixed_v2' 'runtime''_profile'; do
+            if rg -n -i --glob '!target/**' --glob '!node_modules/**' -e "${prohibited}" .; then
+              echo "obsolete data-model vocabulary found" >&2
+              exit 1
+            fi
+          done
       - run: cargo fmt --all -- --check
       - name: Enforce production maintainability limits
         run: >-
@@ -112,7 +120,7 @@ jobs:
           grep -q 'matchRules:' <<<"${rendered_public}"
           test "$(grep -c '^  name: mwc-public-a-access-auth$' <<<"${rendered_public}")" -eq 1
           if grep -q -- 'mwc-public-a-\(web-shell\|port-mapping\)-auth' <<<"${rendered_public}"; then
-            echo "legacy split access-auth plugins were rendered" >&2
+            echo "obsolete split access-auth plugins were rendered" >&2
             exit 1
           fi
           grep -q -- '- "shell.example.com"' <<<"${rendered_public}"

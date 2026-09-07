@@ -58,7 +58,7 @@ impl KubernetesCoordinator {
                     .find(|container| container.name == "workspace")
             })
             .ok_or(ReconcileError::MissingWorkspaceContainer)?;
-        super::workspace_pod::suppress_legacy_environment(
+        super::workspace_pod::apply_injected_environment_overrides(
             &workspace.template,
             workspace_container,
             &injections.environment_targets,

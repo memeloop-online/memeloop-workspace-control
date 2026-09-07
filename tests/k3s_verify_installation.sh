@@ -58,7 +58,7 @@ kubectl() {
   fi
   if [[ $1 == get && $2 == namespaces ]]; then
     if [[ ${FAKE_INCLUDE_SHARED:-false} == true ]]; then
-      printf '{"items":[{"metadata":{"name":"mwc-test-a","labels":{"%s":"test-a"}}},{"metadata":{"name":"workspace-shared","labels":{"%s":"test-a","app.kubernetes.io/managed-by":"memeloop-workspace-control"}}},{"metadata":{"name":"ws-test-a-00000001","labels":{"%s":"test-a","%s":"legacy-workspace"}}}]}' \
+      printf '{"items":[{"metadata":{"name":"mwc-test-a","labels":{"%s":"test-a"}}},{"metadata":{"name":"workspace-shared","labels":{"%s":"test-a","app.kubernetes.io/managed-by":"memeloop-workspace-control"}}},{"metadata":{"name":"ws-test-a-00000001","labels":{"%s":"test-a","%s":"canonical-workspace"}}}]}' \
         "$owner_label" "$owner_label" "$owner_label" "$workspace_label"
     elif [[ ${FAKE_INVALID_DEDICATED_NAMESPACE:-false} == true ]]; then
       printf '{"items":[{"metadata":{"name":"mwc-test-a","labels":{"%s":"test-a"}}},{"metadata":{"name":"foreign-name","labels":{"%s":"test-a","%s":"workspace"}}}]}' \

@@ -213,61 +213,6 @@ async fn migrations_are_versioned_and_idempotent() {
 }
 
 #[tokio::test]
-async fn schema_ten_backfills_yaml_for_a_legacy_template_row() {
-    let database = Database::connect("sqlite::memory:", "profile-migration".parse().unwrap())
-        .await
-        .unwrap();
-    database.migrate().await.unwrap();
-    let Database::Sqlite { pool, .. } = &database else {
-        unreachable!();
-    };
-    sqlx::query("ALTER TABLE workspace_templates ADD COLUMN runtime_profile TEXT NOT NULL DEFAULT 'standard'")
-        .execute(pool)
-        .await
-        .unwrap();
-    sqlx::query(
-        "ALTER TABLE workspaces ADD COLUMN runtime_profile TEXT NOT NULL DEFAULT 'standard'",
-    )
-    .execute(pool)
-    .await
-    .unwrap();
-    for statement in [
-        "ALTER TABLE workspaces ADD COLUMN runtime_naming_scheme TEXT NOT NULL DEFAULT 'legacy_v1'",
-        "ALTER TABLE workspaces ADD COLUMN runtime_resource_prefix TEXT NOT NULL DEFAULT 'workspace'",
-        "ALTER TABLE workspaces ADD COLUMN runtime_route_key TEXT NOT NULL DEFAULT ''",
-    ] {
-        sqlx::query(statement).execute(pool).await.unwrap();
-    }
-    sqlx::query("UPDATE schema_migrations SET version = 18 WHERE version = 19")
-        .execute(pool)
-        .await
-        .unwrap();
-    let template_id = Uuid::now_v7().to_string();
-    sqlx::query("INSERT INTO workspace_templates (id, installation_id, organization_id, name, runtime_profile, image, access_mode, cpu_millis, memory_mib, gpu_count, disk_gib, enabled, created_at, updated_at) VALUES (?1, 'profile-migration', NULL, 'Legacy Rust', 'coder_token_center_rust_dev', 'registry.example/rust:legacy', 'internal', 2000, 4096, 0, 40, 1, 1, 1)")
-        .bind(&template_id)
-        .execute(pool)
-        .await
-        .unwrap();
-    database.migrate().await.unwrap();
-
-    let template = database
-        .get_workspace_template(Uuid::parse_str(&template_id).unwrap())
-        .await
-        .unwrap();
-    assert_eq!(template.name, "Legacy Rust");
-    assert_eq!(template.template.workspace_user, "rust-dev");
-    assert_eq!(template.template.workspace_home, "/home/rust-dev");
-    assert!(
-        template
-            .yaml
-            .contains("apiVersion: workspace.memeloop.dev/v1")
-    );
-    assert!(!template.yaml.contains("runtimeProfile"));
-    assert!(!template.yaml.contains("runtime_profile"));
-    assert_eq!(database.schema_version().await.unwrap(), 19);
-}
-
-#[tokio::test]
 async fn workspace_lease_serializes_distinct_jobs_for_the_same_workspace() {
     let database = database().await;
     let workspace_id = Uuid::now_v7();

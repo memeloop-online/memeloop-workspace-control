@@ -17,7 +17,7 @@ fn yaml_round_trip_contains_only_explicit_template_fields() {
     let document = WorkspaceTemplateDocument::new("Node.js 开发", spec);
     let yaml = document.to_yaml().unwrap();
     assert!(!yaml.contains("runtimeProfile"));
-    assert!(!yaml.contains("runtime_profile"));
+    assert!(!yaml.contains("removed_profile"));
     assert!(yaml.contains("access_mode: internal"));
     assert!(yaml.contains("workspace_user: node-dev"));
     assert!(yaml.contains("preserve_home_ownership: false"));
@@ -26,9 +26,9 @@ fn yaml_round_trip_contains_only_explicit_template_fields() {
     assert!(yaml.contains("buildkit_cache_gib: 8"));
     assert!(!yaml.contains("preserve_home_root"));
     assert_eq!(WorkspaceTemplateDocument::parse(&yaml).unwrap(), document);
-    let legacy_yaml = yaml.replace("preserve_home_ownership", "preserve_home_root");
+    let invalid_yaml = yaml.replace("preserve_home_ownership", "preserve_home_root");
     assert_eq!(
-        WorkspaceTemplateDocument::parse(&legacy_yaml).unwrap(),
+        WorkspaceTemplateDocument::parse(&invalid_yaml).unwrap(),
         document
     );
     let json = serde_json::to_value(&document.spec).unwrap();
@@ -111,12 +111,12 @@ fn historical_environment_parses_but_current_authoring_rejects_it() {
         },
     );
     spec.environment
-        .insert("LEGACY_TOKEN".to_owned(), "legacy-value".to_owned());
-    let document = WorkspaceTemplateDocument::new("Legacy", spec);
+        .insert("EXAMPLE_TOKEN".to_owned(), "example-value".to_owned());
+    let document = WorkspaceTemplateDocument::new("Example", spec);
     let yaml = document.to_yaml().unwrap();
 
     let parsed = WorkspaceTemplateDocument::parse(&yaml).unwrap();
-    assert_eq!(parsed.spec.environment["LEGACY_TOKEN"], "legacy-value");
+    assert_eq!(parsed.spec.environment["EXAMPLE_TOKEN"], "example-value");
     assert_eq!(
         parsed.validate_authoring(),
         Err(TemplateError::ReadOnlyEnvironment)

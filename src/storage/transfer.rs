@@ -6,10 +6,8 @@ use sqlx::Row;
 
 use crate::{
     config::InstallationId,
-    quota::Resources,
     templates::WorkspaceTemplateDocument,
     workspace_runtime::{WorkspaceNamespaceScope, WorkspaceRuntimeIdentity},
-    workspaces::AccessMode,
 };
 use uuid::Uuid;
 
@@ -92,8 +90,8 @@ impl Database {
                 configured: installation_id.to_string(),
             });
         }
-        if snapshot.schema_version > self.schema_version().await? {
-            return Err(StorageError::SnapshotSchemaTooNew(snapshot.schema_version));
+        if snapshot.schema_version != self.schema_version().await? {
+            return Err(StorageError::UnsupportedSnapshotSchema);
         }
 
         let plugin_tables = plugin_state::prepare_import(snapshot)?;
@@ -109,25 +107,16 @@ impl Database {
                 .and_then(|tables| tables.get(*table))
                 .or_else(|| snapshot.tables.get(*table));
             let Some(rows) = rows else {
-                if (*table == "workspace_injection_refs" && snapshot.schema_version < 7)
-                    || (*table == "plugin_configurations" && snapshot.schema_version < 11)
-                    || (plugin_state::is_plugin_table(table) && snapshot.schema_version < 13)
-                    || (*table == "user_api_keys" && snapshot.schema_version < 14)
-                    || (*table == "workspace_port_mappings" && snapshot.schema_version < 15)
-                {
-                    continue;
-                }
                 return Err(StorageError::SnapshotMissingTable((*table).to_owned()));
             };
             validate_snapshot_row_installations(table, rows, installation_id)?;
             if rows.is_empty() {
                 continue;
             }
-            let rows = normalize_snapshot_rows(table, rows, snapshot.schema_version)?;
             if *table == "workspaces" {
-                validate_snapshot_workspace_rows(&rows, installation_id)?;
+                validate_snapshot_workspace_rows(rows, installation_id)?;
             }
-            let json = serde_json::to_string(&rows)?;
+            let json = serde_json::to_string(rows)?;
             let sql = format!(
                 "INSERT INTO {table} SELECT * FROM json_populate_recordset(NULL::{table}, $1::json)"
             );
@@ -243,108 +232,8 @@ async fn validate_imported_workspaces(
     Ok(())
 }
 
-fn normalize_snapshot_rows(
-    table: &str,
-    rows: &[Value],
-    schema_version: i64,
-) -> Result<Vec<Value>, StorageError> {
-    match table {
-        "user_api_keys" => Ok(normalize_snapshot_api_key_rows(rows, schema_version)),
-        "workspace_templates" => normalize_template_rows(rows, schema_version),
-        "workspaces" => normalize_workspace_rows(rows, schema_version),
-        _ => Ok(rows.to_vec()),
-    }
-}
-
-fn normalize_template_rows(
-    rows: &[Value],
-    schema_version: i64,
-) -> Result<Vec<Value>, StorageError> {
-    rows.iter()
-        .cloned()
-        .map(|row| normalize_template_row(row, schema_version, "template_yaml"))
-        .collect()
-}
-
-fn normalize_workspace_rows(
-    rows: &[Value],
-    schema_version: i64,
-) -> Result<Vec<Value>, StorageError> {
-    rows.iter()
-        .cloned()
-        .map(|row| {
-            let row = normalize_template_row(row, schema_version, "template_snapshot_yaml")?;
-            Ok(row)
-        })
-        .collect()
-}
-
-fn normalize_template_row(
-    mut row: Value,
-    schema_version: i64,
-    yaml_key: &str,
-) -> Result<Value, StorageError> {
-    let Some(object) = row.as_object_mut() else {
-        return Ok(row);
-    };
-    let historical_profile = object
-        .remove("runtime_profile")
-        .and_then(|value| value.as_str().map(str::to_owned));
-    if schema_version < 10 || missing_yaml(object, yaml_key) {
-        let yaml = legacy_template_yaml(object, historical_profile.as_deref())?;
-        object.insert(yaml_key.to_owned(), Value::String(yaml));
-    }
-    Ok(row)
-}
-
-fn missing_yaml(object: &Map<String, Value>, yaml_key: &str) -> bool {
-    object
-        .get(yaml_key)
-        .and_then(Value::as_str)
-        .is_none_or(str::is_empty)
-}
-
-fn legacy_template_yaml(
-    object: &Map<String, Value>,
-    historical_profile: Option<&str>,
-) -> Result<String, StorageError> {
-    let access = string_field(object, "access_mode")
-        .and_then(AccessMode::from_database)
-        .ok_or(StorageError::InvalidTemplate)?;
-    let resources = Resources {
-        cpu_millis: unsigned_field(object, "cpu_millis")?,
-        memory_mib: unsigned_field(object, "memory_mib")?,
-        gpu_count: u32::try_from(unsigned_field(object, "gpu_count")?)
-            .map_err(|_| StorageError::InvalidTemplate)?,
-        disk_gib: unsigned_field(object, "disk_gib")?,
-    };
-    let spec = super::template_migration::from_legacy(
-        historical_profile.unwrap_or("standard"),
-        required_string_field(object, "image")?,
-        access,
-        resources,
-    )?;
-    WorkspaceTemplateDocument::new(required_string_field(object, "name")?, spec)
-        .to_yaml()
-        .map_err(|_| StorageError::InvalidTemplate)
-}
-
 fn string_field<'a>(object: &'a Map<String, Value>, key: &str) -> Option<&'a str> {
     object.get(key).and_then(Value::as_str)
-}
-
-fn required_string_field<'a>(
-    object: &'a Map<String, Value>,
-    key: &str,
-) -> Result<&'a str, StorageError> {
-    string_field(object, key).ok_or(StorageError::InvalidTemplate)
-}
-
-fn unsigned_field(object: &Map<String, Value>, key: &str) -> Result<u64, StorageError> {
-    object
-        .get(key)
-        .and_then(Value::as_u64)
-        .ok_or(StorageError::InvalidTemplate)
 }
 
 fn required_workspace_string_field(
@@ -354,29 +243,6 @@ fn required_workspace_string_field(
     string_field(object, key)
         .map(str::to_owned)
         .ok_or(StorageError::InvalidWorkspace)
-}
-
-/// Older snapshots either had no API-key grants or used a wildcard/unbounded
-/// grant. Such token hashes must never become usable while importing data into
-/// a current installation. Keep users and audit history, but omit unsafe key
-/// records entirely.
-fn normalize_snapshot_api_key_rows(
-    rows: &[serde_json::Value],
-    schema_version: i64,
-) -> Vec<serde_json::Value> {
-    if schema_version < 15 {
-        return Vec::new();
-    }
-
-    rows.iter()
-        .filter_map(|row| {
-            let object = row.as_object()?;
-            let scopes_json = object.get("scopes_json")?.as_str()?;
-            let scopes = serde_json::from_str::<Vec<crate::auth::ApiKeyScope>>(scopes_json).ok()?;
-            let has_expiry = object.get("expires_at").is_some_and(|value| value.is_i64());
-            (!scopes.is_empty() && has_expiry).then(|| row.clone())
-        })
-        .collect()
 }
 
 const IMPORT_ORDER: &[&str] = &[
@@ -520,81 +386,12 @@ const EXPORT_QUERIES: &[(&str, &str)] = &[
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        normalize_snapshot_rows, validate_snapshot_row_installations,
-        validate_snapshot_workspace_rows,
-    };
+    use super::{validate_snapshot_row_installations, validate_snapshot_workspace_rows};
     use crate::{config::InstallationId, workspace_runtime::workspace_short_id_for};
     use uuid::Uuid;
 
     #[test]
-    fn old_catalog_rows_receive_template_yaml() {
-        for table in ["workspace_templates", "workspaces"] {
-            let rows = vec![serde_json::json!({
-                "id": "legacy", "installation_id": "snapshot-test", "short_id": "abc123",
-                "name": "Legacy", "image": "registry.example/dev:latest",
-                "access_mode": "internal", "cpu_millis": 1000, "memory_mib": 2048,
-                "gpu_count": 0, "disk_gib": 20, "runtime_profile": "coder_rust_dev"
-            })];
-            let normalized = normalize_snapshot_rows(table, &rows, 7).unwrap();
-            let yaml_key = if table == "workspace_templates" {
-                "template_yaml"
-            } else {
-                "template_snapshot_yaml"
-            };
-            assert!(
-                normalized[0][yaml_key]
-                    .as_str()
-                    .unwrap()
-                    .contains("WorkspaceTemplate")
-            );
-            assert!(normalized[0].get("runtime_profile").is_none());
-            assert!(
-                normalized[0][yaml_key]
-                    .as_str()
-                    .unwrap()
-                    .contains("rust-dev")
-            );
-            assert!(rows[0].get("runtime_profile").is_some());
-            if table == "workspaces" {
-                for legacy_field in [
-                    "runtime_naming_scheme",
-                    "runtime_resource_prefix",
-                    "runtime_route_key",
-                ] {
-                    assert!(normalized[0].get(legacy_field).is_none());
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn v14_api_keys_are_not_imported_without_explicit_bounded_grants() {
-        let rows = vec![serde_json::json!({
-            "id": "key", "installation_id": "test", "user_id": "user",
-            "name": "Imported key", "token_prefix": "mwc_…", "token_hash": "hash",
-            "last_used_at": null, "created_at": 1, "revoked_at": null
-        })];
-        let normalized = normalize_snapshot_rows("user_api_keys", &rows, 14).unwrap();
-        assert!(normalized.is_empty());
-    }
-
-    #[test]
-    fn unbounded_or_wildcard_snapshot_keys_are_not_imported() {
-        let rows = vec![
-            serde_json::json!({
-                "id": "wildcard", "scopes_json": "[\"*\"]", "expires_at": 2_000_000_000
-            }),
-            serde_json::json!({
-                "id": "unbounded", "scopes_json": "[\"read_workspace\"]", "expires_at": null
-            }),
-        ];
-        let normalized = normalize_snapshot_rows("user_api_keys", &rows, 16).unwrap();
-        assert!(normalized.is_empty());
-    }
-
-    #[test]
-    fn single_model_runtime_identity_is_validated_before_insert() {
+    fn runtime_placement_is_validated_before_import() {
         let installation: InstallationId = "snapshot-test".parse().unwrap();
         let id = Uuid::parse_str("018f0000-0000-7000-8000-000000000001").unwrap();
         let short_id = workspace_short_id_for(id);
@@ -603,29 +400,6 @@ mod tests {
             "runtime_namespace_scope": "dedicated", "runtime_namespace": ""
         })];
         assert!(validate_snapshot_workspace_rows(&rows, &installation).is_err());
-    }
-
-    #[test]
-    fn removed_dual_model_runtime_fields_are_rejected() {
-        let installation: InstallationId = "snapshot-test".parse().unwrap();
-        let id = Uuid::parse_str("018f0000-0000-7000-8000-000000000001").unwrap();
-        let short_id = workspace_short_id_for(id);
-        let namespace = installation.workspace_namespace(&short_id).unwrap();
-        for legacy_field in [
-            "runtime_naming_scheme",
-            "runtime_resource_prefix",
-            "runtime_route_key",
-        ] {
-            let mut row = serde_json::json!({
-                "id": id, "installation_id": installation.as_str(), "short_id": short_id.clone(),
-                "runtime_namespace_scope": "dedicated", "runtime_namespace": namespace.clone()
-            });
-            row.as_object_mut().unwrap().insert(
-                legacy_field.to_owned(),
-                serde_json::Value::String("untrusted".to_owned()),
-            );
-            assert!(validate_snapshot_workspace_rows(&[row], &installation).is_err());
-        }
     }
 
     #[test]
