@@ -106,13 +106,18 @@ product terminology.
   - ttyd: `sha256:83a512e43b3f624e4476cde2cbf08f8b3c6b6b6c1b089de9cfdfc74b4b99d6ce`;
   - SSH jump host: `sha256:1b2729514fde871412e1fefb0719e855a4bde1c02cc52e6e71b32518084601d2`.
 - The follow-up pure-schema-20 release is prepared on local branch `final-schema20-baseline` at
-  `d5d2995` (base cleanup `e20fc54`). It deletes the 19-to-20 bridge, its module/error, the old
+  `6304b34` (base cleanup `e20fc54`). It deletes the 19-to-20 bridge, its module/error, the old
   health-route tombstone, and transition-specific template checks. A generic recursive schema-20
   YAML validator rejects unknown fields without naming retired fields. Independent review found no
   P0/P1/P2 issue; frontend 53 tests, plugin sandbox, TypeScript checking, production build, and the
   retired-term scan pass. Keep this branch local until the bridge release has upgraded production.
 - Bootstrap regression coverage explicitly preserves Codex sessions, logs, SQLite/WAL, config, and
-  auth files. Only `.codex/tmp` and `.codex/.tmp` use bounded Pod-lifetime scratch storage.
+  auth files, using the concrete `logs_2.sqlite`/SHM/WAL and `session_index.jsonl` names. Only
+  `.codex/tmp` and `.codex/.tmp` use bounded Pod-lifetime scratch storage.
+- The bridge rollout is staged but not pushed or deployed on GitOps branch `mwc-schema20-bridge`
+  at `01d4065`. Helm lint/render and diff checks pass. It pins source `54bd4c5` and the verified
+  control-plane, ttyd, and disabled jump-host digests; the workspace-base image remains correctly
+  managed through the database image policy rather than a nonexistent Helm value.
 - Another Codex task is actively using ports `31871` and `32671`. Normal `.codex` session, WAL,
   and log writes are expected and safe. Do not stop, restart, or switch those two workspaces until
   that task reports completion.
