@@ -87,5 +87,23 @@ fn sshd_set_env_quotes_spaces_and_quotation_marks() {
             .contains("\"BUILDKIT_HOST=unix:///run/mwc-buildkit/runtime/buildkit/buildkitd.sock\"")
     );
     assert!(config.contains("\"TOOL_FLAGS=--name \\\"hello world\\\"\""));
-    assert!(config.contains("\"PATH=/run/mwc-buildkit/bin:"));
+    assert!(config.contains(
+        "\"PATH=/home/node-dev/.local/bin:/home/node-dev/.local/share/pnpm:/home/node-dev/.cargo/bin:/usr/local/cargo/bin:/run/mwc-buildkit/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\""
+    ));
+}
+
+#[test]
+fn sshd_set_env_sets_a_complete_path_for_non_buildkit_images() {
+    let mut template = template();
+    template.workspace_home = "/home/rust-dev".to_owned();
+    template.environment.insert(
+        "PATH".to_owned(),
+        "/opt/workspace-tools:/usr/local/bin:/bin".to_owned(),
+    );
+
+    let config = WorkspacePod::from_template(&template).ssh_set_env();
+
+    assert!(config.contains(
+        "\"PATH=/home/rust-dev/.local/bin:/home/rust-dev/.local/share/pnpm:/home/rust-dev/.cargo/bin:/usr/local/cargo/bin:/run/mwc-buildkit/bin:/opt/workspace-tools:/usr/local/bin:/bin\""
+    ));
 }

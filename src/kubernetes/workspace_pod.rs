@@ -26,7 +26,9 @@ const BOOTSTRAP: &str = "/etc/workspace-platform/mwc-workspace-bootstrap";
 const BUILD_SCRATCH: &str = "/var/lib/mwc/build-scratch";
 const CODEX_SCRATCH: &str = "/var/lib/mwc/codex-scratch";
 const BUILDKIT_VOLUME_MOUNT: &str = "/run/mwc-buildkit";
+const BUILDKIT_BIN: &str = "/run/mwc-buildkit/bin";
 const BUILDKIT_RUNTIME: &str = "/run/mwc-buildkit/runtime";
+const DEFAULT_SSH_PATH: &str = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 const INTERNAL_PLATFORM_ENVIRONMENT: [&str; 7] = [
     "MWC_WORKSPACE_USER",
     "MWC_WORKSPACE_HOME",
@@ -76,17 +78,8 @@ impl<'a> WorkspacePod<'a> {
 
     pub fn ssh_set_env(self) -> String {
         let mut environment = self.template.environment.clone();
-        if self.template.buildkit {
-            let path = environment.entry("PATH".to_owned()).or_insert_with(|| {
-                "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin".to_owned()
-            });
-            if !path
-                .split(':')
-                .any(|entry| entry == "/run/mwc-buildkit/bin")
-            {
-                path.insert_str(0, "/run/mwc-buildkit/bin:");
-            }
-        }
+        let configured_path = environment.remove("PATH");
+        environment.insert("PATH".to_owned(), self.ssh_path(configured_path.as_deref()));
         for variable in self.session_platform_env() {
             if let Some(value) = variable.value {
                 environment.insert(variable.name, value);
@@ -101,6 +94,23 @@ impl<'a> WorkspacePod<'a> {
         } else {
             format!("SetEnv {}\n", assignments.join(" "))
         }
+    }
+
+    fn ssh_path(self, configured_path: Option<&str>) -> String {
+        let mut entries = vec![
+            format!("{}/.local/bin", self.home),
+            format!("{}/.local/share/pnpm", self.home),
+            format!("{}/.cargo/bin", self.home),
+            "/usr/local/cargo/bin".to_owned(),
+            BUILDKIT_BIN.to_owned(),
+        ];
+        let configured_path = configured_path.unwrap_or(DEFAULT_SSH_PATH);
+        for entry in configured_path.split(':').filter(|entry| !entry.is_empty()) {
+            if !entries.iter().any(|existing| existing == entry) {
+                entries.push(entry.to_owned());
+            }
+        }
+        entries.join(":")
     }
 
     pub fn resource_limits(&self) -> BTreeMap<String, Quantity> {
