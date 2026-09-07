@@ -105,17 +105,19 @@ product terminology.
   - workspace base: `sha256:bfd8ec19f693d1ccff258bf7c6d3c69b9798e34f8dbbcc7b9ce30ef96184712c`;
   - ttyd: `sha256:83a512e43b3f624e4476cde2cbf08f8b3c6b6b6c1b089de9cfdfc74b4b99d6ce`;
   - SSH jump host: `sha256:1b2729514fde871412e1fefb0719e855a4bde1c02cc52e6e71b32518084601d2`.
-- The follow-up pure-schema-20 release is prepared on local branch `final-schema20-baseline` at
-  `6304b34` (base cleanup `e20fc54`). It deletes the 19-to-20 bridge, its module/error, the old
+- The follow-up pure-schema-20 release is prepared on branch `final-schema20-baseline` at
+  `24e7318` (base cleanup `09d6870`). It deletes the 19-to-20 bridge, its module/error, the old
   health-route tombstone, and transition-specific template checks. A generic recursive schema-20
   YAML validator rejects unknown fields without naming retired fields. Independent review found no
   P0/P1/P2 issue; frontend 53 tests, plugin sandbox, TypeScript checking, production build, and the
-  retired-term scan pass. Keep this branch local until the bridge release has upgraded production.
+  retired-term scan pass. Production remains pinned to an immutable older revision, so publishing
+  this branch cannot bypass the required bridge rollout.
 - Bootstrap regression coverage explicitly preserves Codex sessions, logs, SQLite/WAL, config, and
   auth files, using the concrete `logs_2.sqlite`/SHM/WAL and `session_index.jsonl` names. Only
   `.codex/tmp` and `.codex/.tmp` use bounded Pod-lifetime scratch storage.
 - The bridge rollout is staged but not pushed or deployed on GitOps branch `mwc-schema20-bridge`
-  at `01d4065`. Helm lint/render and diff checks pass. It pins source `54bd4c5` and the verified
+  at `5fe5848`, rebased on current GitOps `7900c2a`. Helm lint/render and diff checks pass. It pins
+  source `54bd4c5` and the verified
   control-plane, ttyd, and disabled jump-host digests; the workspace-base image remains correctly
   managed through the database image policy rather than a nonexistent Helm value.
 - Another Codex task is actively using ports `31871` and `32671`. Normal `.codex` session, WAL,
@@ -125,6 +127,9 @@ product terminology.
   workspace-base policies and six unreferenced old development-image policies are disabled. The
   two old policies still referenced by `maintainance` and `rust-dev-test` remain enabled until
   their coordinated upgrade.
+- A live encrypted schema-19 export was preflighted without printing values: all three template
+  YAML documents and four workspace snapshots parse, all seven old environment maps are empty,
+  and the seven ownership fields are safe for the bridge transaction to remove.
 
 ## Next actions
 
