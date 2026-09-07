@@ -1011,7 +1011,7 @@ fn node_template_reuses_the_existing_image_with_platform_bootstrap() {
     let sshd_config = &resources.workspace_config.data.as_ref().unwrap()["sshd_config"];
     assert_eq!(sshd_config.matches("SetEnv ").count(), 1);
     assert!(sshd_config.contains(
-        "\"PATH=/run/mwc-buildkit/bin:/usr/local/bin:/usr/local/sbin:/home/node-dev/.local/bin"
+        "\"PATH=/home/node-dev/.local/bin:/home/node-dev/.local/share/pnpm:/home/node-dev/.cargo/bin:/usr/local/cargo/bin:/run/mwc-buildkit/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin\""
     ));
     assert!(
         sshd_config
@@ -1019,7 +1019,7 @@ fn node_template_reuses_the_existing_image_with_platform_bootstrap() {
     );
     assert!(
         resources.workspace_config.data.as_ref().unwrap()["mwc-workspace-bootstrap"]
-            .contains("apt-get install -y --no-install-recommends jq openssh-server")
+            .contains("workspace image contract requires sshd and jq")
     );
     assert!(
         resources.workspace_config.data.as_ref().unwrap()["mwc-workspace-bootstrap"]
@@ -1043,10 +1043,15 @@ fn node_template_reuses_the_existing_image_with_platform_bootstrap() {
     assert!(bootstrap.contains("secret) mode=384"));
     assert!(bootstrap.contains("config_map) mode=420"));
     assert!(bootstrap.contains("prepare_runtime_sshd_config"));
+    assert!(bootstrap.contains(
+        "value=\"$workspace_root/.local/bin:$workspace_root/.local/share/pnpm:$workspace_root/.cargo/bin:/usr/local/cargo/bin:/run/mwc-buildkit/bin:$value\""
+    ));
     assert!(bootstrap.contains("mark_home_degraded"));
     assert!(bootstrap.contains("regenerable_link_best_effort"));
     assert!(bootstrap.contains("release_reserve_if_critical"));
     assert!(bootstrap.contains("exec /usr/sbin/sshd -D -e -f \"$runtime_sshd_config\""));
+    assert!(!bootstrap.contains("compat-serve"));
+    assert!(!bootstrap.contains("apt-get"));
 }
 
 #[test]

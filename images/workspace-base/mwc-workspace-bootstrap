@@ -48,14 +48,13 @@ prepare_layout() {
         regenerable_link_best_effort "$workspace_root/.cache" "$build_scratch/cache"
         regenerable_link_best_effort "$workspace_root/.cargo/registry" "$build_scratch/cargo-registry"
         regenerable_link_best_effort "$workspace_root/.cargo/git" "$build_scratch/cargo-git"
-        regenerable_link_best_effort "$workspace_root/.codex/.tmp" "$codex_scratch"
     else
         install -d -m 0700 -o "$workspace_user" -g "$workspace_group" "$state_dir"
         prepare_regenerable_link "$workspace_root/.cache" "$build_scratch/cache"
         prepare_regenerable_link "$workspace_root/.cargo/registry" "$build_scratch/cargo-registry"
         prepare_regenerable_link "$workspace_root/.cargo/git" "$build_scratch/cargo-git"
-        prepare_regenerable_link "$workspace_root/.codex/.tmp" "$codex_scratch"
     fi
+    codex_scratch_link_best_effort "$workspace_root/.codex/.tmp" "$codex_scratch"
     if [ "${MWC_BUILDKIT_ENABLED:-false}" = true ]; then
         regenerable_link_best_effort \
             "$workspace_root/.local/bin/buildctl" "/run/mwc-buildkit/bin/buildctl"
@@ -78,6 +77,45 @@ regenerable_link_best_effort() {
     if ! prepare_regenerable_link "$1" "$2"; then
         mark_home_degraded
     fi
+}
+
+codex_scratch_link_best_effort() {
+    if ! reset_codex_scratch_link "$1" "$2"; then
+        mark_home_degraded
+    fi
+}
+
+clear_directory() {
+    directory=$1
+    if [ -L "$directory" ] || [ ! -d "$directory" ]; then
+        return 1
+    fi
+    find "$directory" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+}
+
+reset_codex_scratch_link() {
+    link_path=$1
+    target=$2
+    link_parent=$(dirname "$link_path")
+    if [ -L "$link_parent" ] || { [ -e "$link_parent" ] && [ ! -d "$link_parent" ]; }; then
+        return 1
+    fi
+    if [ ! -d "$link_parent" ] && ! install -d -m 0700 -o "$workspace_user" -g "$workspace_group" "$link_parent"; then
+        return 1
+    fi
+    if ! clear_directory "$target"; then
+        return 1
+    fi
+    if [ -L "$link_path" ]; then
+        rm -f -- "$link_path" || return 1
+    elif [ -d "$link_path" ]; then
+        clear_directory "$link_path" || return 1
+        rmdir -- "$link_path" || return 1
+    elif [ -e "$link_path" ]; then
+        rm -f -- "$link_path" || return 1
+    fi
+    ln -s -- "$target" "$link_path" || return 1
+    chown -h "$workspace_user:$workspace_group" "$link_path"
 }
 
 prepare_regenerable_link() {
@@ -290,29 +328,18 @@ prepare_runtime_sshd_config() {
             *) echo "invalid environment injection object" >&2; exit 1 ;;
         esac
         value=$(cat "$source")
-        if [ "$name" = PATH ] && [ "${MWC_BUILDKIT_ENABLED:-false}" = true ]; then
-            value="/run/mwc-buildkit/bin:$value"
+        if [ "$name" = PATH ]; then
+            value="$workspace_root/.local/bin:$workspace_root/.local/share/pnpm:$workspace_root/.cargo/bin:/usr/local/cargo/bin:/run/mwc-buildkit/bin:$value"
         fi
         escaped=$(printf '%s=%s' "$name" "$value" | sed 's/\\/\\\\/g; s/"/\\"/g')
         printf 'SetEnv "%s"\n' "$escaped" >> "$runtime_sshd_config"
     done
-    if [ "${MWC_BUILDKIT_ENABLED:-false}" = true ] \
-        && ! grep -q '"PATH=' "$runtime_sshd_config"; then
-        escaped_path=$(printf '%s' "/run/mwc-buildkit/bin:$PATH" | sed 's/\\/\\\\/g; s/"/\\"/g')
-        printf 'SetEnv "PATH=%s"\n' "$escaped_path" >> "$runtime_sshd_config"
-    fi
 }
 
-install_compat_openssh() {
+verify_runtime_dependencies() {
     if [ ! -x /usr/sbin/sshd ] || ! command -v jq >/dev/null 2>&1; then
-        if ! command -v apt-get >/dev/null 2>&1; then
-            echo "workspace image must provide sshd and jq, or an apt-compatible package manager" >&2
-            exit 69
-        fi
-        export DEBIAN_FRONTEND=noninteractive
-        apt-get update
-        apt-get install -y --no-install-recommends jq openssh-server
-        rm -rf /var/lib/apt/lists/*
+        echo "workspace image contract requires sshd and jq" >&2
+        exit 69
     fi
     mkdir -p /run/sshd
 }
@@ -321,17 +348,10 @@ case "${1:-serve}" in
     prepare-layout) prepare_layout ;;
     prepare) prepare ;;
     serve)
-        install_compat_openssh
+        verify_runtime_dependencies
         prepare
         storage_pressure_monitor &
         exec /usr/sbin/sshd -D -e -f "$runtime_sshd_config"
         ;;
-    # Kept as a command alias so an already-created Pod template can roll forward safely.
-    compat-serve)
-        install_compat_openssh
-        prepare
-        storage_pressure_monitor &
-        exec /usr/sbin/sshd -D -e -f "$runtime_sshd_config"
-        ;;
-    *) echo "usage: mwc-workspace-bootstrap prepare-layout|prepare|serve|compat-serve" >&2; exit 64 ;;
+    *) echo "usage: mwc-workspace-bootstrap prepare-layout|prepare|serve" >&2; exit 64 ;;
 esac
