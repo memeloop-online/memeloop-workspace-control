@@ -22,7 +22,7 @@ async fn seeded_database() -> (Database, Uuid, Uuid, Uuid) {
         .unwrap();
 
     let user = database
-        .create_user("Port Mapping User", USER_TOKEN, true, 100)
+        .create_user_with_initial_key("Port Mapping User", USER_TOKEN, true, memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(true), 31_536_000, 100)
         .await
         .unwrap();
     let organization = database

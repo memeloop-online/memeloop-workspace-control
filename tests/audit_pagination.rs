@@ -46,11 +46,11 @@ async fn audit_api_pages_filters_and_enforces_organization_rbac() {
         .await
         .unwrap();
     let member = database
-        .create_user("Audit Member", MEMBER_TOKEN, false, 2)
+        .create_user_with_initial_key("Audit Member", MEMBER_TOKEN, false, memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(false), 31_536_000, 2)
         .await
         .unwrap();
     database
-        .create_user("System Admin", SYSTEM_TOKEN, true, 3)
+        .create_user_with_initial_key("System Admin", SYSTEM_TOKEN, true, memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(true), 31_536_000, 3)
         .await
         .unwrap();
     let organization = database

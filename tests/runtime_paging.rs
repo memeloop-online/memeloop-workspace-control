@@ -34,7 +34,7 @@ async fn test_app() -> (Router, Database, Uuid) {
         .await
         .unwrap();
     let admin = database
-        .create_user("API Admin", ADMIN_TOKEN, true, 1)
+        .create_user_with_initial_key("API Admin", ADMIN_TOKEN, true, memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(true), 31_536_000, 1)
         .await
         .unwrap();
     let config = AppConfig {
@@ -283,7 +283,7 @@ async fn workspace_runtime_ids_are_scoped_to_the_requested_organization() {
     );
 
     let member = database
-        .create_user("Runtime member", MEMBER_TOKEN, false, 30)
+        .create_user_with_initial_key("Runtime member", MEMBER_TOKEN, false, memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(false), 31_536_000, 30)
         .await
         .unwrap();
     database
@@ -592,12 +592,7 @@ async fn postgres_workspace_page_summary_matches_the_filtered_collection() {
         .await
         .unwrap();
     let admin = database
-        .create_user(
-            "PostgreSQL summary admin",
-            &format!("summary-pg-admin-{suffix}-000000000000000000000000"),
-            true,
-            1,
-        )
+        .create_user_with_initial_key("PostgreSQL summary admin", &format!("summary-pg-admin-{suffix}-000000000000000000000000"), true, memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(true), 31_536_000, 1)
         .await
         .unwrap();
     let (organization_id, template_id) =

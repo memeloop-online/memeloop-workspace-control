@@ -308,7 +308,9 @@ async fn preview_target(
         ));
     }
     let workspace = state.database.get_workspace(workspace_id).await?;
-    if !actor.allows(Permission::ReadWorkspace, workspace.organization_id) {
+    if !actor.allows(Permission::ReadWorkspace, workspace.organization_id)
+        || !actor.may_access_workspace_template(workspace.template_id)
+    {
         return Err(ApiError::Forbidden);
     }
     if request
@@ -350,7 +352,11 @@ async fn authorize(
             actor.allows(permission, scope_ref.scope_id)
                 && (!locked || actor.allows(Permission::ManageLockedInjections, scope_ref.scope_id))
         }
-        InjectionScope::User => actor.may_manage_system() || actor.user_id == scope_ref.scope_id,
+        InjectionScope::User => {
+            !write && (actor.may_manage_system() || actor.user_id == scope_ref.scope_id)
+                || write && !actor.has_template_restriction()
+                    && (actor.may_manage_system() || actor.user_id == scope_ref.scope_id)
+        }
         InjectionScope::Workspace => {
             let workspace = state.database.get_workspace(scope_ref.scope_id).await?;
             actor.allows(

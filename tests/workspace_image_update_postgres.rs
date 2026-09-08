@@ -46,12 +46,7 @@ async fn postgres_updates_a_locked_stopped_workspace_image() {
         .await
         .unwrap();
     let admin = database
-        .create_user(
-            "Admin",
-            "image-update-pg-admin-000000000000000000000000",
-            true,
-            1,
-        )
+        .create_user_with_initial_key("Admin", "image-update-pg-admin-000000000000000000000000", true, memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(true), 31_536_000, 1)
         .await
         .unwrap();
     let organization = database

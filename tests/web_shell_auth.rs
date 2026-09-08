@@ -36,7 +36,7 @@ async fn browser_access_tickets_are_scoped_and_consumed_once() {
         .await
         .unwrap();
     let user = database
-        .create_user("Shell User", USER_TOKEN, true, 100)
+        .create_user_with_initial_key("Shell User", USER_TOKEN, true, memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(true), 31_536_000, 100)
         .await
         .unwrap();
     let organization = database

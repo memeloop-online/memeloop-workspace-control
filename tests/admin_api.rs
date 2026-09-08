@@ -35,11 +35,11 @@ async fn management_api_enforces_system_and_organization_boundaries() {
         .unwrap();
     database.migrate().await.unwrap();
     let admin = database
-        .create_user("Admin", ADMIN_TOKEN, true, 100)
+        .create_user_with_initial_key("Admin", ADMIN_TOKEN, true, memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(true), 31_536_000, 100)
         .await
         .unwrap();
     database
-        .create_user("Member", MEMBER_TOKEN, false, 101)
+        .create_user_with_initial_key("Member", MEMBER_TOKEN, false, memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(false), 31_536_000, 101)
         .await
         .unwrap();
     let organization = database
@@ -463,7 +463,7 @@ async fn admin_user_initial_key_policy_rejects_escalation_and_invalid_expiry() {
         .await
         .unwrap();
     database
-        .create_user("Bootstrap administrator", BOOTSTRAP_ADMIN_TOKEN, true, 101)
+        .create_user_with_initial_key("Bootstrap administrator", BOOTSTRAP_ADMIN_TOKEN, true, memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(true), 31_536_000, 101)
         .await
         .unwrap();
     let app = router(Arc::new(AppState::new(
@@ -534,7 +534,7 @@ async fn admin_user_initial_key_policy_rejects_escalation_and_invalid_expiry() {
                         "display_name": "Escalated user",
                         "token": NEXT_TOKEN,
                         "scopes": ["manage_system", "read_workspace"],
-                        "expires_at": 1_900_000_000,
+                        "expires_at": 31_536_000,
                     })
                     .to_string(),
                 ))
@@ -580,7 +580,7 @@ async fn creating_a_user_with_an_organization_membership_is_atomic_and_authorize
         .unwrap();
     database.migrate().await.unwrap();
     let administrator = database
-        .create_user("Administrator", ADMIN_TOKEN, true, now)
+        .create_user_with_initial_key("Administrator", ADMIN_TOKEN, true, memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(true), now + 3_600, now)
         .await
         .unwrap();
     let organization = database
@@ -762,7 +762,7 @@ async fn user_and_organization_management_are_paginated_and_safe() {
         .unwrap();
     database.migrate().await.unwrap();
     let admin = database
-        .create_user("Admin", ADMIN_TOKEN, true, 1)
+        .create_user_with_initial_key("Admin", ADMIN_TOKEN, true, memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(true), 31_536_000, 1)
         .await
         .unwrap();
     let organization = database
@@ -794,12 +794,7 @@ async fn user_and_organization_management_are_paginated_and_safe() {
     )));
 
     storage
-        .create_user(
-            "Admin Two",
-            "admin-two-api-token-0000000000000000000000000",
-            false,
-            3,
-        )
+        .create_user_with_initial_key("Admin Two", "admin-two-api-token-0000000000000000000000000", false, memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(false), 31_536_000, 3)
         .await
         .unwrap();
 
@@ -948,7 +943,7 @@ async fn user_page_search_treats_like_metacharacters_literally() {
         .unwrap();
     database.migrate().await.unwrap();
     database
-        .create_user("Search admin", ADMIN_TOKEN, true, 1)
+        .create_user_with_initial_key("Search admin", ADMIN_TOKEN, true, memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(true), 31_536_000, 1)
         .await
         .unwrap();
     for (display_name, token) in [
@@ -966,7 +961,7 @@ async fn user_page_search_treats_like_metacharacters_literally() {
         ),
     ] {
         database
-            .create_user(display_name, token, false, 2)
+            .create_user_with_initial_key(display_name, token, false, memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(false), 31_536_000, 2)
             .await
             .unwrap();
     }

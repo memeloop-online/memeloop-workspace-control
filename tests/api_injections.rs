@@ -26,7 +26,7 @@ async fn app(with_cipher: bool) -> (Router, Uuid) {
         .unwrap();
     database.migrate().await.unwrap();
     let user = database
-        .create_user("Injection User", TOKEN, false, 1)
+        .create_user_with_initial_key("Injection User", TOKEN, false, memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(false), 31_536_000, 1)
         .await
         .unwrap();
     let config = AppConfig {

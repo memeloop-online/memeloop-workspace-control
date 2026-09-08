@@ -36,7 +36,7 @@ async fn authorized_keys_command_returns_only_restricted_workspace_target() {
         .await
         .unwrap();
     let user = database
-        .create_user("SSH User", USER_TOKEN, false, 100)
+        .create_user_with_initial_key("SSH User", USER_TOKEN, false, memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(false), 31_536_000, 100)
         .await
         .unwrap();
     let organization = database

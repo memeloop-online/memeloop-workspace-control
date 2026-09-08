@@ -32,16 +32,11 @@ async fn test_context() -> TestContext {
         .unwrap();
     database.migrate().await.unwrap();
     let owner = database
-        .create_user("Owner", ADMIN_TOKEN, true, 1)
+        .create_user_with_initial_key("Owner", ADMIN_TOKEN, true, memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(true), 31_536_000, 1)
         .await
         .unwrap();
     let second_user = database
-        .create_user(
-            "Second user",
-            "membership-idempotency-second-token-000000",
-            false,
-            2,
-        )
+        .create_user_with_initial_key("Second user", "membership-idempotency-second-token-000000", false, memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(false), 31_536_000, 2)
         .await
         .unwrap();
     let organization = database

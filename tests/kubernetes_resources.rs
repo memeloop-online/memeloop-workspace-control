@@ -22,12 +22,12 @@ fn builder() -> ResourceBuilder {
             "higress-gateway".to_owned(),
         )]),
         higress_source_cidrs: vec!["100.64.0.6/31".to_owned()],
-        internet_egress: InternetEgressConfig::new(
+        internet_egress: Some(InternetEgressConfig::new(
             "kube-system".to_owned(),
             BTreeMap::from([("k8s-app".to_owned(), "kube-dns".to_owned())]),
             Vec::new(),
         )
-        .unwrap(),
+        .unwrap()),
         jump_host_namespace: "workspace-access".to_owned(),
         jump_host_pod_labels: std::collections::BTreeMap::from([(
             "app.kubernetes.io/name".to_owned(),

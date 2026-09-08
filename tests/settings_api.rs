@@ -30,11 +30,11 @@ async fn app() -> (Router, Database) {
         .unwrap();
     database.migrate().await.unwrap();
     database
-        .create_user("Primary User", PRIMARY_TOKEN, false, 1)
+        .create_user_with_initial_key("Primary User", PRIMARY_TOKEN, false, memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(false), 31_536_000, 1)
         .await
         .unwrap();
     database
-        .create_user("Other User", OTHER_TOKEN, false, 2)
+        .create_user_with_initial_key("Other User", OTHER_TOKEN, false, memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(false), 31_536_000, 2)
         .await
         .unwrap();
     let config = AppConfig {
@@ -329,6 +329,7 @@ async fn self_service_cannot_revoke_the_last_api_key_management_or_system_recove
             "Read-only fallback",
             vec![ApiKeyScope::ReadWorkspace],
             Some(expiry),
+            None,
             now,
         )
         .await
@@ -352,6 +353,7 @@ async fn self_service_cannot_revoke_the_last_api_key_management_or_system_recove
             "API key management fallback",
             vec![ApiKeyScope::ManageApiKeys],
             Some(expiry),
+            None,
             now,
         )
         .await

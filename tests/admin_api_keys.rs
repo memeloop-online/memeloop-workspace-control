@@ -33,11 +33,11 @@ async fn system_admin_can_list_and_idempotently_revoke_a_users_api_keys() {
         .unwrap();
     database.migrate().await.unwrap();
     let admin = database
-        .create_user("Administrator", ADMIN_TOKEN, true, 100)
+        .create_user_with_initial_key("Administrator", ADMIN_TOKEN, true, memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(true), 31_536_000, 100)
         .await
         .unwrap();
     let target = database
-        .create_user("Target user", TARGET_TOKEN, false, 101)
+        .create_user_with_initial_key("Target user", TARGET_TOKEN, false, memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(false), 31_536_000, 101)
         .await
         .unwrap();
     let created = database
@@ -46,6 +46,7 @@ async fn system_admin_can_list_and_idempotently_revoke_a_users_api_keys() {
             "Secondary target key",
             vec![ApiKeyScope::ReadWorkspace],
             Some(unix_timestamp() + 30 * 24 * 60 * 60),
+            None,
             unix_timestamp(),
         )
         .await
@@ -318,7 +319,7 @@ async fn target_key_administration_requires_both_system_scopes_and_noops_are_sil
         .await
         .unwrap();
     let target = database
-        .create_user("Target user", TARGET_TOKEN, false, now)
+        .create_user_with_initial_key("Target user", TARGET_TOKEN, false, memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(false), now + 3_600, now)
         .await
         .unwrap();
     let target_key = database
@@ -327,6 +328,7 @@ async fn target_key_administration_requires_both_system_scopes_and_noops_are_sil
             "Target secondary key",
             vec![ApiKeyScope::ReadWorkspace],
             Some(expiry),
+            None,
             now,
         )
         .await
@@ -475,21 +477,11 @@ async fn postgres_admin_revocation_is_idempotent_for_a_disabled_target() {
     database.migrate().await.unwrap();
     let now = unix_timestamp();
     let admin = database
-        .create_user(
-            "PostgreSQL administrator",
-            &format!("pg-admin-token-{suffix}-000000000000000000000000"),
-            true,
-            now,
-        )
+        .create_user_with_initial_key("PostgreSQL administrator", &format!("pg-admin-token-{suffix}-000000000000000000000000"), true, memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(true), now + 3_600, now)
         .await
         .unwrap();
     let target = database
-        .create_user(
-            "Disabled PostgreSQL target",
-            &format!("pg-target-token-{suffix}-00000000000000000000000"),
-            false,
-            now,
-        )
+        .create_user_with_initial_key("Disabled PostgreSQL target", &format!("pg-target-token-{suffix}-00000000000000000000000"), false, memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(false), now + 3_600, now)
         .await
         .unwrap();
     let key_id = database.list_api_keys(target.user_id).await.unwrap()[0].id;

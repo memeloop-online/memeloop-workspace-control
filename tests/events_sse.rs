@@ -24,7 +24,7 @@ async fn sse_resumes_after_durable_last_event_id_and_filters_organization() {
         .unwrap();
     database.migrate().await.unwrap();
     database
-        .create_user("Event Admin", TOKEN, true, 1)
+        .create_user_with_initial_key("Event Admin", TOKEN, true, memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(true), 31_536_000, 1)
         .await
         .unwrap();
     let organization_id = Uuid::now_v7();

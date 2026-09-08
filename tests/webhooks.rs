@@ -26,7 +26,7 @@ async fn webhook_secret_is_encrypted_and_workspace_events_enqueue_durable_delive
         .unwrap();
     let cipher =
         EnvelopeCipher::from_base64("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=").unwrap();
-    let admin = database.create_user("Admin", TOKEN, true, 1).await.unwrap();
+    let admin = database.create_user_with_initial_key("Admin", TOKEN, true, memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(true), 31_536_000, 1).await.unwrap();
     let organization = database
         .create_organization(
             CreateOrganization {

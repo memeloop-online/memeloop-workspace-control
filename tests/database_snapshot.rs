@@ -26,7 +26,7 @@ async fn sqlite_snapshot_contains_ciphertext_and_resets_only_pending_work() {
         .unwrap();
     database.migrate().await.unwrap();
     let user = database
-        .create_user("Snapshot User", TOKEN, true, 100)
+        .create_user_with_initial_key("Snapshot User", TOKEN, true, memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(true), 31_536_000, 100)
         .await
         .unwrap();
     let organization = database
@@ -86,7 +86,7 @@ async fn sqlite_snapshot_contains_ciphertext_and_resets_only_pending_work() {
 
     let snapshot = database.export_snapshot(200).await.unwrap();
     assert_eq!(snapshot.format_version, 2);
-    assert_eq!(snapshot.schema_version, 21);
+    assert_eq!(snapshot.schema_version, 22);
     assert_eq!(snapshot.installation_id, "snapshot-test");
     assert_eq!(snapshot.tables["injection_items"].len(), 1);
     assert!(snapshot.tables.contains_key("workspace_injection_refs"));
@@ -134,6 +134,7 @@ async fn sqlite_snapshot_contains_ciphertext_and_resets_only_pending_work() {
         snapshot_asset()
     );
     assert_eq!(snapshot.tables["user_api_keys"].len(), 1);
+    assert!(snapshot.tables["user_api_keys"][0]["allowed_template_ids_json"].is_null());
     assert!(!snapshot.tables.contains_key("web_shell_tickets"));
     assert!(!snapshot.tables.contains_key("workspace_leases"));
     assert!(!snapshot.tables.contains_key("idempotency_keys"));
@@ -182,7 +183,7 @@ async fn postgres_import_restores_dynamic_plugin_package_and_assets_when_configu
         .unwrap();
     source.migrate().await.unwrap();
     let user = source
-        .create_user("Snapshot Plugin User", TOKEN, true, 100)
+        .create_user_with_initial_key("Snapshot Plugin User", TOKEN, true, memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(true), 31_536_000, 100)
         .await
         .unwrap();
     let organization = source

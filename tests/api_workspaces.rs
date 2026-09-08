@@ -39,11 +39,11 @@ async fn test_app() -> (Router, Database, Uuid) {
         .await
         .unwrap();
     let admin = database
-        .create_user("API Admin", ADMIN_TOKEN, true, 1)
+        .create_user_with_initial_key("API Admin", ADMIN_TOKEN, true, memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(true), 31_536_000, 1)
         .await
         .unwrap();
     database
-        .create_user("Outsider", OUTSIDER_TOKEN, false, 1)
+        .create_user_with_initial_key("Outsider", OUTSIDER_TOKEN, false, memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(false), 31_536_000, 1)
         .await
         .unwrap();
     let config = AppConfig {
@@ -403,6 +403,7 @@ async fn authenticated_workspace_api_enforces_rbac_and_exact_idempotent_replay()
             "read-only test",
             vec![ApiKeyScope::ReadWorkspace],
             Some(now + 3_600),
+            None,
             now,
         )
         .await
@@ -447,4 +448,44 @@ async fn authenticated_workspace_api_enforces_rbac_and_exact_idempotent_replay()
     assert_eq!(stop_status, StatusCode::ACCEPTED);
     let stopped: Value = serde_json::from_slice(&stop_body).unwrap();
     assert_eq!(stopped["workspace"]["state"], "stopping");
+}
+
+#[tokio::test]
+async fn template_restricted_key_enforces_http_create_action_image_override_and_mint_boundaries() {
+    let (app, database, admin_id) = test_app().await;
+    let organization = database.create_organization(
+        memeloop_workspace_control::storage::CreateOrganization { name: "restricted templates".to_owned(), owner_user_id: admin_id }, 2,
+    ).await.unwrap();
+    database.set_organization_quota(organization.id, Resources { cpu_millis: 4_000, memory_mib: 8_192, gpu_count: 0, disk_gib: 100 }, 2).await.unwrap();
+    let template = |name: &str| CreateWorkspaceTemplate { organization_id: Some(organization.id), yaml: WorkspaceTemplateDocument::new(
+        name, WorkspaceTemplateSpec::standard("registry.example/workspace:1", AccessMode::Internal,
+        Resources { cpu_millis: 1_000, memory_mib: 2_048, gpu_count: 0, disk_gib: 20 })).to_yaml().unwrap() };
+    let template_a = database.create_workspace_template(template("allowed"), true, 3).await.unwrap();
+    let template_b = database.create_workspace_template(template("blocked"), true, 3).await.unwrap();
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64;
+    let restricted = database.create_api_key(
+        admin_id, "template A automation", vec![ApiKeyScope::ManageApiKeys, ApiKeyScope::CreateWorkspace, ApiKeyScope::ChangeWorkspaceState, ApiKeyScope::ManageSystem], Some(now + 3600), Some(vec![template_a.id]), now,
+    ).await.unwrap();
+    let workspace = |name: &str, template_id: Uuid| json!({
+        "organization_id": organization.id, "owner_id": admin_id, "name": name, "template_id": template_id,
+    });
+    let allowed = app.clone().oneshot(request(Method::POST, "/api/v1/workspaces", Some(&restricted.token), Some("restricted-a"), Some(workspace("allowed", template_a.id)))).await.unwrap();
+    let (status, bytes) = body(allowed).await;
+    assert_eq!(status, StatusCode::CREATED, "{}", String::from_utf8_lossy(&bytes));
+    let workspace_id = Uuid::parse_str(serde_json::from_slice::<Value>(&bytes).unwrap()["workspace"]["id"].as_str().unwrap()).unwrap();
+    let blocked = app.clone().oneshot(request(Method::POST, "/api/v1/workspaces", Some(&restricted.token), Some("restricted-b"), Some(workspace("blocked", template_b.id)))).await.unwrap();
+    assert_eq!(blocked.status(), StatusCode::FORBIDDEN);
+    let overridden = app.clone().oneshot(request(Method::POST, "/api/v1/workspaces", Some(&restricted.token), Some("restricted-resources"), Some(json!({
+        "organization_id": organization.id, "owner_id": admin_id, "name": "override", "template_id": template_a.id,
+        "resources": { "cpu_millis": 1500, "memory_mib": 2048, "gpu_count": 0, "disk_gib": 20 }
+    })))).await.unwrap();
+    assert_eq!(overridden.status(), StatusCode::FORBIDDEN);
+    let action = app.clone().oneshot(request(Method::POST, &format!("/api/v1/workspaces/{workspace_id}/actions/restart"), Some(&restricted.token), Some("restricted-action"), None)).await.unwrap();
+    assert_eq!(action.status(), StatusCode::ACCEPTED);
+    let image = app.clone().oneshot(request(Method::PUT, &format!("/api/v1/workspaces/{workspace_id}/image"), Some(&restricted.token), Some("restricted-image"), Some(json!({"image":"registry.example/workspace:1","expected_generation":0})))).await.unwrap();
+    assert_eq!(image.status(), StatusCode::FORBIDDEN);
+    let mint = app.clone().oneshot(request(Method::POST, "/api/v1/me/api-keys", Some(&restricted.token), None, Some(json!({
+        "name": "unrestricted child", "scopes": ["create_workspace"], "expires_at": now + 1800, "allowed_template_ids": null
+    })))).await.unwrap();
+    assert_eq!(mint.status(), StatusCode::FORBIDDEN);
 }

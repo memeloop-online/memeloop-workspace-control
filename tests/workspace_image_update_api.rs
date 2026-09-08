@@ -40,11 +40,11 @@ async fn app() -> (
         .await
         .unwrap();
     let admin = database
-        .create_user("Admin", ADMIN_TOKEN, true, 1)
+        .create_user_with_initial_key("Admin", ADMIN_TOKEN, true, memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(true), 31_536_000, 1)
         .await
         .unwrap();
     database
-        .create_user("Member", MEMBER_TOKEN, false, 1)
+        .create_user_with_initial_key("Member", MEMBER_TOKEN, false, memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(false), 31_536_000, 1)
         .await
         .unwrap();
     let organization = database
