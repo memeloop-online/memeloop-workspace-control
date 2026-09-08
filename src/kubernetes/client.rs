@@ -208,4 +208,6 @@ pub enum ReconcileError {
     InvalidTtydMtlsCompanion,
     #[error("owned Higress EnvoyFilter has no UID; refusing an unguarded delete")]
     MissingEnvoyFilterUid,
+    #[error("waiting for Web Shell Ingress removal before deleting its TLS validation filter")]
+    WebShellIngressTerminating,
 }

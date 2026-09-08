@@ -303,6 +303,11 @@ impl KubernetesCoordinator {
                 ingresses
                     .delete(&names.web_shell_ingress, &DeleteParams::default())
                     .await?;
+                if self.builder.ttyd_mtls.is_some() {
+                    // DELETE acceptance is not absence: retain the SAN protection until
+                    // a subsequent reconciliation observes the route has disappeared.
+                    return Err(ReconcileError::WebShellIngressTerminating);
+                }
             }
         }
         if let Some(ingress) = &desired.web_shell_ingress {

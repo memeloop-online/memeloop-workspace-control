@@ -44,6 +44,12 @@ impl KubernetesCoordinator {
 
         let namespaces = Api::<Namespace>::all(self.client.clone());
         let Some(namespace) = namespaces.get_opt(namespace_name).await? else {
+            if self
+                .delete_owned_web_shell_filter(workspace_id, names)
+                .await?
+            {
+                return Ok(DeleteProgress::DeletionRequested);
+            }
             return Ok(DeleteProgress::Gone);
         };
         self.builder
@@ -83,30 +89,11 @@ impl KubernetesCoordinator {
         {
             return Ok(DeleteProgress::DeletionRequested);
         }
-        if self.builder.ttyd_mtls.is_some() {
-            let envoy_filters = Api::<DynamicObject>::namespaced_with(
-                self.client.clone(),
-                &self.builder.higress_namespace,
-                &super::super::envoy_filter::api_resource(),
-            );
-            if let Some(existing) = envoy_filters.get_opt(&names.web_shell_envoy_filter).await? {
-                self.builder
-                    .verify_delete_ownership(&existing.metadata, workspace_id)?;
-                let uid = existing
-                    .metadata
-                    .uid
-                    .ok_or(super::ReconcileError::MissingEnvoyFilterUid)?;
-                envoy_filters
-                    .delete(
-                        &names.web_shell_envoy_filter,
-                        &DeleteParams::default().preconditions(Preconditions {
-                            uid: Some(uid),
-                            resource_version: None,
-                        }),
-                    )
-                    .await?;
-                return Ok(DeleteProgress::DeletionRequested);
-            }
+        if self
+            .delete_owned_web_shell_filter(workspace_id, names)
+            .await?
+        {
+            return Ok(DeleteProgress::DeletionRequested);
         }
         let mapping_policies = Api::<NetworkPolicy>::namespaced(self.client.clone(), namespace);
         if delete_first_owned(
@@ -148,6 +135,40 @@ impl KubernetesCoordinator {
         }
         self.delete_workspace_remaining(namespace, names, workspace_id, &mapping_policies)
             .await
+    }
+
+    async fn delete_owned_web_shell_filter(
+        &self,
+        workspace_id: Uuid,
+        names: &WorkspaceResourceNames,
+    ) -> Result<bool, ReconcileError> {
+        if self.builder.ttyd_mtls.is_none() {
+            return Ok(false);
+        }
+        let filters = Api::<DynamicObject>::namespaced_with(
+            self.client.clone(),
+            &self.builder.higress_namespace,
+            &super::super::envoy_filter::api_resource(),
+        );
+        let Some(existing) = filters.get_opt(&names.web_shell_envoy_filter).await? else {
+            return Ok(false);
+        };
+        self.builder
+            .verify_delete_ownership(&existing.metadata, workspace_id)?;
+        let uid = existing
+            .metadata
+            .uid
+            .ok_or(ReconcileError::MissingEnvoyFilterUid)?;
+        filters
+            .delete(
+                &names.web_shell_envoy_filter,
+                &DeleteParams::default().preconditions(Preconditions {
+                    uid: Some(uid),
+                    resource_version: None,
+                }),
+            )
+            .await?;
+        Ok(true)
     }
 
     async fn workspace_pod_or_pvc_reference_is_present(
