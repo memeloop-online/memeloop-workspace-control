@@ -59,7 +59,7 @@ pub struct ResourceBuilder {
     pub higress_namespace: String,
     pub higress_pod_labels: BTreeMap<String, String>,
     pub higress_source_cidrs: Vec<String>,
-    pub internet_egress: InternetEgressConfig,
+    pub internet_egress: Option<InternetEgressConfig>,
     pub jump_host_namespace: String,
     pub jump_host_pod_labels: BTreeMap<String, String>,
     pub storage_class_name: Option<String>,
@@ -177,6 +177,11 @@ impl ResourceBuilder {
         if workspace.template.image.trim().is_empty() {
             return Err(BuildError::EmptyImage);
         }
+        if workspace.template.egress_policy == crate::templates::EgressPolicy::InternetOnly
+            && self.internet_egress.is_none()
+        {
+            return Err(BuildError::InternetEgressNotConfigured);
+        }
 
         workspace.runtime.validate_for_workspace(
             &self.installation_id,
@@ -236,7 +241,7 @@ impl ResourceBuilder {
                 &self.higress_namespace,
                 &self.higress_pod_labels,
                 &self.higress_source_cidrs,
-                &self.internet_egress,
+                self.internet_egress.as_ref(),
                 &self.jump_host_namespace,
                 &self.jump_host_pod_labels,
                 workspace.template.access_mode,
@@ -405,4 +410,6 @@ pub enum BuildError {
     WorkspaceBeingDeleted,
     #[error("workspace image must not be empty")]
     EmptyImage,
+    #[error("internet_only egress requires configured DNS namespace and Pod labels")]
+    InternetEgressNotConfigured,
 }

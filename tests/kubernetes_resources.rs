@@ -22,12 +22,14 @@ fn builder() -> ResourceBuilder {
             "higress-gateway".to_owned(),
         )]),
         higress_source_cidrs: vec!["100.64.0.6/31".to_owned()],
-        internet_egress: Some(InternetEgressConfig::new(
-            "kube-system".to_owned(),
-            BTreeMap::from([("k8s-app".to_owned(), "kube-dns".to_owned())]),
-            Vec::new(),
-        )
-        .unwrap()),
+        internet_egress: Some(
+            InternetEgressConfig::new(
+                "kube-system".to_owned(),
+                BTreeMap::from([("k8s-app".to_owned(), "kube-dns".to_owned())]),
+                Vec::new(),
+            )
+            .unwrap(),
+        ),
         jump_host_namespace: "workspace-access".to_owned(),
         jump_host_pod_labels: std::collections::BTreeMap::from([(
             "app.kubernetes.io/name".to_owned(),
@@ -175,7 +177,9 @@ fn workspace_pod_uses_the_template_runtime_class_without_a_fallback() {
 
 #[test]
 fn unrestricted_egress_keeps_the_existing_ingress_only_policy() {
-    let policy = builder()
+    let mut unconfigured = builder();
+    unconfigured.internet_egress = None;
+    let policy = unconfigured
         .build(&workspace(WorkspaceState::Ready))
         .unwrap()
         .network_policy;
@@ -189,15 +193,17 @@ fn internet_only_egress_allows_selected_dns_and_public_addresses_only() {
     let mut sandboxed = workspace(WorkspaceState::Ready);
     sandboxed.template.egress_policy = EgressPolicy::InternetOnly;
     let mut egress_builder = builder();
-    egress_builder.internet_egress = InternetEgressConfig::new(
-        "platform-dns".to_owned(),
-        BTreeMap::from([("app".to_owned(), "resolver".to_owned())]),
-        vec![
-            "198.51.100.25/32".parse().unwrap(),
-            "2001:db8:ffff::/48".parse().unwrap(),
-        ],
-    )
-    .unwrap();
+    egress_builder.internet_egress = Some(
+        InternetEgressConfig::new(
+            "platform-dns".to_owned(),
+            BTreeMap::from([("app".to_owned(), "resolver".to_owned())]),
+            vec![
+                "198.51.100.25/32".parse().unwrap(),
+                "2001:db8:ffff::/48".parse().unwrap(),
+            ],
+        )
+        .unwrap(),
+    );
     let policy = egress_builder.build(&sandboxed).unwrap().network_policy;
     let spec = policy.spec.unwrap();
     assert_eq!(spec.policy_types.unwrap(), vec!["Ingress", "Egress"]);
@@ -249,12 +255,70 @@ fn internet_only_egress_allows_selected_dns_and_public_addresses_only() {
     assert!(ipv4_except.contains(&"198.51.100.25/32".to_owned()));
 
     let ipv6 = egress[2].to.as_ref().unwrap()[0].ip_block.as_ref().unwrap();
-    assert_eq!(ipv6.cidr, "::/0");
+    assert_eq!(ipv6.cidr, "2000::/3");
     let ipv6_except = ipv6.except.as_ref().unwrap();
-    assert!(ipv6_except.contains(&"fc00::/7".to_owned()));
-    assert!(ipv6_except.contains(&"fe80::/10".to_owned()));
-    assert!(ipv6_except.contains(&"ff00::/8".to_owned()));
+    assert!(ipv6_except.contains(&"2001::/23".to_owned()));
+    assert!(ipv6_except.contains(&"2001:db8::/32".to_owned()));
     assert!(ipv6_except.contains(&"2001:db8:ffff::/48".to_owned()));
+}
+
+#[test]
+fn internet_only_egress_fails_closed_without_dns_configuration() {
+    let mut sandboxed = workspace(WorkspaceState::Ready);
+    sandboxed.template.egress_policy = EgressPolicy::InternetOnly;
+    let mut unconfigured = builder();
+    unconfigured.internet_egress = None;
+    assert!(matches!(
+        unconfigured.build(&sandboxed),
+        Err(BuildError::InternetEgressNotConfigured)
+    ));
+}
+
+#[test]
+fn operator_block_covering_a_public_allow_removes_that_allow_rule() {
+    let mut sandboxed = workspace(WorkspaceState::Ready);
+    sandboxed.template.egress_policy = EgressPolicy::InternetOnly;
+    let mut egress_builder = builder();
+    egress_builder.internet_egress = Some(
+        InternetEgressConfig::new(
+            "kube-system".to_owned(),
+            BTreeMap::from([("k8s-app".to_owned(), "kube-dns".to_owned())]),
+            vec!["0.0.0.0/0".parse().unwrap(), "::/0".parse().unwrap()],
+        )
+        .unwrap(),
+    );
+    let egress = egress_builder
+        .build(&sandboxed)
+        .unwrap()
+        .network_policy
+        .spec
+        .unwrap()
+        .egress
+        .unwrap();
+    assert_eq!(egress.len(), 1, "only DNS remains allowed");
+
+    egress_builder
+        .internet_egress
+        .as_mut()
+        .unwrap()
+        .additional_blocked_cidrs = vec!["2000::/2".parse().unwrap()];
+    let egress = egress_builder
+        .build(&sandboxed)
+        .unwrap()
+        .network_policy
+        .spec
+        .unwrap()
+        .egress
+        .unwrap();
+    assert_eq!(egress.len(), 2);
+    assert_eq!(
+        egress[1].to.as_ref().unwrap()[0]
+            .ip_block
+            .as_ref()
+            .unwrap()
+            .cidr,
+        "0.0.0.0/0"
+    );
 }
 
 #[test]

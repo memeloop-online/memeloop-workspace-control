@@ -102,6 +102,10 @@ loopback, link-local, CGNAT, multicast, and other reserved ranges. Configure the
 the actual in-cluster resolver, not merely its Service name. Add public node addresses and any
 nonstandard Pod or Service CIDRs to `workspace.egress.additionalBlockedCidrs`.
 
+The chart always supplies this configuration. Non-Helm installations may omit it while all
+templates are `unrestricted`; attempting to build an `internet_only` workspace without both DNS
+namespace and Pod-label settings fails closed.
+
 NetworkPolicy does not govern host/node traffic and cannot remove the interval before a newly
 created policy is enforced. Validate DNS and egress behavior against the installed CNI before
 enabling this policy for production templates.

@@ -34,24 +34,7 @@ const PRIVATE_OR_RESERVED_IPV4: &[&str] = &[
     "240.0.0.0/4",
 ];
 
-const PRIVATE_OR_RESERVED_IPV6: &[&str] = &[
-    "::/96",
-    "::ffff:0:0/96",
-    "64:ff9b::/96",
-    "64:ff9b:1::/48",
-    "100::/64",
-    "2001::/23",
-    "2001:2::/48",
-    "2001:10::/28",
-    "2001:20::/28",
-    "2001:db8::/32",
-    "2002::/16",
-    "3fff::/20",
-    "5f00::/16",
-    "fc00::/7",
-    "fe80::/10",
-    "ff00::/8",
-];
+const PRIVATE_OR_RESERVED_IPV6: &[&str] = &["2001::/23", "2001:db8::/32", "2002::/16", "3fff::/20"];
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn build(
@@ -61,7 +44,7 @@ pub(super) fn build(
     higress_namespace: &str,
     higress_pod_labels: &BTreeMap<String, String>,
     higress_source_cidrs: &[String],
-    internet_egress: &InternetEgressConfig,
+    internet_egress: Option<&InternetEgressConfig>,
     jump_host_namespace: &str,
     jump_host_pod_labels: &BTreeMap<String, String>,
     access_mode: AccessMode,
@@ -100,18 +83,28 @@ pub(super) fn build(
                 ),
                 ssh_rule,
             ]),
-            egress: internet_only.then(|| internet_egress_rules(internet_egress)),
+            egress: internet_only.then(|| {
+                internet_egress_rules(internet_egress.expect(
+                    "ResourceBuilder rejects internet_only templates without egress config",
+                ))
+            }),
             ..NetworkPolicySpec::default()
         }),
     }
 }
 
 fn internet_egress_rules(config: &InternetEgressConfig) -> Vec<NetworkPolicyEgressRule> {
-    vec![
-        dns_egress_rule(&config.dns_namespace, &config.dns_pod_labels),
-        public_egress_rule("0.0.0.0/0", PRIVATE_OR_RESERVED_IPV4, config),
-        public_egress_rule("::/0", PRIVATE_OR_RESERVED_IPV6, config),
-    ]
+    let mut rules = vec![dns_egress_rule(
+        &config.dns_namespace,
+        &config.dns_pod_labels,
+    )];
+    if let Some(rule) = public_egress_rule("0.0.0.0/0", PRIVATE_OR_RESERVED_IPV4, config) {
+        rules.push(rule);
+    }
+    if let Some(rule) = public_egress_rule("2000::/3", PRIVATE_OR_RESERVED_IPV6, config) {
+        rules.push(rule);
+    }
+    rules
 }
 
 fn dns_egress_rule(
@@ -141,8 +134,18 @@ fn public_egress_rule(
     cidr: &str,
     default_except: &[&str],
     config: &InternetEgressConfig,
-) -> NetworkPolicyEgressRule {
-    let ipv4 = cidr == "0.0.0.0/0";
+) -> Option<NetworkPolicyEgressRule> {
+    let allowed = cidr
+        .parse::<ipnet::IpNet>()
+        .expect("static public CIDR is valid");
+    let ipv4 = allowed.addr().is_ipv4();
+    if config
+        .additional_blocked_cidrs
+        .iter()
+        .any(|blocked| blocked.contains(&allowed))
+    {
+        return None;
+    }
     let mut except = default_except
         .iter()
         .map(|cidr| (*cidr).to_owned())
@@ -151,10 +154,10 @@ fn public_egress_rule(
         config
             .additional_blocked_cidrs
             .iter()
-            .filter(|blocked| blocked.addr().is_ipv4() == ipv4)
+            .filter(|blocked| blocked.addr().is_ipv4() == ipv4 && allowed.contains(blocked))
             .map(ToString::to_string),
     );
-    NetworkPolicyEgressRule {
+    Some(NetworkPolicyEgressRule {
         to: Some(vec![NetworkPolicyPeer {
             ip_block: Some(IPBlock {
                 cidr: cidr.to_owned(),
@@ -163,7 +166,7 @@ fn public_egress_rule(
             ..NetworkPolicyPeer::default()
         }]),
         ..NetworkPolicyEgressRule::default()
-    }
+    })
 }
 
 fn network_port(protocol: &str, port: i32) -> NetworkPolicyPort {

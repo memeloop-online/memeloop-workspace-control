@@ -341,29 +341,23 @@ fn resource_builder(
         Err(std::env::VarError::NotPresent) => Vec::new(),
         Err(error) => return Err(io::Error::new(io::ErrorKind::InvalidInput, error)),
     };
-    let egress_dns_namespace = std::env::var("MWC_EGRESS_DNS_NAMESPACE").map_err(|_| {
-        io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "MWC_EGRESS_DNS_NAMESPACE is required when Kubernetes coordination is enabled",
-        )
-    })?;
+    let egress_dns_namespace = match std::env::var("MWC_EGRESS_DNS_NAMESPACE") {
+        Ok(value) => Some(value),
+        Err(std::env::VarError::NotPresent) => None,
+        Err(error) => return Err(io::Error::new(io::ErrorKind::InvalidInput, error)),
+    };
     let egress_dns_pod_labels = match std::env::var("MWC_EGRESS_DNS_POD_LABELS_JSON") {
-        Ok(value) => serde_json::from_str(&value).map_err(|error| {
+        Ok(value) => Some(serde_json::from_str(&value).map_err(|error| {
             io::Error::new(
                 io::ErrorKind::InvalidInput,
                 format!("MWC_EGRESS_DNS_POD_LABELS_JSON must be a JSON string map: {error}"),
             )
-        })?,
-        Err(std::env::VarError::NotPresent) => {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "MWC_EGRESS_DNS_POD_LABELS_JSON is required when Kubernetes coordination is enabled",
-            ));
-        }
+        })?),
+        Err(std::env::VarError::NotPresent) => None,
         Err(error) => return Err(io::Error::new(io::ErrorKind::InvalidInput, error)),
     };
     let additional_blocked_cidrs = match std::env::var("MWC_EGRESS_ADDITIONAL_BLOCKED_CIDRS_JSON") {
-        Ok(value) => serde_json::from_str::<Vec<String>>(&value)
+        Ok(value) => Some(serde_json::from_str::<Vec<String>>(&value)
             .map_err(|error| {
                 io::Error::new(
                     io::ErrorKind::InvalidInput,
@@ -379,16 +373,27 @@ fn resource_builder(
                     )
                 })
             })
-            .collect::<Result<Vec<_>, _>>()?,
-        Err(std::env::VarError::NotPresent) => Vec::new(),
+            .collect::<Result<Vec<_>, _>>()?),
+        Err(std::env::VarError::NotPresent) => None,
         Err(error) => return Err(io::Error::new(io::ErrorKind::InvalidInput, error)),
     };
-    let internet_egress = InternetEgressConfig::new(
-        egress_dns_namespace,
-        egress_dns_pod_labels,
-        additional_blocked_cidrs,
-    )
-    .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+    let internet_egress = match (egress_dns_namespace, egress_dns_pod_labels) {
+        (None, None) if additional_blocked_cidrs.is_none() => None,
+        (Some(namespace), Some(labels)) => Some(
+            InternetEgressConfig::new(
+                namespace,
+                labels,
+                additional_blocked_cidrs.unwrap_or_default(),
+            )
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?,
+        ),
+        _ => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "MWC_EGRESS_DNS_NAMESPACE and MWC_EGRESS_DNS_POD_LABELS_JSON must be set together when configuring internet-only egress",
+            ));
+        }
+    };
     Ok(ResourceBuilder {
         installation_id: config.installation_id.clone(),
         ttyd_image,
