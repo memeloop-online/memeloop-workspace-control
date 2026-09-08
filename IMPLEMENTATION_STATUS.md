@@ -407,6 +407,11 @@ cache pin and unchanged full `--all-features --no-fail-fast` test step were asse
 Actual cache execution and lifecycle test results still require GitHub Actions.
 The lifecycle verification gate has passed. Promote the reviewed product source to main for
 the publication pipeline; do not deploy before published digests and rollout gates are verified.
+Main promotion `1e0ab66` is pushed; publication CI `34268442698` is running, not yet published.
+Main reviewed GitOps `8d8a4e7` and started client-only live acceptance with the already verified
+ttyd `6f430bf` image. Process session `27715` writes `/tmp/mwc-higress-ttyd-client-20260908.json`;
+no outcome or cleanup success is claimed until the process finishes. It does not repeat the
+previously passed server CA/SAN matrix or alter existing workspace resources.
 Disable is explicitly two-stage: keep mTLS/RBAC while removing owned Ingresses first and
 then filters; remove mTLS/RBAC only after absence checks. Disabled installations must not
 query EnvoyFilter APIs. Settled workspaces are not automatically requeued on configuration
