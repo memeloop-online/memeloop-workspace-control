@@ -257,16 +257,7 @@ impl ResourceBuilder {
         {
             return Err(BuildError::InternetEgressNotConfigured);
         }
-        if self
-            .ttyd_mtls
-            .as_ref()
-            .is_some_and(|mtls| mtls.higress_client_secret_namespace != self.higress_namespace)
-        {
-            return Err(BuildError::TtydMtlsGatewayNamespaceMismatch);
-        }
-        if self.ttyd_mtls.is_some() && self.higress_pod_labels.is_empty() {
-            return Err(BuildError::TtydMtlsGatewaySelectorMissing);
-        }
+        self.validate_ttyd_gateway()?;
 
         workspace.runtime.validate_for_workspace(
             &self.installation_id,
@@ -355,6 +346,18 @@ impl ResourceBuilder {
                 })
             }),
         })
+    }
+
+    fn validate_ttyd_gateway(&self) -> Result<(), BuildError> {
+        if let Some(mtls) = &self.ttyd_mtls {
+            if mtls.higress_client_secret_namespace != self.higress_namespace {
+                return Err(BuildError::TtydMtlsGatewayNamespaceMismatch);
+            }
+            if self.higress_pod_labels.is_empty() {
+                return Err(BuildError::TtydMtlsGatewaySelectorMissing);
+            }
+        }
+        Ok(())
     }
 
     pub fn verify_delete_ownership(
