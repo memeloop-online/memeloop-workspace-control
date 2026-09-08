@@ -353,13 +353,16 @@ wrong-server-CA rejection passed; wrong-server-SAN rejection FAILED (200 remaine
 Exact namespace `mwc-higress-ttyd-mtls-1788886900146-j1xdbb` was deleted and absence verified.
 That first canary ended. Companion CA key corrected to official `cacert` in GitOps `e8acafb`.
 New standard EnvoyFilter canary `327418d` plus main's masked-CDS parsing/gateway-pinning fix
-`3a329a3` is RUNNING as session `4072`. Output `/tmp/mwc-higress-ttyd-san-20260908.json`;
+`3a329a3` PASSED, session `4072` exited 0. Output `/tmp/mwc-higress-ttyd-san-20260908.json`;
 namespace `mwc-higress-ttyd-mtls-1788888479795-bwcwhy`, exact gateway filter
 `higress-system/ttyd-mtls-san-1788888479795-bwcwhy`. Uses newly published ttyd digest `6f430bf…`.
-It matches only temporary Service/7681 and tests real wrong-CA/wrong-SAN server certificates
-plus a valid wildcard certificate. Resume this handle; do not launch another test concurrently.
-Cleanup independently removes the ownership-labelled filter and namespace. No gateway fork
-or broad cluster patch is authorized. Do not weaken the acceptance assertion.
+It matched only temporary Service/7681: valid wildcard 200, wrong CA 503, wrong SAN 503, both
+restorations returned 200. Cleanup failures were empty; filter and namespace absence verified
+independently. No canary process remains. `sandbox_runtime_product` now owns productization
+of the exact per-workspace filter lifecycle, ownership checks, Chart permissions and tests.
+Do not repeat this passed canary absent a relevant change. Production rollout, certificate
+lifecycle and authenticated WebSocket acceptance remain pending. No gateway fork or broad
+cluster patch is authorized. Do not weaken the acceptance assertion.
 Native ttyd acceptance already passed; do not repeat it. Never apply broad SNAT source allowances without the gateway
 authentication boundary verified end to end. Shared-namespace cutover still requires the
 schema bridge, writer shutdown, retained-volume and rollback gates.
