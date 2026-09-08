@@ -38,7 +38,12 @@ write_fake_commands() {
   printf '%s\n' \
     '#!/usr/bin/env bash' \
     'set -euo pipefail' \
-    '[[ ${1:-} == ctr && ${2:-} == version ]] && { printf "Client:\\n  Version: v2.3.2-k3s2\\n"; exit 0; }' \
+    'if [[ ${1:-} == ctr && ${2:-} == version ]]; then' \
+    '  printf "Client:\\n  Version: v2.3.2-k3s2\\n"' \
+    '  # Continue writing after the matching line so an early-exit awk gets SIGPIPE.' \
+    '  head -c 8388608 /dev/zero' \
+    '  exit 0' \
+    'fi' \
     '[[ ${1:-} == ctr && ${2:-} == plugins && ${3:-} == ls ]] && { printf "io.containerd.cri.v1 runtime linux/amd64 ok\\n"; exit 0; }' \
     'printf "unexpected k3s invocation: %q\\n" "$*" >&2' \
     'exit 2' > "$fake_bin/k3s"
