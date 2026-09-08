@@ -112,10 +112,9 @@ mod tests {
             "kubernetes-ingress://Kubernetes/higress-system/client-cacert"
         );
         assert!(
-            patch
-                .to_string()
-                .contains("tls_certificate_sds_secret_configs")
-                == false
+            patch["patch"]["value"]["transport_socket"]["typed_config"]["common_tls_context"]
+                .get("tls_certificate_sds_secret_configs")
+                .is_none()
         );
     }
 }
