@@ -333,6 +333,9 @@ product terminology.
 
 Current priority (supersedes historical rollout ordering below): follow active CI `34254345334`,
 publish only after green, and resolve the newly measured Higress server-name validation gap.
+Latest poll: `verify` PASSED; four image publication jobs are queued. No published-image
+or production-upgrade claim yet. OS planning document landed in `4a68871`, migration
+runbook path correction in `0e2c8f2`; OS execution remains unapproved.
 GitOps runner `49c6e6f` plus scoped-diagnostics fix `75d31f0` ran to completion (session `8291`).
 Evidence `/tmp/mwc-higress-ttyd-mtls-20260908.json`: baseline/recovery 200, absent-client and
 wrong-server-CA rejection passed; wrong-server-SAN rejection FAILED (200 remained possible).
