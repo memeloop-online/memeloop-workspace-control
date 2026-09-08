@@ -381,10 +381,13 @@ manifest assertions), including disabled-mode no-CRD access, missing credentials
 foreign ownership, UID preconditions and missing Namespace cleanup.
 Early CI `34262698041` stopped on `ResourceBuilder::build` length (107/100), not an API/type
 error. Main refactor `80a1a67` separates gateway validation from resource assembly without
-weakening lint rules. Follow-up CI `34263765347` is running for that revision on
-`ci/ttyd-san-c63cb93`; this non-main branch cannot publish images. This is not the final
-regression/publication gate. Keep production unchanged; add the lifecycle tests before
-promoting to main and publishing.
+weakening lint rules. Follow-up CI `34263765347` passed production checking, then stopped on
+the renderer test's boolean-comparison lint. Main `c094554` replaces the string search with
+a structural absent-field assertion; rustfmt passed. No CI process is currently running.
+`http_fixture_clocks` continues lifecycle regressions; `release_manifest_plan` (Luna) now
+owns a bounded Rust-dependency CI cache addition, with an immutable upstream action pin.
+Next push these together to `ci/ttyd-san-c63cb93` for verification only; do not publish
+or deploy before the complete regression gate passes.
 Disable is explicitly two-stage: keep mTLS/RBAC while removing owned Ingresses first and
 then filters; remove mTLS/RBAC only after absence checks. Disabled installations must not
 query EnvoyFilter APIs. Settled workspaces are not automatically requeued on configuration
