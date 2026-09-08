@@ -331,8 +331,8 @@ product terminology.
 
 ## Next actions
 
-Current priority (supersedes historical rollout ordering below): resolve the measured Higress
-server-name validation gap and continue the gated migration with the published release.
+Current priority (supersedes historical rollout ordering below): productize the verified Higress
+server-name validation fix and continue the gated migration with the published release.
 Latest poll: `verify` PASSED; image publication status is below. No production-upgrade
 claim yet. OS planning document landed in `4a68871`, migration
 runbook path correction in `0e2c8f2`; OS execution remains unapproved.
@@ -360,6 +360,9 @@ It matched only temporary Service/7681: valid wildcard 200, wrong CA 503, wrong 
 restorations returned 200. Cleanup failures were empty; filter and namespace absence verified
 independently. No canary process remains. `sandbox_runtime_product` now owns productization
 of the exact per-workspace filter lifecycle, ownership checks, Chart permissions and tests.
+Gateway permissions must use a conditional Role/RoleBinding in the gateway Namespace, not
+cluster-wide EnvoyFilter access. Main owns the documentation and ledger. `release_manifest_plan`
+(Luna) is preparing a read-only exact GitOps promotion diff; no cluster changes or push.
 Do not repeat this passed canary absent a relevant change. Production rollout, certificate
 lifecycle and authenticated WebSocket acceptance remain pending. No gateway fork or broad
 cluster patch is authorized. Do not weaken the acceptance assertion.
