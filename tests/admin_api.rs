@@ -459,6 +459,7 @@ async fn admin_user_initial_key_policy_rejects_escalation_and_invalid_expiry() {
     const SCOPED_ADMIN_TOKEN: &str = "scoped-admin-api-token-000000000000000000000";
     const BOOTSTRAP_ADMIN_TOKEN: &str = "bootstrap-admin-api-token-000000000000000000";
     const NEXT_TOKEN: &str = "next-user-api-token-000000000000000000000000000";
+    const OVERLONG_TOKEN: &str = "overlong-user-api-token-000000000000000000000000";
     let initial_key_now = test_unix_timestamp();
     // The omitted child expiry defaults to 30 days, so this short-lived parent
     // exercises clipping that default to the parent's remaining lifetime.
@@ -557,7 +558,7 @@ async fn admin_user_initial_key_policy_rejects_escalation_and_invalid_expiry() {
                         "display_name": "Escalated user",
                         "token": NEXT_TOKEN,
                         "scopes": ["manage_system", "read_workspace"],
-                        "expires_at": initial_key_expiry + 1,
+                        "expires_at": initial_key_expiry,
                     })
                     .to_string(),
                 ))
@@ -566,6 +567,33 @@ async fn admin_user_initial_key_policy_rejects_escalation_and_invalid_expiry() {
         .await
         .unwrap();
     assert_eq!(escalation.status(), StatusCode::FORBIDDEN);
+
+    let overlong = app
+        .clone()
+        .oneshot(
+            authenticated(Request::post("/api/v1/admin/users"), BOOTSTRAP_ADMIN_TOKEN)
+                .header("content-type", "application/json")
+                .header("idempotency-key", "initial-key-overlong-expiry")
+                .body(Body::from(
+                    json!({
+                        "display_name": "Overlong user",
+                        "token": OVERLONG_TOKEN,
+                        "scopes": [
+                            "manage_api_keys",
+                            "create_workspace",
+                            "read_workspace",
+                            "connect_workspace",
+                            "change_workspace_state"
+                        ],
+                        "expires_at": initial_key_expiry + 1,
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(overlong.status(), StatusCode::FORBIDDEN);
 
     let expired = app
         .clone()
