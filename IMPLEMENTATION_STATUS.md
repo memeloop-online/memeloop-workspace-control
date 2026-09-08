@@ -3,7 +3,42 @@
 This is the durable continuation checkpoint. Continue from **Next actions** after context
 compaction. Do not repeat completed audits unless new evidence contradicts them.
 
-Last updated: 2026-09-07
+Last updated: 2026-09-08
+
+## Execution ledger — resume here
+
+This is the single execution ledger. Historical sections below are evidence for their recorded
+revision, not a claim that the final migration or external sandbox acceptance is complete.
+Do not restart completed audits. Update the rows with commits, test evidence, and deployment
+status independently; a source commit is not a production rollout.
+
+Latest decisions: control plane and all workspaces must ultimately share the exact Namespace
+`memeloop-workspace-control`, with workspace-ID-qualified resource names. Keep the existing
+single cross-region hybrid-cloud K3s cluster and Flannel/Tailscale topology. Do not introduce
+Cilium/Calico, split clusters, or restore `runtime_profile`. Preserve durable Codex data.
+
+| ID | Work | State / owner / next gate |
+| --- | --- | --- |
+| MIG-01 | Canonical shared Namespace in product and Chart | Source committed: `c0b2a80`, `0a545d3`; not deployed. Schema 20→21 bridge exists. Publish and verify CI before any cutover. |
+| MIG-02 | Required schema 19→20→21 transitions and GitOps promotion | Pending. Existing 19→20 bridge evidence below remains valid; never skip required transforms. Stage each promotion, not the final GitOps chain at once. |
+| MIG-03 | Four MWC workloads/PVCs/control-plane volume into canonical Namespace | Pending gated cutover. Reuse verified volumes; snapshot, single writer, SSH/host key/PVC/session validation before retiring old resources. |
+| MIG-04 | Last active Coder TOKEN center dev workspace | External-agent cutover only. Current source PVC is 100 GiB; do not stop this workspace from inside itself. Prepare complete copyable final procedure. |
+| MIG-05 | Delete superseded namespaces/resources and retired code/names | Pending after MIG-02/03/04 acceptance. Remove one-time migration compatibility only after live migration; no false claim of completion while old namespaces remain. |
+| IMG-01 | Upgrade maintainance and rust-dev-test to verified images | Waiting for borrower release of ports 31871/32671; preserve sessions/WAL/logs. 2026-09-08 messaging tool returned unavailable, so release is not confirmed. |
+| UI-01 | Final UI closeout | Source committed `c3596e9`, embedded assets `44eca28`; publish/deploy and targeted responsive regression remain. Do not redo earlier twelve-feature audit. |
+| SEC-01 | Actual NetworkPolicy enforcement, same-/cross-node tests | In progress: `netpol_evidence`. Isolated disposable probes only; do not mutate existing business policies. Confirm creation/startup and NAT limitations, not just API object existence. |
+| SEC-02 | Product egress isolation and least-source ingress | Pending SEC-01 evidence. Current live workspace policy is ingress-only and permits broad Pod/Tailnet access to ttyd; external tenant acceptance is NOT passed. |
+| SEC-03 | Template optional `runtime_class_name`, API/YAML/UI/Pod rendering | In progress: `sandbox_runtime_product`. No silent fallback; existing ordinary templates unchanged. |
+| SEC-04 | gVisor node preparation and optional RuntimeClass | In progress: `gvisor_node_rollout` prepares scripts/docs and node plan. Single-node explicit rollout gate; never change default runtime or mass-restart nodes. |
+| SEC-05 | API-key allowed-template IDs and bypass prevention | In progress: `key_template_permissions`. Persist restrictions; enforce server-side, including alternate create/modify paths. |
+| SEC-06 | External sandbox release acceptance | Pending SEC-01..05. Verify network escape paths, privilege/credential boundaries, CPU/memory/disk/PID pressure, SSH/Web Shell, restart/reschedule; fail closed. Installing components alone is not acceptance. |
+| OPS-01 | Operator-only setup and automated product checks | In progress with SEC-04; document exact setup, ownership, drift checks, rollback, supported overhead and unverified limitations. |
+| CLEAN-01 | Superseded API keys/cache injections/image policies | Preserve previous evidence; final transactional cleanup/rotation and deletion verification remain. Never expose secret values. |
+
+2026-09-08 read-only runtime snapshot: 262 Pods have no explicit RuntimeClass, one uses `nvidia`,
+and no `gvisor`/`runsc` RuntimeClass exists. This does not prove each node's default handler.
+Seven nodes are Ready. July's NetworkPolicy non-enforcement document conflicts with August's
+recorded kube-router/SNAT tests; SEC-01 resolves this by fresh bounded tests, not by assumption.
 
 ## Active goal
 
