@@ -407,7 +407,13 @@ cache pin and unchanged full `--all-features --no-fail-fast` test step were asse
 Actual cache execution and lifecycle test results still require GitHub Actions.
 The lifecycle verification gate has passed. Promote the reviewed product source to main for
 the publication pipeline; do not deploy before published digests and rollout gates are verified.
-Main promotion `1e0ab66` is pushed; publication CI `34268442698` is running, not yet published.
+Main promotion `1e0ab66` is pushed; publication CI `34268442698` FAILED in two `admin_api`
+tests (expected user creation 201, got 403); no images were published. Main traced an actual
+default-expiry bug: omitted child expiry becomes request-time + 30 days, exceeding an issuer
+seeded with the same TTL once the clock crosses a second. `d665e89` caps only the default at
+issuer expiry, while explicit over-parent requests remain forbidden. `http_fixture_clocks`
+owns a deterministic short-lived-issuer regression; do not hide this with longer fixture TTLs
+or an explicitly supplied expiry. New CI is required after that regression lands.
 Main reviewed GitOps `8d8a4e7`; client-only live acceptance PASSED with the already verified
 ttyd `6f430bf` image. Session `27715` exited 0; result is
 `/tmp/mwc-higress-ttyd-client-20260908.json`. Valid / absent / restored / untrusted / restored
