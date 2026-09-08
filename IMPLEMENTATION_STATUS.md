@@ -152,6 +152,16 @@ driver requires >=244. Do not bypass preflight, mix drivers or register runsc th
 Asked user whether to authorize the original iv node's maintenance test or supply a newer-OS
 node. serv remains operational on its one-shot 5.15 kernel, old 4.18 still the default; no
 gVisor handler or readiness label was installed. Other product/CI work continues.
+2026-09-08 storage recovery completed: Headplane volume
+`pvc-6a03d5cb-b64b-43e1-b236-5bf3de83a613` is healthy; engine reports both haixia and
+replacement replicas RW, rebuildStatus empty. No forced replica deletion/concurrency change
+was used. The remaining gVisor gate is runtime/node compatibility, not storage recovery.
+CI `34245226707` found workspace_volumes over its 100-line limit; `5930a12` extracts the
+independent ttyd TLS volume constructor. Formatting passed; follow the next CI revision.
+First native ttyd mTLS test was inconclusive: negative TLS request broke its port-forward,
+making subsequent valid-client tests connection failures. Disposable namespace and keys were
+removed. Retest uses a valid-client baseline and independent forwarding sessions plus Pod
+health/log evidence; no claim of TLS end-to-end acceptance yet.
 
 Migration handoff review corrected a dangerous conflation: `rust-dev-test` and Coder TOKEN center
 dev are distinct 100 GiB volumes. Both actual PVC→PV claim UIDs match. Final count is four
