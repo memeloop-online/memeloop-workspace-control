@@ -1,4 +1,8 @@
-use std::{net::SocketAddr, sync::Arc};
+use std::{
+    net::SocketAddr,
+    sync::Arc,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use axum::{
     Router,
@@ -23,7 +27,15 @@ use uuid::Uuid;
 const ADMIN_TOKEN: &str = "api-admin-000000000000000000000000000000";
 const MEMBER_TOKEN: &str = "api-member-000000000000000000000000000000";
 
+fn unix_timestamp() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64
+}
+
 async fn test_app() -> (Router, Database, Uuid) {
+    let key_now = unix_timestamp();
     let installation_id = "api-test".parse().unwrap();
     let database = Database::connect("sqlite::memory:", installation_id)
         .await
@@ -34,7 +46,14 @@ async fn test_app() -> (Router, Database, Uuid) {
         .await
         .unwrap();
     let admin = database
-        .create_user_with_initial_key("API Admin", ADMIN_TOKEN, true, memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(true), 31_536_000, 1)
+        .create_user_with_initial_key(
+            "API Admin",
+            ADMIN_TOKEN,
+            true,
+            memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(true),
+            key_now + 24 * 60 * 60,
+            key_now,
+        )
         .await
         .unwrap();
     let config = AppConfig {
@@ -282,8 +301,16 @@ async fn workspace_runtime_ids_are_scoped_to_the_requested_organization() {
         json!([])
     );
 
+    let key_now = unix_timestamp();
     let member = database
-        .create_user_with_initial_key("Runtime member", MEMBER_TOKEN, false, memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(false), 31_536_000, 30)
+        .create_user_with_initial_key(
+            "Runtime member",
+            MEMBER_TOKEN,
+            false,
+            memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(false),
+            key_now + 24 * 60 * 60,
+            key_now,
+        )
         .await
         .unwrap();
     database
@@ -591,8 +618,16 @@ async fn postgres_workspace_page_summary_matches_the_filtered_collection() {
         .upsert_image_policy("registry.example/workspace:1", true, 1)
         .await
         .unwrap();
+    let key_now = unix_timestamp();
     let admin = database
-        .create_user_with_initial_key("PostgreSQL summary admin", &format!("summary-pg-admin-{suffix}-000000000000000000000000"), true, memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(true), 31_536_000, 1)
+        .create_user_with_initial_key(
+            "PostgreSQL summary admin",
+            &format!("summary-pg-admin-{suffix}-000000000000000000000000"),
+            true,
+            memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(true),
+            key_now + 24 * 60 * 60,
+            key_now,
+        )
         .await
         .unwrap();
     let (organization_id, template_id) =

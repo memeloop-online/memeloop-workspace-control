@@ -1,4 +1,8 @@
-use std::{net::SocketAddr, sync::Arc};
+use std::{
+    net::SocketAddr,
+    sync::Arc,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use axum::{
     Router,
@@ -27,6 +31,10 @@ async fn app() -> (
     Database,
     memeloop_workspace_control::workspaces::Workspace,
 ) {
+    let key_now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
     let database = Database::connect("sqlite::memory:", "image-update-api".parse().unwrap())
         .await
         .unwrap();
@@ -40,11 +48,25 @@ async fn app() -> (
         .await
         .unwrap();
     let admin = database
-        .create_user_with_initial_key("Admin", ADMIN_TOKEN, true, memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(true), 31_536_000, 1)
+        .create_user_with_initial_key(
+            "Admin",
+            ADMIN_TOKEN,
+            true,
+            memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(true),
+            key_now + 24 * 60 * 60,
+            key_now,
+        )
         .await
         .unwrap();
     database
-        .create_user_with_initial_key("Member", MEMBER_TOKEN, false, memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(false), 31_536_000, 1)
+        .create_user_with_initial_key(
+            "Member",
+            MEMBER_TOKEN,
+            false,
+            memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(false),
+            key_now + 24 * 60 * 60,
+            key_now,
+        )
         .await
         .unwrap();
     let organization = database

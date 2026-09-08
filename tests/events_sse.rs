@@ -1,4 +1,8 @@
-use std::{net::SocketAddr, sync::Arc, time::Duration};
+use std::{
+    net::SocketAddr,
+    sync::Arc,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 
 use axum::{
     body::Body,
@@ -18,13 +22,24 @@ const TOKEN: &str = "event-admin-0000000000000000000000000000";
 
 #[tokio::test]
 async fn sse_resumes_after_durable_last_event_id_and_filters_organization() {
+    let key_now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
     let installation_id = "event-test".parse().unwrap();
     let database = Database::connect("sqlite::memory:", installation_id)
         .await
         .unwrap();
     database.migrate().await.unwrap();
     database
-        .create_user_with_initial_key("Event Admin", TOKEN, true, memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(true), 31_536_000, 1)
+        .create_user_with_initial_key(
+            "Event Admin",
+            TOKEN,
+            true,
+            memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(true),
+            key_now + 24 * 60 * 60,
+            key_now,
+        )
         .await
         .unwrap();
     let organization_id = Uuid::now_v7();

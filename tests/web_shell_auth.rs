@@ -26,6 +26,13 @@ const INTERNAL_TOKEN: &str = "web-shell-internal-token-000000000000000000";
 
 #[tokio::test]
 async fn browser_access_tickets_are_scoped_and_consumed_once() {
+    let now = i64::try_from(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs(),
+    )
+    .unwrap();
     let installation_id = "shell-test".parse::<InstallationId>().unwrap();
     let database = Database::connect("sqlite::memory:", installation_id.clone())
         .await
@@ -36,7 +43,14 @@ async fn browser_access_tickets_are_scoped_and_consumed_once() {
         .await
         .unwrap();
     let user = database
-        .create_user_with_initial_key("Shell User", USER_TOKEN, true, memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(true), 31_536_000, 100)
+        .create_user_with_initial_key(
+            "Shell User",
+            USER_TOKEN,
+            true,
+            memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(true),
+            now + 24 * 60 * 60,
+            now,
+        )
         .await
         .unwrap();
     let organization = database
@@ -95,13 +109,6 @@ async fn browser_access_tickets_are_scoped_and_consumed_once() {
         .record_workspace_observation(workspace.id, WorkspaceObservation::Ready, user.user_id, 103)
         .await
         .unwrap();
-    let now = i64::try_from(
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs(),
-    )
-    .unwrap();
     let mapping = database
         .create_port_mapping(
             organization.id,

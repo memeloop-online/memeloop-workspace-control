@@ -1,4 +1,8 @@
-use std::{net::SocketAddr, sync::Arc};
+use std::{
+    net::SocketAddr,
+    sync::Arc,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use axum::{
     Router,
@@ -20,13 +24,24 @@ use uuid::Uuid;
 const TOKEN: &str = "injection-user-00000000000000000000000000";
 
 async fn app(with_cipher: bool) -> (Router, Uuid) {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
     let installation_id = "injection-api".parse().unwrap();
     let database = Database::connect("sqlite::memory:", installation_id)
         .await
         .unwrap();
     database.migrate().await.unwrap();
     let user = database
-        .create_user_with_initial_key("Injection User", TOKEN, false, memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(false), 31_536_000, 1)
+        .create_user_with_initial_key(
+            "Injection User",
+            TOKEN,
+            false,
+            memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(false),
+            now + 24 * 60 * 60,
+            now,
+        )
         .await
         .unwrap();
     let config = AppConfig {

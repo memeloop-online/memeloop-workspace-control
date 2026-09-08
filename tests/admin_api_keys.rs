@@ -27,17 +27,33 @@ const ORGANIZATION_ADMIN_TOKEN: &str = "organization-admin-key-token-00000000000
 
 #[tokio::test]
 async fn system_admin_can_list_and_idempotently_revoke_a_users_api_keys() {
+    let initial_key_now = unix_timestamp();
+    let initial_key_expiry = initial_key_now + 30 * 24 * 60 * 60;
     let installation_id: InstallationId = "admin-api-keys-test".parse().unwrap();
     let database = Database::connect("sqlite::memory:", installation_id.clone())
         .await
         .unwrap();
     database.migrate().await.unwrap();
     let admin = database
-        .create_user_with_initial_key("Administrator", ADMIN_TOKEN, true, memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(true), 31_536_000, 100)
+        .create_user_with_initial_key(
+            "Administrator",
+            ADMIN_TOKEN,
+            true,
+            memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(true),
+            initial_key_expiry,
+            initial_key_now,
+        )
         .await
         .unwrap();
     let target = database
-        .create_user_with_initial_key("Target user", TARGET_TOKEN, false, memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(false), 31_536_000, 101)
+        .create_user_with_initial_key(
+            "Target user",
+            TARGET_TOKEN,
+            false,
+            memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(false),
+            initial_key_expiry,
+            initial_key_now + 1,
+        )
         .await
         .unwrap();
     let created = database
@@ -319,7 +335,14 @@ async fn target_key_administration_requires_both_system_scopes_and_noops_are_sil
         .await
         .unwrap();
     let target = database
-        .create_user_with_initial_key("Target user", TARGET_TOKEN, false, memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(false), now + 3_600, now)
+        .create_user_with_initial_key(
+            "Target user",
+            TARGET_TOKEN,
+            false,
+            memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(false),
+            now + 3_600,
+            now,
+        )
         .await
         .unwrap();
     let target_key = database
@@ -477,11 +500,25 @@ async fn postgres_admin_revocation_is_idempotent_for_a_disabled_target() {
     database.migrate().await.unwrap();
     let now = unix_timestamp();
     let admin = database
-        .create_user_with_initial_key("PostgreSQL administrator", &format!("pg-admin-token-{suffix}-000000000000000000000000"), true, memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(true), now + 3_600, now)
+        .create_user_with_initial_key(
+            "PostgreSQL administrator",
+            &format!("pg-admin-token-{suffix}-000000000000000000000000"),
+            true,
+            memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(true),
+            now + 3_600,
+            now,
+        )
         .await
         .unwrap();
     let target = database
-        .create_user_with_initial_key("Disabled PostgreSQL target", &format!("pg-target-token-{suffix}-00000000000000000000000"), false, memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(false), now + 3_600, now)
+        .create_user_with_initial_key(
+            "Disabled PostgreSQL target",
+            &format!("pg-target-token-{suffix}-00000000000000000000000"),
+            false,
+            memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(false),
+            now + 3_600,
+            now,
+        )
         .await
         .unwrap();
     let key_id = database.list_api_keys(target.user_id).await.unwrap()[0].id;

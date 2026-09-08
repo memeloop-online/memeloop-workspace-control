@@ -30,14 +30,21 @@ async fn plugin_configuration_is_scoped_versioned_and_removable() {
         .await
         .unwrap();
     database.migrate().await.unwrap();
-    let admin = database
-        .create_user_with_initial_key("Admin", ADMIN_TOKEN, true, memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(true), 31_536_000, 1)
-        .await
-        .unwrap();
     let key_now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_secs() as i64;
+    let admin = database
+        .create_user_with_initial_key(
+            "Admin",
+            ADMIN_TOKEN,
+            true,
+            memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(true),
+            key_now + 24 * 60 * 60,
+            key_now,
+        )
+        .await
+        .unwrap();
     let org_admin = database
         .create_user_with_initial_key(
             "Org Admin",

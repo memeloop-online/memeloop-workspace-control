@@ -28,18 +28,33 @@ const CREATED_TOKEN: &str = "created-api-token-000000000000000000000000";
 
 #[tokio::test]
 async fn management_api_enforces_system_and_organization_boundaries() {
-    let initial_key_expiry = test_key_expiry();
+    let initial_key_now = test_unix_timestamp();
+    let initial_key_expiry = initial_key_now + 30 * 24 * 60 * 60;
     let installation_id: InstallationId = "admin-test".parse().unwrap();
     let database = Database::connect("sqlite::memory:", installation_id.clone())
         .await
         .unwrap();
     database.migrate().await.unwrap();
     let admin = database
-        .create_user_with_initial_key("Admin", ADMIN_TOKEN, true, memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(true), 31_536_000, 100)
+        .create_user_with_initial_key(
+            "Admin",
+            ADMIN_TOKEN,
+            true,
+            memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(true),
+            initial_key_expiry,
+            initial_key_now,
+        )
         .await
         .unwrap();
     database
-        .create_user_with_initial_key("Member", MEMBER_TOKEN, false, memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(false), 31_536_000, 101)
+        .create_user_with_initial_key(
+            "Member",
+            MEMBER_TOKEN,
+            false,
+            memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(false),
+            initial_key_expiry,
+            initial_key_now + 1,
+        )
         .await
         .unwrap();
     let organization = database
@@ -463,7 +478,14 @@ async fn admin_user_initial_key_policy_rejects_escalation_and_invalid_expiry() {
         .await
         .unwrap();
     database
-        .create_user_with_initial_key("Bootstrap administrator", BOOTSTRAP_ADMIN_TOKEN, true, memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(true), 31_536_000, 101)
+        .create_user_with_initial_key(
+            "Bootstrap administrator",
+            BOOTSTRAP_ADMIN_TOKEN,
+            true,
+            memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(true),
+            initial_key_expiry,
+            initial_key_now,
+        )
         .await
         .unwrap();
     let app = router(Arc::new(AppState::new(
@@ -580,7 +602,14 @@ async fn creating_a_user_with_an_organization_membership_is_atomic_and_authorize
         .unwrap();
     database.migrate().await.unwrap();
     let administrator = database
-        .create_user_with_initial_key("Administrator", ADMIN_TOKEN, true, memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(true), now + 3_600, now)
+        .create_user_with_initial_key(
+            "Administrator",
+            ADMIN_TOKEN,
+            true,
+            memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(true),
+            now + 3_600,
+            now,
+        )
         .await
         .unwrap();
     let organization = database
@@ -756,13 +785,22 @@ fn test_unix_timestamp() -> i64 {
 
 #[tokio::test]
 async fn user_and_organization_management_are_paginated_and_safe() {
+    let initial_key_now = test_unix_timestamp();
+    let initial_key_expiry = initial_key_now + 30 * 24 * 60 * 60;
     let installation_id: InstallationId = "admin-page-test".parse().unwrap();
     let database = Database::connect("sqlite::memory:", installation_id.clone())
         .await
         .unwrap();
     database.migrate().await.unwrap();
     let admin = database
-        .create_user_with_initial_key("Admin", ADMIN_TOKEN, true, memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(true), 31_536_000, 1)
+        .create_user_with_initial_key(
+            "Admin",
+            ADMIN_TOKEN,
+            true,
+            memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(true),
+            initial_key_expiry,
+            initial_key_now,
+        )
         .await
         .unwrap();
     let organization = database
@@ -794,7 +832,14 @@ async fn user_and_organization_management_are_paginated_and_safe() {
     )));
 
     storage
-        .create_user_with_initial_key("Admin Two", "admin-two-api-token-0000000000000000000000000", false, memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(false), 31_536_000, 3)
+        .create_user_with_initial_key(
+            "Admin Two",
+            "admin-two-api-token-0000000000000000000000000",
+            false,
+            memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(false),
+            initial_key_expiry,
+            initial_key_now + 1,
+        )
         .await
         .unwrap();
 
@@ -937,13 +982,22 @@ async fn user_and_organization_management_are_paginated_and_safe() {
 
 #[tokio::test]
 async fn user_page_search_treats_like_metacharacters_literally() {
+    let initial_key_now = test_unix_timestamp();
+    let initial_key_expiry = initial_key_now + 30 * 24 * 60 * 60;
     let installation_id: InstallationId = "admin-search-test".parse().unwrap();
     let database = Database::connect("sqlite::memory:", installation_id.clone())
         .await
         .unwrap();
     database.migrate().await.unwrap();
     database
-        .create_user_with_initial_key("Search admin", ADMIN_TOKEN, true, memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(true), 31_536_000, 1)
+        .create_user_with_initial_key(
+            "Search admin",
+            ADMIN_TOKEN,
+            true,
+            memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(true),
+            initial_key_expiry,
+            initial_key_now,
+        )
         .await
         .unwrap();
     for (display_name, token) in [
@@ -961,7 +1015,14 @@ async fn user_page_search_treats_like_metacharacters_literally() {
         ),
     ] {
         database
-            .create_user_with_initial_key(display_name, token, false, memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(false), 31_536_000, 2)
+            .create_user_with_initial_key(
+                display_name,
+                token,
+                false,
+                memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(false),
+                initial_key_expiry,
+                initial_key_now + 1,
+            )
             .await
             .unwrap();
     }

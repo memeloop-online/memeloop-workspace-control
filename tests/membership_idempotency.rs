@@ -1,4 +1,8 @@
-use std::{net::SocketAddr, sync::Arc};
+use std::{
+    net::SocketAddr,
+    sync::Arc,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use axum::{
     Router,
@@ -26,17 +30,36 @@ struct TestContext {
 }
 
 async fn test_context() -> TestContext {
+    let key_now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    let key_expiry = key_now + 24 * 60 * 60;
     let installation_id: InstallationId = "membership-idem".parse().unwrap();
     let database = Database::connect("sqlite::memory:", installation_id.clone())
         .await
         .unwrap();
     database.migrate().await.unwrap();
     let owner = database
-        .create_user_with_initial_key("Owner", ADMIN_TOKEN, true, memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(true), 31_536_000, 1)
+        .create_user_with_initial_key(
+            "Owner",
+            ADMIN_TOKEN,
+            true,
+            memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(true),
+            key_expiry,
+            key_now,
+        )
         .await
         .unwrap();
     let second_user = database
-        .create_user_with_initial_key("Second user", "membership-idempotency-second-token-000000", false, memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(false), 31_536_000, 2)
+        .create_user_with_initial_key(
+            "Second user",
+            "membership-idempotency-second-token-000000",
+            false,
+            memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(false),
+            key_expiry,
+            key_now + 1,
+        )
         .await
         .unwrap();
     let organization = database
