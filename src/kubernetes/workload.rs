@@ -288,34 +288,38 @@ fn workspace_volumes(
         },
     ];
     if let Some(mtls) = ttyd_mtls {
-        volumes.push(Volume {
-            name: "ttyd-tls".to_owned(),
-            secret: Some(SecretVolumeSource {
-                secret_name: Some(mtls.server_tls_secret_name.clone()),
-                default_mode: Some(0o400),
-                items: Some(vec![
-                    KeyToPath {
-                        key: "tls.crt".to_owned(),
-                        path: "tls.crt".to_owned(),
-                        mode: Some(0o400),
-                    },
-                    KeyToPath {
-                        key: "tls.key".to_owned(),
-                        path: "tls.key".to_owned(),
-                        mode: Some(0o400),
-                    },
-                    KeyToPath {
-                        key: "ca.crt".to_owned(),
-                        path: "ca.crt".to_owned(),
-                        mode: Some(0o400),
-                    },
-                ]),
-                ..SecretVolumeSource::default()
-            }),
-            ..Volume::default()
-        });
+        volumes.push(ttyd_tls_volume(mtls));
     }
     volumes
+}
+
+fn ttyd_tls_volume(mtls: &super::TtydMtlsConfig) -> Volume {
+    Volume {
+        name: "ttyd-tls".to_owned(),
+        secret: Some(SecretVolumeSource {
+            secret_name: Some(mtls.server_tls_secret_name.clone()),
+            default_mode: Some(0o400),
+            items: Some(vec![
+                KeyToPath {
+                    key: "tls.crt".to_owned(),
+                    path: "tls.crt".to_owned(),
+                    mode: Some(0o400),
+                },
+                KeyToPath {
+                    key: "tls.key".to_owned(),
+                    path: "tls.key".to_owned(),
+                    mode: Some(0o400),
+                },
+                KeyToPath {
+                    key: "ca.crt".to_owned(),
+                    path: "ca.crt".to_owned(),
+                    mode: Some(0o400),
+                },
+            ]),
+            ..SecretVolumeSource::default()
+        }),
+        ..Volume::default()
+    }
 }
 
 fn bounded_empty_dir(size: &str, medium: Option<&str>) -> EmptyDirVolumeSource {
