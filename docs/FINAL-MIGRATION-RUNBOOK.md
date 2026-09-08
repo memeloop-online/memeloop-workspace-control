@@ -47,13 +47,12 @@ change record; do not record secret values or database contents.
    digests. Verify the migration transaction and all workspace reconciliation records before the
    next release.
 4. After schema-20 acceptance, begin the final offline window: pause old GitOps/reconcilers and
-   stop the old control plane before running the **20 -> 21 bridge** against the offline database
-   export/target database. Do not start a schema-21 coordinator in the old namespace: it would
-   create a second writer while namespace-bearing records are being moved. Do not jump 19 directly
-   to 21. If the schema-22 key-column release completes its test/publish gates and supplies an
-   explicit accepted **20 -> 22 bridge**, it may be selected instead under a new change approval;
-   do not use an untested development build. Schema compatibility is a hard gate, not a cosmetic
-   version bump.
+   stop the old control plane. Use the current, verified-and-published schema-22 release to run
+   the offline **20 -> 22** migration; it includes both required transformations, so no
+   schema-21 coordinator/process is started. Do not jump 19 directly to 22. A snapshot can be
+   imported only into an empty target already at the same schema version, so migrate before export
+   and before import. If the schema-22 CI/provenance or publication gate is not green, cutover is
+   prohibited. Schema compatibility is a hard gate, not a cosmetic version bump.
 5. Keep writes frozen and stop every workspace from an external operator context, including the
    active 100Gi Coder workspace. Confirm Pods are gone, StatefulSets/controllers cannot recreate
    them, no
@@ -118,8 +117,9 @@ are explicitly verified.
 
 The target is accepted only when: the target namespace exists; it has exactly one control plane and
 five workspace identities; all PV claimRefs point to target claims with matching UIDs; each
-Longhorn volume is healthy and has exactly one expected attachment; schema 21 is confirmed after
-the two bridges; GitOps/Argo desired state is target-only; no old controller can reconcile; and
+Longhorn volume is healthy and has exactly one expected attachment; schema 22 is confirmed after
+the published 19->20 bridge and offline 20->22 migration; GitOps/Argo desired state is target-only;
+no old controller can reconcile; and
 each workspace passes its connectivity/data checks without durable `.codex` loss.
 
 Rollback is permitted only before old PVC bindings are irreversibly retired and while the schema
@@ -148,11 +148,12 @@ Coder chain is external-agent-only. game-forking's Longhorn volume was degraded 
 healthy first. Do not expose secrets or database contents.
 
 Pause Argo CD and every old reconciler before moving claims. Take and verify fresh Longhorn
-snapshots. Release production schema 19->20 using the published bridge and validate it. For the
-namespace-changing 20->21 bridge, stop the old coordinator first; migrate/import offline and do
-not start schema 21 until target records/resources are ready. A tested, published, explicitly
-approved 20->22 bridge may be used when schema-22 acceptance is complete; read exact image digests
-from successful CI provenance rather than guessing. Stop all writers, confirm detachment,
+snapshots. Release production schema 19->20 using the published bridge and validate it. Then stop
+the old coordinator and use the current verified-and-published schema-22 release for offline
+20->22 migration; do not start an intermediate schema-21 process. Export/import only at matching
+schema versions into an empty import target. CI/provenance or publication not green means no
+cutover; read exact image digests from successful CI provenance rather than guessing. Stop all
+writers, confirm detachment,
 set each selected PV to Retain, and rebind one PV at a time with matching old/new claim UID checks.
 Never mount old and target claims simultaneously. Move/control SQLite only via supported encrypted
 export/import while offline (or a storage-owner-approved local-path move). Preserve all .codex
