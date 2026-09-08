@@ -394,6 +394,7 @@ mod coordinator_tests {
             ResourceBuilder {
                 installation_id: "public-a".parse().unwrap(),
                 ttyd_image: "example/ttyd:1".to_owned(),
+                ttyd_mtls: None,
                 higress_namespace: "higress-system".to_owned(),
                 higress_pod_labels: BTreeMap::new(),
                 higress_source_cidrs: Vec::new(),

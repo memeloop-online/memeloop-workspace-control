@@ -3,7 +3,7 @@ use std::{collections::BTreeMap, io};
 use ipnet::IpNet;
 use memeloop_workspace_control::{
     config::AppConfig,
-    kubernetes::{InternetEgressConfig, ResourceBuilder},
+    kubernetes::{InternetEgressConfig, ResourceBuilder, TtydMtlsConfig},
 };
 
 pub(super) fn resource_builder(config: &AppConfig) -> Result<ResourceBuilder, io::Error> {
@@ -85,6 +85,7 @@ pub(super) fn resource_builder(config: &AppConfig) -> Result<ResourceBuilder, io
     Ok(ResourceBuilder {
         installation_id: config.installation_id.clone(),
         ttyd_image,
+        ttyd_mtls: ttyd_mtls_config()?,
         higress_namespace,
         higress_pod_labels,
         higress_source_cidrs,
@@ -103,6 +104,32 @@ pub(super) fn resource_builder(config: &AppConfig) -> Result<ResourceBuilder, io
             .unwrap_or_else(|_| "https".to_owned()),
         internal_ssh_node_port_enabled: config.internal_ssh_host.is_some(),
     })
+}
+
+fn ttyd_mtls_config() -> Result<Option<TtydMtlsConfig>, io::Error> {
+    let server = optional_env("MWC_TTYD_MTLS_SERVER_SECRET")?;
+    let namespace = optional_env("MWC_HIGRESS_MTLS_CLIENT_SECRET_NAMESPACE")?;
+    let client = optional_env("MWC_HIGRESS_MTLS_CLIENT_SECRET_NAME")?;
+    parse_ttyd_mtls(server, namespace, client)
+}
+
+fn parse_ttyd_mtls(
+    server: Option<String>,
+    namespace: Option<String>,
+    client: Option<String>,
+) -> Result<Option<TtydMtlsConfig>, io::Error> {
+    match (server, namespace, client) {
+        (None, None, None) => Ok(None),
+        (Some(server), Some(namespace), Some(client)) => {
+            TtydMtlsConfig::new(server, namespace, client)
+                .map(Some)
+                .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))
+        }
+        _ => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "MWC_TTYD_MTLS_SERVER_SECRET, MWC_HIGRESS_MTLS_CLIENT_SECRET_NAMESPACE and MWC_HIGRESS_MTLS_CLIENT_SECRET_NAME must be configured together",
+        )),
+    }
 }
 
 fn internet_egress_config() -> Result<Option<InternetEgressConfig>, io::Error> {
@@ -165,4 +192,37 @@ fn optional_cidrs(name: &'static str) -> Result<Option<Vec<IpNet>>, io::Error> {
         })
         .collect::<Result<Vec<_>, _>>()
         .map(Some)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_ttyd_mtls;
+
+    #[test]
+    fn mtls_configuration_requires_all_three_references() {
+        for mask in 0..8 {
+            let result = parse_ttyd_mtls(
+                (mask & 1 != 0).then(|| "ttyd-server".to_owned()),
+                (mask & 2 != 0).then(|| "higress-system".to_owned()),
+                (mask & 4 != 0).then(|| "ttyd-client".to_owned()),
+            );
+            match mask {
+                0 => assert!(result.unwrap().is_none()),
+                7 => assert!(result.unwrap().is_some()),
+                _ => assert!(result.is_err()),
+            }
+        }
+    }
+
+    #[test]
+    fn mtls_configuration_rejects_empty_secret_reference() {
+        assert!(
+            parse_ttyd_mtls(
+                Some(String::new()),
+                Some("higress-system".to_owned()),
+                Some("ttyd-client".to_owned()),
+            )
+            .is_err()
+        );
+    }
 }
