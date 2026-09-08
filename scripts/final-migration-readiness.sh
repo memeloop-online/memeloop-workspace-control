@@ -17,6 +17,12 @@ readonly WORKSPACE_NAMESPACES=(
 
 require_kubectl() { command -v kubectl >/dev/null || { echo "kubectl is required" >&2; exit 127; }; }
 section() { printf '\n## %s\n' "$1"; }
+filter_workspace_rows() {
+  awk -v c="$CONTROL_NAMESPACE" -v a="${WORKSPACE_NAMESPACES[0]}" \
+    -v b="${WORKSPACE_NAMESPACES[1]}" -v d="${WORKSPACE_NAMESPACES[2]}" \
+    -v e="${WORKSPACE_NAMESPACES[3]}" \
+    'NR == 1 || $1 == c || $1 == a || $1 == b || $1 == d || $1 == e'
+}
 
 require_kubectl
 section "Context and namespace existence (read only)"
@@ -29,7 +35,7 @@ done
 
 section "Control plane and MWC workspace PVC -> PV bindings"
 kubectl get pvc -A -o custom-columns='NAMESPACE:.metadata.namespace,NAME:.metadata.name,PHASE:.status.phase,PV:.spec.volumeName,SC:.spec.storageClassName,CAPACITY:.status.capacity.storage,UID:.metadata.uid' \
-  | { head -1; rg "^(${CONTROL_NAMESPACE}|${WORKSPACE_NAMESPACES[0]}|${WORKSPACE_NAMESPACES[1]}|${WORKSPACE_NAMESPACES[2]}|${WORKSPACE_NAMESPACES[3]})\\s"; }
+  | filter_workspace_rows
 kubectl -n "$CODER_NAMESPACE" get pvc "$CODER_PVC" \
   -o custom-columns='NAMESPACE:.metadata.namespace,NAME:.metadata.name,PHASE:.status.phase,PV:.spec.volumeName,SC:.spec.storageClassName,CAPACITY:.status.capacity.storage,UID:.metadata.uid'
 
@@ -42,9 +48,9 @@ done
 
 section "MWC workload ownership and readiness"
 kubectl get pod -A -o custom-columns='NAMESPACE:.metadata.namespace,NAME:.metadata.name,READY:.status.containerStatuses[*].ready,PHASE:.status.phase,OWNER:.metadata.ownerReferences[0].kind' \
-  | { head -1; rg "^(${CONTROL_NAMESPACE}|${WORKSPACE_NAMESPACES[0]}|${WORKSPACE_NAMESPACES[1]}|${WORKSPACE_NAMESPACES[2]}|${WORKSPACE_NAMESPACES[3]})\\s"; }
+  | filter_workspace_rows
 kubectl get statefulset -A -o custom-columns='NAMESPACE:.metadata.namespace,NAME:.metadata.name,READY:.status.readyReplicas,GENERATION:.metadata.generation' \
-  | { head -1; rg "^(${CONTROL_NAMESPACE}|${WORKSPACE_NAMESPACES[0]}|${WORKSPACE_NAMESPACES[1]}|${WORKSPACE_NAMESPACES[2]}|${WORKSPACE_NAMESPACES[3]})\\s"; }
+  | filter_workspace_rows
 
 section "Independent Coder Pod -> PVC chain"
 kubectl -n "$CODER_NAMESPACE" get pod -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.status.phase}{"\t"}{range .spec.volumes[?(@.persistentVolumeClaim)]}{.persistentVolumeClaim.claimName}{","}{end}{"\n"}{end}' \

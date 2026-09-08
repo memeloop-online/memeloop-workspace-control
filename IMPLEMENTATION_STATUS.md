@@ -19,26 +19,52 @@ Cilium/Calico, split clusters, or restore `runtime_profile`. Preserve durable Co
 
 | ID | Work | State / owner / next gate |
 | --- | --- | --- |
-| MIG-01 | Canonical shared Namespace in product and Chart | Source committed: `c0b2a80`, `0a545d3`; not deployed. Schema 20→21 bridge exists. Publish and verify CI before any cutover. |
+| MIG-01 | Canonical shared Namespace in product and Chart | Source committed: `c0b2a80`, `0a545d3`; not deployed. CI `34216981601` reached Rust tests: 100 passed, PostgreSQL migration fixture failed (multiple statements in prepared query). Fix owned by SEC-05 worker; no rollout until rerun passes. |
 | MIG-02 | Required schema 19→20→21 transitions and GitOps promotion | Pending. Existing 19→20 bridge evidence below remains valid; never skip required transforms. Stage each promotion, not the final GitOps chain at once. |
 | MIG-03 | Four MWC workloads/PVCs/control-plane volume into canonical Namespace | Pending gated cutover. Reuse verified volumes; snapshot, single writer, SSH/host key/PVC/session validation before retiring old resources. |
 | MIG-04 | Last active Coder TOKEN center dev workspace | External-agent cutover only. Current source PVC is 100 GiB; do not stop this workspace from inside itself. Prepare complete copyable final procedure. |
 | MIG-05 | Delete superseded namespaces/resources and retired code/names | Pending after MIG-02/03/04 acceptance. Remove one-time migration compatibility only after live migration; no false claim of completion while old namespaces remain. |
 | IMG-01 | Upgrade maintainance and rust-dev-test to verified images | Waiting for borrower release of ports 31871/32671; preserve sessions/WAL/logs. 2026-09-08 messaging tool returned unavailable, so release is not confirmed. |
 | UI-01 | Final UI closeout | Source committed `c3596e9`, embedded assets `44eca28`; publish/deploy and targeted responsive regression remain. Do not redo earlier twelve-feature audit. |
-| SEC-01 | Actual NetworkPolicy enforcement, same-/cross-node tests | In progress: `netpol_evidence`. Isolated disposable probes only; do not mutate existing business policies. Confirm creation/startup and NAT limitations, not just API object existence. |
-| SEC-02 | Product egress isolation and least-source ingress | Pending SEC-01 evidence. Current live workspace policy is ingress-only and permits broad Pod/Tailnet access to ttyd; external tenant acceptance is NOT passed. |
-| SEC-03 | Template optional `runtime_class_name`, API/YAML/UI/Pod rendering | In progress: `sandbox_runtime_product`. No silent fallback; existing ordinary templates unchanged. |
-| SEC-04 | gVisor node preparation and optional RuntimeClass | In progress: `gvisor_node_rollout` prepares scripts/docs and node plan. Single-node explicit rollout gate; never change default runtime or mass-restart nodes. |
-| SEC-05 | API-key allowed-template IDs and bypass prevention | In progress: `key_template_permissions`. Persist restrictions; enforce server-side, including alternate create/modify paths. |
+| SEC-01 | Actual NetworkPolicy enforcement, same-/cross-node tests | Harbor recovered by separate ops. Ingress deny passed all four paths; cross-node ingress selector allow FAILED. Egress matrix passed 12 checks. Boundary retry passed 30 checks including same/other node API/kubelet denial, Kubernetes Service denial, public TCP and DNS retained. Evidence: `/tmp/mwc-network-{acceptance,egress,boundaries-alidns}-20260908.json`; all disposable namespaces deleted. No test process remains running. Other-node and startup coverage remain. |
+| SEC-02 | Product egress isolation and least-source ingress | Source `0f062b8`, review fix `5589e35` (global-unicast IPv6, optional DNS fail-closed). Deployment and full SEC-01 evidence pending. Live policy remains ingress-only with broad ttyd sources: external tenant acceptance is NOT passed. |
+| SEC-03 | Template optional `runtime_class_name`, API/YAML/UI/Pod rendering | Source committed `37fc09b`; formatting, TypeScript and targeted draft tests passed. Full CI and live runtime acceptance pending. No silent fallback; existing ordinary templates unchanged. |
+| SEC-04 | gVisor node preparation and optional RuntimeClass | iv preflight complete, pause pull recovered; default runc remains unchanged. Artifact transfer incomplete, nothing installed. Node hosts gateway/storage workloads: require restart/recovery window before registration. Installer review remains active. |
+| SEC-05 | API-key allowed-template IDs and bypass prevention | Source `f02d7cb`, bypass fixes `205be6e`, `506f13f`, `0f90fd9`; HTTP clocks `cec798b`. CI `34228134529` stopped at formatting, now corrected and resubmitted. Additional read-only key/user-injection HTTP regression delegated to `http_fixture_clocks`. Not deployed/accepted. |
 | SEC-06 | External sandbox release acceptance | Pending SEC-01..05. Verify network escape paths, privilege/credential boundaries, CPU/memory/disk/PID pressure, SSH/Web Shell, restart/reschedule; fail closed. Installing components alone is not acceptance. |
-| OPS-01 | Operator-only setup and automated product checks | In progress with SEC-04; document exact setup, ownership, drift checks, rollback, supported overhead and unverified limitations. |
+| OPS-01 | Operator-only setup and automated product checks | Node docs/preflight source `fb6d0bf`, corrected node evidence/runbook `c4271b1`; installer transaction/rollback review in progress. Do not execute earlier installer draft. |
 | CLEAN-01 | Superseded API keys/cache injections/image policies | Preserve previous evidence; final transactional cleanup/rotation and deletion verification remain. Never expose secret values. |
 
 2026-09-08 read-only runtime snapshot: 262 Pods have no explicit RuntimeClass, one uses `nvidia`,
 and no `gvisor`/`runsc` RuntimeClass exists. This does not prove each node's default handler.
 Seven nodes are Ready. July's NetworkPolicy non-enforcement document conflicts with August's
 recorded kube-router/SNAT tests; SEC-01 resolves this by fresh bounded tests, not by assumption.
+`77bec21` now applies NetworkPolicy before the workload; this orders API writes but does NOT
+prove the node has enforced policy before the first container instruction. Acceptance must
+cover startup and rescheduling. `serv-146231` runs kernel 4.18 and is excluded from current
+gVisor eligibility (documented minimum 5.6). No node runtime has been changed yet.
+Read-only node preflight confirmed iv's containerd v3/cgroup v2 and no runsc handler. Initially its pause
+image cache was empty. Harbor proxy HEAD for `docker-io/rancher/mirrored-pause:3.6` returned 502;
+the registry's node affinity excludes control-plane nodes while its PV is pinned to westlake.
+User explicitly assigned repair to another ops agent; MWC does not own that infrastructure change.
+The ops agent subsequently restored registry availability. The successful egress matrix observed
+the cross-node request as `::ffff:10.42.4.1` at the target, versus the actual same-node client Pod
+IP `::ffff:10.42.4.242`. This is target CNI gateway SNAT, not an assumption about Tailnet source
+addresses. Product egress controls are viable on the tested paths; source-selector ingress
+identity is not preserved across those nodes. Do not "fix" isolation by broadly trusting that
+gateway source without compensating authentication/egress controls.
+The boundary test initially could not reach Cloudflare before installing policy; that is not
+a policy failure. Retrying with reachable public endpoint `223.5.5.5:443` passed 30 checks on
+haixia/westlake. Node API/kubelet denial is observed evidence for those tested addresses, not
+certification of all nodes, IPv6, public host addresses, metadata or startup timing.
+Main inspected 360/1440 API-key screenshots and requested consistent checkbox styling and
+removal of duplicated description; `key_template_ui_review` owns this bounded polish.
+
+Migration handoff review corrected a dangerous conflation: `rust-dev-test` and Coder TOKEN center
+dev are distinct 100 GiB volumes. Both actual PVC→PV claim UIDs match. Final count is four
+existing MWC workspaces plus the last Coder workspace. The game-forking Longhorn volume was
+degraded on this capture; health must recover before its volume cutover. Namespace-changing
+schema migration is OFFLINE with the old coordinator stopped, not a rolling server upgrade.
 
 ## Active goal
 
