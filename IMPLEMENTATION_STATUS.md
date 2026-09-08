@@ -363,6 +363,12 @@ of the exact per-workspace filter lifecycle, ownership checks, Chart permissions
 Gateway permissions must use a conditional Role/RoleBinding in the gateway Namespace, not
 cluster-wide EnvoyFilter access. Main owns the documentation and ledger. `release_manifest_plan`
 (Luna) is preparing a read-only exact GitOps promotion diff; no cluster changes or push.
+Main startup validation landed in `7473093` (namespace mismatch fails before serving);
+rustfmt/diff checks passed, full Rust verification awaits the worker's complete patch and CI.
+Disable is explicitly two-stage: keep mTLS/RBAC while removing owned Ingresses first and
+then filters; remove mTLS/RBAC only after absence checks. Disabled installations must not
+query EnvoyFilter APIs. Settled workspaces are not automatically requeued on configuration
+restart, so operator cleanup must not assume a periodic resync or start stopped workspaces.
 Do not repeat this passed canary absent a relevant change. Production rollout, certificate
 lifecycle and authenticated WebSocket acceptance remain pending. No gateway fork or broad
 cluster patch is authorized. Do not weaken the acceptance assertion.
