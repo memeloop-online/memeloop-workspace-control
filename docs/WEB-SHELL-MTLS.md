@@ -195,3 +195,19 @@ The temporary Namespace `mwc-higress-ttyd-mtls-1788895385437-957o0r` and gateway
 No existing workspace was changed. The server CA/SAN matrix was not repeated.
 This closes the gateway client-certificate gate, not interactive WebSocket authentication
 or production rollout.
+
+## Existing-instance browser authentication — 2026-09-08
+
+Runner `a38de51` with rejection-evidence fix `4bc8926` passed against Ready `tiddlywiki-dev`
+(`01a06174-8ce2-7d52-b268-ff46894a14b9`) at the internal console. The real Chromium flow
+verified a 101 handshake, shell-executed split marker, changed `stty size` after viewport
+resize, rejection of the consumed ticket, and successful fresh-ticket recovery.
+Process `62163` exited 0; browser contexts and temporary token file were cleaned.
+
+Chromium may report HTTP 401 through its exact authentication-failure event instead of a
+handshake-response event. The runner recognizes that explicit signal, corroborated by a real
+local 401 fixture and [Chromium's response-code handling](https://chromium.googlesource.com/chromium/src/+/master/net/websockets/websocket_stream.cc).
+A timeout or generic connection closure is not accepted as rejection evidence.
+
+This browser run used the existing installation without upstream mTLS. Combined new-release
+mTLS, external-auth and resource-lifecycle acceptance is still a deployment gate.

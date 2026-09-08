@@ -446,9 +446,16 @@ committed and main-reviewed. Real run session `30199` passed the first authentic
 split-marker command execution and actual `stty size` resize, then FAILED the replay evidence
 wait (no explicit 401/403 was recorded). Fresh-ticket recovery was not reached. Session ended,
 browser contexts and temporary token file were cleaned by `finally`. Do not claim full browser
-acceptance. The browser worker owns a real-local-Chromium rejected-upgrade fixture and precise
-CDP rejection evidence correction; a close/timeout alone must never count as rejection.
-Release publication is confirmed above; deployment and browser replay acceptance remain pending.
+acceptance from that failed run. Follow-up `4bc8926` handles Chromium's explicit HTTP-401
+authentication error event; main checked its upstream source mapping and reran all three
+fixtures, including real local Chromium against a server returning 401.
+Real browser session `62163` then exited 0: initial 101, split-marker command, actual terminal
+resize, consumed-ticket rejection and fresh-ticket recovery all PASSED on `tiddlywiki-dev`.
+All browser contexts and the generated owner-only token file were cleaned in `finally`;
+no query/ticket, screenshot or trace was persisted. Do not repeat this standalone browser gate
+absent a relevant change. This ran against the existing installation without upstream mTLS:
+it is not proof of the new product release's combined mTLS + external-auth rollout.
+Release publication is confirmed above; deployment and combined rollout acceptance remain pending.
 GitOps app README is added in `dc3b1c6`, refined in `bc4e709`: separate console-access
 instructions with single-line Bash/PowerShell commands for `lindongwu11-token`. Main verified
 Bash syntax and PowerShell decoding using a fake value, never the real credential.
