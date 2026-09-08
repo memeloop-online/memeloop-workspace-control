@@ -1,6 +1,6 @@
 # Implementation status
 
-This is the durable continuation checkpoint. Continue from **Next actions** after context
+This is the durable continuation checkpoint. Continue from **Execution ledger** after context
 compaction. Do not repeat completed audits unless new evidence contradicts them.
 
 Last updated: 2026-09-08
@@ -29,8 +29,8 @@ Cilium/Calico, split clusters, or restore `runtime_profile`. Preserve durable Co
 | SEC-01 | Actual NetworkPolicy enforcement, same-/cross-node tests | Harbor recovered by separate ops. Ingress deny passed all four paths; cross-node ingress selector allow FAILED. Egress matrix passed 12 checks. Boundary retry passed 30 checks including same/other node API/kubelet denial, Kubernetes Service denial, public TCP and DNS retained. Evidence: `/tmp/mwc-network-{acceptance,egress,boundaries-alidns}-20260908.json`; all disposable namespaces deleted. No test process remains running. Other-node and startup coverage remain. |
 | SEC-02 | Product egress isolation and least-source ingress | Source `0f062b8`, review fix `5589e35` (global-unicast IPv6, optional DNS fail-closed). Deployment and full SEC-01 evidence pending. Live policy remains ingress-only with broad ttyd sources: external tenant acceptance is NOT passed. |
 | SEC-03 | Template optional `runtime_class_name`, API/YAML/UI/Pod rendering | Source committed `37fc09b`; formatting, TypeScript and targeted draft tests passed. Full CI and live runtime acceptance pending. No silent fallback; existing ordinary templates unchanged. |
-| SEC-04 | gVisor node preparation and optional RuntimeClass | iv preflight complete, pause pull recovered; default runc remains unchanged. Artifact transfer incomplete, nothing installed. Node hosts gateway/storage workloads: require restart/recovery window before registration. Installer review remains active. |
-| SEC-05 | API-key allowed-template IDs and bypass prevention | Source `f02d7cb`, bypass fixes `205be6e`, `506f13f`, `0f90fd9`; HTTP clocks `cec798b`. CI `34228134529` stopped at formatting, now corrected and resubmitted. Additional read-only key/user-injection HTTP regression delegated to `http_fixture_clocks`. Not deployed/accepted. |
+| SEC-04 | gVisor node preparation and optional RuntimeClass | User authorized root access and reboot of 100.64.0.10 (`serv-146231`). Kernel 5.15.220 booted; K3s active, old 4.18 remains default for rollback. runsc NOT installed: systemd 239 fails the supported systemd-cgroup prerequisite; do not bypass with filesystem cgroups. Eligible node/OS decision remains open. |
+| SEC-05 | API-key allowed-template IDs and bypass prevention | Source `f02d7cb`, bypass fixes `205be6e`, `506f13f`, `0f90fd9`; read-only HTTP regression `504b375`. Latest CI `34251610230` completed all Rust test targets; only settings key-rotation (403 vs 201) and lease schema-version (22 vs 21) tests failed. `http_fixture_clocks` owns these two test diagnoses. Not deployed/accepted. |
 | SEC-06 | External sandbox release acceptance | Pending SEC-01..05. Verify network escape paths, privilege/credential boundaries, CPU/memory/disk/PID pressure, SSH/Web Shell, restart/reschedule; fail closed. Installing components alone is not acceptance. |
 | OPS-01 | Operator-only setup and automated product checks | Hardened installer `5bd4b95` passed real-tar fixture tests, CI hook `4b5c8b0`; node preparation `7b250f7`. Host registration/canary still pending eligible kernel and recovery checks. |
 | CLEAN-01 | Superseded API keys/cache injections/image policies | Preserve previous evidence; final transactional cleanup/rotation and deletion verification remain. Never expose secret values. |
@@ -41,8 +41,9 @@ Seven nodes are Ready. July's NetworkPolicy non-enforcement document conflicts w
 recorded kube-router/SNAT tests; SEC-01 resolves this by fresh bounded tests, not by assumption.
 `77bec21` now applies NetworkPolicy before the workload; this orders API writes but does NOT
 prove the node has enforced policy before the first container instruction. Acceptance must
-cover startup and rescheduling. `serv-146231` runs kernel 4.18 and is excluded from current
-gVisor eligibility (documented minimum 5.6). No node runtime has been changed yet.
+cover startup and rescheduling. At this initial snapshot `serv-146231` ran kernel 4.18;
+the later authorized 5.15 boot and remaining systemd prerequisite are recorded above.
+No node runtime handler has been changed.
 Read-only node preflight confirmed iv's containerd v3/cgroup v2 and no runsc handler. Initially its pause
 image cache was empty. Harbor proxy HEAD for `docker-io/rancher/mirrored-pause:3.6` returned 502;
 the registry's node affinity excludes control-plane nodes while its PV is pinned to westlake.
@@ -330,6 +331,13 @@ product terminology.
 
 ## Next actions
 
+Current priority (supersedes historical rollout ordering below): fix the two failures from
+CI `34251610230`, publish only after green, and review/run the disposable Higress→ttyd
+mTLS acceptance runner owned by `sandbox_runtime_product`. Native ttyd acceptance already
+passed; do not repeat it. Never apply broad SNAT source allowances without the gateway
+authentication boundary verified end to end. Shared-namespace cutover still requires the
+schema bridge, writer shutdown, retained-volume and rollback gates.
+
 1. Do not deploy the already-published schema-20 release while ports `31871` and `32671` are
    borrowed.
 2. After the borrowing task explicitly finishes, stop and snapshot `maintainance` and
@@ -339,10 +347,12 @@ product terminology.
    verify SSH/Web Shell/PVC/host-key continuity, then disable their superseded image policies.
 4. After the bridge migration and live schema-20 records are verified, advance GitOps to staged
    commit `845b2e0` and validate its exact published digests. Never skip directly to this state.
-5. Replace broad Higress source CIDRs with verified per-node CNI gateway `/32` addresses in a
-   staged GitOps rollout. A live WebSocket to a westlake workspace proved the backend source as
-   `10.42.3.1`, not the gateway's Tailnet address. Public WebSocket and port mappings must pass
-   while unrelated Pod access to 7681 fails; new cluster nodes must add their gateway `/32`.
+5. First prove Higress→ttyd mTLS including invalid-client and invalid-server-trust rejection.
+   Then scope any required SNAT source allowances to measured CNI gateway `/32` addresses.
+   Those addresses alone do not identify Higress: cross-node unrelated Pods may share the
+   translated source. Verify they cannot establish a ttyd TLS session without the client key,
+   while authorized WebSocket and port mappings remain functional. Do not claim NetworkPolicy
+   source identity is preserved through SNAT.
 6. Perform one final database/Kubernetes/source acceptance pass and update this checkpoint. Do not
    repeat completed migration, CI, observability, or terminology audits without new contrary
    evidence.
