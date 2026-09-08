@@ -1,5 +1,9 @@
 # serv-146231 AlmaLinux 8 to 9 upgrade plan
 
+User decision (2026-09-08): planning this node's OS upgrade is approved. Execution of
+the major-version upgrade remains a separate approval after the gates below are satisfied.
+The earlier kernel-upgrade/reboot permission does not authorize an OS migration.
+
 This is a planning record only. It does not authorize installing ELevate or Leapp, changing
 repositories, changing K3s or Longhorn, changing GRUB, draining, or rebooting. The target is
 control-plane node `serv-146231` (`serv.146231.com`, cloud/Tailscale address `100.64.0.10`), not a

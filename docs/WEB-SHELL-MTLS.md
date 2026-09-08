@@ -12,8 +12,8 @@ does not widen any NetworkPolicy source, CIDR, Service type, NodePort, or host-p
 The initial 2026-09-08 canary failed server-name validation on Higress 2.2.3: a wrong SNI still
 received HTTP 200. Ingress annotations alone are insufficient to assert certificate SAN
 verification. A subsequent canary using an exact-service EnvoyFilter passed the certificate
-tests below. Its integration into the product lifecycle is in progress; production enablement
-remains gated on that integration and authenticated WebSocket acceptance.
+tests below. Product lifecycle integration is implemented in source; production enablement
+remains gated on its full CI regressions and authenticated WebSocket acceptance.
 
 ## Enablement
 

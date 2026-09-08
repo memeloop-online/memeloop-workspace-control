@@ -384,8 +384,13 @@ error. Main refactor `80a1a67` separates gateway validation from resource assemb
 weakening lint rules. Follow-up CI `34263765347` passed production checking, then stopped on
 the renderer test's boolean-comparison lint. Main `c094554` replaces the string search with
 a structural absent-field assertion; rustfmt passed. No CI process is currently running.
-`http_fixture_clocks` continues lifecycle regressions; `release_manifest_plan` (Luna) now
-owns a bounded Rust-dependency CI cache addition, with an immutable upstream action pin.
+`http_fixture_clocks` continues lifecycle regressions. Main review requires full-call assertions
+that the SAN filter survives an Ingress DELETE until absence is observed, including a retained
+finalizer, and a missing-UID deletion rejection case. The tests are being split into bounded
+fixture and scenario modules; do not treat unexecuted tests as acceptance.
+`release_manifest_plan` (Luna) completed the Rust-dependency CI cache in `618c300`, with an
+immutable upstream action pin. It now prepares a read-only gap analysis for authenticated
+WebSocket acceptance; no cluster changes are delegated.
 Next push these together to `ci/ttyd-san-c63cb93` for verification only; do not publish
 or deploy before the complete regression gate passes.
 Disable is explicitly two-stage: keep mTLS/RBAC while removing owned Ingresses first and
