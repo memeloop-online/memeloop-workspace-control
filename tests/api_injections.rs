@@ -139,7 +139,7 @@ async fn user_injection_writes_require_a_workspace_write_scope() {
         json!({
             "key": key,
             "kind": "environment_variable",
-            "target": key.to_ascii_uppercase(),
+            "target": key.replace('-', "_").to_ascii_uppercase(),
             "value": {"encoding": "utf8", "value": "not-returned"},
             "sensitive": true,
             "locked": false,
