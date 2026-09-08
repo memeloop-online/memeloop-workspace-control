@@ -49,7 +49,7 @@ mod coordinator_tests {
         DeleteProgress, KubernetesCoordinator, ReconcileError, restart_generation_is_stale,
     };
     use crate::{
-        kubernetes::ResourceBuilder,
+        kubernetes::{InternetEgressConfig, ResourceBuilder},
         quota::Resources,
         templates::WorkspaceTemplateSpec,
         workspace_runtime::WorkspaceRuntimeIdentity,
