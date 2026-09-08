@@ -379,9 +379,12 @@ Ingress absence is observed and clean the cross-namespace filter even if the wor
 is already gone. `http_fixture_clocks` owns fake-Kubernetes lifecycle regressions (not only
 manifest assertions), including disabled-mode no-CRD access, missing credentials, ordering,
 foreign ownership, UID preconditions and missing Namespace cleanup.
-Early CI `34262698041` is running for `c63cb93` on `ci/ttyd-san-c63cb93`; its non-main branch
-cannot publish images. This is not the final regression/publication gate. Keep production
-unchanged; add the lifecycle tests before promoting to main and publishing.
+Early CI `34262698041` stopped on `ResourceBuilder::build` length (107/100), not an API/type
+error. Main refactor `80a1a67` separates gateway validation from resource assembly without
+weakening lint rules. Follow-up CI `34263765347` is running for that revision on
+`ci/ttyd-san-c63cb93`; this non-main branch cannot publish images. This is not the final
+regression/publication gate. Keep production unchanged; add the lifecycle tests before
+promoting to main and publishing.
 Disable is explicitly two-stage: keep mTLS/RBAC while removing owned Ingresses first and
 then filters; remove mTLS/RBAC only after absence checks. Disabled installations must not
 query EnvoyFilter APIs. Settled workspaces are not automatically requeued on configuration
