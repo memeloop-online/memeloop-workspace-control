@@ -180,6 +180,15 @@ Main corrected runner's `/token` assertion to parse JSON `{token:""}` rather tha
 an empty HTTP body, and cleared its forwarding readiness interval on timeout. Native mTLS
 canary is now running as exec session `59638`; resume that exact session for results.
 Do not start another canary while this process exists. It owns precise namespace cleanup.
+Session `59638` completed failed due to historical image `6746…1bdd` Harbor manifest redirect
+loop, and its namespace was confirmed absent. Main fixed malformed diagnostic JSON parsing,
+then retried the GitOps-pinned image `0605fae2319fb64efaa5daeb4c98e2afe75e19c4047513a7dad25bf3e95aac46`.
+Session `12709` PASSED native ttyd mTLS: valid-client HTML (728583 bytes), `/token` JSON token
+empty, missing/wrong client rejected, valid-client recheck passed, Pod restartCount zero.
+Namespace `mwc-ttyd-mtls-20260908162656` was deleted and absence independently confirmed.
+No canary process remains. This is native ttyd evidence only; Higress upstream mTLS and
+end-to-end ticket/WebSocket acceptance are still required.
+Snapshot validator test-module import/baseline fixed in `4f25112`; continue its newest CI.
 
 Migration handoff review corrected a dangerous conflation: `rust-dev-test` and Coder TOKEN center
 dev are distinct 100 GiB volumes. Both actual PVC→PV claim UIDs match. Final count is four
