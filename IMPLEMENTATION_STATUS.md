@@ -162,6 +162,13 @@ First native ttyd mTLS test was inconclusive: negative TLS request broke its por
 making subsequent valid-client tests connection failures. Disposable namespace and keys were
 removed. Retest uses a valid-client baseline and independent forwarding sessions plus Pod
 health/log evidence; no claim of TLS end-to-end acceptance yet.
+CI `34247025288` found the TLS manifest test used `Option<bool>` as a bool;
+`37ef1d1` now requires `read_only == Some(true)` without weakening the assertion.
+Second ttyd canary never reached TLS (Pod readiness timeout); it was cleaned but missing
+pre-cleanup failure evidence. Main stopped ad-hoc retries and assigned a durable TS runner
+with failure diagnostics before cleanup; review that runner before another cluster test.
+Runtime worker owns `docs/WEB-SHELL-MTLS.md` and its README link (Secret roles, SAN/EKU,
+rotation and acceptance limits). These docs must not imply live mTLS rollout is complete.
 
 Migration handoff review corrected a dangerous conflation: `rust-dev-test` and Coder TOKEN center
 dev are distinct 100 GiB volumes. Both actual PVC→PV claim UIDs match. Final count is four
