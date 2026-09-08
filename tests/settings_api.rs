@@ -198,7 +198,26 @@ async fn api_keys_rotate_without_ever_returning_stored_tokens() {
     .await;
     assert_eq!(initial.as_array().unwrap().len(), 1);
     let initial_key_id = initial[0]["id"].as_str().unwrap();
+    let initial_expiry = initial[0]["expires_at"].as_i64().unwrap();
     assert!(initial[0].get("token").is_none());
+
+    let exceeds_parent = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/v1/me/api-keys",
+            PRIMARY_TOKEN,
+            Some(json!({
+                "name": "Exceeds parent expiry",
+                "scopes": ["read_workspace", "manage_api_keys"],
+                "expires_at": initial_expiry + 1
+            })),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(exceeds_parent.status(), StatusCode::FORBIDDEN);
+
+    let rotated_expiry = initial_expiry - 1;
 
     let created = json_response(
         app.clone()
@@ -209,7 +228,7 @@ async fn api_keys_rotate_without_ever_returning_stored_tokens() {
                 Some(json!({
                     "name": "Windows workstation",
                     "scopes": ["read_workspace", "manage_api_keys"],
-                    "expires_at": 1_800_000_000i64
+                    "expires_at": rotated_expiry
                 })),
             ))
             .await
@@ -224,7 +243,7 @@ async fn api_keys_rotate_without_ever_returning_stored_tokens() {
         created["scopes"],
         json!(["manage_api_keys", "read_workspace"])
     );
-    assert_eq!(created["expires_at"], 1_800_000_000i64);
+    assert_eq!(created["expires_at"], rotated_expiry);
     assert!(created["prefix"].as_str().unwrap().ends_with('…'));
 
     let listed = json_response(
@@ -258,7 +277,7 @@ async fn api_keys_rotate_without_ever_returning_stored_tokens() {
         repeated_login["api_key_scopes"],
         json!(["manage_api_keys", "read_workspace"])
     );
-    assert_eq!(repeated_login["api_key_expires_at"], 1_800_000_000i64);
+    assert_eq!(repeated_login["api_key_expires_at"], rotated_expiry);
     assert_eq!(
         key_last_used(&database, created["id"].as_str().unwrap()).await,
         first_last_used,
