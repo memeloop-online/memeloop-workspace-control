@@ -425,7 +425,13 @@ Read-only normal-user API check selected Ready `tiddlywiki-dev`
 The existing `mwc-daily-user-tokens` Secret in `mwc-k3si-7032544955`, key
 `lindongwu11-token`, authenticated successfully; its value was held only in memory.
 List API requires `organization_id`, obtainable from `/api/v1/me` memberships.
-Do not repeat credential discovery or output token values. No browser test has run yet.
+Do not repeat credential discovery or output token values. Browser runner `a38de51` is now
+committed and main-reviewed. Real run session `30199` passed the first authenticated socket,
+split-marker command execution and actual `stty size` resize, then FAILED the replay evidence
+wait (no explicit 401/403 was recorded). Fresh-ticket recovery was not reached. Session ended,
+browser contexts and temporary token file were cleaned by `finally`. Do not claim full browser
+acceptance. The browser worker owns a real-local-Chromium rejected-upgrade fixture and precise
+CDP rejection evidence correction; a close/timeout alone must never count as rejection.
 CI `34270275217` has passed verification and entered image publication; control-plane image
 build is still running, so the full release is not yet confirmed.
 Main reviewed GitOps `8d8a4e7`; client-only live acceptance PASSED with the already verified
