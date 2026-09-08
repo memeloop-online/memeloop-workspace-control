@@ -56,6 +56,7 @@ export interface TemplateDraft {
   buildkit: boolean;
   storagePolicy: TemplateStoragePolicyDraft;
   clusterAccess: boolean;
+  runtimeClassName: string;
   requiredNodes: string;
   preferredNodes: string;
   nodeSelector: string;
@@ -93,6 +94,7 @@ const TEMPLATE_FIELD_SCHEMA: TemplateFieldSchema = {
       home_reserve_mib: null,
     },
     cluster_access: null,
+    runtime_class_name: null,
     required_node_names: null,
     preferred_node_names: null,
     node_selector: null,
@@ -131,6 +133,7 @@ export function emptyTemplateDraft(): TemplateDraft {
     buildkit: false,
     storagePolicy: storagePolicyDraft(DEFAULT_STORAGE_POLICY),
     clusterAccess: false,
+    runtimeClassName: "",
     requiredNodes: "",
     preferredNodes: "",
     nodeSelector: "",
@@ -175,6 +178,7 @@ export function templateDraftToYaml(draft: TemplateDraft): string {
     storage_policy: storagePolicy,
     cluster_access: draft.clusterAccess,
   };
+  if (draft.runtimeClassName.trim()) spec.runtime_class_name = draft.runtimeClassName.trim();
   if (requestEphemeral !== null) (spec.pod_requests as Record<string, unknown>).ephemeral_storage_mib = requestEphemeral;
   if (limitEphemeral !== null) spec.ephemeral_storage_limit_mib = limitEphemeral;
   const required = csv(draft.requiredNodes); if (required.length) spec.required_node_names = required;
@@ -210,6 +214,7 @@ export function templateDraftFromYaml(yaml: string): TemplateDraft {
     buildkit: Boolean(spec.buildkit),
     storagePolicy: storagePolicyDraft(storagePolicy),
     clusterAccess: Boolean(spec.cluster_access),
+    runtimeClassName: String(spec.runtime_class_name ?? ""),
     requiredNodes: listText(spec.required_node_names),
     preferredNodes: listText(spec.preferred_node_names),
     nodeSelector: formatPairs(spec.node_selector),

@@ -300,6 +300,8 @@
   "preferredNodes": "Предпочтительные узлы",
   "nodeListHelp": "Имена узлов кластера через запятую; пусто — без ограничения.",
   "nodeSelector": "Выбор по меткам узла",
+  "runtimeClassName": "Имя RuntimeClass",
+  "runtimeClassNameHelp": "Необязательный Kubernetes RuntimeClass для Pod рабочего пространства. Оставьте пустым для настройки кластера; Kubernetes отклонит отсутствующий класс.",
   "keyValueLinesHelp": "По одной строке KEY=value; значение может содержать дополнительные знаки равенства.",
   "saving": "Сохранение",
   "saveChanges": "Сохранить изменения",

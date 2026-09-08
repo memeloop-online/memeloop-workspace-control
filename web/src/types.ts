@@ -147,6 +147,7 @@ export interface WorkspaceTemplate {
   buildkit: boolean;
   storage_policy: WorkspaceStoragePolicy;
   cluster_access: boolean;
+  runtime_class_name: string | null;
   required_node_names: string[];
   preferred_node_names: string[];
   node_selector: Record<string, string>;
@@ -226,6 +227,7 @@ export interface Workspace {
   buildkit: boolean;
   storage_policy: WorkspaceStoragePolicy;
   cluster_access: boolean;
+  runtime_class_name: string | null;
   required_node_names: string[];
   preferred_node_names: string[];
   node_selector: Record<string, string>;

@@ -52,6 +52,14 @@ test("new templates emit backend-compatible storage and ephemeral defaults", () 
   assert.match(yaml, /ephemeral_storage_limit_mib: 14592/u);
   assert.match(yaml, /home_reserve_mib: 1024/u);
   assert.doesNotMatch(yaml, /home_reserve_mib: null/u);
+  assert.doesNotMatch(yaml, /runtime_class_name/u);
+});
+
+test("an optional RuntimeClass name round-trips through the template YAML", () => {
+  const draft = { ...emptyTemplateDraft(), name: "sandbox", runtimeClassName: "gvisor-sandbox" };
+  const yaml = templateDraftToYaml(draft);
+  assert.match(yaml, /runtime_class_name: gvisor-sandbox/u);
+  assert.equal(templateDraftFromYaml(yaml).runtimeClassName, "gvisor-sandbox");
 });
 
 test("an automatic home reserve remains empty in the form and round-trips as null", () => {

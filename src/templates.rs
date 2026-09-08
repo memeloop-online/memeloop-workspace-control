@@ -45,6 +45,12 @@ pub struct WorkspaceTemplateSpec {
     pub storage_policy: WorkspaceStoragePolicy,
     #[serde(default)]
     pub cluster_access: bool,
+    /// An optional Kubernetes RuntimeClass for the workspace Pod.
+    ///
+    /// When omitted, Kubernetes uses its normal runtime selection. A configured class is passed
+    /// through verbatim to the PodSpec; Kubernetes rejects the workload if that class is absent.
+    #[serde(default)]
+    pub runtime_class_name: Option<String>,
     #[serde(default)]
     pub required_node_names: Vec<String>,
     #[serde(default)]
@@ -182,6 +188,13 @@ impl WorkspaceTemplateSpec {
             return Err(TemplateError::WorkspaceIdentity);
         }
         if self
+            .runtime_class_name
+            .as_deref()
+            .is_some_and(|name| !valid_runtime_class_name(name))
+        {
+            return Err(TemplateError::RuntimeClass);
+        }
+        if self
             .required_node_names
             .iter()
             .chain(&self.preferred_node_names)
@@ -217,6 +230,7 @@ impl WorkspaceTemplateSpec {
             buildkit: false,
             storage_policy: WorkspaceStoragePolicy::default(),
             cluster_access: false,
+            runtime_class_name: None,
             required_node_names: Vec::new(),
             preferred_node_names: Vec::new(),
             node_selector: BTreeMap::new(),
@@ -255,6 +269,22 @@ fn valid_selector_part(value: &str) -> bool {
             .any(|character| character.is_control() || character.is_whitespace())
 }
 
+fn valid_runtime_class_name(value: &str) -> bool {
+    value.len() <= 63
+        && !value.is_empty()
+        && value
+            .as_bytes()
+            .first()
+            .is_some_and(u8::is_ascii_alphanumeric)
+        && value
+            .as_bytes()
+            .last()
+            .is_some_and(u8::is_ascii_alphanumeric)
+        && value.bytes().all(|character| {
+            character.is_ascii_lowercase() || character.is_ascii_digit() || character == b'-'
+        })
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum TemplateError {
     #[error("template YAML is invalid")]
@@ -271,6 +301,8 @@ pub enum TemplateError {
     PodResources,
     #[error("workspace user or home path is invalid")]
     WorkspaceIdentity,
+    #[error("Kubernetes RuntimeClass name is invalid")]
+    RuntimeClass,
     #[error("template scheduling constraints are invalid")]
     Scheduling,
     #[error("template storage policy is invalid")]

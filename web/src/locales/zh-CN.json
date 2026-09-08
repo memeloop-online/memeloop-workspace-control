@@ -300,6 +300,8 @@
   "preferredNodes": "优先使用的节点",
   "nodeListHelp": "填写逗号分隔的集群节点名称；留空表示不限制。",
   "nodeSelector": "节点标签选择",
+  "runtimeClassName": "RuntimeClass 名称",
+  "runtimeClassNameHelp": "可选的工作区 Pod Kubernetes RuntimeClass。留空使用集群默认运行时；类不存在时由 Kubernetes 拒绝。",
   "keyValueLinesHelp": "每行填写一个 KEY=value；值可以包含后续的等号。",
   "saving": "保存中",
   "saveChanges": "保存修改",

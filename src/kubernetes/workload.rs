@@ -104,6 +104,7 @@ fn pod_spec(
     PodSpec {
         automount_service_account_token: Some(cluster_access),
         service_account_name: cluster_access.then(|| names.service_account.clone()),
+        runtime_class_name: workspace.template.runtime_class_name.clone(),
         init_containers: Some(init_containers),
         containers,
         affinity: pod.affinity(),

@@ -21,11 +21,36 @@ fn yaml_round_trip_contains_only_explicit_template_fields() {
     assert!(yaml.contains("runtime_tmp_memory_mib: 512"));
     assert!(yaml.contains("build_scratch_gib: 12"));
     assert!(yaml.contains("buildkit_cache_gib: 8"));
+    assert!(yaml.contains("runtime_class_name: null"));
     assert_eq!(WorkspaceTemplateDocument::parse(&yaml).unwrap(), document);
     let json = serde_json::to_value(&document.spec).unwrap();
     assert_eq!(json["access_mode"], "internal");
     assert_eq!(json["workspace_user"], "node-dev");
     assert!(json.get("accessMode").is_none());
+}
+
+#[test]
+fn runtime_class_name_is_optional_and_must_be_a_dns_label() {
+    let mut spec = WorkspaceTemplateSpec::standard(
+        "registry.example/dev:latest",
+        AccessMode::Internal,
+        Resources {
+            cpu_millis: 1_000,
+            memory_mib: 1_024,
+            gpu_count: 0,
+            disk_gib: 20,
+        },
+    );
+    spec.runtime_class_name = Some("gvisor-sandbox".to_owned());
+    let document = WorkspaceTemplateDocument::new("sandbox", spec.clone());
+    let yaml = document.to_yaml().unwrap();
+    assert!(yaml.contains("runtime_class_name: gvisor-sandbox"));
+    assert_eq!(WorkspaceTemplateDocument::parse(&yaml).unwrap(), document);
+
+    spec.runtime_class_name = Some("GVisor".to_owned());
+    assert_eq!(spec.validate(), Err(TemplateError::RuntimeClass));
+    spec.runtime_class_name = Some("gvisor sandbox".to_owned());
+    assert_eq!(spec.validate(), Err(TemplateError::RuntimeClass));
 }
 
 #[test]

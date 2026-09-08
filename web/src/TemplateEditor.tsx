@@ -185,6 +185,7 @@ export function TemplateEditor({ api, organizationId, templates, canGrantCluster
             </fieldset>
             <Check label="BuildKit" help={t("buildkitHelp")} checked={draft.buildkit} update={(buildkit) => setDraft({ ...draft, buildkit })} />
             <Check label={t("maintenanceAccess")} help={t("maintenanceAccessHelp")} checked={draft.clusterAccess} disabled={!canGrantClusterAccess} update={(clusterAccess) => setDraft({ ...draft, clusterAccess })} />
+            <label className="wide"><Field label={t("runtimeClassName")} help={t("runtimeClassNameHelp")} /><input value={draft.runtimeClassName} onChange={(event) => setDraft({ ...draft, runtimeClassName: event.target.value })} placeholder="gvisor-sandbox" /></label>
             <label className="wide"><Field label={t("requiredNodes")} help={t("nodeListHelp")} /><input value={draft.requiredNodes} onChange={(event) => setDraft({ ...draft, requiredNodes: event.target.value })} placeholder="westlake, haixia" /></label>
             <label className="wide"><Field label={t("preferredNodes")} help={t("nodeListHelp")} /><input value={draft.preferredNodes} onChange={(event) => setDraft({ ...draft, preferredNodes: event.target.value })} /></label>
             <label className="wide"><Field label={t("nodeSelector")} help={t("keyValueLinesHelp")} /><textarea value={draft.nodeSelector} onChange={(event) => setDraft({ ...draft, nodeSelector: event.target.value })} placeholder="k3s-worker-ready=true" /></label>

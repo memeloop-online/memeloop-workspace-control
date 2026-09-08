@@ -300,6 +300,8 @@
   "preferredNodes": "Preferred nodes",
   "nodeListHelp": "Comma-separated cluster node names; leave blank for no constraint.",
   "nodeSelector": "Node label selector",
+  "runtimeClassName": "RuntimeClass name",
+  "runtimeClassNameHelp": "Optional Kubernetes RuntimeClass for this workspace Pod. Leave blank for the cluster default; Kubernetes rejects a missing class.",
   "keyValueLinesHelp": "Enter one KEY=value per line; values may contain additional equals signs.",
   "saving": "Saving",
   "saveChanges": "Save changes",

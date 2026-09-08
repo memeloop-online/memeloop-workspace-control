@@ -141,6 +141,33 @@ fn workspace_generation_changes_the_pod_template_for_restart() {
 }
 
 #[test]
+fn workspace_pod_uses_the_template_runtime_class_without_a_fallback() {
+    let mut sandboxed = workspace(WorkspaceState::Ready);
+    sandboxed.template.runtime_class_name = Some("gvisor-sandbox".to_owned());
+    let pod = builder()
+        .build(&sandboxed)
+        .unwrap()
+        .stateful_set
+        .spec
+        .unwrap()
+        .template
+        .spec
+        .unwrap();
+    assert_eq!(pod.runtime_class_name.as_deref(), Some("gvisor-sandbox"));
+
+    let standard_pod = builder()
+        .build(&workspace(WorkspaceState::Ready))
+        .unwrap()
+        .stateful_set
+        .spec
+        .unwrap()
+        .template
+        .spec
+        .unwrap();
+    assert_eq!(standard_pod.runtime_class_name, None);
+}
+
+#[test]
 fn observability_labels_do_not_change_statefulset_immutable_fields() {
     let workspace = workspace(WorkspaceState::Ready);
     let stateful_set = builder().build(&workspace).unwrap().stateful_set;
