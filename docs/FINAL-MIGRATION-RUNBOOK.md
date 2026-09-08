@@ -37,10 +37,11 @@ change record; do not record secret values or database contents.
 1. Freeze automation first. Pause Argo CD auto-sync/self-heal for both the MWC and routing
    Applications and any controller that can recreate old-namespace StatefulSets/PVCs. Merely
    scaling a workload is insufficient while its reconciliation controller remains active.
-2. Resolve the two baseline blockers, perform a fresh read-only evidence capture, and create
-   verified Longhorn snapshots for each workspace volume. Confirm snapshot completion and a
-   tested restore path. The existing pre-start snapshots are retained but are not proof of a fresh
-   cutover snapshot.
+2. Resolve the MWC baseline blocker, perform a fresh read-only evidence capture, and create
+   verified Longhorn snapshots for the four MWC volumes. Confirm snapshot completion and a tested
+   restore path. The independent Coder volume remains live and is explicitly out of this first
+   phase. The existing pre-start snapshots are retained but are not proof of a fresh cutover
+   snapshot.
 3. Promote schema **19 -> 20 only** using the published 19-to-20 bridge release. Read the
    successful CI provenance/artifact metadata and copy the exact control-plane, ttyd and other
    required immutable digests from it. This document intentionally does not invent unpublished
@@ -53,34 +54,35 @@ change record; do not record secret values or database contents.
    imported only into an empty target already at the same schema version, so migrate before export
    and before import. If the schema-22 CI/provenance or publication gate is not green, cutover is
    prohibited. Schema compatibility is a hard gate, not a cosmetic version bump.
-5. Keep writes frozen and stop every workspace from an external operator context, including the
-   active 100Gi Coder workspace. Confirm Pods are gone, StatefulSets/controllers cannot recreate
-   them, no
+5. Keep MWC writes frozen and stop the four MWC workspaces from an external operator context.
+   The independent 100Gi Coder workspace has no MWC database writer relationship: leave it
+   running and do not migrate or stop it in this phase. Confirm the four MWC Pods are gone,
+   their StatefulSets/controllers cannot recreate them, and no
    VolumeAttachment remains for a volume about to move, and Longhorn reports detached before a PV
    claim is moved. Preserve all of `.codex` except explicit pod-lifetime scratch/cache directories:
    `.codex/sessions`, logs, SQLite/WAL, auth/configuration and repositories are durable data.
-6. Import the offline-migrated control-plane database and workload manifests into the target
-   namespace, then move all five workspace PV bindings one at a time. Start the target control
+6. Import the offline-migrated control-plane database and four MWC workload manifests into the
+   target namespace, then move those four MWC PV bindings one at a time. Start the target control
    plane only after its database, namespace-bearing records and target resource plan are ready;
-   start a single workspace writer only after its binding and integrity checks pass. Do not
-   simultaneously mount old and target claims.
-7. Validate each workspace (PVC/PV identity, SSH host-key continuity where applicable, authenticated SSH command,
-   Web Shell, retained Codex data, routes/NodePorts, and reconciler health). Keep old resources
-   intact and controllers paused throughout the rollback window.
-8. Only after all acceptance criteria and an agreed rollback window expire, remove old resources
-   in dependency order and prove no resources remain in the old namespaces. Re-enable GitOps only
-   when its desired state contains exclusively the target namespace.
+   start a single MWC writer only after its binding and integrity checks pass. Do not simultaneously
+   mount old and target claims.
+7. Validate the four MWC workspaces (PVC/PV identity, SSH host-key continuity, authenticated SSH
+   command, Web Shell, retained Codex data, routes/NodePorts, and reconciler health). Re-enable the
+   target MWC GitOps/reconciler only after it has target-only desired state. Keep the old MWC
+   resources intact throughout their rollback window.
+8. This completes the MWC platform phase. The independent Coder migration is a later external-only
+   single-workspace change; it must not interrupt the healthy four MWC workspaces. The final global
+   cleanup gate applies only after that second phase is accepted.
 
 ## PV direct-rebind procedure (one workspace at a time)
 
-This procedure applies to the five listed Longhorn PVs after all gates pass. The Coder PV is
-handled by its external controller owner; the four MWC PVs are handled by the MWC cutover owner.
-It is a human
+This procedure applies to the four MWC Longhorn PVs in the first phase. The Coder PV is excluded
+and is handled only by its external controller owner in the later second phase. It is a human
 runbook so each irreversible action receives a separate review.
 
-1. Capture the actual Pod -> PVC -> PV -> Longhorn Volume chain and Longhorn volume state. Require
+1. Capture each MWC Pod -> PVC -> PV -> Longhorn Volume chain and Longhorn volume state. Require
    the old PVC UID to match `PV.spec.claimRef.uid`; compare only values from the same chain. The
-   two 100Gi workspaces are independent and must never be cross-compared.
+   independent Coder 100Gi chain is not part of this operation and must never be cross-compared.
 2. Stop/pause the old StatefulSet and its reconciler. Wait for no old Pod, no active attachment,
    no unexpected Longhorn workload status, and a completed fresh snapshot. Verify no process can
    write the old claim.
@@ -94,7 +96,7 @@ runbook so each irreversible action receives a separate review.
    is detached and healthy. Start exactly one target workload; confirm its attachment node and
    writer. Keep `Retain` throughout acceptance and the rollback window. Only after final
    acceptance, restore the reclaim policy required by the selected StorageClass (normally `Delete`
-   for the four MWC `mwc-longhorn-large-delete` claims; the Coder source is already `Retain`).
+   for these four MWC `mwc-longhorn-large-delete` claims).
 
 Never use a copy job as a substitute for this process unless a direct rebind is rejected by a
 storage owner. A copy path requires an independent checksum/metadata acceptance plan and a
@@ -107,20 +109,43 @@ then use the product's supported database `export` command to create an encrypte
 external backup without printing its content. Validate the export structurally without exposing
 values. In the target namespace, provision the reviewed target control-plane PVC/storage, deploy
 the correct bridge image, and use the supported `import` command while the service is offline.
-Confirm schema version, installation ID, namespace configuration, all five workspace records,
+Confirm schema version, installation ID, namespace configuration, all four MWC workspace records,
 and reconciler state through redacted metadata/API checks. Keep the old control-plane PV and
 encrypted export through the rollback window. A local-path PV direct rebind is allowed only with
 storage-owner approval after node affinity/path, reclaim policy, claim UID, and recovery behavior
 are explicitly verified.
 
+## Second phase: external Coder single-workspace handoff
+
+After the MWC platform phase has passed, keep its four target workspaces running normally. Only an
+external agent may schedule the Coder change. It must independently snapshot, stop the Coder source
+at the final writer freeze, and validate its own Pod -> PVC -> PV -> Longhorn chain.
+
+The current product exposes normal managed creation through `POST /api/v1/workspaces` and lifecycle
+actions through `POST /api/v1/workspaces/{workspace_id}/actions/{action}`. Creation requires the
+normal authorized organization/owner/template request and an idempotency key, assigns a new
+workspace ID/PVC name, and begins in `Provisioning`. There is no current product API or CLI command
+that imports a Coder workspace or selects/adopts an existing PVC/PV. Do not invent one or edit the
+database directly.
+
+Therefore the external agent's safe path is: create the single target workspace through the managed
+creation API only after its organization, owner, template, image policy and resource limits are
+approved; record the returned workspace ID and deterministic target PVC name; then obtain a
+separately approved storage/controller adoption plan for the existing Coder PV before stopping its
+source. That plan must prove how the newly managed PVC will bind the existing PV without two
+writers, prevent the provisioning reconciler from writing a replacement volume, and retain a tested
+rollback path. If it cannot satisfy those conditions, stop: no supported in-place Coder import path
+currently exists. This phase may not pause or stop the four accepted MWC workspaces.
+
 ## Cutover acceptance and rollback
 
-The target is accepted only when: the target namespace exists; it has exactly one control plane and
-five workspace identities; all PV claimRefs point to target claims with matching UIDs; each
-Longhorn volume is healthy and has exactly one expected attachment; schema 22 is confirmed after
-the published 19->20 bridge and offline 20->22 migration; GitOps/Argo desired state is target-only;
-no old controller can reconcile; and
-each workspace passes its connectivity/data checks without durable `.codex` loss.
+The MWC platform phase is accepted only when: the target namespace exists; it has exactly one
+control plane and four MWC workspace identities; all four MWC PV claimRefs point to target claims
+with matching UIDs; each MWC Longhorn volume is healthy and has exactly one expected attachment;
+schema 22 is confirmed after the published 19->20 bridge and offline 20->22 migration; GitOps/Argo
+desired state is target-only; no old MWC controller can reconcile; and each MWC workspace passes
+its connectivity/data checks without durable `.codex` loss. The final global acceptance additionally
+requires the external Coder phase and its separately recorded acceptance.
 
 Rollback is permitted only before old PVC bindings are irreversibly retired and while the schema
 bridge rollback procedure, encrypted SQLite export, retained PV bindings, and snapshots have been
@@ -152,16 +177,20 @@ snapshots. Release production schema 19->20 using the published bridge and valid
 the old coordinator and use the current verified-and-published schema-22 release for offline
 20->22 migration; do not start an intermediate schema-21 process. Export/import only at matching
 schema versions into an empty import target. CI/provenance or publication not green means no
-cutover; read exact image digests from successful CI provenance rather than guessing. Stop all
-writers, confirm detachment,
-set each selected PV to Retain, and rebind one PV at a time with matching old/new claim UID checks.
-Never mount old and target claims simultaneously. Move/control SQLite only via supported encrypted
-export/import while offline (or a storage-owner-approved local-path move). Preserve all .codex
-except explicitly identified disposable tmp caches.
+cutover; read exact image digests from successful CI provenance rather than guessing. In this first
+phase, stop only the four MWC writers, confirm their detachment, set their selected PVs to Retain,
+and rebind them one at a time with matching old/new claim UID checks. Never mount old and target
+claims simultaneously. Move/control SQLite only via supported encrypted export/import while
+offline (or a storage-owner-approved local-path move). Preserve all .codex except explicitly
+identified disposable tmp caches. Leave Coder running.
 
 Validate Pod/PVC/PV identity, Longhorn attachments, schema, SSH host keys, SSH, Web Shell, routes,
-and durable data for all five workspaces. Keep old namespaces/controllers/PVs for the agreed
-rollback window. Only then make GitOps target-only and prove no old namespace resources remain.
-Report commands, redacted metadata evidence, snapshots, CI digest provenance, downtime interval,
-acceptance results, and any blocked gate. Never use a broad delete-namespace command.
+and durable data for the four MWC workspaces. Keep old MWC namespaces/controllers/PVs for the
+agreed rollback window, then make MWC GitOps target-only. In a later separately approved external
+change, retain normal four-MWC service while creating the Coder target through the managed API and
+obtaining the required storage/controller adoption approval; there is no existing Coder-import API.
+Only after Coder acceptance and both rollback windows may global cleanup prove no old namespace
+resources remain. Report commands, redacted metadata evidence, snapshots, CI digest provenance,
+downtime interval, acceptance results, and any blocked gate. Never use a broad delete-namespace
+command.
 ```
