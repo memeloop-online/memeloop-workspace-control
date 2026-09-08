@@ -142,22 +142,6 @@ fn valid_dns_subdomain(value: &str) -> bool {
         })
 }
 
-fn valid_dns_label(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 63
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
-        && value
-            .bytes()
-            .next()
-            .is_some_and(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
-        && value
-            .bytes()
-            .last()
-            .is_some_and(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
-}
-
 /// Operator-provided DNS identity and exceptional blocks for `internet_only` templates.
 ///
 /// DNS is selected by its configured namespace and Pod labels, rather than a presumed service
