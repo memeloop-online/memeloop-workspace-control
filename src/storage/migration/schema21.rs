@@ -3,7 +3,7 @@ use sqlx::{Postgres, Sqlite, Transaction};
 use crate::storage::StorageError;
 
 /// Adds the optional API-key template allowlist. NULL is intentionally used
-/// for legacy/unrestricted keys so an empty JSON array remains meaningful.
+/// for unrestricted keys so an empty JSON array remains meaningful.
 pub(super) async fn upgrade_sqlite(
     transaction: &mut Transaction<'_, Sqlite>,
 ) -> Result<(), StorageError> {

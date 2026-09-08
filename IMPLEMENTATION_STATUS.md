@@ -15,12 +15,12 @@ status independently; a source commit is not a production rollout.
 Latest decisions: control plane and all workspaces must ultimately share the exact Namespace
 `memeloop-workspace-control`, with workspace-ID-qualified resource names. Keep the existing
 single cross-region hybrid-cloud K3s cluster and Flannel/Tailscale topology. Do not introduce
-Cilium/Calico, split clusters, or restore `runtime_profile`. Preserve durable Codex data.
+Cilium/Calico, split clusters, or restore the removed runtime-profile abstraction. Preserve durable Codex data.
 
 | ID | Work | State / owner / next gate |
 | --- | --- | --- |
 | MIG-01 | Canonical shared Namespace in product and Chart | Source committed: `c0b2a80`, `0a545d3`; not deployed. PostgreSQL fixture raw-SQL fix landed with integration updates; full CI rerun still required. Latest all-target fixture cleanup owned by `http_fixture_clocks`; no rollout until green. |
-| MIG-02 | Required schema 19→20→22 transitions and GitOps promotion | Pending deployment. Code review confirms current release supports atomic offline 20→22 on SQLite/PostgreSQL; no intermediate schema-21 controller needed. First use the published 19→20 bridge, then stop old coordinator before current-release offline migration. CI/image gate remains; snapshots require exact matching schema. `migration_cutover_package` is correcting the runbook. |
+| MIG-02 | Required schema 19→20→22 transitions and GitOps promotion | Pending deployment. Code review confirms current release supports atomic offline 20→22 on SQLite/PostgreSQL; no intermediate schema-21 controller needed. First use the published 19→20 bridge, then stop old coordinator before current-release offline migration. CI/image gate remains; snapshots require exact matching schema. Runbook corrections completed in `0e2c8f2`, `8e2321e`, `773e61a`; staged GitOps delta `8587d39` is not pushed/applied. |
 | MIG-03 | Four MWC workloads/PVCs/control-plane volume into canonical Namespace | Pending gated cutover. Reuse verified volumes; snapshot, single writer, SSH/host key/PVC/session validation before retiring old resources. |
 | MIG-04 | Last active Coder TOKEN center dev workspace | External-agent cutover only. Current source PVC is 100 GiB; do not stop this workspace from inside itself. Prepare complete copyable final procedure. |
 | MIG-05 | Delete superseded namespaces/resources and retired code/names | Pending after MIG-02/03/04 acceptance. Remove one-time migration compatibility only after live migration; no false claim of completion while old namespaces remain. |
