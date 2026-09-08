@@ -132,7 +132,9 @@ fn ttyd_mtls_is_complete_and_isolated_to_the_ttyd_container() {
     assert!(args.contains(&"/etc/mwc-ttyd-tls/tls.key".to_owned()));
     assert!(args.contains(&"/etc/mwc-ttyd-tls/ca.crt".to_owned()));
     assert!(ttyd.volume_mounts.as_ref().unwrap().iter().any(|mount| {
-        mount.name == "ttyd-tls" && mount.mount_path == "/etc/mwc-ttyd-tls" && mount.read_only
+        mount.name == "ttyd-tls"
+            && mount.mount_path == "/etc/mwc-ttyd-tls"
+            && mount.read_only == Some(true)
     }));
     assert!(
         !pod.containers
