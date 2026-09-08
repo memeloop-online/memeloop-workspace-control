@@ -88,7 +88,6 @@ pub(super) fn build(
                     "ResourceBuilder rejects internet_only templates without egress config",
                 ))
             }),
-            ..NetworkPolicySpec::default()
         }),
     }
 }

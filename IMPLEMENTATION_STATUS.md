@@ -59,6 +59,18 @@ haixia/westlake. Node API/kubelet denial is observed evidence for those tested a
 certification of all nodes, IPv6, public host addresses, metadata or startup timing.
 Main inspected 360/1440 API-key screenshots and requested consistent checkbox styling and
 removal of duplicated description; `key_template_ui_review` owns this bounded polish.
+Additional haixia/iv boundary matrix passed 26 checks, zero failures; evidence
+`/tmp/mwc-network-boundaries-haixia-iv-20260908.json`. Namespace
+`mwc-network-acceptance-20260908130313` was removed and absence confirmed. iv is a worker,
+so only kubelet (not an absent API server) was probed there.
+CI `34229220420` passed formatting and found a missing token-prefix import plus a double
+reference passed to CIDR containment. Both were corrected; rerun is required before publication.
+User suggested cloudnium-ecs-1 / 100.64.0.10 as the first gVisor test host and authorized
+careful GitOps-preferred changes with agent-owned rollback. Live Kubernetes maps that IP
+to `serv-146231`, kernel `4.18.0-553.139.1.el8_10.x86_64`; no Node named cloudnium-ecs-1 exists.
+This fails current gVisor's documented Linux >=5.6 requirement. It also hosts overseas Higress,
+CoreDNS, Longhorn and a Wiki. No runtime or kernel change was performed. Asked user to arrange
+kernel upgrade or select an eligible node; application CI and installer work continue meanwhile.
 
 Migration handoff review corrected a dangerous conflation: `rust-dev-test` and Coder TOKEN center
 dev are distinct 100 GiB volumes. Both actual PVC→PV claim UIDs match. Final count is four
