@@ -28,21 +28,65 @@ preflight/install scripts. The freshly downloaded official checksum and local ar
 both equal `b9ccc6e14ca4eb2c2e65ff66e011f3b7e79d3275fb12eab747b19f95caf8e891`; archive size is
 128,892,132 bytes. This is only a verified download, not an installation.
 
-The host does not have the `zstd` package and its tar implementation lacks `--zstd`, so the archive
-layout and required `runsc`, `containerd-shim-runsc-v1`, and `gvisor-bin/` sidecars have not yet
-been locally enumerated. Do not install a decompressor or unpack the archive without approval.
-The copied preflight script also currently exits 141 after its expected `runsc`-absent warning:
-the `k3s ctr version | awk ... exit` pipeline receives SIGPIPE under `pipefail`. The actual
-containerd client and server both report `v2.3.2-k3s2`, but this invocation is not a successful
-preflight result; correct or replace that read-only version collection before calling the node
-prepared.
+The maintenance lead subsequently installed AlmaLinux's `zstd` tool and listed the archive without
+extraction: it contains `runsc`, `containerd-shim-runsc-v1`, and the `gvisor-bin/` sidecars. The
+reviewed preflight's version-collection SIGPIPE was corrected before it was re-uploaded. Its current
+failure is intentional and decisive: `systemd 239` is below the optional runsc systemd-driver
+minimum of 244. This is not a successful node-prepared result.
+
+## Cgroup-driver compatibility decision (2026-09-08)
+
+The node runs `systemd 239 (239-82.el8_10.17)` with cgroup v2. Kubelet is configured with
+`cgroupDriver: systemd`, and the existing **runc** handler has `SystemdCgroup = true`. Those facts
+must not be silently changed for a gVisor rollout.
+
+They do not, by themselves, require `runsc --systemd-cgroup`. gVisor documents its default as the
+filesystem cgroup driver; the stated systemd >=244 requirement applies when the global
+`--systemd-cgroup` option is explicitly supplied. The current runsc handler does not exist and no
+runsc configuration/flag supplies that option. The runc-specific `SystemdCgroup` option is not a
+runsc shim option and must not be copied into a runsc configuration.
+
+The default fs driver is **not compatible by demonstrated construction** with this node's current
+CRI output. A read-only `k3s crictl inspectp` of an existing Wiki sandbox shows CRI sends
+`Linux.CgroupsPath` as `kubepods-burstable-pod<UID>.slice:cri-containerd:<sandbox-id>` and records
+the matching `cgroup_parent` as
+`/kubepods.slice/kubepods-burstable.slice/kubepods-burstable-pod<UID>.slice`. This is the systemd
+three-field notation, not a cgroupfs path. In the exact staged gVisor `release-20260831.0` source,
+`pkg/shim/v1/runsc/service.go:setPodCgroup` only extracts a parent by splitting on `/` and looking
+for a component beginning `pod`; it does not translate this colon notation, so no parent annotation
+is produced here. `runsc/container/container.go` then gives the unchanged `Linux.CgroupsPath` to
+`cgroup.NewFromPath` and installs `spec.Linux.Resources` there. With `--systemd-cgroup=false`,
+`runsc/cgroup/cgroup.go:new` treats every non-absolute value as a relative fs path and, on cgroup
+v2, joins it below the running runsc process's parent cgroup. It does not parse a slice or join the
+Kubernetes Pod cgroup. The fixed release's cgroup-v2 code will create that resulting path and write
+its resource files when it owns the path. This does not prove Kubernetes QoS hierarchy placement or
+resource-limit equivalence; it is not an acceptable basis for a RuntimeClass canary.
+
+Conversely, runsc's systemd driver does parse `slice:prefix:name`, but the same fixed source checks
+the D-Bus-reported systemd version and rejects every version below 244. The official systemd-driver
+guide has the identical cgroup-v2/systemd >=244 prerequisite. Thus serv's systemd 239 prohibits the
+only source-defined interpretation of the CRI's current systemd path. Do not switch kubelet/runc to
+cgroupfs, attempt a mixed-driver workaround, or lower the preflight check. This node is not eligible
+for a gVisor RuntimeClass on the currently supported paths; use a newly provisioned current-OS
+workspace node (or obtain an upstream-supported integration design) instead.
+
+There is no useful no-restart independent OCI canary for this integration. A direct `runsc run`
+bundle would still create cgroups/processes and can at most test an artificial cgroup path; it cannot
+exercise K3s CRI's `SystemdCgroup=true`, containerd's runsc shim, or actual Pod QoS placement. A real
+RuntimeClass test would first require adding the handler/configuration and restarting K3s/containerd,
+which is outside this approval. It must remain unrun rather than being used to bypass this gate.
+
+After the AlmaLinux `zstd` tool was installed by the maintenance lead, the staged official archive
+was listed without extraction and contains `runsc`, `containerd-shim-runsc-v1`, and the required
+`gvisor-bin/` sidecars (`checkpointgofer`, `gvisor-sentry-prewarmer`, `gvisor_sentry`, and
+`runsc-metric-server`).
 
 ## Observed state (2026-09-08)
 
 | Item | Observation | Consequence |
 | --- | --- | --- |
 | Node | Kubernetes `serv-146231`; host `serv.146231.com` | Target identity must be checked on both planes before a change. |
-| OS/kernel | AlmaLinux 8.10, `4.18.0-553.139.1.el8_10.x86_64` | Below gVisor's Linux 5.6 minimum; it must not receive the gVisor-ready label yet. |
+| OS/kernel | AlmaLinux 8.10, booted `5.15.220-1.el8.elrepo.x86_64`; AlmaLinux 4.18 remains the GRUB default | Meets gVisor's kernel-version floor, but is not gVisor-ready: the cgroup integration gate above remains failed. |
 | K3s | Server `v1.36.2+k3s1`, containerd `v2.3.2-k3s2` | This is a control-plane restart risk, not a worker-only experiment. |
 | Boot | BIOS, BLS/GRUB; `GRUB_DEFAULT=saved`, `GRUB_TIMEOUT=0` | `grub2-reboot` is installed and one-shot selection is technically possible, but there is no interactive GRUB recovery window. Confirm provider serial/out-of-band reset first. |
 | Capacity | `/boot` XFS: 610 MiB free; `/`: 11 GiB free | A transaction dry-run must prove the selected package payload and initramfs fit before install. |
