@@ -9,10 +9,11 @@ Do not enable this until the certificate material and the Higress controller beh
 been verified in the target cluster. Production acceptance is not yet complete. This feature
 does not widen any NetworkPolicy source, CIDR, Service type, NodePort, or host-port access.
 
-The 2026-09-08 canary failed server-name validation on Higress 2.2.3: a wrong SNI still
-received HTTP 200. The current Ingress annotations are insufficient to assert certificate
-SAN verification. Keep deployment gated until explicit upstream SAN validation is configured
-and the negative test passes; sending SNI alone is not server-identity verification.
+The initial 2026-09-08 canary failed server-name validation on Higress 2.2.3: a wrong SNI still
+received HTTP 200. Ingress annotations alone are insufficient to assert certificate SAN
+verification. A subsequent canary using an exact-service EnvoyFilter passed the certificate
+tests below. Its integration into the product lifecycle is in progress; production enablement
+remains gated on that integration and authenticated WebSocket acceptance.
 
 ## Enablement
 
@@ -92,6 +93,13 @@ appropriate for `w-<workspace-short-id>` service names. It does not cover deeper
 another Namespace, or arbitrary `w-*` text outside that single label. Alternatively issue SANs
 for the concrete Service names.
 
+The validated gateway configuration adds a standard EnvoyFilter with `context: GATEWAY`,
+the exact Service FQDN and port `7681`. Its TLS combined validation context retains the SDS
+CA reference and adds a DNS SAN matcher for that FQDN. The existing client-certificate SDS
+entry is preserved, not appended a second time. This filter belongs in the gateway Namespace;
+a filter in the workspace Namespace does not configure a gateway in another Namespace.
+Applying the Kubernetes object is not evidence that the gateway has acknowledged it.
+
 The existing `nginx` IngressClass is retained because the installed Higress controller maps
 that class in this deployment. Do not change the class merely to enable mTLS.
 
@@ -113,3 +121,31 @@ Before production acceptance, validate in the real cluster that:
 
 This is a defense for the ttyd upstream. It does not claim to protect host networking, close a
 Pod startup window, or make an unverified production deployment safe.
+
+## Verified canary — 2026-09-08
+
+The dedicated test used Higress 2.2.3 and the released ttyd image
+`sha256:6f430bf2941bbb0e2110a5211a4884018efd72ec52a217b6db1b442d5b34eed7`
+from successful CI run `34254345334` (source `32945cc`). The test inspected the same gateway
+Pod that handled HTTP requests and confirmed both SDS references plus the exact DNS SAN matcher.
+
+| Case | Observed outcome |
+| --- | --- |
+| Correct CA and one-label wildcard server certificate | HTTP 200 |
+| Server certificate issued by a different CA | HTTP 503 |
+| Restore correct server certificate | HTTP 200 |
+| Correct issuing CA, wrong server DNS SAN | HTTP 503 |
+| Restore correct server certificate again | HTTP 200 |
+
+Each negative case replaced only the disposable ttyd Pod with an actually different server
+certificate; changing SNI alone was not used as a substitute. The terminal command was
+`/bin/false`, so the temporary route did not offer an interactive shell.
+
+GitOps test commits: `327418d`, corrected masked-CDS parser and pinned gateway `3a329a3`.
+Local result: `/tmp/mwc-higress-ttyd-san-20260908.json`, process exit 0. Cleanup reported no
+errors, and absence of both the unique test Namespace and gateway EnvoyFilter was independently
+checked. Earlier native-ttyd tests separately rejected absent and untrusted client certificates.
+
+This proves the tested gateway TLS configuration, not the full external sandbox. Product
+resource reconciliation/deletion, certificate renewal, browser WebSocket ticket handling and
+NetworkPolicy/startup/rescheduling coverage still require their own acceptance.
