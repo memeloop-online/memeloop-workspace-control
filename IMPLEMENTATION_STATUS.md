@@ -139,6 +139,19 @@ actual kubelet/CRI cgroup driver and supported alternatives without weakening ch
 Main acknowledges this systemd prerequisite should have been checked before the kernel reboot.
 mTLS parser/client fixture committed `082e20f`; do not push it without the runtime worker's
 matching type/manifest commit.
+Native ttyd mTLS implementation landed in `4e1a584`; CI `34244261180` found duplicate DNS
+validation and a missing Ingress metadata import, now fixed. `293c773` corrects the storage
+authentication fixture's real-clock expiry without altering fixed-clock storage tests.
+Added Helm CI coverage for complete mTLS env rendering and partial-configuration rejection.
+`netpol_evidence` owns a disposable real-ttyd mTLS test: no certificate/wrong CA denied,
+valid certificate accepted, `/token` contains no reusable Basic credential. This does not
+yet prove Higress end-to-end behavior or permit broadening production ingress sources.
+Node compatibility decision `145393d`: serv's actual CRI emits systemd-form cgroup paths;
+runsc fs mode does not supply equivalent Kubernetes Pod hierarchy/limits, and its systemd
+driver requires >=244. Do not bypass preflight, mix drivers or register runsc there.
+Asked user whether to authorize the original iv node's maintenance test or supply a newer-OS
+node. serv remains operational on its one-shot 5.15 kernel, old 4.18 still the default; no
+gVisor handler or readiness label was installed. Other product/CI work continues.
 
 Migration handoff review corrected a dangerous conflation: `rust-dev-test` and Coder TOKEN center
 dev are distinct 100 GiB volumes. Both actual PVC→PV claim UIDs match. Final count is four

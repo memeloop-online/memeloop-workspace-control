@@ -138,6 +138,26 @@ jobs:
           grep -q 'service_name: mwc-public-a.memeloop-workspace-control.svc.cluster.local' <<<"${rendered_public}"
           grep -q 'name: MWC_HIGRESS_SOURCE_CIDRS_JSON' <<<"${rendered_public}"
           grep -q 'resources: \["networkpolicies", "ingresses"\]' <<<"${rendered_public}"
+          rendered_mtls=$(linux-amd64/helm template mtls \
+            deploy/helm/memeloop-workspace-control \
+            --namespace memeloop-workspace-control \
+            -f deploy/helm/memeloop-workspace-control/values.example.yaml \
+            --set workspace.ttydMtls.serverTlsSecretName=ttyd-server \
+            --set higress.ttydMtls.clientSecretNamespace=higress-system \
+            --set higress.ttydMtls.clientSecretName=ttyd-client)
+          for variable in MWC_TTYD_MTLS_SERVER_SECRET MWC_HIGRESS_MTLS_CLIENT_SECRET_NAMESPACE MWC_HIGRESS_MTLS_CLIENT_SECRET_NAME; do
+            grep -q "name: ${variable}" <<<"${rendered_mtls}"
+          done
+          if linux-amd64/helm template incomplete-mtls \
+            deploy/helm/memeloop-workspace-control \
+            --namespace memeloop-workspace-control \
+            -f deploy/helm/memeloop-workspace-control/values.example.yaml \
+            --set workspace.ttydMtls.serverTlsSecretName=ttyd-server \
+            > /dev/null 2> incomplete-mtls.log; then
+            echo "incomplete ttyd mTLS configuration was accepted" >&2
+            exit 1
+          fi
+          grep -q 'must be set together' incomplete-mtls.log
           linux-amd64/helm lint deploy/helm/memeloop-workspace-control \
             --namespace memeloop-workspace-control \
             -f deploy/helm/memeloop-workspace-control/values.internal.example.yaml
