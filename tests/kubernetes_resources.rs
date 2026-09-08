@@ -190,6 +190,50 @@ fn ttyd_mtls_is_complete_and_isolated_to_the_ttyd_container() {
         annotations["nginx.ingress.kubernetes.io/proxy-ssl-name"],
         "w-800000000001abcd.memeloop-workspace-control.svc.cluster.local"
     );
+    let filter = serde_json::to_value(resources.web_shell_envoy_filter.unwrap()).unwrap();
+    let patch = &filter["spec"]["configPatches"][0];
+    assert_eq!(patch["match"]["context"], "GATEWAY");
+    assert_eq!(patch["match"]["cluster"]["portNumber"], 7681);
+    assert_eq!(
+        patch["match"]["cluster"]["service"],
+        "w-800000000001abcd.memeloop-workspace-control.svc.cluster.local"
+    );
+    assert_eq!(
+        patch["patch"]["value"]["transport_socket"]["typed_config"]["common_tls_context"]["combined_validation_context"]
+            ["default_validation_context"]["match_typed_subject_alt_names"][0]["matcher"]["exact"],
+        "w-800000000001abcd.memeloop-workspace-control.svc.cluster.local"
+    );
+    assert_eq!(
+        patch["patch"]["value"]["transport_socket"]["typed_config"]["common_tls_context"]["combined_validation_context"]
+            ["validation_context_sds_secret_config"]["name"],
+        "kubernetes-ingress://Kubernetes/higress-system/ttyd-client-cacert"
+    );
+    assert!(
+        !patch
+            .to_string()
+            .contains("tls_certificate_sds_secret_configs")
+    );
+}
+
+#[test]
+fn ttyd_mtls_requires_the_configured_gateway_namespace_and_selector() {
+    let workspace = workspace(WorkspaceState::Ready);
+    let mut resource_builder = builder();
+    resource_builder.ttyd_mtls = Some(
+        TtydMtlsConfig::new("server".into(), "other-gateway".into(), "client".into()).unwrap(),
+    );
+    assert!(matches!(
+        resource_builder.build(&workspace),
+        Err(BuildError::TtydMtlsGatewayNamespaceMismatch)
+    ));
+    resource_builder.ttyd_mtls = Some(
+        TtydMtlsConfig::new("server".into(), "higress-system".into(), "client".into()).unwrap(),
+    );
+    resource_builder.higress_pod_labels.clear();
+    assert!(matches!(
+        resource_builder.build(&workspace),
+        Err(BuildError::TtydMtlsGatewaySelectorMissing)
+    ));
 }
 
 fn node_template(image: &str, resources: Resources) -> WorkspaceTemplateSpec {

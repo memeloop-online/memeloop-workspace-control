@@ -113,6 +113,7 @@ pub struct WorkspaceResourceNames {
     pub files_config_map: String,
     pub network_policy: String,
     pub web_shell_ingress: String,
+    pub web_shell_envoy_filter: String,
     pub data_claim_template: String,
 }
 
@@ -132,6 +133,7 @@ impl WorkspaceResourceNames {
             files_config_map: named("files-config"),
             network_policy: named("ingress"),
             web_shell_ingress: named("web-shell"),
+            web_shell_envoy_filter: named("ttyd-san"),
             // Keep the claim-template name stable across workspace identity changes. The
             // StatefulSet name is part of the generated PVC name, keeping each workspace claim
             // collision-free in the product Namespace.
@@ -161,6 +163,7 @@ impl WorkspaceResourceNames {
             &self.files_config_map,
             &self.network_policy,
             &self.web_shell_ingress,
+            &self.web_shell_envoy_filter,
             &self.data_claim_template,
             &self.pod_ordinal_zero(),
             &self.data_pvc_ordinal_zero(),

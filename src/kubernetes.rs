@@ -10,6 +10,7 @@ use k8s_openapi::{
     },
     apimachinery::pkg::apis::meta::v1::ObjectMeta,
 };
+use kube::core::DynamicObject;
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -25,6 +26,7 @@ mod buildkit;
 mod client;
 #[cfg(test)]
 mod client_tests;
+mod envoy_filter;
 mod higress;
 mod materialization;
 mod network_policy;
@@ -225,6 +227,7 @@ pub struct DesiredResources {
     pub workspace_config: ConfigMap,
     pub ssh_identity: k8s_openapi::api::core::v1::Secret,
     pub web_shell_ingress: Option<Ingress>,
+    pub web_shell_envoy_filter: Option<DynamicObject>,
 }
 
 impl ResourceBuilder {
@@ -253,6 +256,16 @@ impl ResourceBuilder {
             && self.internet_egress.is_none()
         {
             return Err(BuildError::InternetEgressNotConfigured);
+        }
+        if self
+            .ttyd_mtls
+            .as_ref()
+            .is_some_and(|mtls| mtls.higress_client_secret_namespace != self.higress_namespace)
+        {
+            return Err(BuildError::TtydMtlsGatewayNamespaceMismatch);
+        }
+        if self.ttyd_mtls.is_some() && self.higress_pod_labels.is_empty() {
+            return Err(BuildError::TtydMtlsGatewaySelectorMissing);
         }
 
         workspace.runtime.validate_for_workspace(
@@ -329,6 +342,17 @@ impl ResourceBuilder {
             ssh_identity: resource_helpers::ssh_identity(&names, &labels, None),
             web_shell_ingress: self.web_shell_domain.as_ref().map(|domain| {
                 higress::web_shell_ingress(&names, &labels, domain, self.ttyd_mtls.as_ref())
+            }),
+            web_shell_envoy_filter: self.web_shell_domain.as_ref().and_then(|_| {
+                self.ttyd_mtls.as_ref().map(|mtls| {
+                    envoy_filter::web_shell_san_filter(
+                        &names,
+                        &labels,
+                        &self.higress_namespace,
+                        &self.higress_pod_labels,
+                        mtls,
+                    )
+                })
             }),
         })
     }
@@ -483,4 +507,8 @@ pub enum BuildError {
     EmptyImage,
     #[error("internet_only egress requires configured DNS namespace and Pod labels")]
     InternetEgressNotConfigured,
+    #[error("ttyd mTLS client Secret namespace must equal the configured Higress namespace")]
+    TtydMtlsGatewayNamespaceMismatch,
+    #[error("ttyd mTLS requires non-empty configured Higress gateway Pod labels")]
+    TtydMtlsGatewaySelectorMissing,
 }

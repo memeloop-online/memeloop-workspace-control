@@ -16,6 +16,8 @@ use super::{
     verify_existing,
 };
 
+#[path = "client_apply/envoy_filter.rs"]
+mod envoy_filter;
 #[path = "client_apply/port_mappings.rs"]
 mod port_mappings;
 
@@ -289,6 +291,10 @@ impl KubernetesCoordinator {
                 &Patch::Apply(&desired.network_policy),
             )
             .await?;
+        if self.builder.ttyd_mtls.is_some() && desired.web_shell_ingress.is_some() {
+            self.apply_web_shell_envoy_filter(workspace, desired)
+                .await?;
+        }
         let ingresses = Api::<Ingress>::namespaced(self.client.clone(), namespace_name);
         if let Some(existing) = ingresses.get_opt(&names.web_shell_ingress).await? {
             self.builder
@@ -302,6 +308,10 @@ impl KubernetesCoordinator {
         if let Some(ingress) = &desired.web_shell_ingress {
             ingresses
                 .patch(&names.web_shell_ingress, &apply, &Patch::Apply(ingress))
+                .await?;
+        }
+        if self.builder.ttyd_mtls.is_some() && desired.web_shell_ingress.is_none() {
+            self.apply_web_shell_envoy_filter(workspace, desired)
                 .await?;
         }
         Ok(())

@@ -8,7 +8,8 @@ use k8s_openapi::api::{
 };
 use kube::{
     Api, Resource, ResourceExt,
-    api::{DeleteParams, ListParams},
+    api::{DeleteParams, ListParams, Preconditions},
+    core::DynamicObject,
 };
 use serde::de::DeserializeOwned;
 use uuid::Uuid;
@@ -81,6 +82,31 @@ impl KubernetesCoordinator {
                 .await?
         {
             return Ok(DeleteProgress::DeletionRequested);
+        }
+        if self.builder.ttyd_mtls.is_some() {
+            let envoy_filters = Api::<DynamicObject>::namespaced_with(
+                self.client.clone(),
+                &self.builder.higress_namespace,
+                &super::super::envoy_filter::api_resource(),
+            );
+            if let Some(existing) = envoy_filters.get_opt(&names.web_shell_envoy_filter).await? {
+                self.builder
+                    .verify_delete_ownership(&existing.metadata, workspace_id)?;
+                let uid = existing
+                    .metadata
+                    .uid
+                    .ok_or(super::ReconcileError::MissingEnvoyFilterUid)?;
+                envoy_filters
+                    .delete(
+                        &names.web_shell_envoy_filter,
+                        &DeleteParams::default().preconditions(Preconditions {
+                            uid: Some(uid),
+                            resource_version: None,
+                        }),
+                    )
+                    .await?;
+                return Ok(DeleteProgress::DeletionRequested);
+            }
         }
         let mapping_policies = Api::<NetworkPolicy>::namespaced(self.client.clone(), namespace);
         if delete_first_owned(

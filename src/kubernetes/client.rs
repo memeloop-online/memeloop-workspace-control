@@ -196,4 +196,16 @@ pub enum ReconcileError {
     MissingWorkspaceContainer,
     #[error("desired Kubernetes resources do not match the persisted workspace runtime identity")]
     RuntimeIdentityMismatch,
+    #[error("ttyd mTLS EnvoyFilter requested without mTLS configuration")]
+    MissingTtydMtlsConfig,
+    #[error("configured Higress ttyd client Secret is missing")]
+    MissingTtydMtlsSecret,
+    #[error("configured Higress ttyd client CA companion Secret is missing")]
+    MissingTtydMtlsCompanion,
+    #[error("configured Higress ttyd client Secret lacks tls.crt or tls.key")]
+    InvalidTtydMtlsClientSecret,
+    #[error("configured Higress ttyd client CA companion lacks cacert")]
+    InvalidTtydMtlsCompanion,
+    #[error("owned Higress EnvoyFilter has no UID; refusing an unguarded delete")]
+    MissingEnvoyFilterUid,
 }

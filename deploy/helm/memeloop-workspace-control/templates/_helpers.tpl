@@ -80,6 +80,9 @@ app.kubernetes.io/instance: {{ include "mwc.name" . }}
 {{- if or (and $ttydMtls (or (not $higressMtlsNamespace) (not $higressMtlsName))) (and (not $ttydMtls) (or $higressMtlsNamespace $higressMtlsName)) -}}
 {{- fail "workspace.ttydMtls.serverTlsSecretName and higress.ttydMtls client Secret fields must be set together" -}}
 {{- end -}}
+{{- if and $ttydMtls (ne $higressMtlsNamespace .Values.higress.namespace) -}}
+{{- fail "higress.ttydMtls.clientSecretNamespace must equal higress.namespace for exact EnvoyFilter ownership" -}}
+{{- end -}}
 {{- if or (not .Values.workspace.egress.dnsNamespace) (not (regexMatch "^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$" .Values.workspace.egress.dnsNamespace)) -}}
 {{- fail "workspace.egress.dnsNamespace must be a lower-case DNS label" -}}
 {{- end -}}
