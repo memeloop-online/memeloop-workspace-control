@@ -169,6 +169,13 @@ pre-cleanup failure evidence. Main stopped ad-hoc retries and assigned a durable
 with failure diagnostics before cleanup; review that runner before another cluster test.
 Runtime worker owns `docs/WEB-SHELL-MTLS.md` and its README link (Secret roles, SAN/EKU,
 rotation and acceptance limits). These docs must not imply live mTLS rollout is complete.
+Documentation completed in `e3f9cc4`. CI `34247950017` passed compilation and business_storage,
+then exposed an actual snapshot-import validation gap: json_populate_recordset silently
+ignores unknown workspace fields. Runtime worker owns strict schema22 field validation and
+database_snapshot regression, preserving rejection semantics. CI now uses --no-fail-fast
+to collect failures across test binaries in one run instead of stopping at the first binary.
+TLS runner review still pending fixes for forwarding readiness, transport-vs-auth failures,
+/token validation and cleanup on namespace-deletion errors; no new cluster test approved yet.
 
 Migration handoff review corrected a dangerous conflation: `rust-dev-test` and Coder TOKEN center
 dev are distinct 100 GiB volumes. Both actual PVC→PV claim UIDs match. Final count is four
