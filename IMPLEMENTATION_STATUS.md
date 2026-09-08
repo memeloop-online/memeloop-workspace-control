@@ -391,6 +391,9 @@ fixture and scenario modules; do not treat unexecuted tests as acceptance.
 `release_manifest_plan` (Luna) completed the Rust-dependency CI cache in `618c300`, with an
 immutable upstream action pin. It now prepares a read-only gap analysis for authenticated
 WebSocket acceptance; no cluster changes are delegated.
+Local YAML parsing with duplicate-key rejection passed for the CI workflow; the immutable
+cache pin and unchanged full `--all-features --no-fail-fast` test step were asserted.
+Actual cache execution and lifecycle test results still require GitHub Actions.
 Next push these together to `ci/ttyd-san-c63cb93` for verification only; do not publish
 or deploy before the complete regression gate passes.
 Disable is explicitly two-stage: keep mTLS/RBAC while removing owned Ingresses first and
