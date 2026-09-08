@@ -98,6 +98,19 @@ Node preparation is moving to verified, temporarily staged ELRepo 5.15.220 packa
 preserving AlmaLinux 8 and its existing kernels. `gvisor_node_rollout` owns download/signature/
 dry-run evidence only; no package installation or GRUB/reboot yet. Requested the provider
 console/power-reset recovery contact because SSH cannot recover a failed kernel boot.
+2026-09-08 user explicitly authorized reboot at any time and confirmed cloud-console reset
+assistance. Main verified local API/etcd readyz and saved snapshot
+`mwc-gvisor-serv-20260908-serv-146231-1788877200`. Longhorn snapshot
+`mwc-gvisor-serv-wiki-20260908` is ready for the single-replica overseas Wiki volume
+`pvc-598e610d-9b8e-4de2-b59e-9dd5d0c05474` (a local snapshot, not an off-node backup).
+Installed only the three signature-verified ELRepo 5.15.220 kernel/core/modules RPMs, keeping
+all existing kernels. `/boot` retains 500 MiB free. Old 4.18.0-553.139 default was explicitly
+restored after the transaction; no reboot has happened at this checkpoint. Next: verify
+initramfs/drivers, cordon the exact node, set the explicit new BLS id for one boot and reboot,
+then verify SSH/kernel/K3s/storage/services and uncordon. User controls console reset if needed.
+Uncommitted ttyd Basic-auth draft was rejected: upstream `/token` returns the configured
+credential. Worker is removing it and implementing native TLS client authentication instead.
+Never publish the rejected Basic draft or widen SNAT allowances before live acceptance.
 
 Migration handoff review corrected a dangerous conflation: `rust-dev-test` and Coder TOKEN center
 dev are distinct 100 GiB volumes. Both actual PVC→PV claim UIDs match. Final count is four
