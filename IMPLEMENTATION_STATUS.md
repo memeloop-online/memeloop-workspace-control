@@ -127,6 +127,18 @@ The jump-host namespace fallback now uses the canonical namespace (`1adee76`).
 Main has prepared all-or-none mTLS environment parsing and eight-combination tests; wait for
 the runtime worker's matching config type/manifests before committing that dependent change.
 CI `34241444782` failed; fixture worker owns the next log-based correction.
+CI fixture correction `d556493` fixed an invalid environment-variable target in the new
+authorization test, preserving the 403/success assertions. Subsequent run `34243036481`
+failed; fixture worker is checking its specific result.
+gVisor official archive now staged and checksum-verified on serv at
+`/var/tmp/serv-146231-gvisor-20260831.0.Q2DBoz`. Installed AlmaLinux's `zstd-1.4.4-1.el8`.
+Fixed preflight's early-exit awk SIGPIPE bug; real preflight now correctly reaches the next
+gate: systemd 239 is below the documented 244 minimum for runsc's systemd-cgroup mode.
+No runsc installation, handler change or further restart occurred. Worker is checking the
+actual kubelet/CRI cgroup driver and supported alternatives without weakening checks.
+Main acknowledges this systemd prerequisite should have been checked before the kernel reboot.
+mTLS parser/client fixture committed `082e20f`; do not push it without the runtime worker's
+matching type/manifest commit.
 
 Migration handoff review corrected a dangerous conflation: `rust-dev-test` and Coder TOKEN center
 dev are distinct 100 GiB volumes. Both actual PVC→PV claim UIDs match. Final count is four

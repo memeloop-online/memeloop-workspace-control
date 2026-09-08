@@ -88,7 +88,7 @@ if [[ $test_mode == 1 && -n ${GVISOR_NODE_TEST_CONTAINERD_VERSION:-} ]]; then
   containerd_version=${GVISOR_NODE_TEST_CONTAINERD_VERSION#v}
 else
   containerd_version=$(k3s ctr version 2>/dev/null \
-    | awk '/^[[:space:]]*Version:[[:space:]]*/ { value=$2; sub(/^v/, "", value); print value; exit }')
+    | awk '/^[[:space:]]*Version:[[:space:]]*/ && !seen { value=$2; sub(/^v/, "", value); print value; seen=1 }')
 fi
 [[ -n $containerd_version ]] || fail 'could not determine embedded containerd version'
 containerd_major=${containerd_version%%.*}
@@ -174,7 +174,7 @@ if [[ $test_mode == 1 && -n ${GVISOR_NODE_TEST_SYSTEMD_VERSION:-} ]]; then
   systemd_version=$GVISOR_NODE_TEST_SYSTEMD_VERSION
 elif [[ $cgroup_mode == v2 ]]; then
   systemd_version=$(systemctl --version 2>/dev/null \
-    | awk 'NR == 1 { print $2; exit }')
+    | awk 'NR == 1 { print $2 }')
 fi
 if [[ $cgroup_mode == v2 ]]; then
   [[ $systemd_version =~ ^[0-9]+$ ]] \
