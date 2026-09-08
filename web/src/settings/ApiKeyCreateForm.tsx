@@ -1,18 +1,25 @@
 import type { FormEvent } from "react";
 
-import type { ApiKeyScope } from "../types";
+import type { ApiKeyScope, WorkspaceTemplate } from "../types";
 import type { MessageKey } from "../i18n";
 import { ApiKeyScopePicker, type GrantableApiKeyScope } from "./ApiKeyScopePicker";
+import { ApiKeyTemplatePicker } from "./ApiKeyTemplatePicker";
 
 interface Props {
   name: string;
   scopes: ApiKeyScope[];
   expiresAt: string;
   grantableScopes: readonly GrantableApiKeyScope[];
+  templates: readonly WorkspaceTemplate[];
+  templateRestriction: boolean;
+  allowedTemplateIds: readonly string[];
+  templateRestrictionDisabled?: boolean;
   creating: boolean;
   onNameChange: (value: string) => void;
   onScopesChange: (value: ApiKeyScope[]) => void;
   onExpiresAtChange: (value: string) => void;
+  onTemplateRestrictionChange: (value: boolean) => void;
+  onAllowedTemplateIdsChange: (value: string[]) => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
   translate: (key: MessageKey) => string;
 }
@@ -22,10 +29,16 @@ export function ApiKeyCreateForm({
   scopes,
   expiresAt,
   grantableScopes,
+  templates,
+  templateRestriction,
+  allowedTemplateIds,
+  templateRestrictionDisabled = false,
   creating,
   onNameChange,
   onScopesChange,
   onExpiresAtChange,
+  onTemplateRestrictionChange,
+  onAllowedTemplateIdsChange,
   onSubmit,
   translate,
 }: Props) {
@@ -65,6 +78,16 @@ export function ApiKeyCreateForm({
       selected={scopes}
       translate={translate}
       onChange={onScopesChange}
+    />
+    <ApiKeyTemplatePicker
+      disabled={creating}
+      restrictionDisabled={templateRestrictionDisabled}
+      restricted={templateRestriction}
+      selected={allowedTemplateIds}
+      templates={templates}
+      translate={translate}
+      onRestrictedChange={onTemplateRestrictionChange}
+      onSelectedChange={onAllowedTemplateIdsChange}
     />
     <div className="api-key-create-actions">
       <button className="button primary" disabled={creating || !name.trim() || !expiresAt || scopes.length === 0}>

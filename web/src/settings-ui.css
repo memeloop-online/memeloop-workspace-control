@@ -220,6 +220,74 @@
   min-width: 128px;
 }
 
+.api-key-template-picker {
+  min-width: 0;
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 12px 0 0;
+  border: 0;
+  border-top: 1px solid #24332f;
+}
+
+.api-key-template-picker > legend {
+  padding: 0 6px 0 0;
+  color: #d2d9e5;
+  font-size: .8rem;
+  font-weight: 700;
+}
+
+.api-key-template-toggle {
+  display: flex !important;
+  grid-template-columns: none !important;
+  align-items: center;
+  gap: 8px !important;
+  color: #b9c4d5 !important;
+  font-size: .78rem !important;
+  font-weight: 600 !important;
+  cursor: pointer;
+}
+
+.api-key-template-toggle input {
+  width: auto;
+  margin: 0;
+}
+
+.api-key-template-toggle:has(input:disabled),
+.api-key-template-picker[data-disabled="true"] .api-key-template-control {
+  cursor: not-allowed;
+  opacity: .62;
+}
+
+.api-key-template-control {
+  max-width: 680px;
+  min-width: 0;
+}
+
+.api-key-template-popover {
+  width: min(680px, calc(100vw - 52px));
+}
+
+.api-key-template-options {
+  max-height: 240px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.api-key-template-options label {
+  min-width: 0;
+}
+
+.api-key-template-options label:has(input:disabled) {
+  cursor: not-allowed;
+}
+
+.api-key-template-options b,
+.api-key-template-options small {
+  max-width: 100%;
+}
+
 .settings-api-key-card .new-api-key {
   display: grid;
   gap: 7px;
@@ -353,6 +421,15 @@
 
 :root[data-theme="light"] .api-key-scope-copy small {
   color: #63748a;
+}
+
+:root[data-theme="light"] .api-key-template-picker {
+  border-top-color: var(--line);
+}
+
+:root[data-theme="light"] .api-key-template-picker > legend,
+:root[data-theme="light"] .api-key-template-toggle {
+  color: var(--text) !important;
 }
 
 @media (max-width: 1050px) {
