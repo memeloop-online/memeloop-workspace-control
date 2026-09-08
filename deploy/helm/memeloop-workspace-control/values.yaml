@@ -30,6 +30,10 @@ sqlite:
 workspace:
   storageClassName: ""
   ttydImage: ""
+  ttydMtls:
+    # Existing Secret in the product namespace. It contains ttyd's `tls.crt`,
+    # `tls.key`, and the client-verification `ca.crt`; it is mounted only by ttyd.
+    serverTlsSecretName: ""
   # Stable Tailnet node DNS name or IP. Enables per-workspace, auto-assigned SSH NodePorts.
   internalSshHost: ""
   egress:
@@ -66,6 +70,11 @@ higress:
     app.kubernetes.io/name: higress-gateway
   # Required when gateway Pods use hostNetwork and the CNI sees node source addresses.
   sourceCidrs: []
+  ttydMtls:
+    # Existing Higress client-certificate Secret and its required `-cacert` companion.
+    # The client private key remains in Higress and is never mounted into a workspace.
+    clientSecretNamespace: ""
+    clientSecretName: ""
   httpSectionName: http
   httpsSectionName: https
   sshListenerPort: 22

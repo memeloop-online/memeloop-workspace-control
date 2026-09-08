@@ -2,7 +2,7 @@ use memeloop_workspace_control::{
     injections::{InjectionItem, InjectionKind, InjectionValue, resolve_injections},
     kubernetes::{
         BuildError, InternetEgressConfig, ORGANIZATION_ID_LABEL, OWNER_INSTALLATION_LABEL,
-        OWNER_USER_ID_LABEL, OwnershipError, ResourceBuilder, WORKSPACE_ID_LABEL,
+        OWNER_USER_ID_LABEL, OwnershipError, ResourceBuilder, TtydMtlsConfig, WORKSPACE_ID_LABEL,
     },
     quota::Resources,
     templates::{EgressPolicy, WorkspaceTemplateSpec},
@@ -16,6 +16,7 @@ fn builder() -> ResourceBuilder {
     ResourceBuilder {
         installation_id: "public-a".parse().unwrap(),
         ttyd_image: "tsl0922/ttyd:1.7.7".to_owned(),
+        ttyd_mtls: None,
         higress_namespace: "higress-system".to_owned(),
         higress_pod_labels: std::collections::BTreeMap::from([(
             "app.kubernetes.io/name".to_owned(),
@@ -93,6 +94,100 @@ fn runtime_names(workspace: &Workspace) -> WorkspaceRuntimeNames {
 
 fn metadata_name(metadata: &k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta) -> &str {
     metadata.name.as_deref().unwrap()
+}
+
+#[test]
+fn ttyd_mtls_is_complete_and_isolated_to_the_ttyd_container() {
+    let workspace = workspace(WorkspaceState::Ready);
+    let mut resource_builder = builder();
+    resource_builder.ttyd_mtls = Some(
+        TtydMtlsConfig::new(
+            "ttyd-server-tls".to_owned(),
+            "higress-system".to_owned(),
+            "ttyd-client".to_owned(),
+        )
+        .unwrap(),
+    );
+    let resources = resource_builder.build(&workspace).unwrap();
+    let pod = resources
+        .stateful_set
+        .spec
+        .as_ref()
+        .unwrap()
+        .template
+        .spec
+        .as_ref()
+        .unwrap();
+    let ttyd = pod
+        .containers
+        .iter()
+        .find(|container| container.name == "ttyd")
+        .unwrap();
+    let args = ttyd.args.as_ref().unwrap();
+    let ssl_index = args
+        .iter()
+        .position(|argument| argument == "--ssl")
+        .unwrap();
+    assert_eq!(args[ssl_index + 1], "--ssl-cert");
+    assert!(args.contains(&"/etc/mwc-ttyd-tls/tls.key".to_owned()));
+    assert!(args.contains(&"/etc/mwc-ttyd-tls/ca.crt".to_owned()));
+    assert!(ttyd.volume_mounts.as_ref().unwrap().iter().any(|mount| {
+        mount.name == "ttyd-tls" && mount.mount_path == "/etc/mwc-ttyd-tls" && mount.read_only
+    }));
+    assert!(
+        !pod.containers
+            .iter()
+            .find(|container| container.name == "workspace")
+            .unwrap()
+            .volume_mounts
+            .as_ref()
+            .unwrap()
+            .iter()
+            .any(|mount| mount.name == "ttyd-tls")
+    );
+    let tls_volume = pod
+        .volumes
+        .as_ref()
+        .unwrap()
+        .iter()
+        .find(|volume| volume.name == "ttyd-tls")
+        .unwrap();
+    let secret = tls_volume.secret.as_ref().unwrap();
+    assert_eq!(secret.secret_name.as_deref(), Some("ttyd-server-tls"));
+    assert_eq!(secret.optional, None);
+    assert_eq!(
+        secret
+            .items
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|item| item.key.as_str())
+            .collect::<Vec<_>>(),
+        ["tls.crt", "tls.key", "ca.crt"]
+    );
+
+    let annotations = resources
+        .web_shell_ingress
+        .unwrap()
+        .metadata
+        .annotations
+        .unwrap();
+    assert_eq!(
+        annotations["nginx.ingress.kubernetes.io/backend-protocol"],
+        "HTTPS"
+    );
+    assert_eq!(
+        annotations["nginx.ingress.kubernetes.io/proxy-ssl-secret"],
+        "higress-system/ttyd-client"
+    );
+    assert_eq!(
+        annotations["nginx.ingress.kubernetes.io/proxy-ssl-verify"],
+        "on"
+    );
+    assert_eq!(
+        annotations["nginx.ingress.kubernetes.io/proxy-ssl-name"],
+        "w-800000000001abcd.memeloop-workspace-control.svc.cluster.local"
+    );
 }
 
 fn node_template(image: &str, resources: Resources) -> WorkspaceTemplateSpec {

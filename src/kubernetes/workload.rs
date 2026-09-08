@@ -4,7 +4,7 @@ use k8s_openapi::{
     api::{
         apps::v1::{StatefulSet, StatefulSetSpec},
         core::v1::{
-            ConfigMapVolumeSource, Container, ContainerPort, EmptyDirVolumeSource,
+            ConfigMapVolumeSource, Container, ContainerPort, EmptyDirVolumeSource, KeyToPath,
             PersistentVolumeClaim, PersistentVolumeClaimSpec, PodSpec, PodTemplateSpec,
             ResourceRequirements, SecretVolumeSource, Volume, VolumeResourceRequirements,
         },
@@ -57,7 +57,7 @@ pub(super) fn stateful_set(
                     )])),
                     ..ObjectMeta::default()
                 }),
-                spec: Some(pod_spec(pod, workspace, containers, names)),
+                spec: Some(pod_spec(builder, pod, workspace, containers, names)),
             },
             volume_claim_templates: Some(vec![workspace_claim(
                 builder,
@@ -91,6 +91,7 @@ fn containers(
 }
 
 fn pod_spec(
+    builder: &ResourceBuilder,
     pod: WorkspacePod<'_>,
     workspace: &Workspace,
     containers: Vec<Container>,
@@ -111,7 +112,11 @@ fn pod_spec(
         node_selector: pod.node_selector(),
         security_context: pod.pod_security_context(),
         image_pull_secrets: pod.image_pull_secrets(),
-        volumes: Some(workspace_volumes(&workspace.template.storage_policy, names)),
+        volumes: Some(workspace_volumes(
+            &workspace.template.storage_policy,
+            names,
+            builder.ttyd_mtls.as_ref(),
+        )),
         ..PodSpec::default()
     }
 }
@@ -132,40 +137,58 @@ fn workspace_resources(pod: WorkspacePod<'_>, workspace: &Workspace) -> Resource
 }
 
 fn ttyd_container(builder: &ResourceBuilder, pod: WorkspacePod<'_>, route_key: &str) -> Container {
+    let mut args = vec![
+        "--port".to_owned(),
+        "7681".to_owned(),
+        "--writable".to_owned(),
+        "--base-path".to_owned(),
+        format!("/shell/{route_key}"),
+    ];
+    if builder.ttyd_mtls.is_some() {
+        args.extend([
+            "--ssl".to_owned(),
+            "--ssl-cert".to_owned(),
+            "/etc/mwc-ttyd-tls/tls.crt".to_owned(),
+            "--ssl-key".to_owned(),
+            "/etc/mwc-ttyd-tls/tls.key".to_owned(),
+            "--ssl-ca".to_owned(),
+            "/etc/mwc-ttyd-tls/ca.crt".to_owned(),
+        ]);
+    }
+    args.extend([
+        "/usr/bin/ssh".to_owned(),
+        "-p".to_owned(),
+        "2222".to_owned(),
+        "-o".to_owned(),
+        "StrictHostKeyChecking=yes".to_owned(),
+        "-o".to_owned(),
+        "UserKnownHostsFile=/etc/ssh/platform/known_hosts".to_owned(),
+        "-o".to_owned(),
+        "BatchMode=yes".to_owned(),
+        "-i".to_owned(),
+        "/etc/ssh/platform/ttyd_client_key".to_owned(),
+        format!("{}@127.0.0.1", pod.login_user),
+    ]);
+    let mut volume_mounts = vec![
+        mount("runtime-ssh", "/etc/ssh/platform", true),
+        mount("ttyd-tmp", "/tmp", false),
+        mount("ttyd-tmp", "/var/tmp", false),
+    ];
+    if builder.ttyd_mtls.is_some() {
+        volume_mounts.push(mount("ttyd-tls", "/etc/mwc-ttyd-tls", true));
+    }
     Container {
         name: "ttyd".to_owned(),
         image: Some(builder.ttyd_image.clone()),
         command: Some(vec!["/usr/bin/ttyd".to_owned()]),
-        args: Some(vec![
-            "--port".to_owned(),
-            "7681".to_owned(),
-            "--writable".to_owned(),
-            "--base-path".to_owned(),
-            format!("/shell/{route_key}"),
-            "/usr/bin/ssh".to_owned(),
-            "-p".to_owned(),
-            "2222".to_owned(),
-            "-o".to_owned(),
-            "StrictHostKeyChecking=yes".to_owned(),
-            "-o".to_owned(),
-            "UserKnownHostsFile=/etc/ssh/platform/known_hosts".to_owned(),
-            "-o".to_owned(),
-            "BatchMode=yes".to_owned(),
-            "-i".to_owned(),
-            "/etc/ssh/platform/ttyd_client_key".to_owned(),
-            format!("{}@127.0.0.1", pod.login_user),
-        ]),
+        args: Some(args),
         ports: Some(vec![ContainerPort {
             container_port: 7681,
             name: Some("web-shell".to_owned()),
             protocol: Some("TCP".to_owned()),
             ..ContainerPort::default()
         }]),
-        volume_mounts: Some(vec![
-            mount("runtime-ssh", "/etc/ssh/platform", true),
-            mount("ttyd-tmp", "/tmp", false),
-            mount("ttyd-tmp", "/var/tmp", false),
-        ]),
+        volume_mounts: Some(volume_mounts),
         resources: Some(ResourceRequirements {
             requests: Some(BTreeMap::from([
                 ("cpu".to_owned(), Quantity("10m".to_owned())),
@@ -184,8 +207,9 @@ fn ttyd_container(builder: &ResourceBuilder, pod: WorkspacePod<'_>, route_key: &
 fn workspace_volumes(
     policy: &WorkspaceStoragePolicy,
     names: &WorkspaceResourceNames,
+    ttyd_mtls: Option<&super::TtydMtlsConfig>,
 ) -> Vec<Volume> {
-    vec![
+    let mut volumes = vec![
         Volume {
             name: "ssh-identity".to_owned(),
             secret: Some(SecretVolumeSource {
@@ -262,7 +286,36 @@ fn workspace_volumes(
             )),
             ..Volume::default()
         },
-    ]
+    ];
+    if let Some(mtls) = ttyd_mtls {
+        volumes.push(Volume {
+            name: "ttyd-tls".to_owned(),
+            secret: Some(SecretVolumeSource {
+                secret_name: Some(mtls.server_tls_secret_name.clone()),
+                default_mode: Some(0o400),
+                items: Some(vec![
+                    KeyToPath {
+                        key: "tls.crt".to_owned(),
+                        path: "tls.crt".to_owned(),
+                        mode: Some(0o400),
+                    },
+                    KeyToPath {
+                        key: "tls.key".to_owned(),
+                        path: "tls.key".to_owned(),
+                        mode: Some(0o400),
+                    },
+                    KeyToPath {
+                        key: "ca.crt".to_owned(),
+                        path: "ca.crt".to_owned(),
+                        mode: Some(0o400),
+                    },
+                ]),
+                ..SecretVolumeSource::default()
+            }),
+            ..Volume::default()
+        });
+    }
+    volumes
 }
 
 fn bounded_empty_dir(size: &str, medium: Option<&str>) -> EmptyDirVolumeSource {

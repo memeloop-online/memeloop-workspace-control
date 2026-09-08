@@ -65,6 +65,14 @@ spec:
             {{- end }}
             - name: MWC_TTYD_IMAGE
               value: {{ .Values.workspace.ttydImage | quote }}
+            {{- if .Values.workspace.ttydMtls.serverTlsSecretName }}
+            - name: MWC_TTYD_MTLS_SERVER_SECRET
+              value: {{ .Values.workspace.ttydMtls.serverTlsSecretName | quote }}
+            - name: MWC_HIGRESS_MTLS_CLIENT_SECRET_NAMESPACE
+              value: {{ .Values.higress.ttydMtls.clientSecretNamespace | quote }}
+            - name: MWC_HIGRESS_MTLS_CLIENT_SECRET_NAME
+              value: {{ .Values.higress.ttydMtls.clientSecretName | quote }}
+            {{- end }}
             - name: MWC_EGRESS_DNS_NAMESPACE
               value: {{ .Values.workspace.egress.dnsNamespace | quote }}
             - name: MWC_EGRESS_DNS_POD_LABELS_JSON

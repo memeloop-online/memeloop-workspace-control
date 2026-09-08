@@ -74,6 +74,12 @@ app.kubernetes.io/instance: {{ include "mwc.name" . }}
 {{- if not .Values.workspace.ttydImage -}}
 {{- fail "workspace.ttydImage must be an explicitly pinned image" -}}
 {{- end -}}
+{{- $ttydMtls := .Values.workspace.ttydMtls.serverTlsSecretName -}}
+{{- $higressMtlsNamespace := .Values.higress.ttydMtls.clientSecretNamespace -}}
+{{- $higressMtlsName := .Values.higress.ttydMtls.clientSecretName -}}
+{{- if or (and $ttydMtls (or (not $higressMtlsNamespace) (not $higressMtlsName))) (and (not $ttydMtls) (or $higressMtlsNamespace $higressMtlsName)) -}}
+{{- fail "workspace.ttydMtls.serverTlsSecretName and higress.ttydMtls client Secret fields must be set together" -}}
+{{- end -}}
 {{- if or (not .Values.workspace.egress.dnsNamespace) (not (regexMatch "^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$" .Values.workspace.egress.dnsNamespace)) -}}
 {{- fail "workspace.egress.dnsNamespace must be a lower-case DNS label" -}}
 {{- end -}}
