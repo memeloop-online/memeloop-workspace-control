@@ -14,7 +14,10 @@ type SurfaceState = {
   hasTerm: boolean; hasBuffer: boolean; hasTextarea: boolean;
   termCols: number | null; termRows: number | null;
 };
-type SocketEvidence = { requestCount: number; statuses: number[]; frameCount: number };
+type SocketEvidence = {
+  requestCount: number; statuses: number[]; frameCount: number;
+  frameErrorStatuses: Array<401 | 403>;
+};
 type Session = { page: any; evidence: SocketEvidence };
 const pause = (milliseconds: number) => new Promise<void>((resolvePromise) => setTimeout(resolvePromise, milliseconds));
 
@@ -30,7 +33,7 @@ function socketPathMatches(value: unknown, expectedPath: string): boolean {
 
 /** CDP's Created event is the URL-bearing event; later events only carry requestId. */
 export function attachSocketEvidence(cdp: any, expectedPath: string): SocketEvidence {
-  const evidence: SocketEvidence = { requestCount: 0, statuses: [], frameCount: 0 };
+  const evidence: SocketEvidence = { requestCount: 0, statuses: [], frameCount: 0, frameErrorStatuses: [] };
   const createdIds = new Set<string>(); const handshakeIds = new Set<string>();
   cdp.on("Network.webSocketCreated", (event: any) => {
     if (typeof event?.requestId === "string" && socketPathMatches(event.url, expectedPath)) createdIds.add(event.requestId);
@@ -47,6 +50,17 @@ export function attachSocketEvidence(cdp: any, expectedPath: string): SocketEvid
     const status = Number(event?.response?.status);
     if (Number.isInteger(status) && evidence.statuses.length < 32) evidence.statuses.push(status);
   });
+  cdp.on("Network.webSocketFrameError", (event: any) => {
+    if (!handshakeIds.has(event?.requestId)) return;
+    const message = typeof event?.errorMessage === "string" ? event.errorMessage : "";
+    // Chromium reports HTTP 401 through this canonical auth failure instead of
+    // exposing a WebSocket handshake response event. Keep only the status code.
+    const unexpected = /unexpected response code\s*:\s*(401|403)\b/i.exec(message);
+    const status = unexpected ? Number(unexpected[1]) : message.trim() === "HTTP Authentication failed; no valid credentials available" ? 401 : 0;
+    if (status !== 401 && status !== 403) return;
+    if (evidence.statuses.length < 32) evidence.statuses.push(status);
+    if (evidence.frameErrorStatuses.length < 32) evidence.frameErrorStatuses.push(status);
+  });
   const countFrame = (event: any) => { if (handshakeIds.has(event?.requestId)) evidence.frameCount += 1; };
   cdp.on("Network.webSocketFrameSent", countFrame);
   cdp.on("Network.webSocketFrameReceived", countFrame);
@@ -59,7 +73,7 @@ async function browserStep<T>(stage: string, action: () => Promise<T>): Promise<
     fail(stage, "browser operation failed");
   }
 }
-async function findChromium(): Promise<string> {
+export async function findChromium(): Promise<string> {
   const cacheRoot = "/home/token-center-dev/.cache/ms-playwright";
   const candidates = [process.env.CHROMIUM_BIN, "/usr/bin/google-chrome", "/usr/bin/chromium", "/usr/bin/chromium-browser"]
     .filter((value): value is string => Boolean(value));
@@ -82,7 +96,9 @@ async function openTicketPage(context: any, pages: Set<any>, ticket: BrowserTick
       const evidence = attachSocketEvidence(cdp, expectedSocketPath(ticket.url));
       const response = await page.goto(ticket.url.href, { waitUntil: "domcontentloaded", timeout: timeoutMs });
       const status = response?.status();
-      if (!status || status < 200 || status >= 300) fail("browser", "Web Shell page did not load successfully");
+      if (!status || status < 200 || status >= 300) {
+        fail("browser", `Web Shell page returned HTTP ${status ?? "unavailable"}`);
+      }
       return { page, evidence };
     } catch (error) {
       await page.close().catch(() => undefined); pages.delete(page);
