@@ -19,7 +19,7 @@ Cilium/Calico, split clusters, or restore `runtime_profile`. Preserve durable Co
 
 | ID | Work | State / owner / next gate |
 | --- | --- | --- |
-| MIG-01 | Canonical shared Namespace in product and Chart | Source committed: `c0b2a80`, `0a545d3`; not deployed. CI `34216981601` reached Rust tests: 100 passed, PostgreSQL migration fixture failed (multiple statements in prepared query). Fix owned by SEC-05 worker; no rollout until rerun passes. |
+| MIG-01 | Canonical shared Namespace in product and Chart | Source committed: `c0b2a80`, `0a545d3`; not deployed. PostgreSQL fixture raw-SQL fix landed with integration updates; full CI rerun still required. Latest all-target fixture cleanup owned by `http_fixture_clocks`; no rollout until green. |
 | MIG-02 | Required schema 19→20→21 transitions and GitOps promotion | Pending. Existing 19→20 bridge evidence below remains valid; never skip required transforms. Stage each promotion, not the final GitOps chain at once. |
 | MIG-03 | Four MWC workloads/PVCs/control-plane volume into canonical Namespace | Pending gated cutover. Reuse verified volumes; snapshot, single writer, SSH/host key/PVC/session validation before retiring old resources. |
 | MIG-04 | Last active Coder TOKEN center dev workspace | External-agent cutover only. Current source PVC is 100 GiB; do not stop this workspace from inside itself. Prepare complete copyable final procedure. |
@@ -32,7 +32,7 @@ Cilium/Calico, split clusters, or restore `runtime_profile`. Preserve durable Co
 | SEC-04 | gVisor node preparation and optional RuntimeClass | iv preflight complete, pause pull recovered; default runc remains unchanged. Artifact transfer incomplete, nothing installed. Node hosts gateway/storage workloads: require restart/recovery window before registration. Installer review remains active. |
 | SEC-05 | API-key allowed-template IDs and bypass prevention | Source `f02d7cb`, bypass fixes `205be6e`, `506f13f`, `0f90fd9`; HTTP clocks `cec798b`. CI `34228134529` stopped at formatting, now corrected and resubmitted. Additional read-only key/user-injection HTTP regression delegated to `http_fixture_clocks`. Not deployed/accepted. |
 | SEC-06 | External sandbox release acceptance | Pending SEC-01..05. Verify network escape paths, privilege/credential boundaries, CPU/memory/disk/PID pressure, SSH/Web Shell, restart/reschedule; fail closed. Installing components alone is not acceptance. |
-| OPS-01 | Operator-only setup and automated product checks | Node docs/preflight source `fb6d0bf`, corrected node evidence/runbook `c4271b1`; installer transaction/rollback review in progress. Do not execute earlier installer draft. |
+| OPS-01 | Operator-only setup and automated product checks | Hardened installer `5bd4b95` passed real-tar fixture tests, CI hook `4b5c8b0`; node preparation `7b250f7`. Host registration/canary still pending eligible kernel and recovery checks. |
 | CLEAN-01 | Superseded API keys/cache injections/image policies | Preserve previous evidence; final transactional cleanup/rotation and deletion verification remain. Never expose secret values. |
 
 2026-09-08 read-only runtime snapshot: 262 Pods have no explicit RuntimeClass, one uses `nvidia`,
@@ -92,6 +92,12 @@ denial and the normal ticket flow both pass. This is implementation work, not li
 behavior; no node registration/reboot or gVisor workload acceptance has occurred.
 CI `34233272890` passed production compilation/maintainability checks, then found a missing
 test import; `7d548a4` fixes it. Follow the newer run, not the superseded failure.
+CI `34234125390` then found an unused `test_key_expiry` in `tests/admin_api.rs`.
+`http_fixture_clocks` owns that correction and a bounded scan of its fixture helpers.
+Node preparation is moving to verified, temporarily staged ELRepo 5.15.220 packages while
+preserving AlmaLinux 8 and its existing kernels. `gvisor_node_rollout` owns download/signature/
+dry-run evidence only; no package installation or GRUB/reboot yet. Requested the provider
+console/power-reset recovery contact because SSH cannot recover a failed kernel boot.
 
 Migration handoff review corrected a dangerous conflation: `rust-dev-test` and Coder TOKEN center
 dev are distinct 100 GiB volumes. Both actual PVC→PV claim UIDs match. Final count is four
