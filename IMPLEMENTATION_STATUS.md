@@ -391,17 +391,22 @@ setup but does not include the new lifecycle regression commit `54f9409`.
 full-call assertions that the SAN filter survives Ingress DELETE until absence is observed,
 a retained finalizer over multiple calls, and missing-UID deletion rejection. The 413-line
 scenario module shares 249/248-line harness and fixtures; formatting/diff checks passed.
-These newly committed tests still require CI execution; do not treat them as acceptance yet.
+Verification CI `34267525211` PASSED for `a1b9257`; its logs explicitly show all nine
+`client_tests::ttyd_mtls` scenarios passing, plus full tests, ENOSPC and Helm checks.
+Main follow-up `b91fc80` strengthens disabled-mode assertions to include collection access;
+the main-branch publication pipeline must revalidate that assertion before image publication.
 `release_manifest_plan` (Luna) completed the Rust-dependency CI cache in `618c300`, with an
 immutable upstream action pin. It now prepares a read-only gap analysis for authenticated
 WebSocket acceptance. Its gap analysis is complete; the agent now implements a client-only
 upstream certificate acceptance mode without executing it. `key_template_ui_review` prepares
-a separate real-browser ticket/interactive-terminal/replay runner. No cluster changes are delegated.
+a separate real-browser ticket/interactive-terminal/replay runner. GitOps client-only runner
+`8d8a4e7` is committed with static/repository checks passed; main runtime review and execution
+remain. No cluster changes are delegated.
 Local YAML parsing with duplicate-key rejection passed for the CI workflow; the immutable
 cache pin and unchanged full `--all-features --no-fail-fast` test step were asserted.
 Actual cache execution and lifecycle test results still require GitHub Actions.
-Push the completed lifecycle tests to `ci/ttyd-san-c63cb93` for verification only; do not publish
-or deploy before the complete regression gate passes.
+The lifecycle verification gate has passed. Promote the reviewed product source to main for
+the publication pipeline; do not deploy before published digests and rollout gates are verified.
 Disable is explicitly two-stage: keep mTLS/RBAC while removing owned Ingresses first and
 then filters; remove mTLS/RBAC only after absence checks. Disabled installations must not
 query EnvoyFilter APIs. Settled workspaces are not automatically requeued on configuration
