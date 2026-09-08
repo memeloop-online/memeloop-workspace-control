@@ -23,6 +23,22 @@ approved: it is schedulable and has existing system workloads, so a maintenance/
 required. Do not disrupt control-plane nodes, active workspace nodes, GPU nodes, the NAS, or the
 overseas edge merely to make a sandbox pool.
 
+An approved read-only host-mount inspection on iv found a cgroup v2 filesystem and a generated
+containerd `config.toml` at version 3. Its listed handlers are the existing `runc` and
+`runhcs-wcow-process`; no `runsc` handler or custom v3 template is present. Its K3s config
+explicitly uses `flannel-iface: tailscale0`. No `default_runtime_name`, `sandbox_image`, or
+`disable-network-policy` line was present in the limited whitelist output; absence from that
+output is not proof of an effective runtime or network-policy setting, so validate those behavior
+paths with the canary.
+
+The first one-shot read-only Job could not start because iv had no local pause image and its
+existing image path failed before the Job command ran: `HEAD
+https://harbor.k3s.onetwo.website/v2/docker-io/rancher/mirrored-pause/manifests/3.6?ns=docker.io`
+returned `502 Bad Gateway`. A later read-only `k3s ctr -n k8s.io images ls` check found no local
+pause image. Treat restoration of the correct pinned pause image/cache as a separate approved
+node-reliability action; do not hide this condition by repeatedly scheduling diagnostic Pods or by
+changing the default runtime.
+
 Labels are an assertion about the **measured host**. Add `sandbox.memeloop.dev/gvisor-ready=true`
 only after the preflight, archive checksum, K3s restart and an actual `runsc` canary on that exact
 node all succeed. Remove the label before the handler is removed. Never infer it from OS type,
