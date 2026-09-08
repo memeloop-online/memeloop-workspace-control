@@ -362,9 +362,26 @@ independently. No canary process remains. `sandbox_runtime_product` now owns pro
 of the exact per-workspace filter lifecycle, ownership checks, Chart permissions and tests.
 Gateway permissions must use a conditional Role/RoleBinding in the gateway Namespace, not
 cluster-wide EnvoyFilter access. Main owns the documentation and ledger. `release_manifest_plan`
-(Luna) is preparing a read-only exact GitOps promotion diff; no cluster changes or push.
+(Luna) completed staged promotion `8587d39` in the GitOps worktree: four manifest files use
+the canonical Namespace and verified `32945cc` release, an existing target SQLite claim,
+and paused automated sync. Helm/kustomize/repository checks passed; main reviewed the diff.
+Nothing was pushed or applied. Do not push the staging branch wholesale (31 commits ahead);
+promote the exact reviewed delta onto then-current GitOps `origin/master` only after cutover gates.
 Main startup validation landed in `7473093` (namespace mismatch fails before serving);
 rustfmt/diff checks passed, full Rust verification awaits the worker's complete patch and CI.
+Main Helm regression `0200a66` parses rendered YAML and checks exact gateway Role verbs,
+RoleBinding namespace/SA, absence of cluster-wide filter grants and disabled-mode Role absence.
+Local enabled/disabled renders passed; namespace mismatch and a mutated wildcard-verb fixture
+were rejected. These checks are wired into CI; do not push them without the matching Chart
+and lifecycle implementation currently owned by `sandbox_runtime_product`.
+Product implementation landed in `20efc85`; main review fixes `c63cb93` retain the filter until
+Ingress absence is observed and clean the cross-namespace filter even if the workspace Namespace
+is already gone. `http_fixture_clocks` owns fake-Kubernetes lifecycle regressions (not only
+manifest assertions), including disabled-mode no-CRD access, missing credentials, ordering,
+foreign ownership, UID preconditions and missing Namespace cleanup.
+Early CI `34262698041` is running for `c63cb93` on `ci/ttyd-san-c63cb93`; its non-main branch
+cannot publish images. This is not the final regression/publication gate. Keep production
+unchanged; add the lifecycle tests before promoting to main and publishing.
 Disable is explicitly two-stage: keep mTLS/RBAC while removing owned Ingresses first and
 then filters; remove mTLS/RBAC only after absence checks. Disabled installations must not
 query EnvoyFilter APIs. Settled workspaces are not automatically requeued on configuration
@@ -383,8 +400,11 @@ schema bridge, writer shutdown, retained-volume and rollback gates.
    workspace reconciliations without cleaning durable `.codex` state.
 3. Upgrade the remaining two workspaces to the final development images through the audited API,
    verify SSH/Web Shell/PVC/host-key continuity, then disable their superseded image policies.
-4. After the bridge migration and live schema-20 records are verified, advance GitOps to staged
-   commit `845b2e0` and validate its exact published digests. Never skip directly to this state.
+4. After bridge acceptance, perform the offline 20→22 migration and target volume binding.
+   The current final manifest candidate is GitOps `8587d39`, pinned to verified `32945cc`
+   images with automated sync paused. Rebase only that reviewed delta onto current GitOps
+   `origin/master` for the controlled promotion; do not push the staging history wholesale or sync
+   before the target database/PVC is ready. Keep mTLS disabled until its own rollout gates pass.
 5. First prove Higress→ttyd mTLS including invalid-client and invalid-server-trust rejection.
    Then scope any required SNAT source allowances to measured CNI gateway `/32` addresses.
    Those addresses alone do not identify Higress: cross-node unrelated Pods may share the
