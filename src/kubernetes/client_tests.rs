@@ -1,3 +1,6 @@
+#[path = "client_tests/ttyd_mtls.rs"]
+mod ttyd_mtls;
+
 mod node_port_tests {
     use k8s_openapi::api::core::v1::{Service, ServicePort, ServiceSpec};
 
