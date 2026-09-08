@@ -415,7 +415,11 @@ issuer expiry, while explicit over-parent requests remain forbidden. `http_fixtu
 completed deterministic short-lived-issuer regression `14d5060`; main review follow-up
 `681da5f` separates scope escalation from an explicit over-parent expiry case, so neither
 assertion can pass for the other reason. Main reviewed both; formatting/diff checks passed.
-Push this fix and regression through the main publication gate; no failed job is still running.
+Fix and regression are pushed as `df281ea`; main publication CI `34270275217` is running.
+Watch session `20896` follows that exact run. No failed job is still running.
+Browser runner review requires UUID v7 acceptance, CDP socket identity from `webSocketCreated`,
+and rendered xterm-buffer matching (not an assumed DOM renderer or command-input echo).
+The browser worker is correcting these before live execution.
 Main reviewed GitOps `8d8a4e7`; client-only live acceptance PASSED with the already verified
 ttyd `6f430bf` image. Session `27715` exited 0; result is
 `/tmp/mwc-higress-ttyd-client-20260908.json`. Valid / absent / restored / untrusted / restored
