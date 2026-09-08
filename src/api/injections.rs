@@ -339,6 +339,9 @@ async fn authorize(
 ) -> Result<(), ApiError> {
     let allowed = match scope_ref.scope {
         InjectionScope::Organization => {
+            if write && actor.has_template_restriction() {
+                return Err(ApiError::Forbidden);
+            }
             let permission = if write {
                 Permission::ManageOrganization
             } else {
@@ -357,7 +360,7 @@ async fn authorize(
                     Permission::ReadWorkspace
                 },
                 workspace.organization_id,
-            )
+            ) && actor.may_access_workspace_template(workspace.template_id)
         }
     };
     if !allowed {

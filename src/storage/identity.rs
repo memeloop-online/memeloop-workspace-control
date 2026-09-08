@@ -6,10 +6,7 @@ use uuid::Uuid;
 
 use crate::auth::{ApiKeyScope, Permission, Role, RoleBinding};
 
-use super::{
-    ApiKeySummary, Database, StorageError,
-    user_settings::{token_prefix, validate_api_key_policy},
-};
+use super::{ApiKeySummary, Database, StorageError, user_settings::validate_api_key_policy};
 
 mod backend;
 mod organizations;
@@ -26,6 +23,9 @@ pub struct Principal {
     pub api_key_scopes: Vec<ApiKeyScope>,
     /// The authenticating key's expiry timestamp.
     pub api_key_expires_at: Option<i64>,
+    /// Optional allowlist of templates this key may use to create workspaces.
+    /// `None` leaves template access governed by the user's normal permissions.
+    pub allowed_template_ids: Option<Vec<Uuid>>,
 }
 
 impl Principal {
@@ -57,6 +57,20 @@ impl Principal {
 
     pub fn may_manage_system(&self) -> bool {
         self.system_admin && self.allows(Permission::ManageSystem, Uuid::nil())
+    }
+
+    pub fn may_use_template(&self, template_id: Uuid) -> bool {
+        self.allowed_template_ids
+            .as_ref()
+            .is_none_or(|allowed| allowed.contains(&template_id))
+    }
+
+    pub fn may_access_workspace_template(&self, template_id: Option<Uuid>) -> bool {
+        template_id.is_some_and(|id| self.may_use_template(id)) || !self.has_template_restriction()
+    }
+
+    pub fn has_template_restriction(&self) -> bool {
+        self.allowed_template_ids.is_some()
     }
 }
 
@@ -101,39 +115,6 @@ struct UserWithKeyCommand<'a> {
 }
 
 impl Database {
-    pub async fn create_user(
-        &self,
-        display_name: &str,
-        token: &str,
-        system_admin: bool,
-        now: i64,
-    ) -> Result<Principal, StorageError> {
-        // Kept for bootstrap and fixture compatibility. Management APIs call
-        // `create_user_with_initial_key` to require a bounded key policy.
-        self.create_user_with_key(UserWithKeyCommand {
-            display_name,
-            token,
-            system_admin,
-            initial_key: ApiKeySummary {
-                id: Uuid::now_v7(),
-                name: "Initial key".to_owned(),
-                prefix: token_prefix(token),
-                last_used_at: None,
-                created_at: now,
-                scopes: ApiKeyScope::initial_key_defaults(system_admin),
-                // Test/bootstrap callers may use synthetic historical timestamps;
-                // derive the bounded expiry from the actual clock rather than
-                // from those fixture clocks. Production onboarding uses the
-                // caller-supplied bounded expiry above.
-                expires_at: Some(bootstrap_key_expiry()?),
-                revoked_at: None,
-            },
-            membership: None,
-            now,
-        })
-        .await
-    }
-
     /// Creates a user with a safe, administrator-provided initial key policy.
     /// This deliberately accepts a caller-supplied token so onboarding can hand
     /// it to the user out of band without the API ever returning it.
@@ -185,6 +166,7 @@ impl Database {
                 created_at: command.now,
                 scopes,
                 expires_at: Some(command.expires_at),
+                allowed_template_ids: None,
                 revoked_at: None,
             },
             membership: command.membership,
@@ -242,6 +224,7 @@ impl Database {
                 .collect(),
             api_key_scopes: command.initial_key.scopes,
             api_key_expires_at: command.initial_key.expires_at,
+            allowed_template_ids: command.initial_key.allowed_template_ids,
         })
     }
 
@@ -257,7 +240,7 @@ impl Database {
             } => {
                 let row = sqlx::query(
                     "SELECT u.id, u.display_name, u.system_admin, k.id AS key_id, \
-                    k.last_used_at, k.scopes_json, k.expires_at FROM users u \
+                    k.last_used_at, k.scopes_json, k.expires_at, k.allowed_template_ids_json FROM users u \
                     JOIN user_api_keys k ON k.installation_id = u.installation_id AND k.user_id = u.id \
                     WHERE u.installation_id = ?1 AND k.token_hash = ?2 AND k.revoked_at IS NULL \
                     AND instr(k.scopes_json, '\"*\"') = 0 \
@@ -286,6 +269,9 @@ impl Database {
                     memberships,
                     api_key_scopes: decode_scopes(row.try_get("scopes_json")?)?,
                     api_key_expires_at: row.try_get("expires_at")?,
+                    allowed_template_ids: decode_allowed_template_ids(
+                        row.try_get("allowed_template_ids_json")?,
+                    )?,
                 }))
             }
             Self::Postgres {
@@ -294,7 +280,7 @@ impl Database {
             } => {
                 let row = sqlx::query(
                     "SELECT u.id, u.display_name, u.system_admin, k.id AS key_id, \
-                    k.last_used_at, k.scopes_json, k.expires_at FROM users u \
+                    k.last_used_at, k.scopes_json, k.expires_at, k.allowed_template_ids_json FROM users u \
                     JOIN user_api_keys k ON k.installation_id = u.installation_id AND k.user_id = u.id \
                     WHERE u.installation_id = $1 AND k.token_hash = $2 AND k.revoked_at IS NULL \
                     AND position('\"*\"' IN k.scopes_json) = 0 \
@@ -323,6 +309,9 @@ impl Database {
                     memberships,
                     api_key_scopes: decode_scopes(row.try_get("scopes_json")?)?,
                     api_key_expires_at: row.try_get("expires_at")?,
+                    allowed_template_ids: decode_allowed_template_ids(
+                        row.try_get("allowed_template_ids_json")?,
+                    )?,
                 }))
             }
         }
@@ -335,6 +324,12 @@ fn decode_scopes(value: String) -> Result<Vec<ApiKeyScope>, StorageError> {
         return Err(StorageError::InvalidApiKey);
     }
     Ok(scopes)
+}
+
+fn decode_allowed_template_ids(value: Option<String>) -> Result<Option<Vec<Uuid>>, StorageError> {
+    value
+        .map(|json| serde_json::from_str(&json).map_err(StorageError::from))
+        .transpose()
 }
 
 pub(super) fn hash_token(token: &str) -> String {
@@ -352,12 +347,30 @@ pub(super) fn as_i64(value: u64) -> Result<i64, StorageError> {
     i64::try_from(value).map_err(|_| StorageError::LeaseDurationOverflow)
 }
 
-fn bootstrap_key_expiry() -> Result<i64, StorageError> {
-    let seconds = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_err(|_| StorageError::Clock)?
-        .as_secs();
-    let now = i64::try_from(seconds).map_err(|_| StorageError::Clock)?;
-    now.checked_add(365 * 24 * 60 * 60)
-        .ok_or(StorageError::Clock)
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn template_allowlist_distinguishes_unrestricted_empty_and_selected() {
+        let template_id = Uuid::now_v7();
+        let other_template_id = Uuid::now_v7();
+        let mut principal = Principal {
+            user_id: Uuid::now_v7(),
+            display_name: "test".to_owned(),
+            system_admin: false,
+            memberships: Vec::new(),
+            api_key_scopes: vec![ApiKeyScope::CreateWorkspace],
+            api_key_expires_at: None,
+            allowed_template_ids: None,
+        };
+        assert!(principal.may_use_template(template_id));
+        assert!(principal.may_access_workspace_template(None));
+        principal.allowed_template_ids = Some(Vec::new());
+        assert!(!principal.may_use_template(template_id));
+        assert!(!principal.may_access_workspace_template(None));
+        principal.allowed_template_ids = Some(vec![template_id]);
+        assert!(principal.may_use_template(template_id));
+        assert!(!principal.may_use_template(other_template_id));
+    }
 }

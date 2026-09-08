@@ -62,7 +62,7 @@ SQLite 模式会强制 `--replica-count 1` 并启用 WAL；PostgreSQL URL 可用
 
 用户资料通过 `/api/v1/me/profile` 更新。头像使用本地上传内容保存为受校验的 PNG、JPEG 或 WebP 数据，单个头像最大 512 KiB；远程图片地址不作为头像来源。未上传头像时，界面使用用户 ID 生成的默认图案。
 
-API 密钥通过 `/api/v1/me/api-keys` 管理。新建密钥必须指定至少一个细粒度 scope，并以 Unix 秒设置未来 365 天以内的过期时间；密钥明文只在创建响应中出现一次。可用 scope 为 `create_workspace`、`read_workspace`、`connect_workspace`、`change_workspace_state`、`delete_workspace`、`manage_organization`、`manage_members`、`manage_locked_injections`、`manage_system` 和 `manage_api_keys`。迁移前创建的通配权限密钥保留兼容性，但新密钥不能再申请通配权限。
+API 密钥通过 `/api/v1/me/api-keys` 管理。新建密钥必须指定至少一个细粒度 scope，并以 Unix 秒设置未来 365 天以内的过期时间；密钥明文只在创建响应中出现一次。可用 scope 为 `create_workspace`、`read_workspace`、`connect_workspace`、`change_workspace_state`、`delete_workspace`、`manage_organization`、`manage_members`、`manage_locked_injections`、`manage_system` 和 `manage_api_keys`。密钥还可选以真实模板 ID 限制可创建和操作的工作区；`null` 表示不额外限制，空列表表示不能使用任何模板创建工作区。
 
 ## 分页接口
 

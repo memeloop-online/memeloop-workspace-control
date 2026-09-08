@@ -32,7 +32,7 @@ impl Database {
                 pool,
                 installation_id,
             } => sqlx::query(
-                "SELECT id, name, token_prefix, last_used_at, created_at, scopes_json, expires_at, revoked_at FROM user_api_keys WHERE installation_id = ?1 AND user_id = ?2 AND revoked_at IS NULL ORDER BY created_at, id",
+                "SELECT id, name, token_prefix, last_used_at, created_at, scopes_json, expires_at, allowed_template_ids_json, revoked_at FROM user_api_keys WHERE installation_id = ?1 AND user_id = ?2 AND revoked_at IS NULL ORDER BY created_at, id",
             )
             .bind(installation_id.as_str())
             .bind(user_id.to_string())
@@ -45,7 +45,7 @@ impl Database {
                 pool,
                 installation_id,
             } => sqlx::query(
-                "SELECT id, name, token_prefix, last_used_at, created_at, scopes_json, expires_at, revoked_at FROM user_api_keys WHERE installation_id = $1 AND user_id = $2 AND revoked_at IS NULL ORDER BY created_at, id",
+                "SELECT id, name, token_prefix, last_used_at, created_at, scopes_json, expires_at, allowed_template_ids_json, revoked_at FROM user_api_keys WHERE installation_id = $1 AND user_id = $2 AND revoked_at IS NULL ORDER BY created_at, id",
             )
             .bind(installation_id.as_str())
             .bind(user_id.to_string())
@@ -74,7 +74,7 @@ impl Database {
                 pool,
                 installation_id,
             } => sqlx::query(
-                "SELECT id, name, token_prefix, last_used_at, created_at, scopes_json, expires_at, revoked_at \
+                "SELECT id, name, token_prefix, last_used_at, created_at, scopes_json, expires_at, allowed_template_ids_json, revoked_at \
                  FROM user_api_keys WHERE installation_id = ?1 AND user_id = ?2 \
                  AND (?3 = 2 OR (?3 = 0 AND revoked_at IS NULL) OR (?3 = 1 AND revoked_at IS NOT NULL)) \
                  AND (?4 IS NULL OR created_at > ?4 OR (created_at = ?4 AND id > ?5)) \
@@ -95,7 +95,7 @@ impl Database {
                 pool,
                 installation_id,
             } => sqlx::query(
-                "SELECT id, name, token_prefix, last_used_at, created_at, scopes_json, expires_at, revoked_at \
+                "SELECT id, name, token_prefix, last_used_at, created_at, scopes_json, expires_at, allowed_template_ids_json, revoked_at \
                  FROM user_api_keys WHERE installation_id = $1 AND user_id = $2 \
                  AND ($3 = 2 OR ($3 = 0 AND revoked_at IS NULL) OR ($3 = 1 AND revoked_at IS NOT NULL)) \
                  AND ($4 IS NULL OR created_at > $4 OR (created_at = $4 AND id > $5)) \
@@ -185,6 +185,10 @@ where
         created_at: row.try_get("created_at")?,
         scopes: serde_json::from_str(&row.try_get::<String, _>("scopes_json")?)?,
         expires_at: row.try_get("expires_at")?,
+        allowed_template_ids: row
+            .try_get::<Option<String>, _>("allowed_template_ids_json")?
+            .map(|json| serde_json::from_str(&json))
+            .transpose()?,
         revoked_at: row.try_get("revoked_at")?,
     })
 }

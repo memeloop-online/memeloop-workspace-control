@@ -102,6 +102,11 @@ pub(super) async fn authorize_creation(
     if !actor.allows(Permission::CreateWorkspace, command.organization_id) {
         return Err(ApiError::Forbidden);
     }
+    if !actor.may_use_template(command.template_id)
+        || actor.has_template_restriction() && command.resources.is_some()
+    {
+        return Err(ApiError::Forbidden);
+    }
     if command.owner_id != actor.user_id
         && !actor.allows(Permission::ManageMembers, command.organization_id)
     {
@@ -208,7 +213,14 @@ mod tests {
             .await
             .unwrap();
         let user = database
-            .create_user("Preflight Admin", TOKEN, true, 1)
+            .create_user_with_initial_key(
+                "Preflight Admin",
+                TOKEN,
+                true,
+                crate::auth::ApiKeyScope::initial_key_defaults(true),
+                1_900_000_000,
+                1,
+            )
             .await
             .unwrap();
         let organization = database

@@ -37,6 +37,9 @@ pub struct ApiKeySummary {
     pub created_at: i64,
     pub scopes: Vec<ApiKeyScope>,
     pub expires_at: Option<i64>,
+    /// `None` means the key has no additional template restriction. An empty
+    /// list deliberately prevents workspace creation from every template.
+    pub allowed_template_ids: Option<Vec<Uuid>>,
     pub revoked_at: Option<i64>,
 }
 
@@ -60,6 +63,7 @@ impl Database {
         name: &str,
         scopes: Vec<ApiKeyScope>,
         expires_at: Option<i64>,
+        allowed_template_ids: Option<Vec<Uuid>>,
         now: i64,
     ) -> Result<CreatedApiKey, StorageError> {
         let name = validate_api_key_name(name)?;
@@ -74,6 +78,7 @@ impl Database {
             created_at: now,
             scopes,
             expires_at,
+            allowed_template_ids,
             revoked_at: None,
         };
         let token_hash = hash_token(&token);

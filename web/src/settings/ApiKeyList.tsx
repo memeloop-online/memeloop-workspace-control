@@ -23,10 +23,17 @@ export function ApiKeyList({ keys, locale, onRevoke, translate }: Props) {
         <div><dt>{translate("createdAt")}</dt><dd>{formatTime(key.created_at, locale)}</dd></div>
         <div><dt>{translate("lastUsedAt")}</dt><dd>{key.last_used_at ? formatTime(key.last_used_at, locale) : translate("never")}</dd></div>
         <div><dt>{translate("apiKeyExpires")}</dt><dd>{formatExpiry(key, locale, translate)}</dd></div>
+        <div><dt>{translate("apiKeyTemplates")}</dt><dd>{formatTemplateRestriction(key, translate)}</dd></div>
       </dl>
       <button className="button danger api-key-revoke" type="button" onClick={() => onRevoke(key)}>{translate("revokeApiKey")}</button>
     </article>)}
   </div>;
+}
+
+function formatTemplateRestriction(key: ApiKeySummary, translate: (key: MessageKey) => string): string {
+  if (key.allowed_template_ids === null) return translate("allTemplates");
+  if (key.allowed_template_ids.length === 0) return translate("noTemplates");
+  return key.allowed_template_ids.join(" · ");
 }
 
 function formatTime(value: number, locale: string) {

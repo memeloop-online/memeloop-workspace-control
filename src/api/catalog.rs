@@ -53,7 +53,7 @@ pub(super) async fn list_images(
     headers: HeaderMap,
 ) -> Result<Json<Vec<ImagePolicy>>, ApiError> {
     let actor = principal(&state, &headers).await?;
-    if !actor.may_manage_system() {
+    if !actor.may_manage_system() || actor.has_template_restriction() {
         return Err(ApiError::Forbidden);
     }
     Ok(Json(state.database.list_image_policies().await?))
@@ -66,7 +66,7 @@ pub(super) async fn put_image(
     Json(request): Json<PutImageRequest>,
 ) -> Result<Response, ApiError> {
     let actor = principal(&state, &headers).await?;
-    if !actor.may_manage_system() {
+    if !actor.may_manage_system() || actor.has_template_restriction() {
         return Err(ApiError::Forbidden);
     }
     let key = idempotency_key(&headers)?;
@@ -126,7 +126,7 @@ pub(super) async fn create_template(
         .map_or(actor.may_manage_system(), |organization_id| {
             actor.allows(Permission::ManageOrganization, organization_id)
         });
-    if !allowed {
+    if !allowed || actor.has_template_restriction() {
         return Err(ApiError::Forbidden);
     }
     let document = parse_template_yaml(&command.yaml)?;
@@ -180,7 +180,7 @@ pub(super) async fn replace_template(
         .map_or(actor.may_manage_system(), |organization_id| {
             actor.allows(Permission::ManageOrganization, organization_id)
         });
-    if !allowed {
+    if !allowed || actor.has_template_restriction() {
         return Err(ApiError::Forbidden);
     }
     let document = parse_template_yaml(&request.yaml)?;
@@ -234,7 +234,7 @@ pub(super) async fn set_template_enabled(
         .map_or(actor.may_manage_system(), |organization_id| {
             actor.allows(Permission::ManageOrganization, organization_id)
         });
-    if !allowed {
+    if !allowed || actor.has_template_restriction() {
         return Err(ApiError::Forbidden);
     }
     if current.template.cluster_access && !actor.may_manage_system() {
@@ -301,7 +301,10 @@ pub(super) async fn delete_template(
         .map_or(actor.may_manage_system(), |organization_id| {
             actor.allows(Permission::ManageOrganization, organization_id)
         });
-    if !allowed || current.template.cluster_access && !actor.may_manage_system() {
+    if !allowed
+        || actor.has_template_restriction()
+        || current.template.cluster_access && !actor.may_manage_system()
+    {
         return Err(ApiError::Forbidden);
     }
     let deleted = state

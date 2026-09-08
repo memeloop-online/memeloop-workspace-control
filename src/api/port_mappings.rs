@@ -67,7 +67,9 @@ pub(super) async fn list(
 ) -> Result<Json<Vec<PortMappingResponse>>, ApiError> {
     let actor = principal(&state, &headers).await?;
     let workspace = state.database.get_workspace(workspace_id).await?;
-    if !actor.allows(Permission::ConnectWorkspace, workspace.organization_id) {
+    if !actor.allows(Permission::ConnectWorkspace, workspace.organization_id)
+        || !actor.may_access_workspace_template(workspace.template_id)
+    {
         return Err(ApiError::Forbidden);
     }
     let mappings = state.database.list_port_mappings(workspace_id).await?;
@@ -99,7 +101,9 @@ pub(super) async fn create(
         .map_err(|_| ApiError::BadRequest("port is not an allowed workspace HTTP port"))?;
     let actor = principal(&state, &headers).await?;
     let workspace = state.database.get_workspace(workspace_id).await?;
-    if !actor.allows(Permission::ConnectWorkspace, workspace.organization_id) {
+    if !actor.allows(Permission::ConnectWorkspace, workspace.organization_id)
+        || !actor.may_access_workspace_template(workspace.template_id)
+    {
         return Err(ApiError::Forbidden);
     }
     if workspace.state != crate::workspaces::WorkspaceState::Ready {
@@ -191,7 +195,9 @@ pub(super) async fn open(
 ) -> Result<Json<OpenPortMappingResponse>, ApiError> {
     let actor = principal(&state, &headers).await?;
     let workspace = state.database.get_workspace(workspace_id).await?;
-    if !actor.allows(Permission::ConnectWorkspace, workspace.organization_id) {
+    if !actor.allows(Permission::ConnectWorkspace, workspace.organization_id)
+        || !actor.may_access_workspace_template(workspace.template_id)
+    {
         return Err(ApiError::Forbidden);
     }
     if workspace.state != crate::workspaces::WorkspaceState::Ready {
@@ -229,7 +235,9 @@ pub(super) async fn delete(
 ) -> Result<StatusCode, ApiError> {
     let actor = principal(&state, &headers).await?;
     let workspace = state.database.get_workspace(workspace_id).await?;
-    if !actor.allows(Permission::ConnectWorkspace, workspace.organization_id) {
+    if !actor.allows(Permission::ConnectWorkspace, workspace.organization_id)
+        || !actor.may_access_workspace_template(workspace.template_id)
+    {
         return Err(ApiError::Forbidden);
     }
     // FK cascade revokes all tickets and sessions immediately. The reconciler

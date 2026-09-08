@@ -101,7 +101,7 @@ export function SettingsPanel({
         organizations={organizations}
         onOrganizationChange={onOrganizationChange}
       />
-      <ApiKeySection api={api} principal={principal} onError={onError} />
+      <ApiKeySection api={api} organizationId={organizationId} principal={principal} onError={onError} />
     </div>
   </section>;
 }

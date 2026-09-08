@@ -4,17 +4,18 @@ import type { ApiClient } from "../api";
 import { API_KEY_SCOPES } from "../apiKeyScopes";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { useI18n } from "../i18n";
-import type { ApiKeyScope, ApiKeySummary, CreatedApiKey, Principal } from "../types";
+import type { ApiKeyScope, ApiKeySummary, CreatedApiKey, Principal, WorkspaceTemplate } from "../types";
 import { ApiKeyCreateForm } from "./ApiKeyCreateForm";
 import { ApiKeyList } from "./ApiKeyList";
 
 interface Props {
   api: ApiClient;
+  organizationId: string;
   principal: Principal;
   onError: (message: string) => void;
 }
 
-export function ApiKeySection({ api, principal, onError }: Props) {
+export function ApiKeySection({ api, organizationId, principal, onError }: Props) {
   const { locale, t } = useI18n();
   const [keys, setKeys] = useState<ApiKeySummary[]>([]);
   const [name, setName] = useState("");
@@ -24,6 +25,9 @@ export function ApiKeySection({ api, principal, onError }: Props) {
   const [access, setAccess] = useState<"loading" | "available" | "unavailable">("loading");
   const [creating, setCreating] = useState(false);
   const [revoking, setRevoking] = useState<ApiKeySummary | null>(null);
+  const [templates, setTemplates] = useState<WorkspaceTemplate[]>([]);
+  const [templateRestriction, setTemplateRestriction] = useState(false);
+  const [allowedTemplateIds, setAllowedTemplateIds] = useState<string[]>([]);
   const [revokeBusy, setRevokeBusy] = useState(false);
   const grantableScopes = useMemo(
     () => API_KEY_SCOPES.filter(({ scope }) => principal.api_key_scopes.includes(scope)),
@@ -60,6 +64,14 @@ export function ApiKeySection({ api, principal, onError }: Props) {
     return () => { active = false; };
   }, [api, onError, t]);
 
+  useEffect(() => {
+    if (!organizationId) return;
+    let active = true;
+    void api.templates(organizationId).then((items) => { if (active) setTemplates(items); })
+      .catch((error) => { if (active) onError(message(error, t("requestFailed"))); });
+    return () => { active = false; };
+  }, [api, organizationId, onError, t]);
+
   async function createKey(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!name.trim()) return;
@@ -69,11 +81,14 @@ export function ApiKeySection({ api, principal, onError }: Props) {
         name: name.trim(),
         scopes,
         expires_at: Math.floor(new Date(expiresAt).getTime() / 1_000),
+        allowed_template_ids: templateRestriction ? allowedTemplateIds : null,
       });
       setCreatedKey(created);
       setName("");
       setScopes(grantableScopes[0] ? [grantableScopes[0].scope] : []);
       setExpiresAt(defaultExpiry());
+      setTemplateRestriction(false);
+      setAllowedTemplateIds([]);
       setKeys(await api.apiKeys());
     } catch (error) {
       if (isForbidden(error)) {
@@ -126,6 +141,14 @@ export function ApiKeySection({ api, principal, onError }: Props) {
             onScopesChange={setScopes}
             onSubmit={(event) => void createKey(event)}
           />
+          <fieldset className="api-key-scope-picker">
+            <legend>{t("apiKeyTemplateRestriction")}</legend>
+            <label><input type="checkbox" checked={templateRestriction} onChange={(event) => setTemplateRestriction(event.target.checked)} /> {t("apiKeyRestrictTemplates")}</label>
+            {templateRestriction && <div className="api-key-scope-grid">{templates.map((template) => <label className="api-key-scope-card" key={template.id} data-selected={allowedTemplateIds.includes(template.id)}>
+              <input type="checkbox" checked={allowedTemplateIds.includes(template.id)} onChange={(event) => setAllowedTemplateIds((current) => event.target.checked ? [...current, template.id] : current.filter((id) => id !== template.id))} />
+              <span className="api-key-scope-copy"><strong>{template.name}</strong><small>{template.id}</small></span>
+            </label>)}</div>}
+          </fieldset>
           <ApiKeyList keys={keys} locale={locale} translate={t} onRevoke={setRevoking} />
         </>}
     <ConfirmDialog

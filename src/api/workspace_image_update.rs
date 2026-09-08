@@ -51,7 +51,11 @@ pub(super) async fn update(
     Json(request): Json<UpdateWorkspaceImageRequest>,
 ) -> Result<Response, ApiError> {
     let actor = principal(&state, &headers).await?;
-    if !actor.may_manage_system() {
+    let existing = state.database.get_workspace(workspace_id).await?;
+    if !actor.may_manage_system()
+        || actor.has_template_restriction()
+        || !actor.may_access_workspace_template(existing.template_id)
+    {
         return Err(ApiError::Forbidden);
     }
     let key = idempotency_key(&headers)?;

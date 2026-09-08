@@ -289,7 +289,9 @@ pub(super) async fn get(
 ) -> Result<Json<WorkspaceRuntimeResponse>, ApiError> {
     let actor = principal(&state, &headers).await?;
     let workspace = state.database.get_workspace(workspace_id).await?;
-    if !actor.allows(Permission::ReadWorkspace, workspace.organization_id) {
+    if !actor.allows(Permission::ReadWorkspace, workspace.organization_id)
+        || !actor.may_access_workspace_template(workspace.template_id)
+    {
         return Err(ApiError::Forbidden);
     }
     let client = state

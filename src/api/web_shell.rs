@@ -41,7 +41,9 @@ pub(super) async fn issue(
 ) -> Result<(StatusCode, Json<WebShellTicketResponse>), ApiError> {
     let actor = principal(&state, &headers).await?;
     let workspace = state.database.get_workspace(workspace_id).await?;
-    if !actor.allows(Permission::ConnectWorkspace, workspace.organization_id) {
+    if !actor.allows(Permission::ConnectWorkspace, workspace.organization_id)
+        || !actor.may_access_workspace_template(workspace.template_id)
+    {
         return Err(ApiError::Forbidden);
     }
     if workspace.state != WorkspaceState::Ready {

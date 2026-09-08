@@ -256,7 +256,9 @@ pub(super) async fn get(
 ) -> Result<Json<WorkspaceResponse>, ApiError> {
     let actor = principal(&state, &headers).await?;
     let workspace = state.database.get_workspace(workspace_id).await?;
-    if !actor.allows(Permission::ReadWorkspace, workspace.organization_id) {
+    if !actor.allows(Permission::ReadWorkspace, workspace.organization_id)
+        || !actor.may_access_workspace_template(workspace.template_id)
+    {
         return Err(ApiError::Forbidden);
     }
     let expose_connection = actor.allows(Permission::ConnectWorkspace, workspace.organization_id);
@@ -295,7 +297,9 @@ pub(super) async fn action(
     } else {
         Permission::ChangeWorkspaceState
     };
-    if !actor.allows(permission, existing.organization_id) {
+    if !actor.allows(permission, existing.organization_id)
+        || !actor.may_access_workspace_template(existing.template_id)
+    {
         return Err(ApiError::Forbidden);
     }
     let key = idempotency_key(&headers)?;

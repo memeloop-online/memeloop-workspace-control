@@ -26,7 +26,14 @@ async fn stopped_workspace() -> (Database, Workspace, Uuid) {
         .await
         .unwrap();
     let admin = database
-        .create_user("Admin", "image-update-admin-000000000000000000000", true, 1)
+        .create_user_with_initial_key(
+            "Admin",
+            "image-update-admin-000000000000000000000",
+            true,
+            crate::auth::ApiKeyScope::initial_key_defaults(true),
+            1_900_000_000,
+            1,
+        )
         .await
         .unwrap();
     let organization = database

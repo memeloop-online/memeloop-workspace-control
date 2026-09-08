@@ -5,6 +5,7 @@ use super::{Database, StorageError, schema};
 
 // Delete this module after every deployed database has crossed schema 20.
 mod schema20;
+mod schema21;
 
 pub(super) async fn migrate(database: &Database) -> Result<(), StorageError> {
     let applied_at = unix_timestamp()?;
@@ -41,6 +42,15 @@ async fn migrate_sqlite(
         schema::SCHEMA_VERSION => {}
         20 => {
             schema20::upgrade_sqlite(&mut transaction, installation_id).await?;
+            schema21::upgrade_sqlite(&mut transaction).await?;
+            sqlx::query("INSERT INTO schema_migrations (version, applied_at) VALUES (?1, ?2)")
+                .bind(schema::SCHEMA_VERSION)
+                .bind(applied_at)
+                .execute(&mut *transaction)
+                .await?;
+        }
+        21 => {
+            schema21::upgrade_sqlite(&mut transaction).await?;
             sqlx::query("INSERT INTO schema_migrations (version, applied_at) VALUES (?1, ?2)")
                 .bind(schema::SCHEMA_VERSION)
                 .bind(applied_at)
@@ -92,6 +102,15 @@ async fn migrate_postgres(
         schema::SCHEMA_VERSION => {}
         20 => {
             schema20::upgrade_postgres(&mut transaction, installation_id).await?;
+            schema21::upgrade_postgres(&mut transaction).await?;
+            sqlx::query("INSERT INTO schema_migrations (version, applied_at) VALUES ($1, $2)")
+                .bind(schema::SCHEMA_VERSION)
+                .bind(applied_at)
+                .execute(&mut *transaction)
+                .await?;
+        }
+        21 => {
+            schema21::upgrade_postgres(&mut transaction).await?;
             sqlx::query("INSERT INTO schema_migrations (version, applied_at) VALUES ($1, $2)")
                 .bind(schema::SCHEMA_VERSION)
                 .bind(applied_at)
@@ -209,7 +228,7 @@ mod tests {
 
         database.migrate().await.unwrap();
 
-        assert_eq!(database.schema_version().await.unwrap(), 21);
+        assert_eq!(database.schema_version().await.unwrap(), 22);
         assert_eq!(
             sqlx::query_scalar::<_, String>("SELECT payload FROM workspaces WHERE id = ?1")
                 .bind(id.to_string())
@@ -296,7 +315,7 @@ mod tests {
         let Database::Postgres { pool, .. } = &valid else {
             unreachable!();
         };
-        assert_eq!(valid.schema_version().await.unwrap(), 21);
+        assert_eq!(valid.schema_version().await.unwrap(), 22);
         assert_eq!(
             sqlx::query_scalar::<_, String>("SELECT payload FROM workspaces WHERE id = $1")
                 .bind(valid_id.to_string())
@@ -344,7 +363,7 @@ mod tests {
         );
         drop(invalid);
 
-        sqlx::query(&format!(
+        sqlx::raw_sql(&format!(
             "DROP SCHEMA {valid_schema} CASCADE; DROP SCHEMA {invalid_schema} CASCADE"
         ))
         .execute(&administration)
@@ -368,6 +387,10 @@ mod tests {
         .await
         .unwrap();
         sqlx::query(SCHEMA_20_WORKSPACES)
+            .execute(pool)
+            .await
+            .unwrap();
+        sqlx::query("CREATE TABLE user_api_keys (id TEXT PRIMARY KEY)")
             .execute(pool)
             .await
             .unwrap();
@@ -414,6 +437,10 @@ mod tests {
         .await
         .unwrap();
         sqlx::query(SCHEMA_20_WORKSPACES)
+            .execute(pool)
+            .await
+            .unwrap();
+        sqlx::query("CREATE TABLE user_api_keys (id TEXT PRIMARY KEY)")
             .execute(pool)
             .await
             .unwrap();

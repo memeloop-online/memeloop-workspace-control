@@ -10,6 +10,7 @@ export type WorkspaceState =
   | "deleted"
   | "failed";
 export type AccessMode = "internal" | "public";
+export type EgressPolicy = "unrestricted" | "internet_only";
 export type InjectionScope = "organization" | "user" | "workspace";
 export type InjectionKind =
   | "environment_variable"
@@ -30,6 +31,7 @@ export interface Principal {
   memberships: Membership[];
   api_key_scopes: ApiKeyScope[];
   api_key_expires_at: number | null;
+  allowed_template_ids: string[] | null;
 }
 
 export interface UserProfile {
@@ -45,6 +47,7 @@ export interface ApiKeySummary {
   created_at: number;
   scopes: ApiKeyScope[];
   expires_at: number | null;
+  allowed_template_ids: string[] | null;
   revoked_at: number | null;
 }
 
@@ -147,6 +150,7 @@ export interface WorkspaceTemplate {
   buildkit: boolean;
   storage_policy: WorkspaceStoragePolicy;
   cluster_access: boolean;
+  egress_policy: EgressPolicy;
   runtime_class_name: string | null;
   required_node_names: string[];
   preferred_node_names: string[];
@@ -227,6 +231,7 @@ export interface Workspace {
   buildkit: boolean;
   storage_policy: WorkspaceStoragePolicy;
   cluster_access: boolean;
+  egress_policy: EgressPolicy;
   runtime_class_name: string | null;
   required_node_names: string[];
   preferred_node_names: string[];

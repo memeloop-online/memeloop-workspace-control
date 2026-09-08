@@ -94,7 +94,7 @@ export class ApiClient {
     return this.request("/api/v1/me/api-keys");
   }
 
-  createApiKey(input: { name: string; scopes: ApiKeyScope[]; expires_at: number }): Promise<CreatedApiKey> {
+  createApiKey(input: { name: string; scopes: ApiKeyScope[]; expires_at: number; allowed_template_ids: string[] | null }): Promise<CreatedApiKey> {
     return this.request("/api/v1/me/api-keys", {
       method: "POST", body: JSON.stringify(input),
     });

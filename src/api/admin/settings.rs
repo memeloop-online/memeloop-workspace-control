@@ -38,6 +38,9 @@ pub(in crate::api) struct CreateApiKeyRequest {
     pub name: String,
     pub scopes: Vec<ApiKeyScope>,
     pub expires_at: Option<i64>,
+    /// Null means no additional template restriction; an empty list prevents
+    /// this key from creating workspaces from every template.
+    pub allowed_template_ids: Option<Vec<Uuid>>,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -143,11 +146,20 @@ pub(in crate::api) async fn create_api_key(
     let actor = principal(&state, &headers).await?;
     if !actor.may_manage_api_keys()
         || !actor_may_grant(&actor.api_key_scopes, &request.scopes)
+        || !actor_may_grant_templates(&actor.allowed_template_ids, &request.allowed_template_ids)
         || actor
             .api_key_expires_at
             .is_some_and(|limit| request.expires_at.is_none_or(|requested| requested > limit))
     {
         return Err(ApiError::Forbidden);
+    }
+    if let Some(template_ids) = &request.allowed_template_ids {
+        if !template_ids_are_unique(template_ids) {
+            return Err(ApiError::BadRequest("allowed_template_ids must be unique"));
+        }
+        for template_id in template_ids {
+            state.database.get_workspace_template(*template_id).await?;
+        }
     }
     let created = state
         .database
@@ -156,6 +168,7 @@ pub(in crate::api) async fn create_api_key(
             &request.name,
             request.scopes,
             request.expires_at,
+            request.allowed_template_ids,
             unix_timestamp()?,
         )
         .await?;
@@ -172,6 +185,47 @@ pub(super) fn actor_may_grant(actor_scopes: &[ApiKeyScope], requested: &[ApiKeyS
     requested
         .iter()
         .all(|requested_scope| actor_scopes.contains(requested_scope))
+}
+
+fn actor_may_grant_templates(
+    actor_allowed: &Option<Vec<Uuid>>,
+    requested: &Option<Vec<Uuid>>,
+) -> bool {
+    match (actor_allowed, requested) {
+        (_, None) => actor_allowed.is_none(),
+        (None, Some(_)) => true,
+        (Some(actor_allowed), Some(requested)) => requested
+            .iter()
+            .all(|template_id| actor_allowed.contains(template_id)),
+    }
+}
+
+fn template_ids_are_unique(template_ids: &[Uuid]) -> bool {
+    let mut sorted = template_ids.to_vec();
+    sorted.sort_unstable();
+    sorted.windows(2).all(|pair| pair[0] != pair[1])
+}
+
+#[cfg(test)]
+mod template_grant_tests {
+    use super::*;
+
+    #[test]
+    fn restricted_key_cannot_mint_unrestricted_or_wider_template_key() {
+        let first = Uuid::now_v7();
+        let second = Uuid::now_v7();
+        assert!(!actor_may_grant_templates(&Some(vec![first]), &None));
+        assert!(actor_may_grant_templates(&Some(vec![first]), &Some(vec![])));
+        assert!(actor_may_grant_templates(
+            &Some(vec![first]),
+            &Some(vec![first])
+        ));
+        assert!(!actor_may_grant_templates(
+            &Some(vec![first]),
+            &Some(vec![second])
+        ));
+        assert!(actor_may_grant_templates(&None, &Some(vec![second])));
+    }
 }
 
 #[utoipa::path(

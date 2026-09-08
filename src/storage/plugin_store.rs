@@ -293,7 +293,14 @@ mod tests {
         .unwrap();
         database.migrate().await.unwrap();
         let admin = database
-            .create_user("Admin", "plugin-test-token-000000000000000000000", true, 1)
+            .create_user_with_initial_key(
+                "Admin",
+                "plugin-test-token-000000000000000000000",
+                true,
+                crate::auth::ApiKeyScope::initial_key_defaults(true),
+                1_900_000_000,
+                1,
+            )
             .await
             .unwrap();
         let organization = database

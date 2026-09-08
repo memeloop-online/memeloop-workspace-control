@@ -11,6 +11,7 @@ const baseKey: ApiKeySummary = {
   created_at: 10,
   scopes: ["read_workspace"],
   expires_at: 200,
+  allowed_template_ids: null,
   revoked_at: null,
 };
 
