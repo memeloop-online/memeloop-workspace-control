@@ -176,6 +176,10 @@ database_snapshot regression, preserving rejection semantics. CI now uses --no-f
 to collect failures across test binaries in one run instead of stopping at the first binary.
 TLS runner review still pending fixes for forwarding readiness, transport-vs-auth failures,
 /token validation and cleanup on namespace-deletion errors; no new cluster test approved yet.
+Main corrected runner's `/token` assertion to parse JSON `{token:""}` rather than expecting
+an empty HTTP body, and cleared its forwarding readiness interval on timeout. Native mTLS
+canary is now running as exec session `59638`; resume that exact session for results.
+Do not start another canary while this process exists. It owns precise namespace cleanup.
 
 Migration handoff review corrected a dangerous conflation: `rust-dev-test` and Coder TOKEN center
 dev are distinct 100 GiB volumes. Both actual PVC→PV claim UIDs match. Final count is four
