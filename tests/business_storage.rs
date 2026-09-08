@@ -11,7 +11,10 @@ use memeloop_workspace_control::{
     workspace_runtime::{WORKSPACE_NAMESPACE, WorkspaceRuntimeNames},
     workspaces::{AccessMode, WorkspaceAction, WorkspaceObservation, WorkspaceState},
 };
-use std::collections::BTreeMap;
+use std::{
+    collections::BTreeMap,
+    time::{SystemTime, UNIX_EPOCH},
+};
 use uuid::Uuid;
 
 const ADMIN_TOKEN: &str = "admin-token-0000000000000000000000000000";
@@ -730,14 +733,19 @@ async fn image_allowlist_and_template_contract_are_admitted_atomically() {
 #[tokio::test]
 async fn authentication_and_organization_membership_are_persisted() {
     let database = database().await;
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    let expiry = now + 24 * 60 * 60;
     let admin = database
         .create_user_with_initial_key(
             "Admin",
             ADMIN_TOKEN,
             true,
             memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(true),
-            31_536_000,
-            100,
+            expiry,
+            now,
         )
         .await
         .unwrap();
