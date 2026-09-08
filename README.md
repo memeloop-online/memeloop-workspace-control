@@ -113,6 +113,9 @@ Chart 位于 `deploy/helm/memeloop-workspace-control`：
   `networking.k8s.io/v1` Ingress，将
   `/shell/<installation>-<short-id>/` 原样转发给使用相同 `--base-path` 的 ttyd；Higress external-auth
   消费一次性 ticket。Web Shell 不依赖 Gateway API CRD 或跨 Namespace ReferenceGrant。
+- 若集群的跨节点 SNAT 可能使 ttyd Service 被网关来源地址直接访问，可配置 Higress 到 ttyd 的
+  可选 mTLS；证书角色、Secret 边界、SNI 和轮换影响见
+  [Web Shell mTLS 配置说明](docs/WEB-SHELL-MTLS.md)。生产验收前不得将其视为已完成隔离。
 
 公网 PostgreSQL 示例见 `values.example.yaml`，内网 SQLite 示例见
 `values.internal.example.yaml`。安装前需提供数据库、信封加密、内部鉴权和跳板 host key Secret，并确认管理型 StorageClass 的 `reclaimPolicy` 为 `Delete`。
