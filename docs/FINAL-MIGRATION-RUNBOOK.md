@@ -122,20 +122,38 @@ external agent may schedule the Coder change. It must independently snapshot, st
 at the final writer freeze, and validate its own Pod -> PVC -> PV -> Longhorn chain.
 
 The current product exposes normal managed creation through `POST /api/v1/workspaces` and lifecycle
-actions through `POST /api/v1/workspaces/{workspace_id}/actions/{action}`. Creation requires the
-normal authorized organization/owner/template request and an idempotency key, assigns a new
-workspace ID/PVC name, and begins in `Provisioning`. There is no current product API or CLI command
-that imports a Coder workspace or selects/adopts an existing PVC/PV. Do not invent one or edit the
-database directly.
+actions through `POST /api/v1/workspaces/{workspace_id}/actions/{action}`. Use the following
+standard, single-workspace procedure; it does not require a special Coder-import API or a database
+edit.
 
-Therefore the external agent's safe path is: create the single target workspace through the managed
-creation API only after its organization, owner, template, image policy and resource limits are
-approved; record the returned workspace ID and deterministic target PVC name; then obtain a
-separately approved storage/controller adoption plan for the existing Coder PV before stopping its
-source. That plan must prove how the newly managed PVC will bind the existing PV without two
-writers, prevent the provisioning reconciler from writing a replacement volume, and retain a tested
-rollback path. If it cannot satisfy those conditions, stop: no supported in-place Coder import path
-currently exists. This phase may not pause or stop the four accepted MWC workspaces.
+1. Before creating the target, read-only verify the Coder source's actual home path, numeric
+   UID/GID, file ownership and Pod -> PVC -> PV chain. Select a target template whose
+   `workspace_user`/`workspace_home` resolve to the compatible user and home mount. The bootstrap
+   does not recursively rewrite durable ownership. Preserve `.codex/sessions`, logs, SQLite/WAL,
+   auth/configuration and repositories; only explicitly disposable scratch/cache paths may differ.
+2. Create one normal managed target using the authorized organization/owner/template request and
+   idempotency key. It receives a new workspace ID and deterministic PVC name. Wait for normal
+   provisioning to create and bind its initially empty target PVC/PV, then record its identity,
+   labels, claim UID and PV.
+3. Call the target workspace `stop` action. Wait until its API state is `Stopped`, StatefulSet
+   replicas are observed as zero, no target Pod remains, and its Longhorn volume is detached. A
+   stopped reconcile keeps replicas zero and does not overwrite the PVC binding.
+4. At the final source freeze, stop every Coder writer from the external operator context, take and
+   verify a fresh source snapshot, and wait for the Coder Pod and its Longhorn attachment to be
+   gone. Do not perform this step from the Coder workspace itself.
+5. Change both the target empty PV and the Coder source PV to `Retain` and read the policies back.
+   Keep the target empty PV: it is rollback data and must not be deleted. Delete only the stopped
+   target PVC and the frozen source Coder PVC after their `Retain` readback; never delete either PV
+   or Longhorn volume. Clear the source PV `claimRef` under the approved change record.
+6. Create the replacement target PVC with the **same deterministic target name**, source-PV
+   `spec.volumeName`, compatible class/access/volume-mode/capacity, and the ownership labels copied
+   from the original target PVC. Wait for Bound, then verify the source PV `claimRef` has the target
+   namespace/name and the replacement target PVC's **new UID**. Do not start while the target PVC
+   is absent: the StatefulSet claim template would otherwise provision a replacement claim.
+7. Re-read Longhorn health/attachment and the PVC/PV chain, then call target `start`. Validate host
+   key continuity where applicable, SSH, Web Shell, durable home/Codex data and a single writer.
+   Keep both retained PVs and snapshots through the Coder rollback window. This phase may not pause
+   or stop the four accepted MWC workspaces.
 
 ## Cutover acceptance and rollback
 
@@ -186,11 +204,10 @@ identified disposable tmp caches. Leave Coder running.
 
 Validate Pod/PVC/PV identity, Longhorn attachments, schema, SSH host keys, SSH, Web Shell, routes,
 and durable data for the four MWC workspaces. Keep old MWC namespaces/controllers/PVs for the
-agreed rollback window, then make MWC GitOps target-only. In a later separately approved external
-change, retain normal four-MWC service while creating the Coder target through the managed API and
-obtaining the required storage/controller adoption approval; there is no existing Coder-import API.
-Only after Coder acceptance and both rollback windows may global cleanup prove no old namespace
-resources remain. Report commands, redacted metadata evidence, snapshots, CI digest provenance,
-downtime interval, acceptance results, and any blocked gate. Never use a broad delete-namespace
-command.
+agreed rollback window, then make MWC GitOps target-only. In the later external Coder change,
+retain normal four-MWC service and use the documented managed create -> stop -> Retain -> same-name
+PVC rebind -> start procedure. Only after Coder acceptance and both rollback windows may global
+cleanup prove no old namespace resources remain. Report commands, redacted metadata evidence,
+snapshots, CI digest provenance, downtime interval, acceptance results, and any blocked gate.
+Never use a broad delete-namespace command.
 ```
