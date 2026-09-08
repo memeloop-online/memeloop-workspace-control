@@ -30,7 +30,7 @@ Cilium/Calico, split clusters, or restore `runtime_profile`. Preserve durable Co
 | SEC-02 | Product egress isolation and least-source ingress | Source `0f062b8`, review fix `5589e35` (global-unicast IPv6, optional DNS fail-closed). Deployment and full SEC-01 evidence pending. Live policy remains ingress-only with broad ttyd sources: external tenant acceptance is NOT passed. |
 | SEC-03 | Template optional `runtime_class_name`, API/YAML/UI/Pod rendering | Source committed `37fc09b`; formatting, TypeScript and targeted draft tests passed. Full CI and live runtime acceptance pending. No silent fallback; existing ordinary templates unchanged. |
 | SEC-04 | gVisor node preparation and optional RuntimeClass | User authorized root access and reboot of 100.64.0.10 (`serv-146231`). Kernel 5.15.220 booted; K3s active, old 4.18 remains default for rollback. runsc NOT installed: systemd 239 fails the supported systemd-cgroup prerequisite; do not bypass with filesystem cgroups. User now authorizes OS-upgrade PLANNING only; `gvisor_node_rollout` owns `docs/SERV-146231-OS-UPGRADE-PLAN.md`. Do not execute an OS upgrade yet. |
-| SEC-05 | API-key allowed-template IDs and bypass prevention | Source `f02d7cb`, bypass fixes `205be6e`, `506f13f`, `0f90fd9`; read-only HTTP regression `504b375`. CI failures fixed in `f010ccf`, with explicit child-expiry-above-parent 403 regression retained. Workflow-dispatch CI `34254345334` is running for `32945cc`, including image publication after verification. Duplicate push CI `34254342932` cancelled. Not deployed/accepted. |
+| SEC-05 | API-key allowed-template IDs and bypass prevention | Source `f02d7cb`, bypass fixes `205be6e`, `506f13f`, `0f90fd9`; read-only HTTP regression `504b375`. CI failures fixed in `f010ccf`, with explicit child-expiry-above-parent 403 regression retained. Workflow-dispatch CI `34254345334` PASSED for `32945cc`, including all four image publications. Duplicate push CI `34254342932` cancelled. Not deployed/accepted. |
 | SEC-06 | External sandbox release acceptance | Pending SEC-01..05. Verify network escape paths, privilege/credential boundaries, CPU/memory/disk/PID pressure, SSH/Web Shell, restart/reschedule; fail closed. Installing components alone is not acceptance. |
 | OPS-01 | Operator-only setup and automated product checks | Hardened installer `5bd4b95` passed real-tar fixture tests, CI hook `4b5c8b0`; node preparation `7b250f7`. Host registration/canary still pending eligible kernel and recovery checks. |
 | CLEAN-01 | Superseded API keys/cache injections/image policies | Preserve previous evidence; final transactional cleanup/rotation and deletion verification remain. Never expose secret values. |
@@ -331,24 +331,35 @@ product terminology.
 
 ## Next actions
 
-Current priority (supersedes historical rollout ordering below): follow active CI `34254345334`,
-publish only after green, and resolve the newly measured Higress server-name validation gap.
+Current priority (supersedes historical rollout ordering below): resolve the measured Higress
+server-name validation gap and continue the gated migration with the published release.
 Latest poll: `verify` PASSED; image publication status is below. No production-upgrade
 claim yet. OS planning document landed in `4a68871`, migration
 runbook path correction in `0e2c8f2`; OS execution remains unapproved.
-Job evidence: ttyd, workspace-base and SSH jump images published successfully;
-control-plane build is still running. Immutable OCI index digests from successful job logs:
+CI `34254345334` finished SUCCESS (verification and all four image publication jobs).
+All four OCI index digests were independently fetched from GHCR and SHA-256 checked without
+downloading image layers. Immutable digests from successful job logs:
+control-plane `sha256:299f9a18019baea893cc93ac1a397cee3149f66660113a0a4c3ac09b3a898883`,
 ttyd `sha256:6f430bf2941bbb0e2110a5211a4884018efd72ec52a217b6db1b442d5b34eed7`,
 workspace `sha256:f4161453c3fa5dbbea71e76fffa199a7a7a3db6178411d4f59420c18596bcbb0`,
 ssh-jump `sha256:1eb742878128151f98a620651822ceab291dfd714f3200b468582619adccc081`.
-Do not promote a partial release. Corrected runbook `8e2321e` separates four-MWC cutover from
-the later external Coder cutover; no requirement to stop the current Coder workspace now.
+Corrected runbook `8e2321e` separates four-MWC cutover from the later external Coder cutover;
+`773e61a` gives the existing managed-create → stop → retained-PV rebind → start path.
+No requirement to stop the current Coder workspace now. Borrower-release confirmation remains
+pending: async question sent to user because the cross-task messaging tool still fails.
 GitOps runner `49c6e6f` plus scoped-diagnostics fix `75d31f0` ran to completion (session `8291`).
 Evidence `/tmp/mwc-higress-ttyd-mtls-20260908.json`: baseline/recovery 200, absent-client and
 wrong-server-CA rejection passed; wrong-server-SAN rejection FAILED (200 remained possible).
 Exact namespace `mwc-higress-ttyd-mtls-1788886900146-j1xdbb` was deleted and absence verified.
-No canary process remains. `sandbox_runtime_product` is checking official Higress support and
-the correct CA companion key; do not weaken the acceptance assertion.
+That first canary ended. Companion CA key corrected to official `cacert` in GitOps `e8acafb`.
+New standard EnvoyFilter canary `327418d` plus main's masked-CDS parsing/gateway-pinning fix
+`3a329a3` is RUNNING as session `4072`. Output `/tmp/mwc-higress-ttyd-san-20260908.json`;
+namespace `mwc-higress-ttyd-mtls-1788888479795-bwcwhy`, exact gateway filter
+`higress-system/ttyd-mtls-san-1788888479795-bwcwhy`. Uses newly published ttyd digest `6f430bf…`.
+It matches only temporary Service/7681 and tests real wrong-CA/wrong-SAN server certificates
+plus a valid wildcard certificate. Resume this handle; do not launch another test concurrently.
+Cleanup independently removes the ownership-labelled filter and namespace. No gateway fork
+or broad cluster patch is authorized. Do not weaken the acceptance assertion.
 Native ttyd acceptance already passed; do not repeat it. Never apply broad SNAT source allowances without the gateway
 authentication boundary verified end to end. Shared-namespace cutover still requires the
 schema bridge, writer shutdown, retained-volume and rollback gates.
