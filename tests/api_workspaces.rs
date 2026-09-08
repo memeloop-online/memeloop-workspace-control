@@ -475,6 +475,9 @@ async fn template_restricted_key_enforces_http_create_action_image_override_and_
     let workspace_id = Uuid::parse_str(serde_json::from_slice::<Value>(&bytes).unwrap()["workspace"]["id"].as_str().unwrap()).unwrap();
     let blocked = app.clone().oneshot(request(Method::POST, "/api/v1/workspaces", Some(&restricted.token), Some("restricted-b"), Some(workspace("blocked", template_b.id)))).await.unwrap();
     assert_eq!(blocked.status(), StatusCode::FORBIDDEN);
+    let workspace_b = app.clone().oneshot(request(Method::POST, "/api/v1/workspaces", Some(ADMIN_TOKEN), Some("admin-b"), Some(workspace("admin-b", template_b.id)))).await.unwrap();
+    let (_, workspace_b_body) = body(workspace_b).await;
+    let workspace_b_id = Uuid::parse_str(serde_json::from_slice::<Value>(&workspace_b_body).unwrap()["workspace"]["id"].as_str().unwrap()).unwrap();
     let overridden = app.clone().oneshot(request(Method::POST, "/api/v1/workspaces", Some(&restricted.token), Some("restricted-resources"), Some(json!({
         "organization_id": organization.id, "owner_id": admin_id, "name": "override", "template_id": template_a.id,
         "resources": { "cpu_millis": 1500, "memory_mib": 2048, "gpu_count": 0, "disk_gib": 20 }
@@ -488,4 +491,19 @@ async fn template_restricted_key_enforces_http_create_action_image_override_and_
         "name": "unrestricted child", "scopes": ["create_workspace"], "expires_at": now + 1800, "allowed_template_ids": null
     })))).await.unwrap();
     assert_eq!(mint.status(), StatusCode::FORBIDDEN);
+    let injection = json!({
+        "key": "restricted-test", "kind": "environment_variable", "target": "RESTRICTED_TEST",
+        "value": {"encoding": "utf8", "value": "value"}, "sensitive": false, "locked": false,
+        "version": 0, "file_mode": null, "owner": null, "group": null, "template_selector": null, "labels": {}
+    });
+    for path in [
+        format!("/api/v1/injections/organization/{}/restricted-test", organization.id),
+        format!("/api/v1/injections/user/{admin_id}/restricted-test"),
+        format!("/api/v1/injections/workspace/{workspace_b_id}/restricted-test"),
+    ] {
+        let response = app.clone().oneshot(request(Method::PUT, &path, Some(&restricted.token), Some("restricted-injection-denied"), Some(injection.clone()))).await.unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN, "{path}");
+    }
+    let allowed_injection = app.clone().oneshot(request(Method::PUT, &format!("/api/v1/injections/workspace/{workspace_id}/restricted-test"), Some(&restricted.token), Some("restricted-injection-allowed"), Some(injection))).await.unwrap();
+    assert_eq!(allowed_injection.status(), StatusCode::OK);
 }

@@ -24,17 +24,18 @@ const PRIMARY_TOKEN: &str = "settings-primary-token-0000000000000000000000";
 const OTHER_TOKEN: &str = "settings-other-token-000000000000000000000000";
 
 async fn app() -> (Router, Database) {
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64;
     let installation_id: InstallationId = "settings-api".parse().unwrap();
     let database = Database::connect("sqlite::memory:", installation_id.clone())
         .await
         .unwrap();
     database.migrate().await.unwrap();
     database
-        .create_user_with_initial_key("Primary User", PRIMARY_TOKEN, false, memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(false), 31_536_000, 1)
+        .create_user_with_initial_key("Primary User", PRIMARY_TOKEN, false, memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(false), now + 3_600, now)
         .await
         .unwrap();
     database
-        .create_user_with_initial_key("Other User", OTHER_TOKEN, false, memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(false), 31_536_000, 2)
+        .create_user_with_initial_key("Other User", OTHER_TOKEN, false, memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(false), now + 3_600, now)
         .await
         .unwrap();
     let config = AppConfig {

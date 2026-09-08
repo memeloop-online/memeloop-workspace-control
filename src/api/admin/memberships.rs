@@ -39,7 +39,9 @@ pub(in crate::api) async fn list_members(
     Query(query): Query<PageQuery>,
 ) -> Result<Json<MembershipPage>, ApiError> {
     let actor = principal(&state, &headers).await?;
-    if !actor.allows(Permission::ManageMembers, organization_id) {
+    if !actor.allows(Permission::ManageMembers, organization_id)
+        || actor.has_template_restriction()
+    {
         return Err(ApiError::Forbidden);
     }
     Ok(Json(
@@ -63,7 +65,9 @@ pub(in crate::api) async fn upsert_membership(
     Json(request): Json<MembershipRequest>,
 ) -> Result<Response, ApiError> {
     let actor = principal(&state, &headers).await?;
-    if !actor.allows(Permission::ManageMembers, organization_id) {
+    if !actor.allows(Permission::ManageMembers, organization_id)
+        || actor.has_template_restriction()
+    {
         return Err(ApiError::Forbidden);
     }
     if request.role == Role::SystemAdmin {

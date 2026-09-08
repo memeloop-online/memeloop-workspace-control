@@ -48,7 +48,7 @@ async fn require_system_admin(
     headers: &axum::http::HeaderMap,
 ) -> Result<Principal, ApiError> {
     let actor = super::auth::principal(state, headers).await?;
-    if !actor.may_manage_system() {
+    if !actor.may_manage_system() || actor.has_template_restriction() {
         return Err(ApiError::Forbidden);
     }
     Ok(actor)
