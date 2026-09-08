@@ -32,7 +32,7 @@ async fn disabled_reconcile_and_delete_never_call_envoyfilter() {
     assert!(
         fake.requests()
             .iter()
-            .all(|request| !request.uri.contains("/envoyfilters/")),
+            .all(|request| !request.uri.contains("/envoyfilters")),
         "mTLS-disabled lifecycle must not call the EnvoyFilter API"
     );
 }
