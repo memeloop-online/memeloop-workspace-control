@@ -333,9 +333,16 @@ product terminology.
 
 Current priority (supersedes historical rollout ordering below): follow active CI `34254345334`,
 publish only after green, and resolve the newly measured Higress server-name validation gap.
-Latest poll: `verify` PASSED; four image publication jobs are queued. No published-image
-or production-upgrade claim yet. OS planning document landed in `4a68871`, migration
+Latest poll: `verify` PASSED; image publication status is below. No production-upgrade
+claim yet. OS planning document landed in `4a68871`, migration
 runbook path correction in `0e2c8f2`; OS execution remains unapproved.
+Job evidence: ttyd, workspace-base and SSH jump images published successfully;
+control-plane build is still running. Immutable OCI index digests from successful job logs:
+ttyd `sha256:6f430bf2941bbb0e2110a5211a4884018efd72ec52a217b6db1b442d5b34eed7`,
+workspace `sha256:f4161453c3fa5dbbea71e76fffa199a7a7a3db6178411d4f59420c18596bcbb0`,
+ssh-jump `sha256:1eb742878128151f98a620651822ceab291dfd714f3200b468582619adccc081`.
+Do not promote a partial release. Corrected runbook `8e2321e` separates four-MWC cutover from
+the later external Coder cutover; no requirement to stop the current Coder workspace now.
 GitOps runner `49c6e6f` plus scoped-diagnostics fix `75d31f0` ran to completion (session `8291`).
 Evidence `/tmp/mwc-higress-ttyd-mtls-20260908.json`: baseline/recovery 200, absent-client and
 wrong-server-CA rejection passed; wrong-server-SAN rejection FAILED (200 remained possible).
