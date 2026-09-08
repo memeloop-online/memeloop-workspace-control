@@ -412,8 +412,10 @@ tests (expected user creation 201, got 403); no images were published. Main trac
 default-expiry bug: omitted child expiry becomes request-time + 30 days, exceeding an issuer
 seeded with the same TTL once the clock crosses a second. `d665e89` caps only the default at
 issuer expiry, while explicit over-parent requests remain forbidden. `http_fixture_clocks`
-owns a deterministic short-lived-issuer regression; do not hide this with longer fixture TTLs
-or an explicitly supplied expiry. New CI is required after that regression lands.
+completed deterministic short-lived-issuer regression `14d5060`; main review follow-up
+`681da5f` separates scope escalation from an explicit over-parent expiry case, so neither
+assertion can pass for the other reason. Main reviewed both; formatting/diff checks passed.
+Push this fix and regression through the main publication gate; no failed job is still running.
 Main reviewed GitOps `8d8a4e7`; client-only live acceptance PASSED with the already verified
 ttyd `6f430bf` image. Session `27715` exited 0; result is
 `/tmp/mwc-higress-ttyd-client-20260908.json`. Valid / absent / restored / untrusted / restored
