@@ -15,6 +15,7 @@ use tokio::net::TcpListener;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
+#[path = "main/kubernetes_config.rs"]
 mod kubernetes_config;
 
 #[tokio::main]

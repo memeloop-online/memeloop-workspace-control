@@ -80,26 +80,7 @@ pub(super) fn resource_builder(config: &AppConfig) -> Result<ResourceBuilder, io
         Err(std::env::VarError::NotPresent) => Vec::new(),
         Err(error) => return Err(io::Error::new(io::ErrorKind::InvalidInput, error)),
     };
-    let egress_dns_namespace = optional_env("MWC_EGRESS_DNS_NAMESPACE")?;
-    let egress_dns_pod_labels = optional_json_map("MWC_EGRESS_DNS_POD_LABELS_JSON")?;
-    let additional_blocked_cidrs = optional_cidrs("MWC_EGRESS_ADDITIONAL_BLOCKED_CIDRS_JSON")?;
-    let internet_egress = match (egress_dns_namespace, egress_dns_pod_labels) {
-        (None, None) if additional_blocked_cidrs.is_none() => None,
-        (Some(namespace), Some(labels)) => Some(
-            InternetEgressConfig::new(
-                namespace,
-                labels,
-                additional_blocked_cidrs.unwrap_or_default(),
-            )
-            .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?,
-        ),
-        _ => {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "MWC_EGRESS_DNS_NAMESPACE and MWC_EGRESS_DNS_POD_LABELS_JSON must be set together when configuring internet-only egress",
-            ));
-        }
-    };
+    let internet_egress = internet_egress_config()?;
     Ok(ResourceBuilder {
         installation_id: config.installation_id.clone(),
         ttyd_image,
@@ -121,6 +102,24 @@ pub(super) fn resource_builder(config: &AppConfig) -> Result<ResourceBuilder, io
             .unwrap_or_else(|_| "https".to_owned()),
         internal_ssh_node_port_enabled: config.internal_ssh_host.is_some(),
     })
+}
+
+fn internet_egress_config() -> Result<Option<InternetEgressConfig>, io::Error> {
+    let namespace = optional_env("MWC_EGRESS_DNS_NAMESPACE")?;
+    let labels = optional_json_map("MWC_EGRESS_DNS_POD_LABELS_JSON")?;
+    let blocked = optional_cidrs("MWC_EGRESS_ADDITIONAL_BLOCKED_CIDRS_JSON")?;
+    match (namespace, labels) {
+        (None, None) if blocked.is_none() => Ok(None),
+        (Some(namespace), Some(labels)) => {
+            InternetEgressConfig::new(namespace, labels, blocked.unwrap_or_default())
+                .map(Some)
+                .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))
+        }
+        _ => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "MWC_EGRESS_DNS_NAMESPACE and MWC_EGRESS_DNS_POD_LABELS_JSON must be set together when configuring internet-only egress",
+        )),
+    }
 }
 
 fn optional_env(name: &'static str) -> Result<Option<String>, io::Error> {
