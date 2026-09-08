@@ -174,3 +174,24 @@ checked. Earlier native-ttyd tests separately rejected absent and untrusted clie
 This proves the tested gateway TLS configuration, not the full external sandbox. Product
 resource reconciliation/deletion, certificate renewal, browser WebSocket ticket handling and
 NetworkPolicy/startup/rescheduling coverage still require their own acceptance.
+
+## Verified gateway client certificates — 2026-09-08
+
+GitOps runner `8d8a4e7`, in client-only mode, used the same released ttyd digest as above.
+Each result required three consecutive HTTP outcomes plus the expected Ingress annotation
+and active client-certificate SDS reference on the gateway Pod actually serving the requests.
+
+| Client configuration | Observed outcome |
+| --- | --- |
+| Valid client certificate | HTTP 200 × 3 |
+| Client certificate removed; active client SDS absent | HTTP 503 × 3 |
+| Valid client certificate restored | HTTP 200 × 3 |
+| Client certificate signed by an untrusted CA | HTTP 503 × 3 |
+| Valid client certificate restored again | HTTP 200 × 3 |
+
+Result: `/tmp/mwc-higress-ttyd-client-20260908.json`, process exit 0, no cleanup failures.
+The temporary Namespace `mwc-higress-ttyd-mtls-1788895385437-957o0r` and gateway filter
+`ttyd-mtls-san-1788895385437-957o0r` were independently confirmed absent.
+No existing workspace was changed. The server CA/SAN matrix was not repeated.
+This closes the gateway client-certificate gate, not interactive WebSocket authentication
+or production rollout.
