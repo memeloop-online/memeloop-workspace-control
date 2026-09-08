@@ -46,7 +46,6 @@ export function ApiKeyCreateForm({
     <div className="api-key-create-heading">
       <div>
         <h4>{translate("createApiKey")}</h4>
-        <p>{translate("apiKeysHelp")}</p>
       </div>
     </div>
     <div className="api-key-create-fields">

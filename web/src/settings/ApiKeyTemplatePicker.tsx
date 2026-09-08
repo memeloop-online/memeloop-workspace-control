@@ -132,18 +132,22 @@ export function ApiKeyTemplatePicker({
         </div>
         <div className="credential-reference-options api-key-template-options" role="group" aria-label={translate("templates")}>
           {filteredTemplates.length === 0 && <small>{translate("noTemplates")}</small>}
-          {filteredTemplates.map((template) => <label key={template.id}>
-            <input
-              type="checkbox"
-              checked={selected.includes(template.id)}
-              disabled={disabled}
-              onChange={() => toggle(template.id)}
-            />
-            <span>
-              <b>{template.name}</b>
-              <small>{shortTemplateId(template.id)}</small>
-            </span>
-          </label>)}
+          {filteredTemplates.map((template) => {
+            const checked = selected.includes(template.id);
+            return <label className="api-key-scope-card api-key-template-option" data-selected={checked} key={template.id}>
+              <input
+                type="checkbox"
+                checked={checked}
+                disabled={disabled}
+                onChange={() => toggle(template.id)}
+              />
+              <span className="api-key-scope-mark" aria-hidden="true">{checked ? "✓" : ""}</span>
+              <span className="api-key-scope-copy">
+                <strong>{template.name}</strong>
+                <small>{shortTemplateId(template.id)}</small>
+              </span>
+            </label>;
+          })}
         </div>
       </div>}
     </div>}

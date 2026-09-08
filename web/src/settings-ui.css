@@ -275,15 +275,40 @@
   scrollbar-gutter: stable;
 }
 
-.api-key-template-options label {
+.api-key-template-options .api-key-template-option {
   min-width: 0;
+  min-height: 48px;
+  margin: 0;
+  padding: 8px 9px;
+  border: 0;
+  border-top: 1px solid #1d2532;
+  border-radius: 7px;
 }
 
-.api-key-template-options label:has(input:disabled) {
+.api-key-template-options .api-key-template-option:first-of-type {
+  border-top: 0;
+}
+
+.api-key-template-options .api-key-template-option input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.api-key-template-options .api-key-template-option:has(input:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.api-key-template-options .api-key-template-option:has(input:disabled) {
   cursor: not-allowed;
 }
 
-.api-key-template-options b,
+.api-key-template-options strong,
 .api-key-template-options small {
   max-width: 100%;
 }
