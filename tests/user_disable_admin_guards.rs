@@ -18,11 +18,25 @@ async fn database(name: &str) -> Database {
 async fn disabling_the_last_active_organization_admin_is_rejected() {
     let database = database("disable-last-org").await;
     let owner = database
-        .create_user_with_initial_key("Owner", "owner-disable-org-admin-token-000000000000000", false, memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(false), 31_536_000, 1)
+        .create_user_with_initial_key(
+            "Owner",
+            "owner-disable-org-admin-token-000000000000000",
+            false,
+            memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(false),
+            31_536_000,
+            1,
+        )
         .await
         .unwrap();
     let inactive_admin = database
-        .create_user_with_initial_key("Inactive administrator", "inactive-disable-org-admin-token-000000000000", false, memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(false), 31_536_000, 2)
+        .create_user_with_initial_key(
+            "Inactive administrator",
+            "inactive-disable-org-admin-token-000000000000",
+            false,
+            memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(false),
+            31_536_000,
+            2,
+        )
         .await
         .unwrap();
     let organization = database
@@ -61,11 +75,25 @@ async fn disabling_the_last_active_organization_admin_is_rejected() {
 async fn concurrent_disables_leave_an_active_organization_admin() {
     let database = database("disable-org-race").await;
     let first = database
-        .create_user_with_initial_key("First", "first-disable-org-admin-token-000000000000000", false, memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(false), 31_536_000, 1)
+        .create_user_with_initial_key(
+            "First",
+            "first-disable-org-admin-token-000000000000000",
+            false,
+            memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(false),
+            31_536_000,
+            1,
+        )
         .await
         .unwrap();
     let second = database
-        .create_user_with_initial_key("Second", "second-disable-org-admin-token-00000000000000", false, memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(false), 31_536_000, 2)
+        .create_user_with_initial_key(
+            "Second",
+            "second-disable-org-admin-token-00000000000000",
+            false,
+            memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(false),
+            31_536_000,
+            2,
+        )
         .await
         .unwrap();
     let organization = database
@@ -111,15 +139,36 @@ async fn concurrent_disables_leave_an_active_organization_admin() {
 async fn disabled_administrators_do_not_allow_removing_the_only_active_administrator() {
     let database = database("active-admin-member").await;
     let active = database
-        .create_user_with_initial_key("Active", "active-org-admin-token-000000000000000000000", false, memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(false), 31_536_000, 1)
+        .create_user_with_initial_key(
+            "Active",
+            "active-org-admin-token-000000000000000000000",
+            false,
+            memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(false),
+            31_536_000,
+            1,
+        )
         .await
         .unwrap();
     let first_disabled = database
-        .create_user_with_initial_key("First disabled", "first-disabled-org-admin-token-000000000000000", false, memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(false), 31_536_000, 2)
+        .create_user_with_initial_key(
+            "First disabled",
+            "first-disabled-org-admin-token-000000000000000",
+            false,
+            memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(false),
+            31_536_000,
+            2,
+        )
         .await
         .unwrap();
     let second_disabled = database
-        .create_user_with_initial_key("Second disabled", "second-disabled-org-admin-token-00000000000000", false, memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(false), 31_536_000, 3)
+        .create_user_with_initial_key(
+            "Second disabled",
+            "second-disabled-org-admin-token-00000000000000",
+            false,
+            memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(false),
+            31_536_000,
+            3,
+        )
         .await
         .unwrap();
     let organization = database
@@ -183,11 +232,25 @@ async fn postgres_serializes_disable_and_membership_demotion() {
     database.migrate().await.unwrap();
 
     let first = database
-        .create_user_with_initial_key("First", "first-postgres-admin-guard-token-000000000000", false, memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(false), 31_536_000, 1)
+        .create_user_with_initial_key(
+            "First",
+            "first-postgres-admin-guard-token-000000000000",
+            false,
+            memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(false),
+            31_536_000,
+            1,
+        )
         .await
         .unwrap();
     let second = database
-        .create_user_with_initial_key("Second", "second-postgres-admin-guard-token-00000000000", false, memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(false), 31_536_000, 2)
+        .create_user_with_initial_key(
+            "Second",
+            "second-postgres-admin-guard-token-00000000000",
+            false,
+            memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(false),
+            31_536_000,
+            2,
+        )
         .await
         .unwrap();
     let organization = database

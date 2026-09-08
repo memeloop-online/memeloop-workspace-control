@@ -212,14 +212,15 @@ mod tests {
             .upsert_image_policy("registry.example/workspace:1", true, 1)
             .await
             .unwrap();
+        let key_now = crate::api::idempotency::unix_timestamp().unwrap();
         let user = database
             .create_user_with_initial_key(
                 "Preflight Admin",
                 TOKEN,
                 true,
                 crate::auth::ApiKeyScope::initial_key_defaults(true),
-                1_900_000_000,
-                1,
+                key_now + 86_400,
+                key_now,
             )
             .await
             .unwrap();

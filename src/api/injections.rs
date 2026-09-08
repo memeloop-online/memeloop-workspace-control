@@ -353,9 +353,18 @@ async fn authorize(
                 && (!locked || actor.allows(Permission::ManageLockedInjections, scope_ref.scope_id))
         }
         InjectionScope::User => {
-            !write && (actor.may_manage_system() || actor.user_id == scope_ref.scope_id)
-                || write && !actor.has_template_restriction()
-                    && (actor.may_manage_system() || actor.user_id == scope_ref.scope_id)
+            let permission = if write {
+                Permission::ChangeWorkspaceState
+            } else {
+                Permission::ReadWorkspace
+            };
+            (!write || !actor.has_template_restriction())
+                && (actor.may_manage_system()
+                    || actor.user_id == scope_ref.scope_id
+                        && actor
+                            .api_key_scopes
+                            .iter()
+                            .any(|scope| scope.permits(permission)))
         }
         InjectionScope::Workspace => {
             let workspace = state.database.get_workspace(scope_ref.scope_id).await?;

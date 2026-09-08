@@ -26,7 +26,14 @@ async fn sqlite_snapshot_contains_ciphertext_and_resets_only_pending_work() {
         .unwrap();
     database.migrate().await.unwrap();
     let user = database
-        .create_user_with_initial_key("Snapshot User", TOKEN, true, memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(true), 31_536_000, 100)
+        .create_user_with_initial_key(
+            "Snapshot User",
+            TOKEN,
+            true,
+            memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(true),
+            31_536_000,
+            100,
+        )
         .await
         .unwrap();
     let organization = database
@@ -183,7 +190,14 @@ async fn postgres_import_restores_dynamic_plugin_package_and_assets_when_configu
         .unwrap();
     source.migrate().await.unwrap();
     let user = source
-        .create_user_with_initial_key("Snapshot Plugin User", TOKEN, true, memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(true), 31_536_000, 100)
+        .create_user_with_initial_key(
+            "Snapshot Plugin User",
+            TOKEN,
+            true,
+            memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(true),
+            31_536_000,
+            100,
+        )
         .await
         .unwrap();
     let organization = source

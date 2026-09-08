@@ -31,7 +31,7 @@ async fn stopped_workspace() -> (Database, Workspace, Uuid) {
             "image-update-admin-000000000000000000000",
             true,
             crate::auth::ApiKeyScope::initial_key_defaults(true),
-            1_900_000_000,
+            31_536_000,
             1,
         )
         .await

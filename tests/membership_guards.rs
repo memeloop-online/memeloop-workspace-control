@@ -12,7 +12,14 @@ async fn last_organization_admin_cannot_be_demoted_or_removed() {
         .unwrap();
     database.migrate().await.unwrap();
     let owner = database
-        .create_user_with_initial_key("Owner", "owner-membership-guard-token-000000000000000000", false, memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(false), 31_536_000, 1)
+        .create_user_with_initial_key(
+            "Owner",
+            "owner-membership-guard-token-000000000000000000",
+            false,
+            memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(false),
+            31_536_000,
+            1,
+        )
         .await
         .unwrap();
     let organization = database
@@ -48,11 +55,25 @@ async fn concurrent_admin_demotions_leave_one_administrator() {
         .unwrap();
     database.migrate().await.unwrap();
     let first = database
-        .create_user_with_initial_key("First", "first-membership-guard-token-000000000000000", false, memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(false), 31_536_000, 1)
+        .create_user_with_initial_key(
+            "First",
+            "first-membership-guard-token-000000000000000",
+            false,
+            memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(false),
+            31_536_000,
+            1,
+        )
         .await
         .unwrap();
     let second = database
-        .create_user_with_initial_key("Second", "second-membership-guard-token-000000000000000", false, memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(false), 31_536_000, 2)
+        .create_user_with_initial_key(
+            "Second",
+            "second-membership-guard-token-000000000000000",
+            false,
+            memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(false),
+            31_536_000,
+            2,
+        )
         .await
         .unwrap();
     let organization = database

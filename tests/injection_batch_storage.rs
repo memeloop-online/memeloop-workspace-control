@@ -35,7 +35,14 @@ fn item(key: &str, target: &str, locked: bool) -> InjectionItem {
 async fn assert_locked_batch_rolls_back(database: Database) {
     database.migrate().await.unwrap();
     let actor = database
-        .create_user_with_initial_key("Batch Operator", "batch-operator-token-000000000000000000000", true, memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(true), 31_536_000, 1)
+        .create_user_with_initial_key(
+            "Batch Operator",
+            "batch-operator-token-000000000000000000000",
+            true,
+            memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(true),
+            31_536_000,
+            1,
+        )
         .await
         .unwrap();
     let organization = database

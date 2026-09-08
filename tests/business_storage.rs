@@ -64,7 +64,14 @@ async fn unconfigured_image_allowlist_defaults_to_deny() {
         .unwrap();
     database.migrate().await.unwrap();
     let admin = database
-        .create_user_with_initial_key("Admin", ADMIN_TOKEN, true, memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(true), 31_536_000, 100)
+        .create_user_with_initial_key(
+            "Admin",
+            ADMIN_TOKEN,
+            true,
+            memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(true),
+            31_536_000,
+            100,
+        )
         .await
         .unwrap();
     let organization = database
@@ -115,7 +122,14 @@ async fn unconfigured_image_allowlist_defaults_to_deny() {
 async fn inline_injection_failure_rolls_back_workspace_and_first_job() {
     let database = database().await;
     let admin = database
-        .create_user_with_initial_key("Admin", ADMIN_TOKEN, true, memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(true), 31_536_000, 100)
+        .create_user_with_initial_key(
+            "Admin",
+            ADMIN_TOKEN,
+            true,
+            memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(true),
+            31_536_000,
+            100,
+        )
         .await
         .unwrap();
     let organization = database
@@ -194,7 +208,14 @@ async fn inline_injection_failure_rolls_back_workspace_and_first_job() {
 async fn admitted_template_must_match_the_transactional_workspace_snapshot() {
     let database = database().await;
     let admin = database
-        .create_user_with_initial_key("Admin", ADMIN_TOKEN, true, memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(true), 31_536_000, 100)
+        .create_user_with_initial_key(
+            "Admin",
+            ADMIN_TOKEN,
+            true,
+            memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(true),
+            31_536_000,
+            100,
+        )
         .await
         .unwrap();
     let organization = database
@@ -278,7 +299,14 @@ async fn admitted_template_must_match_the_transactional_workspace_snapshot() {
 async fn workspace_runtime_identity_uses_the_product_namespace() {
     let database = database().await;
     let admin = database
-        .create_user_with_initial_key("Admin", ADMIN_TOKEN, true, memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(true), 31_536_000, 100)
+        .create_user_with_initial_key(
+            "Admin",
+            ADMIN_TOKEN,
+            true,
+            memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(true),
+            31_536_000,
+            100,
+        )
         .await
         .unwrap();
     let organization = database
@@ -364,7 +392,14 @@ async fn workspace_runtime_identity_uses_the_product_namespace() {
 async fn template_deletion_requires_disabled_unreferenced_template() {
     let database = database().await;
     let admin = database
-        .create_user_with_initial_key("Admin", ADMIN_TOKEN, true, memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(true), 31_536_000, 100)
+        .create_user_with_initial_key(
+            "Admin",
+            ADMIN_TOKEN,
+            true,
+            memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(true),
+            31_536_000,
+            100,
+        )
         .await
         .unwrap();
     let organization = database
@@ -451,7 +486,14 @@ async fn template_deletion_requires_disabled_unreferenced_template() {
 async fn workspace_resource_override_is_validated_and_snapshotted() {
     let database = database().await;
     let admin = database
-        .create_user_with_initial_key("Admin", ADMIN_TOKEN, true, memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(true), 31_536_000, 100)
+        .create_user_with_initial_key(
+            "Admin",
+            ADMIN_TOKEN,
+            true,
+            memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(true),
+            31_536_000,
+            100,
+        )
         .await
         .unwrap();
     let organization = database
@@ -541,7 +583,14 @@ async fn workspace_resource_override_is_validated_and_snapshotted() {
 async fn image_allowlist_and_template_contract_are_admitted_atomically() {
     let database = database().await;
     let admin = database
-        .create_user_with_initial_key("Admin", ADMIN_TOKEN, true, memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(true), 31_536_000, 100)
+        .create_user_with_initial_key(
+            "Admin",
+            ADMIN_TOKEN,
+            true,
+            memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(true),
+            31_536_000,
+            100,
+        )
         .await
         .unwrap();
     let organization = database
@@ -682,7 +731,14 @@ async fn image_allowlist_and_template_contract_are_admitted_atomically() {
 async fn authentication_and_organization_membership_are_persisted() {
     let database = database().await;
     let admin = database
-        .create_user_with_initial_key("Admin", ADMIN_TOKEN, true, memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(true), 31_536_000, 100)
+        .create_user_with_initial_key(
+            "Admin",
+            ADMIN_TOKEN,
+            true,
+            memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(true),
+            31_536_000,
+            100,
+        )
         .await
         .unwrap();
     assert!(database.authenticate("wrong").await.unwrap().is_none());
@@ -712,7 +768,14 @@ async fn authentication_and_organization_membership_are_persisted() {
 async fn workspace_creation_enforces_quota_and_enqueues_lifecycle_actions() {
     let database = database().await;
     let admin = database
-        .create_user_with_initial_key("Admin", ADMIN_TOKEN, true, memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(true), 31_536_000, 100)
+        .create_user_with_initial_key(
+            "Admin",
+            ADMIN_TOKEN,
+            true,
+            memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(true),
+            31_536_000,
+            100,
+        )
         .await
         .unwrap();
     let organization = database
@@ -905,7 +968,14 @@ async fn confirmed_deletion_scrubs_sensitive_workspace_state_and_keeps_a_tombsto
     let cipher =
         EnvelopeCipher::from_base64("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=").unwrap();
     let admin = database
-        .create_user_with_initial_key("Admin", ADMIN_TOKEN, true, memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(true), 31_536_000, 100)
+        .create_user_with_initial_key(
+            "Admin",
+            ADMIN_TOKEN,
+            true,
+            memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(true),
+            31_536_000,
+            100,
+        )
         .await
         .unwrap();
     let organization = database
@@ -1043,11 +1113,25 @@ async fn confirmed_deletion_scrubs_sensitive_workspace_state_and_keeps_a_tombsto
 async fn user_injection_change_reconciles_every_workspace_the_user_can_access() {
     let database = database().await;
     let admin = database
-        .create_user_with_initial_key("Admin", ADMIN_TOKEN, true, memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(true), 31_536_000, 100)
+        .create_user_with_initial_key(
+            "Admin",
+            ADMIN_TOKEN,
+            true,
+            memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(true),
+            31_536_000,
+            100,
+        )
         .await
         .unwrap();
     let member = database
-        .create_user_with_initial_key("Member", "member-token-000000000000000000000000000", false, memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(false), 31_536_000, 101)
+        .create_user_with_initial_key(
+            "Member",
+            "member-token-000000000000000000000000000",
+            false,
+            memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(false),
+            31_536_000,
+            101,
+        )
         .await
         .unwrap();
     let organization = database

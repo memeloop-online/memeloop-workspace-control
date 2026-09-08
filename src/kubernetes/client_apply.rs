@@ -43,7 +43,8 @@ impl KubernetesCoordinator {
             .await?;
         // Publish isolation intent before creating any workspace containers. Policy acceptance
         // is not an enforcement acknowledgement; node-level acceptance must verify convergence.
-        self.apply_network(namespace_name, workspace, desired).await?;
+        self.apply_network(namespace_name, workspace, desired)
+            .await?;
         self.apply_workload(namespace_name, workspace, desired)
             .await
     }
