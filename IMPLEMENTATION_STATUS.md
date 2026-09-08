@@ -30,7 +30,7 @@ Cilium/Calico, split clusters, or restore `runtime_profile`. Preserve durable Co
 | SEC-02 | Product egress isolation and least-source ingress | Source `0f062b8`, review fix `5589e35` (global-unicast IPv6, optional DNS fail-closed). Deployment and full SEC-01 evidence pending. Live policy remains ingress-only with broad ttyd sources: external tenant acceptance is NOT passed. |
 | SEC-03 | Template optional `runtime_class_name`, API/YAML/UI/Pod rendering | Source committed `37fc09b`; formatting, TypeScript and targeted draft tests passed. Full CI and live runtime acceptance pending. No silent fallback; existing ordinary templates unchanged. |
 | SEC-04 | gVisor node preparation and optional RuntimeClass | User authorized root access and reboot of 100.64.0.10 (`serv-146231`). Kernel 5.15.220 booted; K3s active, old 4.18 remains default for rollback. runsc NOT installed: systemd 239 fails the supported systemd-cgroup prerequisite; do not bypass with filesystem cgroups. User now authorizes OS-upgrade PLANNING only; `gvisor_node_rollout` owns `docs/SERV-146231-OS-UPGRADE-PLAN.md`. Do not execute an OS upgrade yet. |
-| SEC-05 | API-key allowed-template IDs and bypass prevention | Source `f02d7cb`, bypass fixes `205be6e`, `506f13f`, `0f90fd9`; read-only HTTP regression `504b375`. Latest CI `34251610230` completed all Rust test targets; only settings key-rotation (403 vs 201) and lease schema-version (22 vs 21) tests failed. `http_fixture_clocks` owns these two test diagnoses. Not deployed/accepted. |
+| SEC-05 | API-key allowed-template IDs and bypass prevention | Source `f02d7cb`, bypass fixes `205be6e`, `506f13f`, `0f90fd9`; read-only HTTP regression `504b375`. CI failures fixed in `f010ccf`, with explicit child-expiry-above-parent 403 regression retained. Workflow-dispatch CI `34254345334` is running for `32945cc`, including image publication after verification. Duplicate push CI `34254342932` cancelled. Not deployed/accepted. |
 | SEC-06 | External sandbox release acceptance | Pending SEC-01..05. Verify network escape paths, privilege/credential boundaries, CPU/memory/disk/PID pressure, SSH/Web Shell, restart/reschedule; fail closed. Installing components alone is not acceptance. |
 | OPS-01 | Operator-only setup and automated product checks | Hardened installer `5bd4b95` passed real-tar fixture tests, CI hook `4b5c8b0`; node preparation `7b250f7`. Host registration/canary still pending eligible kernel and recovery checks. |
 | CLEAN-01 | Superseded API keys/cache injections/image policies | Preserve previous evidence; final transactional cleanup/rotation and deletion verification remain. Never expose secret values. |
@@ -331,10 +331,15 @@ product terminology.
 
 ## Next actions
 
-Current priority (supersedes historical rollout ordering below): fix the two failures from
-CI `34251610230`, publish only after green, and review/run the disposable Higress→ttyd
-mTLS acceptance runner owned by `sandbox_runtime_product`. Native ttyd acceptance already
-passed; do not repeat it. Never apply broad SNAT source allowances without the gateway
+Current priority (supersedes historical rollout ordering below): follow active CI `34254345334`,
+publish only after green, and resolve the newly measured Higress server-name validation gap.
+GitOps runner `49c6e6f` plus scoped-diagnostics fix `75d31f0` ran to completion (session `8291`).
+Evidence `/tmp/mwc-higress-ttyd-mtls-20260908.json`: baseline/recovery 200, absent-client and
+wrong-server-CA rejection passed; wrong-server-SAN rejection FAILED (200 remained possible).
+Exact namespace `mwc-higress-ttyd-mtls-1788886900146-j1xdbb` was deleted and absence verified.
+No canary process remains. `sandbox_runtime_product` is checking official Higress support and
+the correct CA companion key; do not weaken the acceptance assertion.
+Native ttyd acceptance already passed; do not repeat it. Never apply broad SNAT source allowances without the gateway
 authentication boundary verified end to end. Shared-namespace cutover still requires the
 schema bridge, writer shutdown, retained-volume and rollback gates.
 
