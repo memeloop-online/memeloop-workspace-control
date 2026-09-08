@@ -27,6 +27,8 @@ MWC_HIGRESS_MTLS_CLIENT_SECRET_NAME=ttyd-client
 
 Partial configuration is rejected at startup. Values must be valid Kubernetes Secret names;
 the Higress Secret namespace is a DNS label, not a dotted Namespace path.
+The client Secret Namespace must equal `MWC_HIGRESS_NAMESPACE` (default `higress-system`);
+the SAN filter and its scoped permissions target that gateway Namespace.
 
 The Helm chart supplies the same values and injects the environment variables:
 
@@ -102,6 +104,28 @@ Applying the Kubernetes object is not evidence that the gateway has acknowledged
 
 The existing `nginx` IngressClass is retained because the installed Higress controller maps
 that class in this deployment. Do not change the class merely to enable mTLS.
+
+## Planned disable sequence
+
+The lifecycle implementation uses two stages so installations that never enabled this feature
+do not need an EnvoyFilter CRD or gateway permissions. Complete these checks before removing
+the mTLS configuration or its namespace-scoped Role:
+
+1. Keep all mTLS settings and gateway permissions. Set both `public.webShellDomain` and
+   `public.webShellOrigin` to empty, and wait until all control-plane replicas run that
+   configuration. This intentionally disables Web Shell access.
+2. Remove the owned Web Shell Ingresses first and confirm they are absent; only then remove
+   their exact per-workspace SAN filters. Match the database workspace identity and installation
+   ownership labels for every deletion. Preserve unrelated HTTP port-mapping Ingresses and
+   gateway filters. Stop on an ownership mismatch.
+3. Confirm no owned Web Shell Ingress or SAN filter remains, then remove all three mTLS settings
+   and the conditional gateway Role/RoleBinding.
+
+Do not assume a control-plane restart automatically requeues every settled workspace. A completed
+job is not a continuous resync. If no reconcile is queued for an existing workspace, the operator
+must perform the scoped cleanup in step 2; do not start a stopped workspace merely to trigger it.
+Changing the gateway Namespace likewise requires cleanup in the old Namespace before removing
+its permissions. These steps do not stop workspace SSH or delete user volumes.
 
 ## Rotation and operational checks
 
