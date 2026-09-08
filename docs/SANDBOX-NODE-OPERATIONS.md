@@ -8,9 +8,8 @@ device compatibility.
 
 ## Current admission position (2026-09-08)
 
-The observed cluster has seven Ready amd64 nodes. Six use K3s `v1.36.2+k3s1` with containerd
-`2.3.2-k3s2`; `onetwo-nas` uses K3s `v1.35.5+k3s1` with containerd `2.2.3-k3s1`. Both are
-containerd 2.x and therefore use the K3s v3 template path below. This is an observation, not a
+The observed cluster has seven Ready amd64 nodes, all using K3s `v1.36.2+k3s1` with containerd
+`2.3.2-k3s2`. They therefore use the K3s v3 template path below. This is an observation, not a
 promise that every node is suitable.
 
 `serv-146231` runs kernel `4.18.0-553.139.1.el8_10.x86_64`. It is below the currently adopted
@@ -22,6 +21,12 @@ it has kernel 5.15 and about 4 CPU / 3.8 GiB allocatable capacity. It is not aut
 approved: it is schedulable and has existing system workloads, so a maintenance/capacity review is
 required. Do not disrupt control-plane nodes, active workspace nodes, GPU nodes, the NAS, or the
 overseas edge merely to make a sandbox pool.
+
+The user subsequently selected `100.64.0.10` for testing and authorized direct SSH operations.
+Its Kubernetes name is `serv-146231`; its host name is `serv.146231.com`. Root SSH is now
+verified. Kernel upgrade preparation is in progress; this authorization does not make the
+current 4.18 kernel eligible. Keep its existing bootable kernel until the replacement kernel,
+storage/network drivers and node rejoin have passed validation.
 
 An approved read-only host-mount inspection on iv found a cgroup v2 filesystem and a generated
 containerd `config.toml` at version 3. Its listed handlers are the existing `runc` and
@@ -37,7 +42,8 @@ https://harbor.k3s.onetwo.website/v2/docker-io/rancher/mirrored-pause/manifests/
 returned `502 Bad Gateway`. A later read-only `k3s ctr -n k8s.io images ls` check found no local
 pause image. Treat restoration of the correct pinned pause image/cache as a separate approved
 node-reliability action; do not hide this condition by repeatedly scheduling diagnostic Pods or by
-changing the default runtime.
+changing the default runtime. The separately assigned operations agent subsequently restored
+Harbor, and a CRI pause-image pull succeeded. That image-pull prerequisite is now resolved.
 
 Labels are an assertion about the **measured host**. Add `sandbox.memeloop.dev/gvisor-ready=true`
 only after the preflight, archive checksum, K3s restart and an actual `runsc` canary on that exact
