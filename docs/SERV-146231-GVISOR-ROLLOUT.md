@@ -44,6 +44,35 @@ un-pinned `kernel-ml`, or make `elrepo-kernel` generally enabled for unrelated p
 Secure Boot is not currently the blocker (the host boots BIOS), but ELRepo says these kernels are
 not Secure-Boot signed; re-evaluate if the boot mode changes.
 
+## Staged-artifact and transaction evidence
+
+The following files were downloaded on the target into the mode-0700 temporary directory
+`/var/tmp/serv-146231-elrepo-kernel-lt.50FQsh`; they are **not installed** and no persistent DNF
+repo was created. The directory is intentionally retained for the approval record and must be
+re-hashed and signature-checked again immediately before any install.
+
+| File | SHA-256 |
+| --- | --- |
+| `kernel-lt-5.15.220-1.el8.elrepo.x86_64.rpm` | `cacf5b97da283fb344bb5044ef9c04f6c38818b6de85ff5c0c731f95f041bb61` |
+| `kernel-lt-core-5.15.220-1.el8.elrepo.x86_64.rpm` | `5f981c6aa6f732ad0d328ebe394a730a921623b84d7b72121222c5a357d9d21f` |
+| `kernel-lt-modules-5.15.220-1.el8.elrepo.x86_64.rpm` | `5e1e2513544378941c846c03e91904a9829908c822724baf7bda4b3e85e932b9` |
+| `kernel-lt-modules-extra-5.15.220-1.el8.elrepo.x86_64.rpm` | `31089fb7c8d8916ae0b40c5ba568952d44ac59980cc1be0c209a37cb1691a7a8` |
+| `RPM-GPG-KEY-v2-elrepo.org` | `60789f228816a932251de2a3935f91829245366a465af183a9aa719b7693b494` |
+
+The public key fingerprint matched the ELRepo-published v2 fingerprint and `rpmkeys`, using an
+RPM database under that temporary directory, reported an OK RSA/SHA256 header and payload digest
+for every staged RPM. The temporary DNF configuration also lives below that directory, uses only
+the official `https://elrepo.org/linux/kernel/el8/$basearch/` metadata endpoint, and never writes
+`/etc/yum.repos.d`.
+
+Its real `--assumeno` transaction resolves exactly three packages: `kernel-lt`,
+`kernel-lt-core`, and `kernel-lt-modules`, with a 92 MiB download and 130 MiB installed size; it
+reported no removal or replacement of either installed AlmaLinux 4.18 kernel. The staged
+`kernel-lt-modules-extra` is **not** a dependency of that transaction. RPM payload inspection
+locates each currently required module (`iscsi_tcp`, `virtio_net`, `virtio_blk`,
+`virtio_console`, and `xfs`) in `kernel-lt-core`, so modules-extra is not necessary for the
+currently observed boot/iSCSI/Longhorn path. Do not install it speculatively.
+
 ## Approval gates
 
 All gates must be fresh, recorded, and approved together:
@@ -71,36 +100,53 @@ grubby --info=ALL
 grub2-editenv list
 df -h /boot /
 
-# 1. Establish the ELRepo release metadata and verify its v2 key fingerprint out-of-band.
-dnf install https://www.elrepo.org/elrepo-release-8.el8.elrepo.noarch.rpm
-rpm -q --qf '%{VERSION}-%{RELEASE}\n' elrepo-release
-gpg --show-keys --with-fingerprint /etc/pki/rpm-gpg/RPM-GPG-KEY-v2-elrepo.org
+# 1. Re-hash and signature-check the previously approved staged files. This does not import a
+#    key into the system RPM database or add an /etc repository.
+stage=/var/tmp/serv-146231-elrepo-kernel-lt.50FQsh
+(cd "$stage" && sha256sum -c <<'EOF'
+cacf5b97da283fb344bb5044ef9c04f6c38818b6de85ff5c0c731f95f041bb61  kernel-lt-5.15.220-1.el8.elrepo.x86_64.rpm
+5f981c6aa6f732ad0d328ebe394a730a921623b84d7b72121222c5a357d9d21f  kernel-lt-core-5.15.220-1.el8.elrepo.x86_64.rpm
+5e1e2513544378941c846c03e91904a9829908c822724baf7bda4b3e85e932b9  kernel-lt-modules-5.15.220-1.el8.elrepo.x86_64.rpm
+60789f228816a932251de2a3935f91829245366a465af183a9aa719b7693b494  RPM-GPG-KEY-v2-elrepo.org
+EOF
+)
+rpmkeys --dbpath "$stage/rpmdb" --checksig --verbose "$stage"/*.rpm
 
-# 2. Pin the observed LTS build; dry-run must fit and retain the AlmaLinux kernels.
-dnf --assumeno --disablerepo='*' --enablerepo=elrepo-kernel \
-  install kernel-lt-5.15.220-1.el8.elrepo
-dnf --disablerepo='*' --enablerepo=elrepo-kernel \
+# 2. Repeat the no-write, temporary-repo transaction check. It must resolve exactly three RPMs
+#    and no removals. --assumeno returns 1 after displaying the resolved transaction.
+dnf --config="$stage/dnf.conf" --disablerepo='*' --enablerepo=elrepo-kernel --assumeno \
   install kernel-lt-5.15.220-1.el8.elrepo
 
-# 3. Identify the new BLS entry by its kernel path; never select a numeric index.
+# 3. Install only the three locally verified, exact RPMs. No persistent ELRepo repo is needed.
+dnf --disablerepo='*' install \
+  "$stage/kernel-lt-5.15.220-1.el8.elrepo.x86_64.rpm" \
+  "$stage/kernel-lt-core-5.15.220-1.el8.elrepo.x86_64.rpm" \
+  "$stage/kernel-lt-modules-5.15.220-1.el8.elrepo.x86_64.rpm"
+
+# 4. The approved transaction installs exactly these NEVRAs; modules-extra is not required.
+#    Record `rpm -q` output after the transaction before proceeding.
+rpm -q kernel-lt-5.15.220-1.el8.elrepo.x86_64 \
+  kernel-lt-core-5.15.220-1.el8.elrepo.x86_64 \
+  kernel-lt-modules-5.15.220-1.el8.elrepo.x86_64
+
+# 5. Identify the new BLS entry by its kernel path; never select a numeric index.
 new_kernel=/boot/vmlinuz-5.15.220-1.el8.elrepo.x86_64
 grubby --info="$new_kernel"
 new_id=$(grubby --info="$new_kernel" | awk -F= '/^id=/{gsub(/"/, "", $2); print $2}')
 test -n "$new_id"
 
-# 4. Preserve the known-good 4.18 default, then select 5.15 for the next boot only.
+# 6. Preserve the known-good 4.18 default, then select 5.15 for the next boot only.
 grubby --set-default "$old_kernel"
 grub2-reboot "$new_id"
 grub2-editenv list
 
-# 5. Reboot only after the maintenance lead confirms quorum, replica safety and console access.
+# 7. Reboot only after the maintenance lead confirms quorum, replica safety and console access.
 systemctl reboot
 ```
 
-The ELRepo release RPM adds repository configuration; it is a configuration change and should be
-removed after the evaluation if policy requires it. The command uses a version-pinned kernel and
-enables only `elrepo-kernel` for the installation transaction. It does not change the normal K3s
-runtime or add a Kubernetes RuntimeClass.
+The procedure uses a version-pinned, locally verified kernel RPM set and does not retain an ELRepo
+repository configuration. It does not change the normal K3s runtime or add a Kubernetes
+RuntimeClass.
 
 ## First-boot acceptance and rollback
 
@@ -125,10 +171,16 @@ all cluster/storage checks are healthy, remove the tested ELRepo packages only a
 the running kernel is not `kernel-lt`:
 
 ```bash
-uname -r
-dnf remove 'kernel-lt*'
+uname -r  # must show the retained AlmaLinux 4.18 kernel, never kernel-lt
+dnf remove \
+  kernel-lt-5.15.220-1.el8.elrepo.x86_64 \
+  kernel-lt-core-5.15.220-1.el8.elrepo.x86_64 \
+  kernel-lt-modules-5.15.220-1.el8.elrepo.x86_64
 grubby --info=ALL
 ```
+
+If a later approved transaction explicitly installs `kernel-lt-modules-extra`, record its exact
+NEVRA and add only that exact package to the removal command. Never use a wildcard removal.
 
 Do not remove the AlmaLinux kernel packages or rescue entries. Removal of the ELRepo release RPM
 and GPG key is a separate policy decision after confirming no remaining ELRepo package depends on
