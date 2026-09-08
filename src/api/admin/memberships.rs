@@ -130,7 +130,9 @@ pub(in crate::api) async fn remove_membership(
     Path((organization_id, user_id)): Path<(Uuid, Uuid)>,
 ) -> Result<Response, ApiError> {
     let actor = principal(&state, &headers).await?;
-    if !actor.allows(Permission::ManageMembers, organization_id) {
+    if !actor.allows(Permission::ManageMembers, organization_id)
+        || actor.has_template_restriction()
+    {
         return Err(ApiError::Forbidden);
     }
     let key = idempotency_key(&headers)?;
