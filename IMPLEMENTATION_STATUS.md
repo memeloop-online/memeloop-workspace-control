@@ -420,6 +420,14 @@ Watch session `20896` follows that exact run. No failed job is still running.
 Browser runner review requires UUID v7 acceptance, CDP socket identity from `webSocketCreated`,
 and rendered xterm-buffer matching (not an assumed DOM renderer or command-input echo).
 The browser worker is correcting these before live execution.
+Read-only normal-user API check selected Ready `tiddlywiki-dev`
+(`01a06174-8ce2-7d52-b268-ff46894a14b9`) for browser acceptance, avoiding borrowed workspaces.
+The existing `mwc-daily-user-tokens` Secret in `mwc-k3si-7032544955`, key
+`lindongwu11-token`, authenticated successfully; its value was held only in memory.
+List API requires `organization_id`, obtainable from `/api/v1/me` memberships.
+Do not repeat credential discovery or output token values. No browser test has run yet.
+CI `34270275217` has passed verification and entered image publication; control-plane image
+build is still running, so the full release is not yet confirmed.
 Main reviewed GitOps `8d8a4e7`; client-only live acceptance PASSED with the already verified
 ttyd `6f430bf` image. Session `27715` exited 0; result is
 `/tmp/mwc-higress-ttyd-client-20260908.json`. Valid / absent / restored / untrusted / restored
