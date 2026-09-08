@@ -71,6 +71,22 @@ to `serv-146231`, kernel `4.18.0-553.139.1.el8_10.x86_64`; no Node named cloudni
 This fails current gVisor's documented Linux >=5.6 requirement. It also hosts overseas Higress,
 CoreDNS, Longhorn and a Wiki. No runtime or kernel change was performed. Asked user to arrange
 kernel upgrade or select an eligible node; application CI and installer work continue meanwhile.
+User subsequently authorized direct operation on 100.64.0.10 and installed this controller's
+SSH key. Root SSH succeeded: hostname `serv.146231.com`, AlmaLinux 8.10, two retained 4.18
+kernels, 610 MiB free in /boot and 11 GiB free on /. `gvisor_node_rollout` now owns read-only
+kernel/package/one-shot-boot preparation and `docs/SERV-146231-GVISOR-ROLLOUT.md`; main owns
+the upgrade/reboot decision and recovery. No host changes have been applied.
+UI follow-up `a57c325` passed 61 frontend tests and three viewport checks; main re-inspected
+the updated 360px screenshot and confirmed template checkbox styling now matches permission
+cards. HTTP scope regression is committed as `504b375`.
+CI follow-ups: `34230244396` found needless struct defaults (fixed `af58ead`);
+`34231642062` found binary-module path resolution (fixed `43fe230`, also split egress parsing).
+Do not rerun those failed revisions; follow the newest run for `43fe230`.
+SEC-02 review confirmed current ttyd has no backend authentication; broad SNAT allowances
+would bypass gateway tickets. `sandbox_runtime_product` is implementing per-workspace ttyd
+Basic authentication using domain-separated control-plane key derivation, a ttyd-only Secret,
+and Higress upstream header replacement. No ingress CIDR broadening until direct-access
+denial and the normal ticket flow both pass. This is implementation work, not live acceptance.
 
 Migration handoff review corrected a dangerous conflation: `rust-dev-test` and Coder TOKEN center
 dev are distinct 100 GiB volumes. Both actual PVC→PV claim UIDs match. Final count is four
