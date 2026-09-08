@@ -218,9 +218,12 @@ fn initial_user_command<'a>(
         .scopes
         .clone()
         .unwrap_or_else(|| ApiKeyScope::initial_key_defaults(request.system_admin));
-    let expires_at = request
-        .expires_at
-        .unwrap_or_else(|| now + INITIAL_KEY_LIFETIME_SECONDS);
+    let expires_at = request.expires_at.unwrap_or_else(|| {
+        let default_expiry = now + INITIAL_KEY_LIFETIME_SECONDS;
+        actor
+            .api_key_expires_at
+            .map_or(default_expiry, |limit| default_expiry.min(limit))
+    });
     if !super::settings::actor_may_grant(&actor.api_key_scopes, &scopes)
         || actor
             .api_key_expires_at
