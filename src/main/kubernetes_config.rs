@@ -85,7 +85,7 @@ pub(super) fn resource_builder(config: &AppConfig) -> Result<ResourceBuilder, io
     Ok(ResourceBuilder {
         installation_id: config.installation_id.clone(),
         ttyd_image,
-        ttyd_mtls: ttyd_mtls_config()?,
+        ttyd_mtls: ttyd_mtls_config(&higress_namespace)?,
         higress_namespace,
         higress_pod_labels,
         higress_source_cidrs,
@@ -106,21 +106,28 @@ pub(super) fn resource_builder(config: &AppConfig) -> Result<ResourceBuilder, io
     })
 }
 
-fn ttyd_mtls_config() -> Result<Option<TtydMtlsConfig>, io::Error> {
+fn ttyd_mtls_config(gateway_namespace: &str) -> Result<Option<TtydMtlsConfig>, io::Error> {
     let server = optional_env("MWC_TTYD_MTLS_SERVER_SECRET")?;
     let namespace = optional_env("MWC_HIGRESS_MTLS_CLIENT_SECRET_NAMESPACE")?;
     let client = optional_env("MWC_HIGRESS_MTLS_CLIENT_SECRET_NAME")?;
-    parse_ttyd_mtls(server, namespace, client)
+    parse_ttyd_mtls(server, namespace, client, gateway_namespace)
 }
 
 fn parse_ttyd_mtls(
     server: Option<String>,
     namespace: Option<String>,
     client: Option<String>,
+    gateway_namespace: &str,
 ) -> Result<Option<TtydMtlsConfig>, io::Error> {
     match (server, namespace, client) {
         (None, None, None) => Ok(None),
         (Some(server), Some(namespace), Some(client)) => {
+            if namespace != gateway_namespace {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "MWC_HIGRESS_MTLS_CLIENT_SECRET_NAMESPACE must equal MWC_HIGRESS_NAMESPACE",
+                ));
+            }
             TtydMtlsConfig::new(server, namespace, client)
                 .map(Some)
                 .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))
@@ -205,6 +212,7 @@ mod tests {
                 (mask & 1 != 0).then(|| "ttyd-server".to_owned()),
                 (mask & 2 != 0).then(|| "higress-system".to_owned()),
                 (mask & 4 != 0).then(|| "ttyd-client".to_owned()),
+                "higress-system",
             );
             match mask {
                 0 => assert!(result.unwrap().is_none()),
@@ -221,8 +229,37 @@ mod tests {
                 Some(String::new()),
                 Some("higress-system".to_owned()),
                 Some("ttyd-client".to_owned()),
+                "higress-system",
             )
             .is_err()
+        );
+    }
+
+    #[test]
+    fn mtls_namespace_must_match_the_gateway_at_startup() {
+        for gateway in ["higress-system", "dedicated-gateway"] {
+            assert!(
+                parse_ttyd_mtls(
+                    Some("ttyd-server".into()),
+                    Some(gateway.into()),
+                    Some("client".into()),
+                    gateway,
+                )
+                .is_ok()
+            );
+            let error = parse_ttyd_mtls(
+                Some("ttyd-server".into()),
+                Some("another-namespace".into()),
+                Some("client".into()),
+                gateway,
+            )
+            .unwrap_err();
+            assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+        }
+        assert!(
+            parse_ttyd_mtls(None, None, None, "dedicated-gateway")
+                .unwrap()
+                .is_none()
         );
     }
 }
