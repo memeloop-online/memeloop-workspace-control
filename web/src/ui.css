@@ -73,6 +73,40 @@
   padding: 14px 22px 20px;
 }
 
+.form-dialog {
+  width: min(560px, calc(100vw - 28px));
+}
+
+.form-dialog > form,
+.form-dialog-fields {
+  display: grid;
+  gap: 14px;
+}
+
+.form-dialog-body {
+  grid-template-columns: 1fr;
+}
+
+.form-dialog-fields label {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: .76rem;
+  font-weight: 600;
+}
+
+.form-dialog-fields input,
+.form-dialog-fields select,
+.form-dialog-fields textarea {
+  width: 100%;
+}
+
+.form-dialog-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
 .button.danger {
   color: #fff;
   background: #a82f42;
@@ -103,5 +137,9 @@
 
   .confirm-dialog-actions .button {
     flex: 1 1 0;
+  }
+
+  .form-dialog-grid {
+    grid-template-columns: 1fr;
   }
 }

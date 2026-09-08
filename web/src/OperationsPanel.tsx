@@ -1,7 +1,10 @@
 import { useEffect, useState } from "react";
 import { CreateUserForm } from "./admin/CreateUserForm";
+import { workspaceStateCounts } from "./admin/workspaceSummary";
 import type { ApiClient } from "./api";
 import { OrganizationManager } from "./OrganizationManager";
+import { ConfirmDialog } from "./components/ConfirmDialog";
+import { FormDialog } from "./components/FormDialog";
 import { canManageOrganization, canManageSystem } from "./permissions";
 import { UsersDirectory } from "./UsersDirectory";
 import { useI18n } from "./i18n";
@@ -13,7 +16,7 @@ import type {
   Resources,
   ScalingStatus,
   WebhookSubscription,
-  WorkspaceResponse,
+  WorkspaceSummary,
   WorkspaceTemplate,
 } from "./types";
 
@@ -30,12 +33,11 @@ interface AdminPanelProps {
   api: ApiClient;
   principal: Principal;
   organizationId: string;
-  workspaces: WorkspaceResponse[];
   onError: (message: string) => void;
   onOrganizationsChanged: (preferredOrganizationId?: string) => Promise<void>;
 }
 
-export function AdminPanel({ api, principal, organizationId, workspaces, onError, onOrganizationsChanged }: AdminPanelProps) {
+export function AdminPanel({ api, principal, organizationId, onError, onOrganizationsChanged }: AdminPanelProps) {
   const { t } = useI18n();
   const [organizations, setOrganizations] = useState<Organization[]>([]);
   const [images, setImages] = useState<ImagePolicy[]>([]);
@@ -50,19 +52,28 @@ export function AdminPanel({ api, principal, organizationId, workspaces, onError
   const [quotaDraft, setQuotaDraft] = useState<ResourceDraft>(() => resourceDraft(DEFAULT_QUOTA));
   const [directoryVersion, setDirectoryVersion] = useState(0);
   const [showCreateUser, setShowCreateUser] = useState(false);
+  const [workspaceSummary, setWorkspaceSummary] = useState<WorkspaceSummary | null>(null);
+  const [confirmOrganizationDelete, setConfirmOrganizationDelete] = useState(false);
+  const [userQuotaTarget, setUserQuotaTarget] = useState<string | null>(null);
+  const [userQuotaDraft, setUserQuotaDraft] = useState<ResourceDraft>(() => resourceDraft(DEFAULT_QUOTA));
+  const [showWebhookForm, setShowWebhookForm] = useState(false);
+  const [webhookUrl, setWebhookUrl] = useState("");
+  const [webhookSecret, setWebhookSecret] = useState("");
+  const [dialogBusy, setDialogBusy] = useState(false);
   const canManageQuota = canManageOrganization(principal, organizationId, "manage_organization");
   const canManageMembers = canManageOrganization(principal, organizationId, "manage_members");
   const canManageGlobalState = canManageSystem(principal);
   const currentOrganization = organizations.find((organization) => organization.id === organizationId);
-  const states = workspaces.reduce<Record<string, number>>((sum, item) => ({ ...sum, [item.workspace.state]: (sum[item.workspace.state] ?? 0) + 1 }), {});
+  const states = workspaceStateCounts(workspaceSummary);
 
   async function refresh() {
     try {
-      const [managedResources, organizationPage] = await Promise.all([
+      const [managedResources, organizationPage, workspacePage] = await Promise.all([
         canManageQuota
           ? Promise.all([api.quota(organizationId), api.templates(organizationId), api.webhooks(organizationId)])
           : Promise.resolve([null, [], []] as [Resources | null, WorkspaceTemplate[], WebhookSubscription[]]),
         api.organizationsPage({ limit: 200 }),
+        api.workspacesPage(organizationId, { limit: 1 }),
       ]);
       const [currentQuota, visibleTemplates, subscriptions] = managedResources;
       setQuota(currentQuota);
@@ -70,6 +81,7 @@ export function AdminPanel({ api, principal, organizationId, workspaces, onError
       setTemplates(visibleTemplates);
       setWebhooks(subscriptions);
       setOrganizations(organizationPage.items);
+      setWorkspaceSummary(workspacePage.summary);
       if (canManageGlobalState) {
         const [allImages, status] = await Promise.all([api.images(), api.scaling()]);
         setImages(allImages);
@@ -118,12 +130,15 @@ export function AdminPanel({ api, principal, organizationId, workspaces, onError
   }
 
   async function deleteOrganization() {
-    if (!confirm(t("deleteOrganizationConfirm"))) return;
+    setDialogBusy(true);
     try {
       await api.deleteOrganization(organizationId);
+      setConfirmOrganizationDelete(false);
       await onOrganizationsChanged();
     } catch (error) {
       onError(message(error, t("requestFailed")));
+    } finally {
+      setDialogBusy(false);
     }
   }
 
@@ -140,27 +155,39 @@ export function AdminPanel({ api, principal, organizationId, workspaces, onError
   async function editUserQuota(userId: string) {
     try {
       const current = await api.userQuota(userId);
-      const cpu = prompt(t("userCpuQuotaPrompt"), String(current?.cpu_millis ?? 4000));
-      const memory = prompt(t("userMemoryQuotaPrompt"), String(current?.memory_mib ?? 8192));
-      const gpu = prompt(t("userGpuQuotaPrompt"), String(current?.gpu_count ?? 0));
-      const disk = prompt(t("userDiskQuotaPrompt"), String(current?.disk_gib ?? 100));
-      if ([cpu, memory, gpu, disk].some((value) => value === null)) return;
-      await api.setUserQuota(userId, { cpu_millis: Number(cpu), memory_mib: Number(memory), gpu_count: Number(gpu), disk_gib: Number(disk) });
-      await refresh();
+      setUserQuotaDraft(resourceDraft(current ?? DEFAULT_QUOTA));
+      setUserQuotaTarget(userId);
     } catch (error) {
       onError(message(error, t("requestFailed")));
     }
   }
 
-  async function newWebhook() {
-    const url = prompt(t("webhookUrlPrompt"));
-    const secret = prompt(t("webhookSecretPrompt"));
-    if (!url || !secret) return;
+  async function saveUserQuota() {
+    if (!userQuotaTarget) return;
+    setDialogBusy(true);
     try {
-      await api.createWebhook({ organization_id: organizationId, url, event_prefix: "workspace.", signing_secret: secret });
+      await api.setUserQuota(userQuotaTarget, parseResourceDraft(userQuotaDraft));
+      setUserQuotaTarget(null);
+      await refresh();
+    } catch (error) {
+      onError(error instanceof InvalidResourceDraft ? t("invalidTemplateNumber") : message(error, t("requestFailed")));
+    } finally {
+      setDialogBusy(false);
+    }
+  }
+
+  async function newWebhook() {
+    setDialogBusy(true);
+    try {
+      await api.createWebhook({ organization_id: organizationId, url: webhookUrl.trim(), event_prefix: "workspace.", signing_secret: webhookSecret });
+      setShowWebhookForm(false);
+      setWebhookUrl("");
+      setWebhookSecret("");
       await refresh();
     } catch (error) {
       onError(message(error, t("requestFailed")));
+    } finally {
+      setDialogBusy(false);
     }
   }
 
@@ -198,7 +225,7 @@ export function AdminPanel({ api, principal, organizationId, workspaces, onError
         onOrganizationNameChange={setCurrentOrganizationName}
         onNewOrganizationNameChange={setOrganizationName}
         onSave={() => void saveOrganization()}
-        onDelete={() => void deleteOrganization()}
+        onDelete={() => setConfirmOrganizationDelete(true)}
         onCreate={() => void createOrganization()}
       />
 
@@ -212,9 +239,26 @@ export function AdminPanel({ api, principal, organizationId, workspaces, onError
       {canManageGlobalState && <ImageAllowlist images={images} image={image} onImageChange={setImage} onAllow={() => void allowImage()} />}
 
       {canManageQuota && <div className="system-card wide template-system-card"><TemplateEditor api={api} organizationId={organizationId} templates={templates} canGrantClusterAccess={canManageGlobalState} onRefresh={refresh} onError={onError} /></div>}
-      {canManageQuota && <div className="system-card wide"><h3>{t("webhook")}</h3><button className="button" onClick={() => void newWebhook()}>{t("addWebhook")}</button>{webhooks.length ? <div className="state-bars">{webhooks.map((hook) => <div key={hook.id}><span>{hook.event_prefix}</span><code>{hook.url}</code></div>)}</div> : <p>{t("noWebhooks")}</p>}</div>}
+      {canManageQuota && <div className="system-card wide"><h3>{t("webhook")}</h3><button className="button" onClick={() => setShowWebhookForm(true)}>{t("addWebhook")}</button>{webhooks.length ? <div className="state-bars">{webhooks.map((hook) => <div key={hook.id}><span>{hook.event_prefix}</span><code>{hook.url}</code></div>)}</div> : <p>{t("noWebhooks")}</p>}</div>}
     </div>
+    <ConfirmDialog open={confirmOrganizationDelete} title={t("deleteOrganization")} description={t("deleteOrganizationConfirm")} confirmLabel={t("deleteOrganization")} cancelLabel={t("cancel")} busy={dialogBusy} danger details={currentOrganization && <strong>{currentOrganization.name}</strong>} onClose={() => setConfirmOrganizationDelete(false)} onConfirm={() => void deleteOrganization()} />
+    <FormDialog open={userQuotaTarget !== null} title={t("editUserQuota")} submitLabel={t("saveQuota")} cancelLabel={t("cancel")} busy={dialogBusy} onClose={() => setUserQuotaTarget(null)} onSubmit={() => void saveUserQuota()}>
+      <div className="form-dialog-grid">
+        <ResourceInput label={t("userCpuQuotaPrompt")} value={userQuotaDraft.cpu_millis} min={100} step={100} onChange={(cpu_millis) => setUserQuotaDraft({ ...userQuotaDraft, cpu_millis })} />
+        <ResourceInput label={t("userMemoryQuotaPrompt")} value={userQuotaDraft.memory_mib} min={128} step={128} onChange={(memory_mib) => setUserQuotaDraft({ ...userQuotaDraft, memory_mib })} />
+        <ResourceInput label={t("userGpuQuotaPrompt")} value={userQuotaDraft.gpu_count} min={0} step={1} onChange={(gpu_count) => setUserQuotaDraft({ ...userQuotaDraft, gpu_count })} />
+        <ResourceInput label={t("userDiskQuotaPrompt")} value={userQuotaDraft.disk_gib} min={1} step={1} onChange={(disk_gib) => setUserQuotaDraft({ ...userQuotaDraft, disk_gib })} />
+      </div>
+    </FormDialog>
+    <FormDialog open={showWebhookForm} title={t("addWebhook")} submitLabel={t("addWebhook")} cancelLabel={t("cancel")} busy={dialogBusy} onClose={() => setShowWebhookForm(false)} onSubmit={() => void newWebhook()}>
+      <label>{t("webhookUrlPrompt")}<input type="url" required value={webhookUrl} onChange={(event) => setWebhookUrl(event.target.value)} placeholder="https://example.com/hooks/workspace" /></label>
+      <label>{t("webhookSecretPrompt")}<input type="password" required minLength={32} autoComplete="new-password" value={webhookSecret} onChange={(event) => setWebhookSecret(event.target.value)} /></label>
+    </FormDialog>
   </section>;
+}
+
+function ResourceInput({ label, value, min, step, onChange }: { label: string; value: string; min: number; step: number; onChange: (value: string) => void }) {
+  return <label>{label}<input type="number" inputMode="numeric" required min={min} step={step} value={value} onChange={(event) => onChange(event.target.value)} /></label>;
 }
 
 function IdentityQuotaCard({

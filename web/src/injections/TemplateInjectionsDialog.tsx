@@ -1,6 +1,7 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 
 import type { ApiClient } from "../api";
+import { ConfirmDialog } from "../components/ConfirmDialog";
 import { useI18n } from "../i18n";
 import type { InjectionKind, StoredInjection, WorkspaceTemplate } from "../types";
 import { InjectionEditorForm } from "./InjectionEditorForm";
@@ -40,6 +41,7 @@ export function TemplateInjectionsDialog({
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState("");
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
   const filteredItems = useMemo(() => {
     const query = search.trim().toLocaleLowerCase();
@@ -106,11 +108,12 @@ export function TemplateInjectionsDialog({
   }
 
   async function remove() {
-    if (!selectedKey || !confirm(t("deleteCredentialConfirm"))) return;
+    if (!selectedKey) return;
     setSaving(true);
     try {
       await api.deleteInjection("organization", organizationId, selectedKey);
       resetDraft();
+      setConfirmDelete(false);
       await load();
     } catch (error) {
       onError(message(error));
@@ -126,6 +129,7 @@ export function TemplateInjectionsDialog({
   }
 
   return (
+    <>
     <dialog
       ref={dialogRef}
       className="template-injections-dialog"
@@ -172,11 +176,13 @@ export function TemplateInjectionsDialog({
             className="editor-card template-injections-editor"
             onReset={resetDraft}
             onSubmit={save}
-            onDelete={remove}
+            onDelete={() => setConfirmDelete(true)}
           />
         </div>
       </div>
     </dialog>
+    <ConfirmDialog open={confirmDelete} title={t("delete")} description={t("deleteCredentialConfirm")} confirmLabel={t("delete")} cancelLabel={t("cancel")} busy={saving} danger details={selectedKey && <code>{selectedKey}</code>} onClose={() => setConfirmDelete(false)} onConfirm={() => void remove()} />
+    </>
   );
 }
 

@@ -242,7 +242,7 @@ export default function App() {
           ) : view === "plugins" ? (
             <PluginPanel token={token} organizationId={organizationId} systemAdmin={canManageGlobalState} onOpenCredentials={() => setView("injections")} />
           ) : (
-            <AdminPanel api={api} principal={principal} organizationId={organizationId} workspaces={scopedWorkspaces} onError={setNotice} onOrganizationsChanged={refreshOrganizations} />
+            <AdminPanel api={api} principal={principal} organizationId={organizationId} onError={setNotice} onOrganizationsChanged={refreshOrganizations} />
           )}
         </Suspense>
       </main>

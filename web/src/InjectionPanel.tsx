@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import type { ApiClient } from "./api";
+import { ConfirmDialog } from "./components/ConfirmDialog";
 import { WorkspaceCombobox } from "./forms/WorkspaceCombobox";
 import { useI18n } from "./i18n";
 import { canManageOrganization as mayManageOrganization } from "./permissions";
@@ -46,6 +47,7 @@ export function InjectionPanel(props: Props) {
   const [saving, setSaving] = useState(false);
   const [search, setSearch] = useState("");
   const [mobilePane, setMobilePane] = useState<"list" | "editor">("list");
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
   const filteredItems = useMemo(() => {
     const query = search.trim().toLocaleLowerCase();
@@ -177,11 +179,12 @@ export function InjectionPanel(props: Props) {
   }
 
   async function remove() {
-    if (!selectedKey || !scopeId || !confirm(t("deleteCredentialConfirm"))) return;
+    if (!selectedKey || !scopeId) return;
     setSaving(true);
     try {
       await props.api.deleteInjection(scope, scopeId, selectedKey);
       resetDraft();
+      setConfirmDelete(false);
       await load();
     } catch (error) {
       props.onError(message(error));
@@ -254,12 +257,13 @@ export function InjectionPanel(props: Props) {
         </div>
 
         <div className={`injection-editor-pane${mobilePane === "editor" ? "" : " mobile-pane-hidden"}`}>
-          <InjectionEditorForm draft={draft} update={setDraft} scope={scope} templates={templates} selectedKey={selectedKey} saving={saving} disabled={!scopeId} onReset={resetDraft} onSubmit={save} onDelete={remove} />
+          <InjectionEditorForm draft={draft} update={setDraft} scope={scope} templates={templates} selectedKey={selectedKey} saving={saving} disabled={!scopeId} onReset={resetDraft} onSubmit={save} onDelete={() => setConfirmDelete(true)} />
         </div>
         </div>
       </div>
 
       {preview.length > 0 && <div className="preview-card"><h3>{t("resolvedSources")}</h3><div className="preview-grid">{preview.map((item) => <div key={item.key}><strong>{item.key}</strong><span>{item.source === "organization" ? t("fromOrganization") : item.source === "user" ? t("fromUser") : t("fromWorkspace")}</span><small>{item.target}{item.locked ? ` · ${t("locked")}` : ""}</small></div>)}</div></div>}
+      <ConfirmDialog open={confirmDelete} title={t("delete")} description={t("deleteCredentialConfirm")} confirmLabel={t("delete")} cancelLabel={t("cancel")} busy={saving} danger details={selectedKey && <code>{selectedKey}</code>} onClose={() => setConfirmDelete(false)} onConfirm={() => void remove()} />
     </section>
   );
 }

@@ -1,6 +1,7 @@
 import Form from "@rjsf/core";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useI18n } from "./i18n";
+import { ConfirmDialog } from "./components/ConfirmDialog";
 import { PluginApi } from "./plugins/api";
 import { PluginAuthorizationDialog } from "./plugins/PluginAuthorizationDialog";
 import { PluginInstaller } from "./plugins/PluginInstaller";
@@ -34,6 +35,7 @@ export function PluginPanel({
   const [inspection, setInspection] = useState<PluginInspection | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [pendingUninstall, setPendingUninstall] = useState<PluginManifest | null>(null);
   const catalogState = pluginCatalogState(loading, error, plugins.length);
 
   const load = useCallback(async () => {
@@ -59,10 +61,10 @@ export function PluginPanel({
   }
 
   async function uninstall(plugin: PluginManifest) {
-    if (!confirm(t("pluginUninstallConfirm"))) return;
     try {
       await api.uninstall(plugin.id, plugin.package_version);
       setPlugins((values) => values.filter((value) => value.id !== plugin.id));
+      setPendingUninstall(null);
       setError("");
     } catch (reason) { setError(pluginErrorMessage(reason, t)); }
   }
@@ -78,7 +80,7 @@ export function PluginPanel({
     {catalogState === "error" && <div className="error-banner" role="alert">{error}<button type="button" onClick={() => void load()}>{t("pluginRetry")}</button></div>}
     {catalogState === "loading" ? <div className="empty" role="status">{t("pluginsLoading")}</div> : catalogState === "empty" ? (
       <div className="empty plugin-empty"><strong>{t("pluginsEmpty")}</strong><span>{systemAdmin ? t("pluginsEmptyHint") : t("pluginsEmptyMemberHint")}</span></div>
-    ) : <div className="plugin-grid">{plugins.map((plugin) => <PluginCard key={plugin.id} plugin={plugin} systemAdmin={systemAdmin} onConfigure={() => setSelected(plugin)} onUpdate={() => setInstallerTarget(plugin)} onToggle={() => void setEnabled(plugin)} onUninstall={() => void uninstall(plugin)} />)}</div>}
+    ) : <div className="plugin-grid">{plugins.map((plugin) => <PluginCard key={plugin.id} plugin={plugin} systemAdmin={systemAdmin} onConfigure={() => setSelected(plugin)} onUpdate={() => setInstallerTarget(plugin)} onToggle={() => void setEnabled(plugin)} onUninstall={() => setPendingUninstall(plugin)} />)}</div>}
     <PluginSurfaceHost api={api} plugins={plugins} placement="admin_tab" organizationId={organizationId} />
     {selected && <ConfigurationDialog
       api={api}
@@ -90,6 +92,7 @@ export function PluginPanel({
     />}
     {installerTarget !== undefined && <PluginInstaller api={api} updateTarget={installerTarget} onClose={() => setInstallerTarget(undefined)} onInspected={(value) => { setInstallerTarget(undefined); setInspection(value); }} />}
     {inspection && <PluginAuthorizationDialog api={api} inspection={inspection} onClose={() => setInspection(null)} onInstalled={installed} />}
+    <ConfirmDialog open={pendingUninstall !== null} title={t("pluginUninstall")} description={t("pluginUninstallConfirm")} confirmLabel={t("pluginUninstall")} cancelLabel={t("cancel")} danger details={pendingUninstall && <strong>{pendingUninstall.name || pendingUninstall.id}</strong>} onClose={() => setPendingUninstall(null)} onConfirm={() => pendingUninstall && void uninstall(pendingUninstall)} />
   </section>;
 }
 
@@ -157,6 +160,7 @@ function ConfigurationDialog({ api, plugin, organizationId, systemAdmin, onClose
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
+  const [confirmDeleteOverride, setConfirmDeleteOverride] = useState(false);
   const schema = useMemo(() => checkPluginSchema(plugin.configuration_schema), [plugin.configuration_schema]);
   const current = configurations[configurationKey(plugin.id, scope)];
 
@@ -208,7 +212,7 @@ function ConfigurationDialog({ api, plugin, organizationId, systemAdmin, onClose
   }
 
   async function removeOverride() {
-    if (!current || current.scope_version === 0 || !confirm(t("pluginDeleteOverrideConfirm"))) return;
+    if (!current || current.scope_version === 0) return;
     setBusy(true); setError(""); setMessage("");
     try {
       const inherited = await api.deleteConfiguration(
@@ -218,6 +222,7 @@ function ConfigurationDialog({ api, plugin, organizationId, systemAdmin, onClose
       );
       setConfigurations((values) => ({ ...values, [configurationKey(plugin.id, scope)]: inherited }));
       setFormData(inherited.value);
+      setConfirmDeleteOverride(false);
       setMessage(t("pluginOverrideDeleted"));
     } catch (reason) {
       setError(pluginErrorMessage(reason, t));
@@ -226,7 +231,7 @@ function ConfigurationDialog({ api, plugin, organizationId, systemAdmin, onClose
     }
   }
 
-  return <dialog ref={dialog} className="plugin-dialog" aria-labelledby="plugin-dialog-title" onCancel={onClose} onClose={onClose}>
+  return <><dialog ref={dialog} className="plugin-dialog" aria-labelledby="plugin-dialog-title" onCancel={onClose} onClose={onClose}>
     <div className="plugin-dialog-heading"><div><p className="eyebrow">{plugin.id}</p><h2 id="plugin-dialog-title">{t("pluginConfigurationTitle")}</h2></div><button type="button" className="dialog-close" aria-label={t("pluginCloseDialog")} onClick={onClose}>×</button></div>
     <div className="scope-tabs" role="tablist" aria-label={t("pluginConfigurationScope")} onKeyDown={(event) => {
       const next = nextConfigurationScope(scope, event.key, systemAdmin);
@@ -260,12 +265,12 @@ function ConfigurationDialog({ api, plugin, organizationId, systemAdmin, onClose
         >
           <div className="plugin-dialog-actions">
             <button className="button primary" type="submit" disabled={busy}>{busy ? t("pluginSaving") : t("pluginSaveConfiguration")}</button>
-            <button className="button danger" type="button" disabled={busy || current.scope_version === 0} onClick={() => void removeOverride()}>{t("pluginDeleteOverride")}</button>
+            <button className="button danger" type="button" disabled={busy || current.scope_version === 0} onClick={() => setConfirmDeleteOverride(true)}>{t("pluginDeleteOverride")}</button>
           </div>
         </Form>
       )}
     </>}
-  </dialog>;
+  </dialog><ConfirmDialog open={confirmDeleteOverride} title={t("pluginDeleteOverride")} description={t("pluginDeleteOverrideConfirm")} confirmLabel={t("pluginDeleteOverride")} cancelLabel={t("cancel")} busy={busy} danger onClose={() => setConfirmDeleteOverride(false)} onConfirm={() => void removeOverride()} /></>;
 }
 
 function sourceLabel(source: PluginConfiguration["source"], t: ReturnType<typeof useI18n>["t"]): string {

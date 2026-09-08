@@ -2,6 +2,7 @@ import { useMemo, useRef, useState } from "react";
 import type { FormEvent } from "react";
 
 import type { ApiClient } from "./api";
+import { ConfirmDialog } from "./components/ConfirmDialog";
 import { useI18n } from "./i18n";
 import { TemplateInjectionsDialog } from "./injections/TemplateInjectionsDialog";
 import {
@@ -33,6 +34,8 @@ export function TemplateEditor({ api, organizationId, templates, canGrantCluster
   const [yamlText, setYamlText] = useState(() => templateDraftToYaml(emptyTemplateDraft()));
   const [saving, setSaving] = useState(false);
   const [managingInjections, setManagingInjections] = useState(false);
+  const [pendingSave, setPendingSave] = useState<{ candidate: TemplateDraft; yaml: string } | null>(null);
+  const [pendingAction, setPendingAction] = useState<{ kind: "disable" | "delete"; template: WorkspaceTemplate } | null>(null);
   const selected = useMemo(() => templates.find((item) => item.id === selectedId) ?? null, [templates, selectedId]);
 
   function startNew() {
@@ -78,7 +81,14 @@ export function TemplateEditor({ api, organizationId, templates, canGrantCluster
       onError(errorMessage(error, t));
       return;
     }
-    if (candidate.clusterAccess && !confirm(t("templateHighRiskConfirm"))) return;
+    if (candidate.clusterAccess) {
+      setPendingSave({ candidate, yaml });
+      return;
+    }
+    await persist(candidate, yaml);
+  }
+
+  async function persist(candidate: TemplateDraft, yaml: string) {
     setSaving(true);
     try {
       const saved = selectedId
@@ -88,6 +98,7 @@ export function TemplateEditor({ api, organizationId, templates, canGrantCluster
       setSelectedId(saved.id);
       setDraft(savedDraft);
       setYamlText(templateDraftToYaml(savedDraft));
+      setPendingSave(null);
       await onRefresh();
     } catch (error) {
       onError(errorMessage(error, t));
@@ -97,21 +108,30 @@ export function TemplateEditor({ api, organizationId, templates, canGrantCluster
   }
 
   async function toggle(template: WorkspaceTemplate) {
-    if (template.enabled && !confirm(`${template.name}: ${t("disableTemplateConfirm")}`)) return;
+    if (template.enabled) {
+      setPendingAction({ kind: "disable", template });
+      return;
+    }
+    await setTemplateEnabled(template, true);
+  }
+
+  async function setTemplateEnabled(template: WorkspaceTemplate, enabled: boolean) {
+    setSaving(true);
     try {
-      await api.setTemplateEnabled(template.id, !template.enabled);
+      await api.setTemplateEnabled(template.id, enabled);
+      setPendingAction(null);
       await onRefresh();
     } catch (error) {
       onError(errorMessage(error, t));
-    }
+    } finally { setSaving(false); }
   }
 
   async function remove(template: WorkspaceTemplate) {
-    if (!confirm(`${template.name}: ${t("deleteTemplateConfirm")}`)) return;
     setSaving(true);
     try {
       await api.deleteTemplate(template.id);
       startNew();
+      setPendingAction(null);
       await onRefresh();
     } catch (error) {
       onError(errorMessage(error, t));
@@ -177,11 +197,13 @@ export function TemplateEditor({ api, organizationId, templates, canGrantCluster
         <div className="form-actions">
           <button className="button primary" disabled={saving}>{saving ? t("saving") : selectedId ? t("saveChanges") : t("createTemplate")}</button>
           {selected && <button type="button" className={selected.enabled ? "button danger" : "button"} disabled={saving} onClick={() => void toggle(selected)}>{selected.enabled ? t("disable") : t("enable")}</button>}
-          {selected && !selected.enabled && <button type="button" className="button danger" disabled={saving} onClick={() => void remove(selected)}>{t("deleteTemplate")}</button>}
+          {selected && !selected.enabled && <button type="button" className="button danger" disabled={saving} onClick={() => setPendingAction({ kind: "delete", template: selected })}>{t("deleteTemplate")}</button>}
         </div>
       </form>
     </div>
     {selected && <TemplateInjectionsDialog api={api} organizationId={organizationId} template={selected} open={managingInjections} returnFocusRef={manageButtonRef} onClose={() => setManagingInjections(false)} onError={onError} />}
+    <ConfirmDialog open={pendingSave !== null} title={selectedId ? t("saveChanges") : t("createTemplate")} description={t("templateHighRiskConfirm")} confirmLabel={selectedId ? t("saveChanges") : t("createTemplate")} cancelLabel={t("cancel")} busy={saving} danger details={<strong>{pendingSave?.candidate.name}</strong>} onClose={() => setPendingSave(null)} onConfirm={() => pendingSave && void persist(pendingSave.candidate, pendingSave.yaml)} />
+    <ConfirmDialog open={pendingAction !== null} title={pendingAction?.kind === "delete" ? t("deleteTemplate") : t("disable")} description={pendingAction?.kind === "delete" ? t("deleteTemplateConfirm") : t("disableTemplateConfirm")} confirmLabel={pendingAction?.kind === "delete" ? t("deleteTemplate") : t("disable")} cancelLabel={t("cancel")} busy={saving} danger details={<strong>{pendingAction?.template.name}</strong>} onClose={() => setPendingAction(null)} onConfirm={() => pendingAction && void (pendingAction.kind === "delete" ? remove(pendingAction.template) : setTemplateEnabled(pendingAction.template, false))} />
   </div>;
 }
 

@@ -8,6 +8,7 @@ import {
   formatTime,
 } from "./adminApiKeyView";
 import type { ApiClient } from "./api";
+import { ConfirmDialog } from "./components/ConfirmDialog";
 import { applyLocalRevocations, getApiKeyStatus } from "./apiKeyStatus";
 import { useI18n } from "./i18n";
 import { hasApiKeyScope } from "./permissions";
@@ -157,6 +158,7 @@ function UserDirectoryRow({ user, api, organizationId, principal, canManageUsers
   const [saving, setSaving] = useState(false);
   const [membershipMessage, setMembershipMessage] = useState("");
   const [showApiKeys, setShowApiKeys] = useState(false);
+  const [confirmMemberRemoval, setConfirmMemberRemoval] = useState(false);
   const isCurrentUser = user.id === principal.user_id;
 
   useEffect(() => {
@@ -193,11 +195,11 @@ function UserDirectoryRow({ user, api, organizationId, principal, canManageUsers
   }
 
   async function removeMember() {
-    if (!confirm(t("revokeMemberConfirm"))) return;
     setSaving(true);
     try {
       await api.removeMembership(organizationId, user.id);
       onMembershipChanged(user.id, null);
+      setConfirmMemberRemoval(false);
       setMembershipMessage(t("membershipRemoved"));
     } catch (error) {
       onError(message(error, t("requestFailed")));
@@ -216,10 +218,11 @@ function UserDirectoryRow({ user, api, organizationId, principal, canManageUsers
         <div className="form-actions" style={{ flexWrap: "wrap", gap: "8px" }}><button className="button primary" disabled={saving || !displayName.trim()} onClick={() => void save()}>{saving ? t("saving") : t("saveUser")}</button>{principal.system_admin && !isCurrentUser && hasApiKeyScope(principal, "manage_system") && hasApiKeyScope(principal, "manage_api_keys") && <button className="button" type="button" disabled={saving} onClick={() => setShowApiKeys(true)}>{t("manageUserApiKeys")}</button>}</div>
       </>}
       {canEditQuota && <div className="form-actions"><button className="button" disabled={saving} onClick={() => onEditQuota(user.id)}>{t("editUserQuota")}</button></div>}
-      <div className="form-actions" style={{ flexWrap: "wrap", gap: "8px" }}><label>{t("role")}<select value={role} disabled={saving} onChange={(event) => setRole(event.target.value as Role)}><option value="member">{t("roleMember")}</option><option value="organization_admin">{t("roleOrganizationAdmin")}</option></select></label><button className="button" disabled={saving} onClick={() => void saveMembership()}>{user.membershipRole ? t("saveMembership") : t("addOrganizationMember")}</button>{user.membershipRole && <button className="button danger" disabled={saving} onClick={() => void removeMember()}>{t("removeOrganizationMember")}</button>}</div>
+      <div className="form-actions" style={{ flexWrap: "wrap", gap: "8px" }}><label>{t("role")}<select value={role} disabled={saving} onChange={(event) => setRole(event.target.value as Role)}><option value="member">{t("roleMember")}</option><option value="organization_admin">{t("roleOrganizationAdmin")}</option></select></label><button className="button" disabled={saving} onClick={() => void saveMembership()}>{user.membershipRole ? t("saveMembership") : t("addOrganizationMember")}</button>{user.membershipRole && <button className="button danger" disabled={saving} onClick={() => setConfirmMemberRemoval(true)}>{t("removeOrganizationMember")}</button>}</div>
       {membershipMessage && <small role="status">{membershipMessage}</small>}
     </article>
     {showApiKeys && <AdminUserApiKeysDialog api={api} userId={user.id} userDisplayName={user.display_name} onClose={() => setShowApiKeys(false)} onError={onError} />}
+    <ConfirmDialog open={confirmMemberRemoval} title={t("removeOrganizationMember")} description={t("revokeMemberConfirm")} confirmLabel={t("removeOrganizationMember")} cancelLabel={t("cancel")} busy={saving} danger details={<strong>{user.display_name}</strong>} onClose={() => setConfirmMemberRemoval(false)} onConfirm={() => void removeMember()} />
   </>;
 }
 
