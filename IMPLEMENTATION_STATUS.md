@@ -105,13 +105,14 @@ product terminology.
   - workspace base: `sha256:bfd8ec19f693d1ccff258bf7c6d3c69b9798e34f8dbbcc7b9ce30ef96184712c`;
   - ttyd: `sha256:83a512e43b3f624e4476cde2cbf08f8b3c6b6b6c1b089de9cfdfc74b4b99d6ce`;
   - SSH jump host: `sha256:1b2729514fde871412e1fefb0719e855a4bde1c02cc52e6e71b32518084601d2`.
-- The follow-up pure-schema-20 release is prepared on branch `final-schema20-baseline` at
-  `24e7318` (base cleanup `09d6870`). It deletes the 19-to-20 bridge, its module/error, the old
+- The follow-up pure-schema-20 release is published from `main` at
+  `85397636219585ff523a5f89a605864962f0d002`. It deletes the 19-to-20 bridge, its module/error, the old
   health-route tombstone, and transition-specific template checks. A generic recursive schema-20
   YAML validator rejects unknown fields without naming retired fields. Independent review found no
   P0/P1/P2 issue; frontend 53 tests, plugin sandbox, TypeScript checking, production build, and the
-  retired-term scan pass. Production remains pinned to an immutable older revision, so publishing
-  this branch cannot bypass the required bridge rollout.
+  retired-term scan pass. GitHub Actions run `34171842403` passed and published all four images
+  with matching provenance. Production remains pinned to an immutable older revision, so this
+  release cannot bypass the required bridge rollout.
 - Bootstrap regression coverage explicitly preserves Codex sessions, logs, SQLite/WAL, config, and
   auth files, using the concrete `logs_2.sqlite`/SHM/WAL and `session_index.jsonl` names. Only
   `.codex/tmp` and `.codex/.tmp` use bounded Pod-lifetime scratch storage.
@@ -120,6 +121,11 @@ product terminology.
   source `54bd4c5` and the verified
   control-plane, ttyd, and disabled jump-host digests; the workspace-base image remains correctly
   managed through the database image policy rather than a nonexistent Helm value.
+- The subsequent pure-schema-20 GitOps state is staged locally at `845b2e0` on
+  `mwc-schema20-final`, after bridge commit `5fe5848`. It pins source `8539763` and the verified
+  control-plane, ttyd, and disabled jump-host digests. Its maintenance script emits only current
+  schema-20 template fields. Helm lint/render, PowerShell parsing, retired-field scanning, and
+  `git diff --check` pass. It has not been pushed or deployed.
 - Another Codex task is actively using ports `31871` and `32671`. Normal `.codex` session, WAL,
   and log writes are expected and safe. Do not stop, restart, or switch those two workspaces until
   that task reports completion.
@@ -140,9 +146,8 @@ product terminology.
    workspace reconciliations without cleaning durable `.codex` state.
 3. Upgrade the remaining two workspaces to the final development images through the audited API,
    verify SSH/Web Shell/PVC/host-key continuity, then disable their superseded image policies.
-4. After live schema 20 and cleaned records are verified, merge and push the already-reviewed
-   `final-schema20-baseline` branch, validate it with the Rust 1.98/Docker GitHub Actions jobs, then
-   deploy its exact published digests.
+4. After the bridge migration and live schema-20 records are verified, advance GitOps to staged
+   commit `845b2e0` and validate its exact published digests. Never skip directly to this state.
 5. Replace broad Higress source CIDRs with verified per-node CNI gateway `/32` addresses in a
    staged GitOps rollout. A live WebSocket to a westlake workspace proved the backend source as
    `10.42.3.1`, not the gateway's Tailnet address. Public WebSocket and port mappings must pass
