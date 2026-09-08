@@ -108,6 +108,7 @@ async fn sqlite_snapshot_contains_ciphertext_and_resets_only_pending_work() {
         "runtime_naming_scheme",
         "runtime_resource_prefix",
         "runtime_route_key",
+        "arbitrary_unrecognized_workspace_snapshot_field",
     ] {
         assert!(workspace_row.get(removed_field).is_none());
     }
@@ -282,6 +283,7 @@ async fn postgres_import_restores_dynamic_plugin_package_and_assets_when_configu
         "runtime_naming_scheme",
         "runtime_resource_prefix",
         "runtime_route_key",
+        "arbitrary_unrecognized_workspace_snapshot_field",
     ] {
         let mut rejected_runtime_snapshot = snapshot.clone();
         rejected_runtime_snapshot

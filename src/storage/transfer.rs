@@ -4,16 +4,12 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use sqlx::Row;
 
-use crate::{
-    config::InstallationId,
-    templates::WorkspaceTemplateDocument,
-    workspace_runtime::{WorkspaceRuntimeIdentity, workspace_short_id_for},
-};
-use uuid::Uuid;
+use crate::{config::InstallationId, templates::WorkspaceTemplateDocument};
 
 use super::{Database, StorageError};
 
 mod plugin_state;
+mod workspace_rows;
 
 const SNAPSHOT_FORMAT_VERSION: u32 = 2;
 
@@ -114,7 +110,7 @@ impl Database {
                 continue;
             }
             if *table == "workspaces" {
-                validate_snapshot_workspace_rows(rows, installation_id)?;
+                workspace_rows::validate(rows, installation_id)?;
             }
             let json = serde_json::to_string(rows)?;
             let sql = format!(
@@ -164,26 +160,6 @@ fn validate_snapshot_row_installations(
     Ok(())
 }
 
-fn validate_snapshot_workspace_rows(
-    rows: &[Value],
-    installation_id: &InstallationId,
-) -> Result<(), StorageError> {
-    for row in rows {
-        let object = row.as_object().ok_or(StorageError::InvalidWorkspace)?;
-        let id = Uuid::parse_str(&required_workspace_string_field(object, "id")?)
-            .map_err(|_| StorageError::InvalidWorkspace)?;
-        let short_id = required_workspace_string_field(object, "short_id")?;
-        if short_id != workspace_short_id_for(id) {
-            return Err(StorageError::InvalidWorkspace);
-        }
-        let runtime = WorkspaceRuntimeIdentity;
-        runtime
-            .validate_for_workspace(installation_id, id, &short_id)
-            .map_err(|_| StorageError::InvalidWorkspace)?;
-    }
-    Ok(())
-}
-
 async fn validate_imported_templates(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     installation_id: &InstallationId,
@@ -220,15 +196,6 @@ async fn validate_imported_workspaces(
 
 fn string_field<'a>(object: &'a Map<String, Value>, key: &str) -> Option<&'a str> {
     object.get(key).and_then(Value::as_str)
-}
-
-fn required_workspace_string_field(
-    object: &Map<String, Value>,
-    key: &str,
-) -> Result<String, StorageError> {
-    string_field(object, key)
-        .map(str::to_owned)
-        .ok_or(StorageError::InvalidWorkspace)
 }
 
 const IMPORT_ORDER: &[&str] = &[
