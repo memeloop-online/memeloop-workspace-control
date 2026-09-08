@@ -87,6 +87,11 @@ would bypass gateway tickets. `sandbox_runtime_product` is implementing per-work
 Basic authentication using domain-separated control-plane key derivation, a ttyd-only Secret,
 and Higress upstream header replacement. No ingress CIDR broadening until direct-access
 denial and the normal ticket flow both pass. This is implementation work, not live acceptance.
+`5bd4b95` completed installer transaction/rollback hardening. Main reran
+`bash tests/gvisor_node_scripts.sh` successfully and added it to CI. This only proves fixture
+behavior; no node registration/reboot or gVisor workload acceptance has occurred.
+CI `34233272890` passed production compilation/maintainability checks, then found a missing
+test import; `7d548a4` fixes it. Follow the newer run, not the superseded failure.
 
 Migration handoff review corrected a dangerous conflation: `rust-dev-test` and Coder TOKEN center
 dev are distinct 100 GiB volumes. Both actual PVC→PV claim UIDs match. Final count is four

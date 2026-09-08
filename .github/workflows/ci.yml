@@ -71,6 +71,8 @@ jobs:
             fi
           done
       - run: cargo fmt --all -- --check
+      - name: Verify node installer rollback fixtures
+        run: bash tests/gvisor_node_scripts.sh
       - name: Enforce production maintainability limits
         run: >-
           cargo clippy --locked --lib --bins --all-features --
