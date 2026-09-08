@@ -4,6 +4,22 @@ This is a preparation record, not an authorization to change the node. Do not in
 add a repository, change GRUB, cordon/drain, relabel, restart K3s, or reboot from this document
 without a separately approved maintenance change.
 
+## Executed maintenance result (2026-09-08)
+
+After the separately approved ELRepo `5.15.220` one-shot boot, `serv-146231` returned Ready with
+the 5.15.220 kernel. K3s `/readyz` was healthy; overseas Higress recovered (`2/2`) and the Wiki
+recovered (`3/3`) with its volume healthy. The known-good AlmaLinux 4.18 kernel remains the GRUB
+default, preserving the next-boot rollback route.
+
+This is **not** final gVisor acceptance. At the time of this record, Longhorn volume
+`pvc-6a03d5cb-b64b-43e1-b236-5bf3de83a613` remains attached to `haixia` but degraded. The old
+serv replica stopped during the node outage after a connection reset/refusal. Longhorn has created
+a replacement replica on `versetensor-hv`, but it is queued: that node's concurrent-rebuild limit
+is one and another rebuild occupies the only slot. Do not delete either stopped replica, change
+replica count, or raise rebuild concurrency as part of this kernel/gVisor work. Wait for the
+existing rebuild to complete and observe the replacement becoming running and the volume becoming
+healthy; if it does not, hand off to the storage owner as a separate incident.
+
 ## Observed state (2026-09-08)
 
 | Item | Observation | Consequence |
