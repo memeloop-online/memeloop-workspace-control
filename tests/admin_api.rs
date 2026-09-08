@@ -460,7 +460,9 @@ async fn admin_user_initial_key_policy_rejects_escalation_and_invalid_expiry() {
     const BOOTSTRAP_ADMIN_TOKEN: &str = "bootstrap-admin-api-token-000000000000000000";
     const NEXT_TOKEN: &str = "next-user-api-token-000000000000000000000000000";
     let initial_key_now = test_unix_timestamp();
-    let initial_key_expiry = initial_key_now + 30 * 24 * 60 * 60;
+    // The omitted child expiry defaults to 30 days, so this short-lived parent
+    // exercises clipping that default to the parent's remaining lifetime.
+    let initial_key_expiry = initial_key_now + 60 * 60;
     let installation_id: InstallationId = "initial-key-policy".parse().unwrap();
     let database = Database::connect("sqlite::memory:", installation_id.clone())
         .await
@@ -539,10 +541,9 @@ async fn admin_user_initial_key_policy_rejects_escalation_and_invalid_expiry() {
             "change_workspace_state"
         ])
     );
-    assert!(
-        compatibility_principal["api_key_expires_at"]
-            .as_i64()
-            .is_some()
+    assert_eq!(
+        compatibility_principal["api_key_expires_at"],
+        initial_key_expiry
     );
 
     let escalation = app
@@ -556,7 +557,7 @@ async fn admin_user_initial_key_policy_rejects_escalation_and_invalid_expiry() {
                         "display_name": "Escalated user",
                         "token": NEXT_TOKEN,
                         "scopes": ["manage_system", "read_workspace"],
-                        "expires_at": 31_536_000,
+                        "expires_at": initial_key_expiry + 1,
                     })
                     .to_string(),
                 ))
