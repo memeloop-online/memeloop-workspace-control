@@ -383,7 +383,9 @@ Early CI `34262698041` stopped on `ResourceBuilder::build` length (107/100), not
 error. Main refactor `80a1a67` separates gateway validation from resource assembly without
 weakening lint rules. Follow-up CI `34263765347` passed production checking, then stopped on
 the renderer test's boolean-comparison lint. Main `c094554` replaces the string search with
-a structural absent-field assertion; rustfmt passed. No CI process is currently running.
+a structural absent-field assertion; rustfmt passed. Verification-only CI `34266603901`
+is now running for `67b1f53` on `ci/ttyd-san-c63cb93`. This validates the committed product,
+lint fixes and cache setup; the worker's uncommitted lifecycle tests are NOT included.
 `http_fixture_clocks` continues lifecycle regressions. Main review requires full-call assertions
 that the SAN filter survives an Ingress DELETE until absence is observed, including a retained
 finalizer, and a missing-UID deletion rejection case. The tests are being split into bounded
@@ -394,7 +396,7 @@ WebSocket acceptance; no cluster changes are delegated.
 Local YAML parsing with duplicate-key rejection passed for the CI workflow; the immutable
 cache pin and unchanged full `--all-features --no-fail-fast` test step were asserted.
 Actual cache execution and lifecycle test results still require GitHub Actions.
-Next push these together to `ci/ttyd-san-c63cb93` for verification only; do not publish
+Push the completed lifecycle tests to `ci/ttyd-san-c63cb93` for verification only; do not publish
 or deploy before the complete regression gate passes.
 Disable is explicitly two-stage: keep mTLS/RBAC while removing owned Ingresses first and
 then filters; remove mTLS/RBAC only after absence checks. Disabled installations must not
