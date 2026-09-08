@@ -154,7 +154,7 @@ fn public_egress_rule(
         config
             .additional_blocked_cidrs
             .iter()
-            .filter(|blocked| blocked.addr().is_ipv4() == ipv4 && allowed.contains(blocked))
+            .filter(|blocked| blocked.addr().is_ipv4() == ipv4 && allowed.contains(*blocked))
             .map(ToString::to_string),
     );
     Some(NetworkPolicyEgressRule {

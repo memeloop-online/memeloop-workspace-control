@@ -6,7 +6,10 @@ use uuid::Uuid;
 
 use crate::auth::{ApiKeyScope, Permission, Role, RoleBinding};
 
-use super::{ApiKeySummary, Database, StorageError, user_settings::validate_api_key_policy};
+use super::{
+    ApiKeySummary, Database, StorageError,
+    user_settings::{token_prefix, validate_api_key_policy},
+};
 
 mod backend;
 mod organizations;
