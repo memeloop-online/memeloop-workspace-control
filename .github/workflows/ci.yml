@@ -148,6 +148,21 @@ jobs:
           for variable in MWC_TTYD_MTLS_SERVER_SECRET MWC_HIGRESS_MTLS_CLIENT_SECRET_NAMESPACE MWC_HIGRESS_MTLS_CLIENT_SECRET_NAME; do
             grep -q "name: ${variable}" <<<"${rendered_mtls}"
           done
+          printf '%s\n' "${rendered_mtls}" > rendered-mtls.yaml
+          printf '%s\n' "${rendered_public}" > rendered-without-mtls.yaml
+          node --experimental-strip-types tests/helm_mtls_rbac.ts rendered-mtls.yaml rendered-without-mtls.yaml
+          if linux-amd64/helm template mismatched-mtls \
+            deploy/helm/memeloop-workspace-control \
+            --namespace memeloop-workspace-control \
+            -f deploy/helm/memeloop-workspace-control/values.example.yaml \
+            --set workspace.ttydMtls.serverTlsSecretName=ttyd-server \
+            --set higress.ttydMtls.clientSecretNamespace=wrong-gateway \
+            --set higress.ttydMtls.clientSecretName=ttyd-client \
+            > /dev/null 2> mismatched-mtls.log; then
+            echo "mismatched gateway namespace was accepted" >&2
+            exit 1
+          fi
+          grep -q 'must equal higress.namespace' mismatched-mtls.log
           if linux-amd64/helm template incomplete-mtls \
             deploy/helm/memeloop-workspace-control \
             --namespace memeloop-workspace-control \
