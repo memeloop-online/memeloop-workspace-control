@@ -449,6 +449,13 @@ browser contexts and temporary token file were cleaned by `finally`. Do not clai
 acceptance. The browser worker owns a real-local-Chromium rejected-upgrade fixture and precise
 CDP rejection evidence correction; a close/timeout alone must never count as rejection.
 Release publication is confirmed above; deployment and browser replay acceptance remain pending.
+GitOps app README is added in `dc3b1c6`, refined in `bc4e709`: separate console-access
+instructions with single-line Bash/PowerShell commands for `lindongwu11-token`. Main verified
+Bash syntax and PowerShell decoding using a fake value, never the real credential.
+Both README commits remain local. GitOps fetch fails SSH host-key verification even with
+plain BatchMode SSH (not only the Coder wrapper). `release_manifest_plan` owns read-only
+endpoint/fingerprint verification against the authenticated cluster; do not disable host-key
+checking, auto-accept an unknown key, or push without verifying the current remote branch.
 Main reviewed GitOps `8d8a4e7`; client-only live acceptance PASSED with the already verified
 ttyd `6f430bf` image. Session `27715` exited 0; result is
 `/tmp/mwc-higress-ttyd-client-20260908.json`. Valid / absent / restored / untrusted / restored
