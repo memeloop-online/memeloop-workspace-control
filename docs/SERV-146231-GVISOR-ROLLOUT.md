@@ -20,6 +20,23 @@ replica count, or raise rebuild concurrency as part of this kernel/gVisor work. 
 existing rebuild to complete and observe the replacement becoming running and the volume becoming
 healthy; if it does not, hand off to the storage owner as a separate incident.
 
+## gVisor binary staging status (2026-09-08)
+
+The fixed official `release-20260831.0` x86_64 archive and the official `SHA256SUMS` file are
+staged at `/var/tmp/serv-146231-gvisor-20260831.0.Q2DBoz`, alongside a copy of the reviewed node
+preflight/install scripts. The freshly downloaded official checksum and local archive checksum
+both equal `b9ccc6e14ca4eb2c2e65ff66e011f3b7e79d3275fb12eab747b19f95caf8e891`; archive size is
+128,892,132 bytes. This is only a verified download, not an installation.
+
+The host does not have the `zstd` package and its tar implementation lacks `--zstd`, so the archive
+layout and required `runsc`, `containerd-shim-runsc-v1`, and `gvisor-bin/` sidecars have not yet
+been locally enumerated. Do not install a decompressor or unpack the archive without approval.
+The copied preflight script also currently exits 141 after its expected `runsc`-absent warning:
+the `k3s ctr version | awk ... exit` pipeline receives SIGPIPE under `pipefail`. The actual
+containerd client and server both report `v2.3.2-k3s2`, but this invocation is not a successful
+preflight result; correct or replace that read-only version collection before calling the node
+prepared.
+
 ## Observed state (2026-09-08)
 
 | Item | Observation | Consequence |
