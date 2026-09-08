@@ -459,10 +459,17 @@ Release publication is confirmed above; deployment and combined rollout acceptan
 GitOps app README is added in `dc3b1c6`, refined in `bc4e709`: separate console-access
 instructions with single-line Bash/PowerShell commands for `lindongwu11-token`. Main verified
 Bash syntax and PowerShell decoding using a fake value, never the real credential.
-Both README commits remain local. GitOps fetch fails SSH host-key verification even with
-plain BatchMode SSH (not only the Coder wrapper). `release_manifest_plan` owns read-only
-endpoint/fingerprint verification against the authenticated cluster; do not disable host-key
-checking, auto-accept an unknown key, or push without verifying the current remote branch.
+GitOps SSH access is restored: the missing Forgejo RSA host-key record was independently
+matched between both authenticated-cluster Pods, live port 30022 and Argo CD configuration
+(`SHA256:ewYa4jlChcGPmsOQAyKQXUErp4g8x9BWIKmrAJyZLEM`). Main added only that verified key
+to effective `/home/rust-dev/.ssh/known_hosts`; strict checking stayed enabled. Fetch succeeded.
+After confirming current remote master lacked the README, main created the isolated worktree
+`/home/token-center-dev/workspace/k3s-gitops-mwc-console-access` from `c0300f9` and cherry-picked
+only README commits as `957f9c1`/`ebd7d8b`. Push to GitOps master succeeded; the remote change is
+exactly one Markdown file, with no Application or migration changes.
+Product follow-up CI `34273967636` for `6bc57e7` also PASSED. No CI job remains active.
+Next execution gate is still explicit release of borrowed ports 31871/32671 before stopping,
+snapshotting and migrating those workspaces; current TOKEN center dev remains external-only.
 Main reviewed GitOps `8d8a4e7`; client-only live acceptance PASSED with the already verified
 ttyd `6f430bf` image. Session `27715` exited 0; result is
 `/tmp/mwc-higress-ttyd-client-20260908.json`. Valid / absent / restored / untrusted / restored
