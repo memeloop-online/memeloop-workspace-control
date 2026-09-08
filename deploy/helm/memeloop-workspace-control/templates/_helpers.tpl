@@ -31,6 +31,9 @@ app.kubernetes.io/instance: {{ include "mwc.name" . }}
 {{- end -}}
 
 {{- define "mwc.validate" -}}
+{{- if ne .Release.Namespace "memeloop-workspace-control" -}}
+{{- fail "the release namespace must be memeloop-workspace-control" -}}
+{{- end -}}
 {{- if not (regexMatch "^[a-z0-9]([-a-z0-9]{0,18}[a-z0-9])?$" .Values.installationId) -}}
 {{- fail "installationId must be a lower-case DNS label of at most 20 characters" -}}
 {{- end -}}
@@ -54,9 +57,6 @@ app.kubernetes.io/instance: {{ include "mwc.name" . }}
 {{- end -}}
 {{- if and .Values.sqlite.existingClaim (or (gt (len .Values.sqlite.existingClaim) 253) (not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$" .Values.sqlite.existingClaim))) -}}
 {{- fail "sqlite.existingClaim must be a lower-case DNS subdomain of at most 253 characters" -}}
-{{- end -}}
-{{- if and .Values.workspace.sharedNamespace (not (regexMatch "^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$" .Values.workspace.sharedNamespace)) -}}
-{{- fail "workspace.sharedNamespace must be a lower-case DNS label of at most 63 characters" -}}
 {{- end -}}
 {{- if and (eq .Values.mode "postgresql") .Values.autoscaling.enabled -}}
 {{- $cpuRequest := dig "requests" "cpu" "" .Values.resources -}}

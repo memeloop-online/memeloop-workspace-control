@@ -56,51 +56,31 @@ export resource_kinds
 
 K3S_INSTALLATION_ID=test-a \
 K3S_WORKSPACE_ID=$target_id \
-K3S_WORKSPACE_NAMESPACE=ws-test-a-00000001 \
-K3S_WORKSPACE_NAMESPACE_SCOPE=dedicated \
-bash "$verifier" >/dev/null
-
-if FAKE_NAMESPACE_EXISTS=true \
-  K3S_INSTALLATION_ID=test-a \
-  K3S_WORKSPACE_ID=$target_id \
-  K3S_WORKSPACE_NAMESPACE=ws-test-a-00000001 \
-  K3S_WORKSPACE_NAMESPACE_SCOPE=dedicated \
-  bash "$verifier" >/dev/null 2>&1; then
-  printf 'cleanup verification accepted an existing dedicated workspace namespace\n' >&2
-  exit 1
-fi
-
-K3S_INSTALLATION_ID=test-a \
-K3S_WORKSPACE_ID=$target_id \
 K3S_SIBLING_WORKSPACE_ID=$sibling_id \
-K3S_WORKSPACE_NAMESPACE=workspace-shared \
-K3S_WORKSPACE_NAMESPACE_SCOPE=shared \
+K3S_WORKSPACE_NAMESPACE=memeloop-workspace-control \
 bash "$verifier" >/dev/null
 
 K3S_INSTALLATION_ID=test-a \
 K3S_WORKSPACE_ID=$target_id \
-K3S_WORKSPACE_NAMESPACE=workspace-shared \
-K3S_WORKSPACE_NAMESPACE_SCOPE=shared \
+K3S_WORKSPACE_NAMESPACE=memeloop-workspace-control \
 bash "$verifier" >/dev/null
 
 if FAKE_TARGET_RESOURCE=true \
   K3S_INSTALLATION_ID=test-a \
   K3S_WORKSPACE_ID=$target_id \
   K3S_SIBLING_WORKSPACE_ID=$sibling_id \
-  K3S_WORKSPACE_NAMESPACE=workspace-shared \
-  K3S_WORKSPACE_NAMESPACE_SCOPE=shared \
+  K3S_WORKSPACE_NAMESPACE=memeloop-workspace-control \
   bash "$verifier" >/dev/null 2>&1; then
-  printf 'shared cleanup accepted a remaining target workspace resource\n' >&2
+  printf 'cleanup accepted a remaining target workspace resource\n' >&2
   exit 1
 fi
 
 if FAKE_TARGET_CLUSTER_RESOURCE=true \
   K3S_INSTALLATION_ID=test-a \
   K3S_WORKSPACE_ID=$target_id \
-  K3S_WORKSPACE_NAMESPACE=workspace-shared \
-  K3S_WORKSPACE_NAMESPACE_SCOPE=shared \
+  K3S_WORKSPACE_NAMESPACE=memeloop-workspace-control \
   bash "$verifier" >/dev/null 2>&1; then
-  printf 'shared cleanup accepted a remaining target ClusterRoleBinding\n' >&2
+  printf 'cleanup accepted a remaining target ClusterRoleBinding\n' >&2
   exit 1
 fi
 
@@ -108,10 +88,9 @@ if FAKE_SHARED_OWNER=other-installation \
   K3S_INSTALLATION_ID=test-a \
   K3S_WORKSPACE_ID=$target_id \
   K3S_SIBLING_WORKSPACE_ID=$sibling_id \
-  K3S_WORKSPACE_NAMESPACE=workspace-shared \
-  K3S_WORKSPACE_NAMESPACE_SCOPE=shared \
+  K3S_WORKSPACE_NAMESPACE=memeloop-workspace-control \
   bash "$verifier" >/dev/null 2>&1; then
-  printf 'shared cleanup accepted a namespace owned by another installation\n' >&2
+  printf 'cleanup accepted a namespace owned by another installation\n' >&2
   exit 1
 fi
 
@@ -119,10 +98,9 @@ if FAKE_SHARED_WORKSPACE_LABEL=true \
   K3S_INSTALLATION_ID=test-a \
   K3S_WORKSPACE_ID=$target_id \
   K3S_SIBLING_WORKSPACE_ID=$sibling_id \
-  K3S_WORKSPACE_NAMESPACE=workspace-shared \
-  K3S_WORKSPACE_NAMESPACE_SCOPE=shared \
+  K3S_WORKSPACE_NAMESPACE=memeloop-workspace-control \
   bash "$verifier" >/dev/null 2>&1; then
-  printf 'shared cleanup accepted a namespace carrying a workspace ID\n' >&2
+  printf 'cleanup accepted workspace ownership on the installation namespace\n' >&2
   exit 1
 fi
 
@@ -130,10 +108,17 @@ if FAKE_SIBLING_RESOURCE=false \
   K3S_INSTALLATION_ID=test-a \
   K3S_WORKSPACE_ID=$target_id \
   K3S_SIBLING_WORKSPACE_ID=$sibling_id \
-  K3S_WORKSPACE_NAMESPACE=workspace-shared \
-  K3S_WORKSPACE_NAMESPACE_SCOPE=shared \
+  K3S_WORKSPACE_NAMESPACE=memeloop-workspace-control \
   bash "$verifier" >/dev/null 2>&1; then
-  printf 'shared cleanup accepted disappearance of sibling resources\n' >&2
+  printf 'cleanup accepted disappearance of sibling resources\n' >&2
+  exit 1
+fi
+
+if K3S_INSTALLATION_ID=test-a \
+  K3S_WORKSPACE_ID=$target_id \
+  K3S_WORKSPACE_NAMESPACE=another-namespace \
+  bash "$verifier" >/dev/null 2>&1; then
+  printf 'cleanup verification accepted a non-canonical namespace\n' >&2
   exit 1
 fi
 

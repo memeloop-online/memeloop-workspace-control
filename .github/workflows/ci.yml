@@ -103,15 +103,18 @@ jobs:
           tar -xzf prometheus.tgz prometheus-3.14.0.linux-amd64/promtool
           promtool=prometheus-3.14.0.linux-amd64/promtool
           linux-amd64/helm lint deploy/helm/memeloop-workspace-control \
+            --namespace memeloop-workspace-control \
             --set installationId=ci-a \
             --set secrets.encryptionSecretName=enc \
             --set secrets.internalAuthSecretName=auth \
             --set workspace.ttydImage=tsl0922/ttyd:1.7.7 \
             --set jumpHost.enabled=false
           linux-amd64/helm lint deploy/helm/memeloop-workspace-control \
+            --namespace memeloop-workspace-control \
             -f deploy/helm/memeloop-workspace-control/values.example.yaml
           rendered_public=$(linux-amd64/helm template public \
             deploy/helm/memeloop-workspace-control \
+            --namespace memeloop-workspace-control \
             -f deploy/helm/memeloop-workspace-control/values.example.yaml)
           grep -q 'phase: AUTHN' <<<"${rendered_public}"
           grep -q 'priority: 360' <<<"${rendered_public}"
@@ -130,13 +133,15 @@ jobs:
           test "${web_rule_line}" -lt "${port_rule_line}"
           grep -q 'path: /api/v1/internal/web-shell/authorize' <<<"${rendered_public}"
           grep -q 'path: /api/v1/internal/port-mappings/authorize' <<<"${rendered_public}"
-          grep -q 'service_name: mwc-public-a.default.svc.cluster.local' <<<"${rendered_public}"
+          grep -q 'service_name: mwc-public-a.memeloop-workspace-control.svc.cluster.local' <<<"${rendered_public}"
           grep -q 'name: MWC_HIGRESS_SOURCE_CIDRS_JSON' <<<"${rendered_public}"
           grep -q 'resources: \["networkpolicies", "ingresses"\]' <<<"${rendered_public}"
           linux-amd64/helm lint deploy/helm/memeloop-workspace-control \
+            --namespace memeloop-workspace-control \
             -f deploy/helm/memeloop-workspace-control/values.internal.example.yaml
           rendered_sqlite_default=$(linux-amd64/helm template sqlite-default \
             deploy/helm/memeloop-workspace-control \
+            --namespace memeloop-workspace-control \
             --set installationId=sqlite-default \
             --set secrets.encryptionSecretName=enc \
             --set secrets.internalAuthSecretName=auth \
@@ -147,44 +152,23 @@ jobs:
           grep -q '^    whenDeleted: Retain$' <<<"${rendered_sqlite_default}"
           grep -q '^    whenScaled: Retain$' <<<"${rendered_sqlite_default}"
           grep -q '^  volumeClaimTemplates:$' <<<"${rendered_sqlite_default}"
-          if grep -q 'MWC_WORKSPACE_SHARED_NAMESPACE' <<<"${rendered_sqlite_default}"; then
-            echo "default shared Namespace unexpectedly emitted an environment variable" >&2
-            exit 1
-          fi
-          rendered_shared=$(linux-amd64/helm template shared \
+          if invalid_namespace_output=$(linux-amd64/helm template wrong-namespace \
             deploy/helm/memeloop-workspace-control \
-            --set installationId=shared \
+            --namespace default \
+            --set installationId=wrong-namespace \
             --set secrets.encryptionSecretName=enc \
             --set secrets.internalAuthSecretName=auth \
             --set workspace.ttydImage=tsl0922/ttyd:1.7.7 \
-            --set workspace.sharedNamespace=workspace-pool \
             --set jumpHost.enabled=false \
-            --set autoscaling.enabled=false)
-          grep -A1 'name: MWC_WORKSPACE_SHARED_NAMESPACE' <<<"${rendered_shared}" \
-            | grep -q 'value: "workspace-pool"'
-          assert_invalid_shared_namespace() {
-            case_name=$1
-            shared_namespace=$2
-            if invalid_shared_output=$(linux-amd64/helm template "${case_name}" \
-              deploy/helm/memeloop-workspace-control \
-              --set "installationId=${case_name}" \
-              --set secrets.encryptionSecretName=enc \
-              --set secrets.internalAuthSecretName=auth \
-              --set workspace.ttydImage=tsl0922/ttyd:1.7.7 \
-              --set-string "workspace.sharedNamespace=${shared_namespace}" \
-              --set jumpHost.enabled=false \
-              --set autoscaling.enabled=false 2>&1); then
-              echo "invalid shared Namespace ${shared_namespace} was accepted" >&2
-              exit 1
-            fi
-            grep -q 'workspace.sharedNamespace must be a lower-case DNS label of at most 63 characters' \
-              <<<"${invalid_shared_output}"
-          }
-          assert_invalid_shared_namespace invalid-shared-dot workspace.pool
-          assert_invalid_shared_namespace invalid-shared-case Workspace-pool
-          assert_invalid_shared_namespace invalid-shared-long aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+            --set autoscaling.enabled=false 2>&1); then
+            echo "chart accepted a non-canonical release namespace" >&2
+            exit 1
+          fi
+          grep -q 'the release namespace must be memeloop-workspace-control' \
+            <<<"${invalid_namespace_output}"
           rendered_existing_claim=$(linux-amd64/helm template sqlite-existing \
             deploy/helm/memeloop-workspace-control \
+            --namespace memeloop-workspace-control \
             --set installationId=sqlite-existing \
             --set secrets.encryptionSecretName=enc \
             --set secrets.internalAuthSecretName=auth \
@@ -199,6 +183,7 @@ jobs:
           fi
           if postgres_claim_output=$(linux-amd64/helm template postgres-existing \
             deploy/helm/memeloop-workspace-control \
+            --namespace memeloop-workspace-control \
             --set installationId=postgres-existing \
             --set mode=postgresql \
             --set database.postgresSecretName=database \
@@ -214,6 +199,7 @@ jobs:
           grep -q 'sqlite.existingClaim may only be set in sqlite mode' <<<"${postgres_claim_output}"
           if storage_claim_output=$(linux-amd64/helm template sqlite-sc-conflict \
             deploy/helm/memeloop-workspace-control \
+            --namespace memeloop-workspace-control \
             --set installationId=sqlite-sc-conflict \
             --set secrets.encryptionSecretName=enc \
             --set secrets.internalAuthSecretName=auth \
@@ -228,6 +214,7 @@ jobs:
           grep -q 'sqlite.existingClaim and sqlite.storageClassName are mutually exclusive' \
             <<<"${storage_claim_output}"
           linux-amd64/helm template digest-pinned deploy/helm/memeloop-workspace-control \
+            --namespace memeloop-workspace-control \
             --set installationId=digest-pinned \
             --set secrets.encryptionSecretName=enc \
             --set secrets.internalAuthSecretName=auth \
@@ -237,6 +224,7 @@ jobs:
             | grep -q 'memeloop-workspace-control@sha256:aaaaaaaa'
           rendered_monitoring=$(linux-amd64/helm template monitoring \
             deploy/helm/memeloop-workspace-control \
+            --namespace memeloop-workspace-control \
             --set installationId=monitoring \
             --set secrets.encryptionSecretName=enc \
             --set secrets.internalAuthSecretName=auth \
@@ -284,6 +272,7 @@ jobs:
           fi
           rendered_prometheus_rule=$(linux-amd64/helm template monitoring-rules \
             deploy/helm/memeloop-workspace-control \
+            --namespace memeloop-workspace-control \
             --show-only templates/prometheusrule.yaml \
             --set installationId=monitoring \
             --set secrets.encryptionSecretName=enc \
@@ -299,6 +288,7 @@ jobs:
           grep -q '>= 90' <<<"${rendered_monitoring}"
           rendered_ports=$(linux-amd64/helm template ports \
             deploy/helm/memeloop-workspace-control \
+            --namespace memeloop-workspace-control \
             --set installationId=ports \
             --set secrets.encryptionSecretName=enc \
             --set secrets.internalAuthSecretName=auth \
@@ -316,6 +306,7 @@ jobs:
           grep -q -- '- exact: location' <<<"${rendered_ports}"
           grep -q 'name: external-auth' <<<"${rendered_ports}"
           if linux-amd64/helm template unsafe-ports deploy/helm/memeloop-workspace-control \
+            --namespace memeloop-workspace-control \
             --set installationId=unsafe-ports \
             --set secrets.encryptionSecretName=enc \
             --set secrets.internalAuthSecretName=auth \
@@ -326,6 +317,7 @@ jobs:
             exit 1
           fi
           if linux-amd64/helm template bad-digest deploy/helm/memeloop-workspace-control \
+            --namespace memeloop-workspace-control \
             --set installationId=bad-digest \
             --set secrets.encryptionSecretName=enc \
             --set secrets.internalAuthSecretName=auth \
@@ -336,6 +328,7 @@ jobs:
             exit 1
           fi
           if linux-amd64/helm template unsafe deploy/helm/memeloop-workspace-control \
+            --namespace memeloop-workspace-control \
             --set installationId=unsafe \
             --set secrets.encryptionSecretName=enc \
             --set secrets.internalAuthSecretName=auth \
@@ -347,6 +340,7 @@ jobs:
             exit 1
           fi
           if linux-amd64/helm template unsafe-network deploy/helm/memeloop-workspace-control \
+            --namespace memeloop-workspace-control \
             --set installationId=unsafe-network \
             --set secrets.encryptionSecretName=enc \
             --set secrets.internalAuthSecretName=auth \
@@ -360,12 +354,14 @@ jobs:
             exit 1
           fi
           if linux-amd64/helm template invalid-hpa deploy/helm/memeloop-workspace-control \
+            --namespace memeloop-workspace-control \
             -f deploy/helm/memeloop-workspace-control/values.example.yaml \
             --set resources.requests.cpu=null >/dev/null 2>&1; then
             echo "HPA rendered without a CPU request" >&2
             exit 1
           fi
           if linux-amd64/helm template invalid-selector deploy/helm/memeloop-workspace-control \
+            --namespace memeloop-workspace-control \
             -f deploy/helm/memeloop-workspace-control/values.example.yaml \
             --set higress.podLabels=null >/dev/null 2>&1; then
             echo "public Web Shell rendered without a Higress Pod selector" >&2

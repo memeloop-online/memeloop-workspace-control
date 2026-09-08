@@ -28,10 +28,6 @@ sqlite:
   size: 10Gi
 
 workspace:
-  # Optional installation-owned Namespace for newly created prefixed workspaces. The control
-  # plane creates it when absent or verifies its ownership. Empty omits the environment variable
-  # and preserves the current one-Namespace-per-workspace placement.
-  sharedNamespace: ""
   storageClassName: ""
   ttydImage: ""
   # Stable Tailnet node DNS name or IP. Enables per-workspace, auto-assigned SSH NodePorts.

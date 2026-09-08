@@ -29,7 +29,7 @@ Run the read-only preflight before Helm changes. All target-identifying values a
 
 ```bash
 export K3S_INSTALLATION_ID=public-a
-export K3S_RELEASE_NAMESPACE=mwc-public-a
+export K3S_RELEASE_NAMESPACE=memeloop-workspace-control
 export K3S_STORAGE_CLASS=managed-delete
 export K3S_MODE=postgresql
 export K3S_PUBLIC_API=true
@@ -46,47 +46,26 @@ Higress Gateway are required only when at least one public API, SSH or Web Shell
 
 Set Helm `higress.podLabels` to the same selector labels verified by the preflight.
 
-After rollout, verify workload shape, readiness, owner labels and workspace namespace prefixes:
+After rollout, verify workload shape, readiness, owner labels and the canonical Namespace:
 
 ```bash
 export K3S_EXPECT_PUBLIC_SSH=true
 export K3S_EXPECT_PUBLIC_WEB_SHELL=true
-export K3S_WORKSPACE_NAMESPACE_SCOPE=dedicated
 scripts/k3s/verify-installation.sh
 ```
 
-For an installation configured with a shared workspace Namespace, set
-`K3S_WORKSPACE_NAMESPACE_SCOPE=shared` and provide `K3S_WORKSPACE_SHARED_NAMESPACE`. Before the
-first shared workspace is reconciled, the Namespace may not exist; the verifier reports
-`shared:pending`. Once it exists, it must have the requested installation owner and managed-by
-labels and no workspace, organization, or user ownership labels. Existing dedicated
-Namespaces may coexist and must retain their installation prefix and workspace ID.
-
-After an API delete reaches `deleted`, use dedicated mode to prove that a
-dedicated Namespace and all workspace-labelled objects are gone:
+After an API delete reaches `deleted`, prove that every object carrying the deleted workspace ID
+is gone while the installation Namespace remains:
 
 ```bash
 export K3S_WORKSPACE_ID=00000000-0000-0000-0000-000000000000
-export K3S_WORKSPACE_NAMESPACE=ws-public-a-00000000
-export K3S_WORKSPACE_NAMESPACE_SCOPE=dedicated
-scripts/k3s/verify-workspace-cleanup.sh
-```
-
-For a shared workspace, the Namespace must remain. Shared mode instead requires every namespaced
-object and ClusterRoleBinding with the deleted workspace ID to be gone and validates the
-Namespace's installation-level ownership. Optionally provide a sibling workspace UUID as a
-preservation sentinel; when supplied, at least one sibling-labelled object must remain:
-
-```bash
-export K3S_WORKSPACE_ID=00000000-0000-0000-0000-000000000000
-export K3S_WORKSPACE_NAMESPACE=workspace-public-a
-export K3S_WORKSPACE_NAMESPACE_SCOPE=shared
+export K3S_WORKSPACE_NAMESPACE=memeloop-workspace-control
 export K3S_SIBLING_WORKSPACE_ID=00000000-0000-0000-0000-000000000001
 scripts/k3s/verify-workspace-cleanup.sh
 ```
 
-Omit `K3S_SIBLING_WORKSPACE_ID` when verifying deletion of the final workspace in a shared
-Namespace.
+`K3S_SIBLING_WORKSPACE_ID` is an optional preservation sentinel. When supplied, the verifier also
+requires at least one sibling-labelled object to remain. Omit it when deleting the final workspace.
 
 The scripts do not install, patch or delete resources. Preserve their output together with the
 API responses and OpenSSH command transcripts as acceptance evidence.
@@ -111,12 +90,11 @@ API responses and OpenSSH command transcripts as acceptance evidence.
 
 ## Installation topology
 
-1. Install `internal-a` with SQLite and no public SSH route.
-2. Install `public-a` with an independent PostgreSQL database/schema, domains, ServiceAccount,
-   Secrets and public LoadBalancer IP.
-3. Confirm every managed object has `workspace.memeloop.dev/owner-installation`. Dedicated
-   workspace Namespaces must be prefixed with the correct installation ID and carry a workspace
-   ID. The explicitly configured shared Namespace must carry only installation-level ownership.
+1. Install the service into `memeloop-workspace-control` with the selected SQLite or PostgreSQL
+   configuration.
+2. Confirm the control plane and every workspace object use that exact Namespace.
+3. Confirm every managed object has `workspace.memeloop.dev/owner-installation` and each workspace
+   object has the matching workspace ID label; the Namespace itself has no workspace-scoped label.
 4. Attempt a delete with a mismatched ownership label and confirm the coordinator refuses it.
 
 ## Lifecycle and cleanup
@@ -126,8 +104,8 @@ API responses and OpenSSH command transcripts as acceptance evidence.
 3. Stop and start; confirm replicas change 1→0→1 while the PVC and OpenSSH host identity persist.
 4. Delete; confirm new SSH/Web Shell authorization fails immediately and the workspace Ingress,
    StatefulSet, Pod, Service, ServiceAccount, Secrets, ConfigMaps, NetworkPolicies, PVC and
-   ClusterRoleBinding disappear before the database state becomes `deleted`. Dedicated Namespace
-   deletion must cascade; a shared Namespace and every sibling workspace object must remain.
+   ClusterRoleBinding disappear before the database state becomes `deleted`. The
+   `memeloop-workspace-control` Namespace and every sibling workspace object must remain.
 
 ## OpenSSH
 

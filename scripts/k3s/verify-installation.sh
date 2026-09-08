@@ -12,17 +12,20 @@ required() {
 required K3S_INSTALLATION_ID
 required K3S_RELEASE_NAMESPACE
 required K3S_MODE
-required K3S_WORKSPACE_NAMESPACE_SCOPE
 command -v kubectl >/dev/null
 command -v jq >/dev/null
+
+canonical_namespace='memeloop-workspace-control'
+if [[ $K3S_RELEASE_NAMESPACE != "$canonical_namespace" ]]; then
+  printf 'K3S_RELEASE_NAMESPACE must be %s\n' "$canonical_namespace" >&2
+  exit 64
+fi
 
 selector="app.kubernetes.io/instance=mwc-${K3S_INSTALLATION_ID}"
 owner_label='workspace.memeloop.dev/owner-installation'
 workspace_label='workspace.memeloop.dev/workspace-id'
 organization_label='workspace.memeloop.dev/organization-id'
 user_label='workspace.memeloop.dev/owner-user-id'
-managed_by_label='app.kubernetes.io/managed-by'
-managed_by='memeloop-workspace-control'
 resource_kinds='pod,service,deployment,statefulset,replicaset,serviceaccount,configmap,secret,pvc,networkpolicy,ingress,hpa'
 if kubectl get crd httproutes.gateway.networking.k8s.io >/dev/null 2>&1; then
   resource_kinds+=',httproute'
@@ -82,81 +85,20 @@ if [[ $release_owner != "$K3S_INSTALLATION_ID" ]]; then
 fi
 
 workspace_namespaces=$(kubectl get namespaces -l "$owner_label=$K3S_INSTALLATION_ID" -o json)
-expected_prefix="ws-${K3S_INSTALLATION_ID}-"
-namespace_scope_status="$K3S_WORKSPACE_NAMESPACE_SCOPE"
-case "$K3S_WORKSPACE_NAMESPACE_SCOPE" in
-  dedicated)
-    invalid_namespaces=$(jq --arg prefix "$expected_prefix" \
-      --arg release "$K3S_RELEASE_NAMESPACE" --arg workspace "$workspace_label" \
-      '[.items[] | select(.metadata.name != $release) | select(
-        (.metadata.name | startswith($prefix) | not) or
-        (.metadata.labels[$workspace] // "" | length == 0)
-      )] | length' <<<"$workspace_namespaces")
-    if [[ $invalid_namespaces != 0 ]]; then
-      printf 'managed dedicated workspace namespace lacks the installation prefix or workspace ID\n' >&2
-      exit 1
-    fi
-    ;;
-  shared)
-    required K3S_WORKSPACE_SHARED_NAMESPACE
-    if [[ $K3S_WORKSPACE_SHARED_NAMESPACE == "$K3S_RELEASE_NAMESPACE" ]]; then
-      printf 'shared workspace namespace must differ from the release namespace\n' >&2
-      exit 64
-    fi
-    if ! shared_namespace=$(kubectl get namespace "$K3S_WORKSPACE_SHARED_NAMESPACE" \
-      --ignore-not-found -o json); then
-      printf 'could not inspect configured shared workspace namespace\n' >&2
-      exit 1
-    fi
-    if [[ -z $shared_namespace ]]; then
-      namespace_scope_status='shared:pending'
-    else
-      shared_owner=$(jq -r --arg key "$owner_label" '.metadata.labels[$key] // ""' \
-        <<<"$shared_namespace")
-      if [[ $shared_owner != "$K3S_INSTALLATION_ID" ]]; then
-        printf 'shared workspace namespace has owner %s, expected %s\n' \
-          "$shared_owner" "$K3S_INSTALLATION_ID" >&2
-        exit 1
-      fi
-      shared_manager=$(jq -r --arg key "$managed_by_label" '.metadata.labels[$key] // ""' \
-        <<<"$shared_namespace")
-      if [[ $shared_manager != "$managed_by" ]]; then
-        printf 'shared workspace namespace has managed-by %s, expected %s\n' \
-          "$shared_manager" "$managed_by" >&2
-        exit 1
-      fi
-      shared_workspace_labels=$(jq --arg workspace "$workspace_label" \
-        --arg organization "$organization_label" --arg user "$user_label" \
-        '[.metadata.labels | .[$workspace], .[$organization], .[$user] | select(. != null)] | length' \
-        <<<"$shared_namespace")
-      if [[ $shared_workspace_labels != 0 ]]; then
-        printf 'shared workspace namespace carries workspace-scoped ownership labels\n' >&2
-        exit 1
-      fi
-      shared_matches=$(jq --arg shared "$K3S_WORKSPACE_SHARED_NAMESPACE" \
-        '[.items[] | select(.metadata.name == $shared)] | length' <<<"$workspace_namespaces")
-      if [[ $shared_matches != 1 ]]; then
-        printf 'shared workspace namespace is absent from installation-owned namespaces\n' >&2
-        exit 1
-      fi
-    fi
-    invalid_namespaces=$(jq --arg prefix "$expected_prefix" \
-      --arg release "$K3S_RELEASE_NAMESPACE" --arg shared "$K3S_WORKSPACE_SHARED_NAMESPACE" \
-      --arg workspace "$workspace_label" \
-      '[.items[] | select(.metadata.name != $release and .metadata.name != $shared) | select(
-        (.metadata.name | startswith($prefix) | not) or
-        (.metadata.labels[$workspace] // "" | length == 0)
-      )] | length' <<<"$workspace_namespaces")
-    if [[ $invalid_namespaces != 0 ]]; then
-      printf 'canonical dedicated namespace lacks the installation prefix or workspace ID\n' >&2
-      exit 1
-    fi
-    ;;
-  *)
-    printf 'K3S_WORKSPACE_NAMESPACE_SCOPE must be dedicated or shared\n' >&2
-    exit 64
-    ;;
-esac
+invalid_namespaces=$(jq --arg namespace "$canonical_namespace" \
+  '[.items[] | select(.metadata.name != $namespace)] | length' <<<"$workspace_namespaces")
+if [[ $invalid_namespaces != 0 ]]; then
+  printf 'installation owns a namespace other than %s\n' "$canonical_namespace" >&2
+  exit 1
+fi
+namespace_scoped_labels=$(kubectl get namespace "$canonical_namespace" -o json \
+  | jq --arg workspace "$workspace_label" --arg organization "$organization_label" \
+    --arg user "$user_label" \
+    '[.metadata.labels | .[$workspace], .[$organization], .[$user] | select(. != null)] | length')
+if [[ $namespace_scoped_labels != 0 ]]; then
+  printf 'installation namespace carries workspace-scoped ownership labels\n' >&2
+  exit 1
+fi
 
 mapfile -t storage_classes < <(kubectl get pvc --all-namespaces \
   -l "$owner_label=$K3S_INSTALLATION_ID" -o json \
@@ -190,7 +132,9 @@ if [[ ${K3S_EXPECT_PUBLIC_WEB_SHELL:-false} == true ]]; then
   fi
 fi
 
-workspace_count=$(jq --arg release "$K3S_RELEASE_NAMESPACE" \
-  '[.items[] | select(.metadata.name != $release)] | length' <<<"$workspace_namespaces")
-printf 'installation verification passed: %s resources, %s managed workspace namespaces (%s)\n' \
-  "$count" "$workspace_count" "$namespace_scope_status"
+workspace_count=$(kubectl get "$resource_kinds" -n "$canonical_namespace" \
+  -l "$owner_label=$K3S_INSTALLATION_ID" -o json \
+  | jq --arg workspace "$workspace_label" \
+    '[.items[].metadata.labels[$workspace] // empty] | unique | length')
+printf 'installation verification passed: %s resources, %s workspaces in %s\n' \
+  "$count" "$workspace_count" "$canonical_namespace"

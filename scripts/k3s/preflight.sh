@@ -14,6 +14,12 @@ required K3S_RELEASE_NAMESPACE
 required K3S_STORAGE_CLASS
 required K3S_MODE
 
+canonical_namespace='memeloop-workspace-control'
+if [[ $K3S_RELEASE_NAMESPACE != "$canonical_namespace" ]]; then
+  printf 'K3S_RELEASE_NAMESPACE must be %s\n' "$canonical_namespace" >&2
+  exit 64
+fi
+
 if [[ ! $K3S_INSTALLATION_ID =~ ^[a-z0-9]([-a-z0-9]{0,18}[a-z0-9])?$ ]]; then
   printf 'K3S_INSTALLATION_ID must be a lower-case DNS label of at most 20 characters\n' >&2
   exit 64

@@ -58,7 +58,7 @@ export -f kubectl
 
 run_preflight() {
   K3S_INSTALLATION_ID=test-a \
-  K3S_RELEASE_NAMESPACE=mwc-test-a \
+  K3S_RELEASE_NAMESPACE=memeloop-workspace-control \
   K3S_STORAGE_CLASS=managed-delete \
   K3S_MODE=${K3S_MODE:-sqlite} \
   K3S_PUBLIC_SSH=${K3S_PUBLIC_SSH:-false} \
@@ -70,6 +70,15 @@ run_preflight() {
 }
 
 FAKE_NAMESPACE_EXISTS=false FAKE_HTTPROUTE_CRD=false run_preflight >/dev/null
+
+if K3S_INSTALLATION_ID=test-a \
+  K3S_RELEASE_NAMESPACE=another-namespace \
+  K3S_STORAGE_CLASS=managed-delete \
+  K3S_MODE=sqlite \
+  bash "$preflight" >/dev/null 2>&1; then
+  printf 'preflight accepted a non-canonical release namespace\n' >&2
+  exit 1
+fi
 
 FAKE_NAMESPACE_EXISTS=false \
 FAKE_HTTPROUTE_CRD=false \

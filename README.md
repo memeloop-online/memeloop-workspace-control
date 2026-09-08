@@ -105,12 +105,12 @@ Chart 位于 `deploy/helm/memeloop-workspace-control`：
 - `mode=sqlite` 渲染单副本 StatefulSet 与独立 RWO PVC，并显式保留 StatefulSet
   删除或缩容后的 claim；`sqlite.existingClaim` 可改为挂载同 Namespace 中的预建 PVC。
 - `mode=postgresql` 渲染 Deployment 与 HPA。
-- `workspace.sharedNamespace` 可让新建的工作区使用一个共享 Namespace；
-  默认空值不注入环境变量并继续使用每工作区独立 Namespace；直接注入空字符串会被配置
-  校验拒绝。创建 API 与协调器都会验证共享 Namespace 的 installation ownership，既有
-  工作区不会被重命名或迁移。
+- Chart 只能安装在 `memeloop-workspace-control` Namespace；控制面与全部工作区都位于
+  该 Namespace。工作区资源名使用工作区 ID 前缀，并保留 installation、workspace、
+  organization 和 owner 标签，避免资源名与 selector 冲突。
 - 公网 SSH 始终只有一条固定 TCPRoute，后端是标准 OpenSSH 跳板 Deployment。
-- 每个工作区在工作区所在 Namespace 创建 `networking.k8s.io/v1` Ingress，将
+- 每个工作区在 `memeloop-workspace-control` Namespace 创建独立的
+  `networking.k8s.io/v1` Ingress，将
   `/shell/<installation>-<short-id>/` 原样转发给使用相同 `--base-path` 的 ttyd；Higress external-auth
   消费一次性 ticket。Web Shell 不依赖 Gateway API CRD 或跨 Namespace ReferenceGrant。
 

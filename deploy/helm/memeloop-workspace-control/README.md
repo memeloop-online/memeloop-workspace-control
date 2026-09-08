@@ -19,19 +19,10 @@ controlled window, stop the only database writer, check SQLite integrity, delete
 StatefulSet without deleting its retained PVC, and set `sqlite.existingClaim` to that exact claim
 name. Verify the recreated Pod mounts the recorded PVC/PV/CSI handle before allowing writes.
 
-Set `workspace.sharedNamespace` to place newly created workspaces in one
-installation-owned Namespace. The default empty value preserves dedicated Namespace placement.
-Existing workspaces keep their persisted runtime identity and are never moved by changing this
-value.
-
-The Helm default does not emit `MWC_WORKSPACE_SHARED_NAMESPACE`. Setting that environment variable
-directly to an empty string is not equivalent to leaving it unset: application validation rejects
-the empty string. For a non-empty value, the control plane creates an absent shared Namespace with
-installation ownership. Before database insertion, the creation API reads an existing configured
-Namespace and rejects installation-ownership conflicts or a workspace-owned Namespace; apply
-repeats the same check to close the race. A missing Namespace is allowed for the coordinator to
-create. RBAC, quota/policy, and StorageClass failures remain ordinary fail-closed reconciliation
-errors rather than claims made by this ownership preflight.
+Install the chart with `--namespace memeloop-workspace-control`. Rendering fails for every other
+release Namespace. The control plane and every workspace use this Namespace; workspace-ID-prefixed
+resource names and ownership labels isolate their StatefulSets, Services, claims, configuration,
+NetworkPolicies and routes without creating per-workspace Namespaces.
 
 The internal listener on port `8081` exposes OpenMetrics at `/metrics`, including HTTP
 latency/errors, active streams, upstream calls, durable queues, process/allocator memory, plugin
@@ -61,8 +52,8 @@ for the storage bands follows `monitoring.prometheusRule.warningFor` and
 `workspace.memeloop.dev/owner-installation` and `workspace.memeloop.dev/workspace-id` Pod labels
 from kube-state-metrics and joins matching Pods to
 `kube_pod_spec_volumes_persistentvolumeclaims_info`. The workspace UUID is only a filter and is not
-copied into recording or alert labels. This covers dedicated and shared
-prefixed shared-Namespace workspaces while their Pod object exists. Stopped workspaces have no Pod,
+copied into recording or alert labels. This covers all workspace-ID-prefixed resources in
+`memeloop-workspace-control` while their Pod object exists. Stopped workspaces have no Pod,
 so they intentionally have no Home-usage series or capacity alert; inspect their PVC/storage volume
 directly during stopped maintenance. Before enabling these rules, use a known running workspace to
 verify both allowlisted Pod labels and the Pod/PVC relationship metric are present and the join
@@ -110,7 +101,7 @@ wildcard DNS record and matching wildcard TLS certificate for `*.ports.example.c
 Configure the wildcard in Higress `credentialConfig` without an ACME issuer and enable
 `fallbackForInvalidSecret`; the generated Ingress uses an intentionally absent placeholder Secret
 so Higress resolves the certificate centrally instead of copying private keys into workspace
-namespaces.
+resources.
 Higress attaches fail-closed external authentication through the shared `access-auth` plugin and
 the valid full-label wildcard route match, then the port-mapping rule selects only `p-*` mapping
 hosts with its inner blacklist. This two-stage match is required because Higress route matching
@@ -131,10 +122,8 @@ the verified `sha256:...` values published by CI. A digest takes precedence over
 the corresponding tag, and the chart rejects malformed digest values.
 
 Public PostgreSQL example values are in `values.example.yaml`; the internal SQLite shape is in
-`values.internal.example.yaml`. Install each coexisting instance
-into its own namespace and use a separate database, secrets, ServiceAccount,
-PVC, domains, and (when public SSH is enabled) LoadBalancer IP or shared jump
-facility.
+`values.internal.example.yaml`. A cluster runs one installation in the canonical Namespace and
+uses its own database, Secrets, ServiceAccount, PVC and domains.
 
 Before installing on K3S, run `scripts/k3s/preflight.sh`. After rollout, run
 `scripts/k3s/verify-installation.sh`; both scripts are read-only and require explicit environment

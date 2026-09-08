@@ -40,27 +40,26 @@
 
 SQLite 模式可通过内置导出和迁移命令升级到 PostgreSQL 模式。迁移后改用 Deployment，即可增加服务副本分摊 CPU 负载。
 
-### 同集群多实例共存
+### 集群部署边界
 
-每套安装必须拥有不可变的 `installation_id`，并执行以下隔离：
+每个集群部署一套实例。安装拥有不可变的 `installation_id`，并执行以下隔离：
 
 - 使用独立 SQLite 文件或独立 PostgreSQL Database/Schema。
 - 使用独立 ServiceAccount、RoleBinding、Service、PVC 和配置。
-- 工作区 Namespace 名称包含安装前缀，例如 `ws-&lt;installation&gt;-&lt;workspace&gt;`。
+- 控制面与全部工作区统一位于 `memeloop-workspace-control` Namespace。
+- 工作区资源名称包含工作区 ID 前缀，并使用所有权标签隔离 selector 与清理范围。
 - 所有受管资源标记 `owner-installation=&lt;installation_id&gt;`。
 - 协调器只查询并修改带有自身所有权标签的资源。
 - 删除操作必须同时匹配数据库记录和 Kubernetes 所有权标签。
-- API、Web Shell 和管理界面使用不同域名或路径前缀。
+- API、Web Shell 和管理界面使用各自的域名或路径前缀。
 - SQLite 实例使用内网 SSH 时，不创建公网跳板路由。
 - 公网实例独占其 SSH 域名对应的 Higress TCP 22 入口。
 
-一个内部 SQLite 实例与一个公网 PostgreSQL 实例可正常共存。若多套实例都需要公网 SSH，它们不能同时独占同一个公网 `IP:22`；需使用不同 LoadBalancer IP，或共同接入一套支持多安装来源的共享跳板机。
-
-由于 Kubernetes RBAC 无法按 Namespace 标签限制集群级 Namespace 创建权限，同集群多实例只提供逻辑所有权隔离。互不信任的运营方必须使用独立集群或 vCluster。
+同一集群只部署一套实例；需要隔离的运营方使用独立集群或 vCluster。
 
 ## 工作区生命周期
 
-- 每个工作区拥有独立 Namespace。
+- 所有工作区位于 `memeloop-workspace-control` Namespace，各自使用带工作区 ID 前缀的资源。
 - 使用单副本 StatefulSet：启动时副本数为 `1`；停止时缩容到 `0`；停止保留 PVC、配置和 SSH 身份。
 - 每个工作区创建 ClusterIP Service，SSH 在 Pod 内监听 `2222`。
 - 工作区镜像包含标准 OpenSSH Server，并接受平台挂载的 host key、`authorized_keys`、`sshd_config`、Secret 和配置文件。
@@ -70,8 +69,8 @@ SQLite 模式可通过内置导出和迁移命令升级到 PostgreSQL 模式。�
 
 1. 禁止生成新的 Web Shell 和 SSH 授权。
 2. 删除 Higress HTTP 路由及跳板机目标授权。
-3. 删除工作区 Namespace。
-4. 等待 StatefulSet、Pod、Service、Secret、ConfigMap 和 PVC 全部消失。
+3. 删除带该工作区 ID 所有权标签的资源。
+4. 等待 StatefulSet、Pod、Service、Secret、ConfigMap、PVC、NetworkPolicy 和路由全部消失。
 5. 确认资源清理后才标记为 `deleted`。
 6. 数据库只保留不含敏感值的审计墓碑。
 7. 管理型 StorageClass 必须使用 `reclaimPolicy: Delete`。
@@ -163,7 +162,7 @@ Web Shell 采用现成的 ttyd：
 
 界面必须使用多行编辑器，保留空行、缩进和末尾换行，支持 JSON、YAML、PEM 和多行配置。Secret 保存后只写不可读但允许整体替换；展示最终值来自组织、用户还是工作区；创建前预览覆盖和锁定冲突。
 
-Secret 使用信封加密存储。解析后物化为工作区 Namespace 内的 Kubernetes Secret/ConfigMap；明文不进入日志、审计或 Kubernetes 注解。
+Secret 使用信封加密存储。解析后物化为 `memeloop-workspace-control` Namespace 内按工作区 ID 命名的 Kubernetes Secret/ConfigMap；明文不进入日志、审计或 Kubernetes 注解。
 
 ## API 与管理界面
 
@@ -185,7 +184,7 @@ Ready 后返回 ProxyJump SSH 命令、SSH config 片段、跳板机和工作区
 - 验证一个公网 22 端口可同时连接多个工作区，且 `PermitOpen` 阻止跨工作区访问。
 - 验证 ttyd、Higress WebSocket、external-auth 和一次性 ticket。
 - 验证三级 Secret 覆盖、锁定和 API 内联注入。
-- 验证删除后 Namespace、PVC、Secret、路由和跳板授权全部清理。
+- 验证删除后该工作区的 PVC、Secret、路由和跳板授权全部清理，产品 Namespace 与其他工作区不受影响。
 - 集成和部署测试仅运行在自有 K3s 实例，不建立 Kubernetes/K3s 多版本测试矩阵。
 
 ## 明确边界
