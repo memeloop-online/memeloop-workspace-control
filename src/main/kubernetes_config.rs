@@ -15,8 +15,9 @@ pub(super) fn resource_builder(config: &AppConfig) -> Result<ResourceBuilder, io
     })?;
     let higress_namespace =
         std::env::var("MWC_HIGRESS_NAMESPACE").unwrap_or_else(|_| "higress-system".to_owned());
-    let jump_host_namespace = std::env::var("MWC_JUMP_HOST_NAMESPACE")
-        .unwrap_or_else(|_| format!("mwc-{}", config.installation_id));
+    let jump_host_namespace = std::env::var("MWC_JUMP_HOST_NAMESPACE").unwrap_or_else(|_| {
+        memeloop_workspace_control::workspace_runtime::WORKSPACE_NAMESPACE.to_owned()
+    });
     let storage_class_name = std::env::var("MWC_STORAGE_CLASS_NAME")
         .ok()
         .filter(|value| !value.trim().is_empty());
