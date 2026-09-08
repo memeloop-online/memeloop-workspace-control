@@ -772,10 +772,6 @@ async fn creating_a_user_with_an_organization_membership_is_atomic_and_authorize
     }
 }
 
-fn test_key_expiry() -> i64 {
-    test_unix_timestamp() + 30 * 24 * 60 * 60
-}
-
 fn test_unix_timestamp() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
