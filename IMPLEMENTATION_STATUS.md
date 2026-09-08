@@ -427,7 +427,10 @@ header for `sha-df281ea` (no image layers downloaded, authentication held only i
 | `-workspace` | `sha256:c37fa3729f548bec8a693c956f05017fb5af08f508145253b23ea843579be12b` |
 | `-ssh-jump` | `sha256:6b1db4a26be39a32136a9a03c97f94378a7d94b6bdb9a7d6e84323e0f7efb6a8` |
 
-`release_manifest_plan` owns updating only the staged final Application source/image pins.
+`release_manifest_plan` completed final pin update `7206fdc`; main reviewed exactly four
+changed fields (source revision, control/ttyd/jump digests). Helm rendering and diff checks
+passed. The full candidate is the namespace/manual-sync change `8587d39` plus pin update
+`7206fdc`, not the pin-only commit alone. Neither is pushed/applied.
 Keep manual sync, existingClaim, migration gates and mTLS-disabled configuration; do not
 deploy the schema-22 release over a schema-19 database or push the staging branch wholesale.
 Browser runner review requires UUID v7 acceptance, CDP socket identity from `webSocketCreated`,
@@ -472,8 +475,8 @@ schema bridge, writer shutdown, retained-volume and rollback gates.
 3. Upgrade the remaining two workspaces to the final development images through the audited API,
    verify SSH/Web Shell/PVC/host-key continuity, then disable their superseded image policies.
 4. After bridge acceptance, perform the offline 20→22 migration and target volume binding.
-   The current final manifest candidate is GitOps `8587d39`, pinned to verified `32945cc`
-   images with automated sync paused. Rebase only that reviewed delta onto current GitOps
+   The current final manifest candidate is GitOps `8587d39` plus `7206fdc`, pinned to verified
+   `df281ea` images with automated sync paused. Rebase only that combined reviewed delta onto current GitOps
    `origin/master` for the controlled promotion; do not push the staging history wholesale or sync
    before the target database/PVC is ready. Keep mTLS disabled until its own rollout gates pass.
 5. First prove Higress→ttyd mTLS including invalid-client and invalid-server-trust rejection.
