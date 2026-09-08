@@ -1,9 +1,9 @@
-pub(super) const SCHEMA_VERSION: i64 = 20;
+pub(super) const SCHEMA_VERSION: i64 = 21;
 
 pub(super) const MIGRATION_TABLE: &str = "CREATE TABLE IF NOT EXISTS schema_migrations (version BIGINT PRIMARY KEY, applied_at BIGINT NOT NULL)";
 
 /// Complete schema for a new installation. This baseline deliberately contains
-/// only the current data model; an earlier release performs the one-time v19 upgrade.
+/// only the current data model. Runtime placement is a product invariant and is not persisted.
 pub(super) const BASELINE: &[&str] = &[
     "CREATE TABLE installation_metadata (singleton INTEGER PRIMARY KEY CHECK (singleton = 1), installation_id TEXT NOT NULL)",
     "CREATE TABLE users (id TEXT PRIMARY KEY, installation_id TEXT NOT NULL, display_name TEXT NOT NULL, token_hash TEXT NOT NULL, system_admin BIGINT NOT NULL, disabled BIGINT NOT NULL, created_at BIGINT NOT NULL, avatar_url TEXT, UNIQUE (installation_id, token_hash))",
@@ -17,7 +17,7 @@ pub(super) const BASELINE: &[&str] = &[
     "CREATE INDEX memberships_organization_role_idx ON organization_memberships (installation_id, organization_id, role)",
     "CREATE TABLE organization_quotas (installation_id TEXT NOT NULL, organization_id TEXT NOT NULL, cpu_millis BIGINT NOT NULL, memory_mib BIGINT NOT NULL, gpu_count BIGINT NOT NULL, disk_gib BIGINT NOT NULL, updated_at BIGINT NOT NULL, PRIMARY KEY (installation_id, organization_id), FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE)",
     "CREATE TABLE user_quotas (installation_id TEXT NOT NULL, user_id TEXT NOT NULL, cpu_millis BIGINT NOT NULL, memory_mib BIGINT NOT NULL, gpu_count BIGINT NOT NULL, disk_gib BIGINT NOT NULL, updated_at BIGINT NOT NULL, PRIMARY KEY (installation_id, user_id), FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE)",
-    "CREATE TABLE workspaces (id TEXT PRIMARY KEY, installation_id TEXT NOT NULL, short_id TEXT NOT NULL, organization_id TEXT NOT NULL, owner_id TEXT NOT NULL, name TEXT NOT NULL, template_id TEXT, image TEXT NOT NULL, access_mode TEXT NOT NULL, state TEXT NOT NULL, cpu_millis BIGINT NOT NULL, memory_mib BIGINT NOT NULL, gpu_count BIGINT NOT NULL, disk_gib BIGINT NOT NULL, generation BIGINT NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, deleted_at BIGINT, template_snapshot_yaml TEXT NOT NULL, runtime_namespace_scope TEXT NOT NULL, runtime_namespace TEXT NOT NULL, UNIQUE (installation_id, short_id), UNIQUE (installation_id, organization_id, name), FOREIGN KEY (organization_id) REFERENCES organizations(id), FOREIGN KEY (owner_id) REFERENCES users(id))",
+    "CREATE TABLE workspaces (id TEXT PRIMARY KEY, installation_id TEXT NOT NULL, short_id TEXT NOT NULL, organization_id TEXT NOT NULL, owner_id TEXT NOT NULL, name TEXT NOT NULL, template_id TEXT, image TEXT NOT NULL, access_mode TEXT NOT NULL, state TEXT NOT NULL, cpu_millis BIGINT NOT NULL, memory_mib BIGINT NOT NULL, gpu_count BIGINT NOT NULL, disk_gib BIGINT NOT NULL, generation BIGINT NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, deleted_at BIGINT, template_snapshot_yaml TEXT NOT NULL, UNIQUE (installation_id, short_id), UNIQUE (installation_id, organization_id, name), FOREIGN KEY (organization_id) REFERENCES organizations(id), FOREIGN KEY (owner_id) REFERENCES users(id))",
     "CREATE INDEX workspaces_org_idx ON workspaces (installation_id, organization_id, state, created_at)",
     "CREATE INDEX workspaces_page_idx ON workspaces (installation_id, organization_id, state, created_at, id)",
     "CREATE TABLE workspace_injection_refs (installation_id TEXT NOT NULL, workspace_id TEXT NOT NULL, scope TEXT NOT NULL, injection_key TEXT NOT NULL, created_at BIGINT NOT NULL, PRIMARY KEY (installation_id, workspace_id, scope, injection_key), FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE)",

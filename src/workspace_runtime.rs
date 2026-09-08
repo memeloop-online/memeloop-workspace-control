@@ -5,90 +5,44 @@ use uuid::Uuid;
 
 use crate::config::InstallationId;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum WorkspaceNamespaceScope {
-    Dedicated,
-    Shared,
-}
-
-impl WorkspaceNamespaceScope {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Dedicated => "dedicated",
-            Self::Shared => "shared",
-        }
-    }
-
-    pub fn from_database(value: &str) -> Option<Self> {
-        match value {
-            "dedicated" => Some(Self::Dedicated),
-            "shared" => Some(Self::Shared),
-            _ => None,
-        }
-    }
-}
+pub const WORKSPACE_NAMESPACE: &str = "memeloop-workspace-control";
 
 /// Immutable runtime placement captured when a workspace is created.
 ///
 /// Object names and public routes deliberately are not persisted here. They
 /// are a pure function of the installation and workspace short id.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
-pub struct WorkspaceRuntimeIdentity {
-    pub namespace_scope: WorkspaceNamespaceScope,
-    pub namespace: String,
-}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema, Default)]
+pub struct WorkspaceRuntimeIdentity;
 
 impl WorkspaceRuntimeIdentity {
     pub fn new(
-        installation_id: &InstallationId,
         workspace_id: Uuid,
         workspace_short_id: &str,
-        shared_namespace: Option<&str>,
     ) -> Result<Self, WorkspaceRuntimeIdentityError> {
         if workspace_short_id != workspace_short_id_for(workspace_id) {
             return Err(WorkspaceRuntimeIdentityError::InvalidIdentity);
         }
-        let identity = Self {
-            namespace_scope: if shared_namespace.is_some() {
-                WorkspaceNamespaceScope::Shared
-            } else {
-                WorkspaceNamespaceScope::Dedicated
-            },
-            namespace: match shared_namespace {
-                Some(namespace) => namespace.to_owned(),
-                None => installation_id
-                    .workspace_namespace(workspace_short_id)
-                    .map_err(|_| WorkspaceRuntimeIdentityError::InvalidIdentity)?,
-            },
-        };
-        identity.validate_for_workspace(installation_id, workspace_id, workspace_short_id)?;
-        Ok(identity)
+        Ok(Self)
     }
 
     pub fn validate(&self) -> Result<(), WorkspaceRuntimeIdentityError> {
-        valid_dns_label(&self.namespace, 63)
+        valid_dns_label(WORKSPACE_NAMESPACE, 63)
     }
 
     pub fn validate_for_workspace(
         &self,
-        installation_id: &InstallationId,
+        _installation_id: &InstallationId,
         workspace_id: Uuid,
         workspace_short_id: &str,
     ) -> Result<(), WorkspaceRuntimeIdentityError> {
         self.validate()?;
-        if workspace_short_id != workspace_short_id_for(workspace_id) {
-            return Err(WorkspaceRuntimeIdentityError::InvalidIdentity);
-        }
-        if self.namespace_scope == WorkspaceNamespaceScope::Dedicated {
-            let expected_namespace = installation_id
-                .workspace_namespace(workspace_short_id)
-                .map_err(|_| WorkspaceRuntimeIdentityError::InvalidIdentity)?;
-            if self.namespace != expected_namespace {
-                return Err(WorkspaceRuntimeIdentityError::InvalidIdentity);
-            }
-        }
-        Ok(())
+        (workspace_short_id == workspace_short_id_for(workspace_id))
+            .then_some(())
+            .ok_or(WorkspaceRuntimeIdentityError::InvalidIdentity)
+    }
+
+    pub const fn namespace(&self) -> &'static str {
+        WORKSPACE_NAMESPACE
     }
 }
 
@@ -116,7 +70,7 @@ impl WorkspaceRuntimeNames {
         let resources = WorkspaceResourceNames::for_prefix(&resource_prefix);
         resources.validate()?;
         Ok(Self {
-            namespace: runtime.namespace.clone(),
+            namespace: runtime.namespace().to_owned(),
             resource_prefix,
             route_key,
             resources,
@@ -179,8 +133,8 @@ impl WorkspaceResourceNames {
             network_policy: named("ingress"),
             web_shell_ingress: named("web-shell"),
             // Keep the claim-template name stable across workspace identity changes. The
-            // StatefulSet name is part of the generated PVC name, so shared namespaces still
-            // get one collision-free PVC per workspace.
+            // StatefulSet name is part of the generated PVC name, keeping each workspace claim
+            // collision-free in the product Namespace.
             data_claim_template: "workspace-data".to_owned(),
         }
     }
@@ -250,11 +204,10 @@ mod tests {
     fn canonical_names_are_prefixed_and_bound_to_the_installation() {
         let installation = "internal-a".parse().unwrap();
         let short_id = workspace_short_id_for(workspace_id());
-        let runtime =
-            WorkspaceRuntimeIdentity::new(&installation, workspace_id(), &short_id, None).unwrap();
+        let runtime = WorkspaceRuntimeIdentity::new(workspace_id(), &short_id).unwrap();
         let names =
             WorkspaceRuntimeNames::for_workspace(&installation, &runtime, &short_id).unwrap();
-        assert_eq!(names.namespace, "ws-internal-a-8000000000000001");
+        assert_eq!(names.namespace, WORKSPACE_NAMESPACE);
         assert_eq!(names.resources.stateful_set, "w-8000000000000001");
         assert_eq!(names.resources.data_claim_template, "workspace-data");
         assert_eq!(
@@ -274,11 +227,8 @@ mod tests {
         let second_id = Uuid::parse_str("018f0000-0000-7000-8000-000000000002").unwrap();
         let first_short_id = workspace_short_id_for(first_id);
         let second_short_id = workspace_short_id_for(second_id);
-        let first_runtime =
-            WorkspaceRuntimeIdentity::new(&installation, first_id, &first_short_id, None).unwrap();
-        let second_runtime =
-            WorkspaceRuntimeIdentity::new(&installation, second_id, &second_short_id, None)
-                .unwrap();
+        let first_runtime = WorkspaceRuntimeIdentity::new(first_id, &first_short_id).unwrap();
+        let second_runtime = WorkspaceRuntimeIdentity::new(second_id, &second_short_id).unwrap();
         let first_names =
             WorkspaceRuntimeNames::for_workspace(&installation, &first_runtime, &first_short_id)
                 .unwrap();
@@ -306,41 +256,18 @@ mod tests {
 
     #[test]
     fn identity_rejects_a_short_id_from_another_workspace() {
-        let installation = "internal-a".parse().unwrap();
-        assert!(
-            WorkspaceRuntimeIdentity::new(&installation, workspace_id(), "8000000000000002", None,)
-                .is_err()
-        );
+        assert!(WorkspaceRuntimeIdentity::new(workspace_id(), "8000000000000002").is_err());
     }
 
     #[test]
-    fn dedicated_identity_rejects_a_tampered_namespace() {
+    fn runtime_identity_always_uses_the_product_namespace() {
         let installation = "internal-a".parse().unwrap();
         let short_id = workspace_short_id_for(workspace_id());
-        let mut runtime =
-            WorkspaceRuntimeIdentity::new(&installation, workspace_id(), &short_id, None).unwrap();
-        runtime.namespace = "other-namespace".to_owned();
-        assert!(
-            runtime
-                .validate_for_workspace(&installation, workspace_id(), &short_id)
-                .is_err()
-        );
-    }
-
-    #[test]
-    fn shared_identity_keeps_its_placement_but_not_its_names() {
-        let installation = "internal-a".parse().unwrap();
-        let short_id = workspace_short_id_for(workspace_id());
-        let runtime = WorkspaceRuntimeIdentity::new(
-            &installation,
-            workspace_id(),
-            &short_id,
-            Some("persisted-shared-namespace"),
-        )
-        .unwrap();
+        let runtime = WorkspaceRuntimeIdentity::new(workspace_id(), &short_id).unwrap();
         let names =
             WorkspaceRuntimeNames::for_workspace(&installation, &runtime, &short_id).unwrap();
-        assert_eq!(names.namespace, "persisted-shared-namespace");
+        assert_eq!(runtime.namespace(), WORKSPACE_NAMESPACE);
+        assert_eq!(names.namespace, WORKSPACE_NAMESPACE);
         assert_eq!(names.resource_prefix, "w-8000000000000001");
     }
 }

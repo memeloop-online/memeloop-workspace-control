@@ -20,7 +20,7 @@ impl KubernetesCoordinator {
         workspace: &Workspace,
         mappings: &[PortMapping],
     ) -> Result<(), ReconcileError> {
-        let namespace = &workspace.runtime.namespace;
+        let namespace = workspace.runtime.namespace();
         let services = Api::<Service>::namespaced(self.client.clone(), namespace);
         let ingresses = Api::<Ingress>::namespaced(self.client.clone(), namespace);
         let policies = Api::<NetworkPolicy>::namespaced(self.client.clone(), namespace);

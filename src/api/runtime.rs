@@ -267,7 +267,7 @@ fn build_runtime_entries(
                     allocated: workspace.template.resources,
                     pvc_capacity: kubernetes.pvc_capacities.remove(&workspace_id),
                     storage: storage_metrics.telemetry(
-                        &workspace.runtime.namespace,
+                        workspace.runtime.namespace(),
                         &names.resources.data_pvc_ordinal_zero(),
                         observed_now,
                     ),
@@ -299,7 +299,7 @@ pub(super) async fn get(
     let kubernetes_request = state
         .observability
         .begin_upstream(crate::observability::UpstreamKind::Kubernetes);
-    let namespace = &workspace.runtime.namespace;
+    let namespace = workspace.runtime.namespace();
     let names = crate::workspace_runtime::WorkspaceRuntimeNames::for_workspace(
         &state.config.installation_id,
         &workspace.runtime,

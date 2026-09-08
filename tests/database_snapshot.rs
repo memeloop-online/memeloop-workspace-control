@@ -86,7 +86,7 @@ async fn sqlite_snapshot_contains_ciphertext_and_resets_only_pending_work() {
 
     let snapshot = database.export_snapshot(200).await.unwrap();
     assert_eq!(snapshot.format_version, 2);
-    assert_eq!(snapshot.schema_version, 20);
+    assert_eq!(snapshot.schema_version, 21);
     assert_eq!(snapshot.installation_id, "snapshot-test");
     assert_eq!(snapshot.tables["injection_items"].len(), 1);
     assert!(snapshot.tables.contains_key("workspace_injection_refs"));
@@ -95,12 +95,9 @@ async fn sqlite_snapshot_contains_ciphertext_and_resets_only_pending_work() {
     assert_eq!(snapshot.tables["plugin_assets"].len(), 1);
     assert_eq!(snapshot.tables["plugin_catalog_metadata"].len(), 1);
     let workspace_row = &snapshot.tables["workspaces"][0];
-    assert_eq!(workspace_row["runtime_namespace_scope"], "dedicated");
-    assert_eq!(
-        workspace_row["runtime_namespace"],
-        format!("ws-snapshot-test-{}", workspace.short_id)
-    );
     for removed_field in [
+        "runtime_namespace_scope",
+        "runtime_namespace",
         "runtime_naming_scheme",
         "runtime_resource_prefix",
         "runtime_route_key",
@@ -233,43 +230,40 @@ async fn postgres_import_restores_dynamic_plugin_package_and_assets_when_configu
         .await
         .unwrap();
 
-    // Import validates the persisted identity, rather than accepting a
+    // Import validates the canonical short identity rather than accepting a
     // syntactically-valid snapshot row that could target another resource.
     // Every failure must roll the whole import transaction back.
-    for (field, value) in [
-        ("runtime_namespace_scope", "invalid"),
-        ("runtime_namespace", "other-namespace"),
-    ] {
-        let mut invalid_snapshot = snapshot.clone();
-        let workspace = invalid_snapshot.tables.get_mut("workspaces").unwrap()[0]
-            .as_object_mut()
-            .unwrap();
-        workspace.insert(
-            field.to_owned(),
-            serde_json::Value::String(value.to_owned()),
-        );
-        assert!(matches!(
-            target.import_snapshot(&invalid_snapshot).await,
-            Err(StorageError::InvalidWorkspace)
-        ));
-        let Database::Postgres { pool, .. } = &target else {
-            unreachable!("the import target is PostgreSQL");
-        };
-        let workspace_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM workspaces")
-            .fetch_one(pool)
-            .await
-            .unwrap();
-        let organization_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM organizations")
-            .fetch_one(pool)
-            .await
-            .unwrap();
-        assert_eq!(workspace_count, 0);
-        assert_eq!(organization_count, 0);
-    }
+    let mut invalid_snapshot = snapshot.clone();
+    let invalid_workspace_row = invalid_snapshot.tables.get_mut("workspaces").unwrap()[0]
+        .as_object_mut()
+        .unwrap();
+    invalid_workspace_row.insert(
+        "short_id".to_owned(),
+        serde_json::Value::String("0000000000000000".to_owned()),
+    );
+    assert!(matches!(
+        target.import_snapshot(&invalid_snapshot).await,
+        Err(StorageError::InvalidWorkspace)
+    ));
+    let Database::Postgres { pool, .. } = &target else {
+        unreachable!("the import target is PostgreSQL");
+    };
+    let workspace_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM workspaces")
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    let organization_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM organizations")
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    assert_eq!(workspace_count, 0);
+    assert_eq!(organization_count, 0);
 
     // A v2 snapshot is a single runtime model. Supplying a removed dual-model
     // field is untrusted input and must be rejected before INSERT.
     for removed_field in [
+        "runtime_namespace_scope",
+        "runtime_namespace",
         "runtime_naming_scheme",
         "runtime_resource_prefix",
         "runtime_route_key",

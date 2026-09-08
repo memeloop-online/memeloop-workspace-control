@@ -15,8 +15,7 @@ use uuid::Uuid;
 use crate::{
     config::InstallationId,
     workspace_runtime::{
-        WorkspaceNamespaceScope, WorkspaceRuntimeIdentity, WorkspaceRuntimeIdentityError,
-        WorkspaceRuntimeNames,
+        WorkspaceRuntimeIdentity, WorkspaceRuntimeIdentityError, WorkspaceRuntimeNames,
     },
     workspaces::{Workspace, WorkspaceState},
 };
@@ -112,14 +111,10 @@ impl ResourceBuilder {
             workspace.id,
             &workspace.short_id,
         )?;
-        let runtime = &workspace.runtime;
         let names = self.runtime_names(workspace)?;
         let stable_labels = self.labels(workspace.id);
         let labels = self.workspace_labels(workspace);
-        let namespace_labels = match runtime.namespace_scope {
-            WorkspaceNamespaceScope::Dedicated => labels.clone(),
-            WorkspaceNamespaceScope::Shared => self.installation_labels(),
-        };
+        let namespace_labels = self.installation_labels();
         // StatefulSet selectors and volumeClaimTemplates are immutable. Keep those
         // labels limited to the original ownership identity so an upgrade can add
         // observability labels to existing workspaces without replacing storage.
@@ -140,7 +135,7 @@ impl ResourceBuilder {
         Ok(DesiredResources {
             namespace: Namespace {
                 metadata: ObjectMeta {
-                    name: Some(runtime.namespace.clone()),
+                    name: Some(workspace.runtime.namespace().to_owned()),
                     labels: Some(namespace_labels),
                     ..ObjectMeta::default()
                 },

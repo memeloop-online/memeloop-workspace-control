@@ -8,7 +8,7 @@ use memeloop_workspace_control::{
         Database, IdempotencyDecision, InjectionScopeRef, StorageError,
     },
     templates::{WorkspaceTemplateDocument, WorkspaceTemplateSpec},
-    workspace_runtime::{WorkspaceNamespaceScope, WorkspaceRuntimeNames},
+    workspace_runtime::{WORKSPACE_NAMESPACE, WorkspaceRuntimeNames},
     workspaces::{AccessMode, WorkspaceAction, WorkspaceObservation, WorkspaceState},
 };
 use std::collections::BTreeMap;
@@ -259,7 +259,6 @@ async fn admitted_template_must_match_the_transactional_workspace_snapshot() {
             },
             inline_injections: None,
             admitted_template_yaml: &admitted_yaml,
-            shared_namespace: None,
             allow_cluster_access: true,
             actor_user_id: admin.user_id,
             now: 104,
@@ -276,7 +275,7 @@ async fn admitted_template_must_match_the_transactional_workspace_snapshot() {
 }
 
 #[tokio::test]
-async fn workspace_runtime_identity_is_persisted_for_shared_namespace_creation() {
+async fn workspace_runtime_identity_uses_the_product_namespace() {
     let database = database().await;
     let admin = database
         .create_user("Admin", ADMIN_TOKEN, true, 100)
@@ -325,7 +324,6 @@ async fn workspace_runtime_identity_is_persisted_for_shared_namespace_creation()
             },
             inline_injections: None,
             admitted_template_yaml: &admitted_yaml,
-            shared_namespace: Some("workspace-pool"),
             allow_cluster_access: true,
             actor_user_id: admin.user_id,
             now: 103,
@@ -333,11 +331,7 @@ async fn workspace_runtime_identity_is_persisted_for_shared_namespace_creation()
         .await
         .unwrap();
 
-    assert_eq!(
-        workspace.runtime.namespace_scope,
-        WorkspaceNamespaceScope::Shared
-    );
-    assert_eq!(workspace.runtime.namespace, "workspace-pool");
+    assert_eq!(workspace.runtime.namespace(), WORKSPACE_NAMESPACE);
     let runtime_names = WorkspaceRuntimeNames::for_workspace(
         &"business-test".parse().unwrap(),
         &workspace.runtime,

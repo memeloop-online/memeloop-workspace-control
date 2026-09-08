@@ -134,7 +134,6 @@ async fn browser_access_tickets_are_scoped_and_consumed_once() {
             instance_id: "test".to_owned(),
             ssh_public_host: None,
             internal_ssh_host: None,
-            workspace_shared_namespace: None,
             web_shell_public_origin: Some("https://shell.example.com".to_owned()),
             port_mapping_public_domain: Some("apps.example.com".to_owned()),
             prometheus_url: None,

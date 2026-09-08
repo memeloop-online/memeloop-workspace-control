@@ -77,63 +77,17 @@ mod coordinator_tests {
     }
 
     #[tokio::test]
-    async fn deletion_removes_owned_cluster_binding_then_service_account_then_namespace() {
-        let workspace_id = Uuid::now_v7();
-        let workspace = dedicated_workspace(workspace_id);
-        let mock = Arc::new(DeleteMock::new("public-a", workspace_id));
-        let coordinator = coordinator(mock.clone());
+    async fn deletion_waits_for_pods_then_deletes_only_the_owned_pvc() {
+        let workspace_id = workspace_id();
+        let workspace = workspace(workspace_id);
+        let mock = Arc::new(WorkspaceDeleteMock::new("public-a", workspace_id));
+        let coordinator = workspace_coordinator(mock.clone());
 
         assert_eq!(
             coordinator.delete_or_confirm(&workspace).await.unwrap(),
-            DeleteProgress::DeletionRequested
+            DeleteProgress::Terminating
         );
-        assert!(!mock.binding_exists.load(Ordering::SeqCst));
-        assert!(mock.service_account_exists.load(Ordering::SeqCst));
-
-        assert_eq!(
-            coordinator.delete_or_confirm(&workspace).await.unwrap(),
-            DeleteProgress::DeletionRequested
-        );
-        assert!(!mock.service_account_exists.load(Ordering::SeqCst));
-        assert!(mock.namespace_exists.load(Ordering::SeqCst));
-
-        assert_eq!(
-            coordinator.delete_or_confirm(&workspace).await.unwrap(),
-            DeleteProgress::DeletionRequested
-        );
-        assert!(!mock.namespace_exists.load(Ordering::SeqCst));
-        assert_eq!(
-            coordinator.delete_or_confirm(&workspace).await.unwrap(),
-            DeleteProgress::Gone
-        );
-
-        let requests = mock.requests.lock().unwrap();
-        let deletes = requests
-            .iter()
-            .filter(|(method, _)| method == Method::DELETE.as_str())
-            .map(|(_, uri)| uri.trim_end_matches('?'))
-            .collect::<Vec<_>>();
-        assert_eq!(
-            deletes,
-            [
-                "/apis/rbac.authorization.k8s.io/v1/clusterrolebindings/mwc-public-a-w-01jabc-admin",
-                "/api/v1/namespaces/ws-public-a-01jabc/serviceaccounts/w-01jabc-admin",
-                "/api/v1/namespaces/ws-public-a-01jabc",
-            ]
-        );
-    }
-
-    #[tokio::test]
-    async fn deletion_never_removes_another_installations_cluster_binding() {
-        let workspace_id = Uuid::now_v7();
-        let workspace = dedicated_workspace(workspace_id);
-        let mock = Arc::new(DeleteMock::new("other", workspace_id));
-        let coordinator = coordinator(mock.clone());
-        assert!(matches!(
-            coordinator.delete_or_confirm(&workspace).await,
-            Err(ReconcileError::Ownership(_))
-        ));
-        assert!(mock.binding_exists.load(Ordering::SeqCst));
+        assert!(mock.pvc_exists.load(Ordering::SeqCst));
         assert!(
             mock.requests
                 .lock()
@@ -141,23 +95,6 @@ mod coordinator_tests {
                 .iter()
                 .all(|(method, _)| method != Method::DELETE.as_str())
         );
-    }
-
-    #[tokio::test]
-    async fn shared_deletion_waits_for_pods_then_deletes_only_the_owned_pvc() {
-        let workspace_id = shared_workspace_id();
-        let workspace = shared_workspace(workspace_id);
-        let mock = Arc::new(SharedDeleteMock::new("public-a", workspace_id));
-        let coordinator = shared_coordinator(mock.clone());
-
-        assert_eq!(
-            coordinator.delete_or_confirm(&workspace).await.unwrap(),
-            DeleteProgress::Terminating
-        );
-        assert!(mock.pvc_exists.load(Ordering::SeqCst));
-        assert!(mock.requests.lock().unwrap().iter().all(|(method, path)| {
-            method != Method::DELETE.as_str() && path != "/api/v1/namespaces/workspace-pool"
-        }));
 
         mock.pod_exists.store(false, Ordering::SeqCst);
         assert_eq!(
@@ -178,17 +115,17 @@ mod coordinator_tests {
         assert_eq!(
             deletes,
             [
-                "/api/v1/namespaces/workspace-pool/persistentvolumeclaims/workspace-data-w-8000000000000001-0"
+                "/api/v1/namespaces/memeloop-workspace-control/persistentvolumeclaims/workspace-data-w-8000000000000001-0"
             ]
         );
     }
 
     #[tokio::test]
-    async fn shared_deletion_rejects_a_pod_with_wrong_ownership_without_deleting_anything() {
-        let workspace_id = shared_workspace_id();
-        let workspace = shared_workspace(workspace_id);
-        let mock = Arc::new(SharedDeleteMock::new("other", workspace_id));
-        let coordinator = shared_coordinator(mock.clone());
+    async fn deletion_rejects_a_pod_with_wrong_ownership_without_deleting_anything() {
+        let workspace_id = workspace_id();
+        let workspace = workspace(workspace_id);
+        let mock = Arc::new(WorkspaceDeleteMock::new("other", workspace_id));
+        let coordinator = workspace_coordinator(mock.clone());
         assert!(matches!(
             coordinator.delete_or_confirm(&workspace).await,
             Err(ReconcileError::Ownership(_))
@@ -203,11 +140,11 @@ mod coordinator_tests {
     }
 
     #[tokio::test]
-    async fn shared_deletion_rejects_a_target_pod_without_ownership_labels() {
-        let workspace_id = shared_workspace_id();
-        let workspace = shared_workspace(workspace_id);
-        let mock = Arc::new(SharedDeleteMock::without_pod_labels(workspace_id));
-        let coordinator = shared_coordinator(mock.clone());
+    async fn deletion_rejects_a_target_pod_without_ownership_labels() {
+        let workspace_id = workspace_id();
+        let workspace = workspace(workspace_id);
+        let mock = Arc::new(WorkspaceDeleteMock::without_pod_labels(workspace_id));
+        let coordinator = workspace_coordinator(mock.clone());
 
         assert!(matches!(
             coordinator.delete_or_confirm(&workspace).await,
@@ -217,13 +154,13 @@ mod coordinator_tests {
     }
 
     #[tokio::test]
-    async fn shared_deletion_waits_for_any_pod_referencing_the_data_pvc() {
-        let workspace_id = shared_workspace_id();
-        let workspace = shared_workspace(workspace_id);
-        let mock = Arc::new(SharedDeleteMock::new("public-a", workspace_id));
+    async fn deletion_waits_for_any_pod_referencing_the_data_pvc() {
+        let workspace_id = workspace_id();
+        let workspace = workspace(workspace_id);
+        let mock = Arc::new(WorkspaceDeleteMock::new("public-a", workspace_id));
         mock.pod_exists.store(false, Ordering::SeqCst);
         mock.other_pod_references_pvc.store(true, Ordering::SeqCst);
-        let coordinator = shared_coordinator(mock.clone());
+        let coordinator = workspace_coordinator(mock.clone());
 
         assert_eq!(
             coordinator.delete_or_confirm(&workspace).await.unwrap(),
@@ -234,14 +171,14 @@ mod coordinator_tests {
     }
 
     #[tokio::test]
-    async fn shared_deletion_rechecks_an_unlabeled_target_pod_that_appears_in_the_pod_list() {
-        let workspace_id = shared_workspace_id();
-        let workspace = shared_workspace(workspace_id);
-        let mock = Arc::new(SharedDeleteMock::without_pod_labels(workspace_id));
+    async fn deletion_rechecks_an_unlabeled_target_pod_that_appears_in_the_pod_list() {
+        let workspace_id = workspace_id();
+        let workspace = workspace(workspace_id);
+        let mock = Arc::new(WorkspaceDeleteMock::without_pod_labels(workspace_id));
         mock.pod_exists.store(false, Ordering::SeqCst);
         mock.target_pod_appears_in_list
             .store(true, Ordering::SeqCst);
-        let coordinator = shared_coordinator(mock.clone());
+        let coordinator = workspace_coordinator(mock.clone());
 
         assert!(matches!(
             coordinator.delete_or_confirm(&workspace).await,
@@ -251,18 +188,15 @@ mod coordinator_tests {
         assert_no_pvc_delete(&mock);
     }
 
-    fn dedicated_workspace(id: Uuid) -> Workspace {
+    fn workspace(id: Uuid) -> Workspace {
         Workspace {
             id,
-            short_id: "01jabc".to_owned(),
+            short_id: "8000000000000001".to_owned(),
             organization_id: Uuid::now_v7(),
             owner_id: Uuid::now_v7(),
             name: "test".to_owned(),
             template_id: None,
-            runtime: WorkspaceRuntimeIdentity {
-                namespace_scope: crate::workspace_runtime::WorkspaceNamespaceScope::Dedicated,
-                namespace: "ws-public-a-01jabc".to_owned(),
-            },
+            runtime: WorkspaceRuntimeIdentity,
             template: WorkspaceTemplateSpec::standard(
                 "example/workspace:1",
                 AccessMode::Public,
@@ -280,21 +214,11 @@ mod coordinator_tests {
         }
     }
 
-    fn shared_workspace(id: Uuid) -> Workspace {
-        let mut workspace = dedicated_workspace(id);
-        workspace.short_id = "8000000000000001".to_owned();
-        workspace.runtime = WorkspaceRuntimeIdentity {
-            namespace_scope: crate::workspace_runtime::WorkspaceNamespaceScope::Shared,
-            namespace: "workspace-pool".to_owned(),
-        };
-        workspace
-    }
-
-    fn shared_workspace_id() -> Uuid {
+    fn workspace_id() -> Uuid {
         Uuid::parse_str("018f0000-0000-7000-8000-000000000001").unwrap()
     }
 
-    struct SharedDeleteMock {
+    struct WorkspaceDeleteMock {
         pod_owner: Option<String>,
         workspace_id: Uuid,
         pod_exists: AtomicBool,
@@ -304,7 +228,7 @@ mod coordinator_tests {
         requests: Mutex<Vec<(String, String)>>,
     }
 
-    impl SharedDeleteMock {
+    impl WorkspaceDeleteMock {
         fn new(pod_owner: &str, workspace_id: Uuid) -> Self {
             Self {
                 pod_owner: Some(pod_owner.to_owned()),
@@ -332,7 +256,7 @@ mod coordinator_tests {
         fn target_pod(&self) -> serde_json::Value {
             let mut metadata = serde_json::json!({
                 "name": "w-8000000000000001-0",
-                "namespace": "workspace-pool",
+                "namespace": "memeloop-workspace-control",
             });
             if let Some(owner) = &self.pod_owner {
                 metadata["labels"] = ownership_labels(owner, self.workspace_id);
@@ -350,9 +274,26 @@ mod coordinator_tests {
                 .lock()
                 .unwrap()
                 .push((method.to_string(), uri.to_string()));
-            let pods_path = "/api/v1/namespaces/workspace-pool/pods";
-            let target_pod_path = "/api/v1/namespaces/workspace-pool/pods/w-8000000000000001-0";
-            let pvc_path = "/api/v1/namespaces/workspace-pool/persistentvolumeclaims/workspace-data-w-8000000000000001-0";
+            let namespace_path = "/api/v1/namespaces/memeloop-workspace-control";
+            let pods_path = "/api/v1/namespaces/memeloop-workspace-control/pods";
+            let target_pod_path =
+                "/api/v1/namespaces/memeloop-workspace-control/pods/w-8000000000000001-0";
+            let pvc_path = "/api/v1/namespaces/memeloop-workspace-control/persistentvolumeclaims/workspace-data-w-8000000000000001-0";
+            if method == Method::GET && path == namespace_path {
+                return json_response(
+                    StatusCode::OK,
+                    serde_json::json!({
+                        "apiVersion": "v1",
+                        "kind": "Namespace",
+                        "metadata": {
+                            "name": "memeloop-workspace-control",
+                            "labels": {
+                                "workspace.memeloop.dev/owner-installation": "public-a",
+                            },
+                        },
+                    }),
+                );
+            }
             if method == Method::GET && path == target_pod_path {
                 return if self.pod_exists.load(Ordering::SeqCst) {
                     json_response(StatusCode::OK, self.target_pod())
@@ -373,7 +314,7 @@ mod coordinator_tests {
                         "kind": "Pod",
                         "metadata": {
                             "name": "unrelated-pod",
-                            "namespace": "workspace-pool",
+                            "namespace": "memeloop-workspace-control",
                         },
                         "spec": {
                             "volumes": [{
@@ -404,7 +345,7 @@ mod coordinator_tests {
                             "kind": "PersistentVolumeClaim",
                             "metadata": {
                                 "name": "workspace-data-w-8000000000000001-0",
-                                "namespace": "workspace-pool",
+                                "namespace": "memeloop-workspace-control",
                                 "labels": ownership_labels("public-a", self.workspace_id),
                             },
                             "spec": {"accessModes": ["ReadWriteOnce"], "resources": {}},
@@ -421,9 +362,9 @@ mod coordinator_tests {
             if method == Method::GET
                 && matches!(
                     path,
-                    "/apis/networking.k8s.io/v1/namespaces/workspace-pool/ingresses"
-                        | "/apis/networking.k8s.io/v1/namespaces/workspace-pool/networkpolicies"
-                        | "/api/v1/namespaces/workspace-pool/services"
+                    "/apis/networking.k8s.io/v1/namespaces/memeloop-workspace-control/ingresses"
+                        | "/apis/networking.k8s.io/v1/namespaces/memeloop-workspace-control/networkpolicies"
+                        | "/api/v1/namespaces/memeloop-workspace-control/services"
                 )
             {
                 return json_response(
@@ -443,140 +384,7 @@ mod coordinator_tests {
         }
     }
 
-    struct DeleteMock {
-        binding_owner: String,
-        workspace_id: Uuid,
-        binding_exists: AtomicBool,
-        service_account_exists: AtomicBool,
-        namespace_exists: AtomicBool,
-        requests: Mutex<Vec<(String, String)>>,
-    }
-
-    impl DeleteMock {
-        fn new(binding_owner: &str, workspace_id: Uuid) -> Self {
-            Self {
-                binding_owner: binding_owner.to_owned(),
-                workspace_id,
-                binding_exists: AtomicBool::new(true),
-                service_account_exists: AtomicBool::new(true),
-                namespace_exists: AtomicBool::new(true),
-                requests: Mutex::new(Vec::new()),
-            }
-        }
-
-        fn response(&self, method: &Method, uri: &Uri) -> Response<Body> {
-            let path = uri.path();
-            self.requests
-                .lock()
-                .unwrap()
-                .push((method.to_string(), uri.to_string()));
-            let binding_path = "/apis/rbac.authorization.k8s.io/v1/clusterrolebindings/mwc-public-a-w-01jabc-admin";
-            let namespace_path = "/api/v1/namespaces/ws-public-a-01jabc";
-            let service_account_path =
-                "/api/v1/namespaces/ws-public-a-01jabc/serviceaccounts/w-01jabc-admin";
-            let ingress_path = "/apis/networking.k8s.io/v1/namespaces/ws-public-a-01jabc/ingresses/w-01jabc-web-shell";
-            match (method, path) {
-                (&Method::GET, value) if value == binding_path => {
-                    if self.binding_exists.load(Ordering::SeqCst) {
-                        json_response(
-                            StatusCode::OK,
-                            serde_json::json!({
-                                "apiVersion": "rbac.authorization.k8s.io/v1",
-                                "kind": "ClusterRoleBinding",
-                                "metadata": {
-                                    "name": "mwc-public-a-w-01jabc-admin",
-                                    "labels": ownership_labels(&self.binding_owner, self.workspace_id),
-                                },
-                                "roleRef": {
-                                    "apiGroup": "rbac.authorization.k8s.io",
-                                    "kind": "ClusterRole",
-                                    "name": "cluster-admin",
-                                },
-                            }),
-                        )
-                    } else {
-                        not_found()
-                    }
-                }
-                (&Method::DELETE, value) if value == binding_path => {
-                    self.binding_exists.store(false, Ordering::SeqCst);
-                    success()
-                }
-                (&Method::GET, value) if value == namespace_path => {
-                    if self.namespace_exists.load(Ordering::SeqCst) {
-                        json_response(
-                            StatusCode::OK,
-                            serde_json::json!({
-                                "apiVersion": "v1",
-                                "kind": "Namespace",
-                                "metadata": {
-                                    "name": "ws-public-a-01jabc",
-                                    "labels": ownership_labels("public-a", self.workspace_id),
-                                },
-                            }),
-                        )
-                    } else {
-                        not_found()
-                    }
-                }
-                (&Method::DELETE, value) if value == namespace_path => {
-                    self.namespace_exists.store(false, Ordering::SeqCst);
-                    success()
-                }
-                (&Method::GET, value) if value == service_account_path => {
-                    if self.service_account_exists.load(Ordering::SeqCst) {
-                        json_response(
-                            StatusCode::OK,
-                            serde_json::json!({
-                                "apiVersion": "v1",
-                                "kind": "ServiceAccount",
-                                "metadata": {
-                                    "name": "w-01jabc-admin",
-                                    "namespace": "ws-public-a-01jabc",
-                                    "labels": ownership_labels("public-a", self.workspace_id),
-                                },
-                            }),
-                        )
-                    } else {
-                        not_found()
-                    }
-                }
-                (&Method::DELETE, value) if value == service_account_path => {
-                    self.service_account_exists.store(false, Ordering::SeqCst);
-                    success()
-                }
-                (&Method::GET, value) if value == ingress_path => not_found(),
-                _ => panic!("unexpected Kubernetes request: {method} {path}"),
-            }
-        }
-    }
-
-    fn coordinator(mock: Arc<DeleteMock>) -> KubernetesCoordinator {
-        let service = service_fn(move |request: Request<kube::client::Body>| {
-            let mock = mock.clone();
-            async move { Ok::<_, Infallible>(mock.response(request.method(), request.uri())) }
-        });
-        KubernetesCoordinator::new(
-            kube::Client::new(service, "default"),
-            ResourceBuilder {
-                installation_id: "public-a".parse().unwrap(),
-                ttyd_image: "example/ttyd:1".to_owned(),
-                higress_namespace: "higress-system".to_owned(),
-                higress_pod_labels: BTreeMap::new(),
-                higress_source_cidrs: Vec::new(),
-                jump_host_namespace: "access".to_owned(),
-                jump_host_pod_labels: BTreeMap::new(),
-                storage_class_name: None,
-                web_shell_domain: None,
-                port_mapping_domain: None,
-                higress_gateway_name: "higress".to_owned(),
-                higress_https_section_name: "https".to_owned(),
-                internal_ssh_node_port_enabled: false,
-            },
-        )
-    }
-
-    fn shared_coordinator(mock: Arc<SharedDeleteMock>) -> KubernetesCoordinator {
+    fn workspace_coordinator(mock: Arc<WorkspaceDeleteMock>) -> KubernetesCoordinator {
         let service = service_fn(move |request: Request<kube::client::Body>| {
             let mock = mock.clone();
             async move { Ok::<_, Infallible>(mock.response(request.method(), request.uri())) }
@@ -608,22 +416,23 @@ mod coordinator_tests {
         })
     }
 
-    fn assert_no_pvc_delete(mock: &SharedDeleteMock) {
+    fn assert_no_pvc_delete(mock: &WorkspaceDeleteMock) {
         assert!(mock.requests.lock().unwrap().iter().all(|(method, path)| {
             method != Method::DELETE.as_str()
                 || path
                     .trim_end_matches('?')
-                    != "/api/v1/namespaces/workspace-pool/persistentvolumeclaims/workspace-data-w-8000000000000001-0"
+                    != "/api/v1/namespaces/memeloop-workspace-control/persistentvolumeclaims/workspace-data-w-8000000000000001-0"
         }));
     }
 
-    fn assert_pod_list_has_no_label_selector(mock: &SharedDeleteMock) {
+    fn assert_pod_list_has_no_label_selector(mock: &WorkspaceDeleteMock) {
         let requests = mock.requests.lock().unwrap();
         let pod_list_uris = requests
             .iter()
             .filter(|(method, uri)| {
                 method == Method::GET.as_str()
-                    && uri.split('?').next() == Some("/api/v1/namespaces/workspace-pool/pods")
+                    && uri.split('?').next()
+                        == Some("/api/v1/namespaces/memeloop-workspace-control/pods")
             })
             .map(|(_, uri)| uri.clone())
             .collect::<Vec<_>>();

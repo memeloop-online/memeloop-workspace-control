@@ -24,7 +24,7 @@ pub(super) async fn create_admitted_workspace(
             .validate()
             .map_err(|_| crate::storage::StorageError::InvalidWorkspace)?;
     }
-    preflight_shared_namespace(state).await?;
+    preflight_product_namespace(state).await?;
     validate_inline_injections(
         state,
         command,
@@ -62,7 +62,6 @@ pub(super) async fn create_admitted_workspace(
             command: command.clone(),
             inline_injections: inline,
             admitted_template_yaml: &template.yaml,
-            shared_namespace: state.config.workspace_shared_namespace.as_deref(),
             allow_cluster_access: actor.may_manage_system(),
             actor_user_id: actor.user_id,
             now,
@@ -70,13 +69,11 @@ pub(super) async fn create_admitted_workspace(
         .await?)
 }
 
-async fn preflight_shared_namespace(state: &AppState) -> Result<(), ApiError> {
-    let (Some(namespace), Some(client)) = (
-        state.config.workspace_shared_namespace.as_deref(),
-        state.kubernetes_client.clone(),
-    ) else {
+async fn preflight_product_namespace(state: &AppState) -> Result<(), ApiError> {
+    let Some(client) = state.kubernetes_client.clone() else {
         return Ok(());
     };
+    let namespace = crate::workspace_runtime::WORKSPACE_NAMESPACE;
     let namespaces = kube::Api::<k8s_openapi::api::core::v1::Namespace>::all(client);
     let Some(existing) = namespaces
         .get_opt(namespace)
@@ -92,7 +89,7 @@ async fn preflight_shared_namespace(state: &AppState) -> Result<(), ApiError> {
                 && !labels.contains_key(WORKSPACE_ID_LABEL)
         });
     if !compatible {
-        return Err(ApiError::SharedNamespaceConflict);
+        return Err(ApiError::ProductNamespaceConflict);
     }
     Ok(())
 }
@@ -146,24 +143,24 @@ mod tests {
         workspaces::AccessMode,
     };
 
-    const TOKEN: &str = "shared-preflight-admin-000000000000000000000000";
+    const TOKEN: &str = "namespace-preflight-admin-000000000000000000000";
 
     #[derive(Clone, Copy, Debug)]
     enum NamespaceFixture {
         Absent,
         Owned,
         WrongOwner,
-        Dedicated,
+        WorkspaceLabel,
         Terminating,
     }
 
     #[tokio::test]
-    async fn shared_namespace_preflight_is_fail_closed_before_workspace_insert() {
+    async fn product_namespace_preflight_is_fail_closed_before_workspace_insert() {
         for fixture in [
             NamespaceFixture::Absent,
             NamespaceFixture::Owned,
             NamespaceFixture::WrongOwner,
-            NamespaceFixture::Dedicated,
+            NamespaceFixture::WorkspaceLabel,
             NamespaceFixture::Terminating,
         ] {
             let (state, actor, request, template, organization_id) = setup(fixture).await;
@@ -173,7 +170,7 @@ mod tests {
                 assert!(result.is_ok(), "fixture {fixture:?} should be accepted");
             } else {
                 assert!(
-                    matches!(result, Err(ApiError::SharedNamespaceConflict)),
+                    matches!(result, Err(ApiError::ProductNamespaceConflict)),
                     "fixture {fixture:?} should fail with a namespace ownership conflict"
                 );
             }
@@ -271,7 +268,6 @@ mod tests {
                 instance_id: "test".to_owned(),
                 ssh_public_host: None,
                 internal_ssh_host: None,
-                workspace_shared_namespace: Some("workspace-pool".to_owned()),
                 web_shell_public_origin: None,
                 port_mapping_public_domain: None,
                 prometheus_url: None,
@@ -286,7 +282,10 @@ mod tests {
     fn fake_kubernetes_client(fixture: NamespaceFixture) -> kube::Client {
         let service = service_fn(move |request: Request<kube::client::Body>| async move {
             assert_eq!(request.method(), Method::GET);
-            assert_eq!(request.uri().path(), "/api/v1/namespaces/workspace-pool");
+            assert_eq!(
+                request.uri().path(),
+                "/api/v1/namespaces/memeloop-workspace-control"
+            );
             Ok::<_, Infallible>(namespace_response(fixture))
         });
         kube::Client::new(service, "default")
@@ -312,7 +311,7 @@ mod tests {
             "preflight-a"
         };
         let mut labels = BTreeMap::from([(OWNER_INSTALLATION_LABEL.to_owned(), owner.to_owned())]);
-        if matches!(fixture, NamespaceFixture::Dedicated) {
+        if matches!(fixture, NamespaceFixture::WorkspaceLabel) {
             labels.insert(WORKSPACE_ID_LABEL.to_owned(), uuid::Uuid::nil().to_string());
         }
         let deletion_timestamp =
@@ -323,7 +322,7 @@ mod tests {
                 "apiVersion": "v1",
                 "kind": "Namespace",
                 "metadata": {
-                    "name": "workspace-pool",
+                    "name": "memeloop-workspace-control",
                     "labels": labels,
                     "deletionTimestamp": deletion_timestamp,
                 },

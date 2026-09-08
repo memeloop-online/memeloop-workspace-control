@@ -7,7 +7,7 @@ use sqlx::Row;
 use crate::{
     config::InstallationId,
     templates::WorkspaceTemplateDocument,
-    workspace_runtime::{WorkspaceNamespaceScope, WorkspaceRuntimeIdentity},
+    workspace_runtime::{WorkspaceRuntimeIdentity, workspace_short_id_for},
 };
 use uuid::Uuid;
 
@@ -173,24 +173,10 @@ fn validate_snapshot_workspace_rows(
         let id = Uuid::parse_str(&required_workspace_string_field(object, "id")?)
             .map_err(|_| StorageError::InvalidWorkspace)?;
         let short_id = required_workspace_string_field(object, "short_id")?;
-        if [
-            "runtime_naming_scheme",
-            "runtime_resource_prefix",
-            "runtime_route_key",
-        ]
-        .iter()
-        .any(|field| object.contains_key(*field))
-        {
+        if short_id != workspace_short_id_for(id) {
             return Err(StorageError::InvalidWorkspace);
         }
-        let namespace_scope = WorkspaceNamespaceScope::from_database(
-            &required_workspace_string_field(object, "runtime_namespace_scope")?,
-        )
-        .ok_or(StorageError::InvalidWorkspace)?;
-        let runtime = WorkspaceRuntimeIdentity {
-            namespace_scope,
-            namespace: required_workspace_string_field(object, "runtime_namespace")?,
-        };
+        let runtime = WorkspaceRuntimeIdentity;
         runtime
             .validate_for_workspace(installation_id, id, &short_id)
             .map_err(|_| StorageError::InvalidWorkspace)?;
@@ -344,7 +330,7 @@ const EXPORT_QUERIES: &[(&str, &str)] = &[
     ),
     (
         "workspaces",
-        "SELECT json_object('id', id, 'installation_id', installation_id, 'short_id', short_id, 'organization_id', organization_id, 'owner_id', owner_id, 'name', name, 'template_id', template_id, 'image', image, 'access_mode', access_mode, 'state', state, 'cpu_millis', cpu_millis, 'memory_mib', memory_mib, 'gpu_count', gpu_count, 'disk_gib', disk_gib, 'generation', generation, 'created_at', created_at, 'updated_at', updated_at, 'deleted_at', deleted_at, 'template_snapshot_yaml', template_snapshot_yaml, 'runtime_namespace_scope', runtime_namespace_scope, 'runtime_namespace', runtime_namespace) item FROM workspaces WHERE installation_id = ?1 ORDER BY id",
+        "SELECT json_object('id', id, 'installation_id', installation_id, 'short_id', short_id, 'organization_id', organization_id, 'owner_id', owner_id, 'name', name, 'template_id', template_id, 'image', image, 'access_mode', access_mode, 'state', state, 'cpu_millis', cpu_millis, 'memory_mib', memory_mib, 'gpu_count', gpu_count, 'disk_gib', disk_gib, 'generation', generation, 'created_at', created_at, 'updated_at', updated_at, 'deleted_at', deleted_at, 'template_snapshot_yaml', template_snapshot_yaml) item FROM workspaces WHERE installation_id = ?1 ORDER BY id",
     ),
     (
         "workspace_port_mappings",

@@ -13,22 +13,19 @@ use kube::{
 use serde::de::DeserializeOwned;
 use uuid::Uuid;
 
-use crate::{
-    workspace_runtime::{WorkspaceNamespaceScope, WorkspaceResourceNames},
-    workspaces::Workspace,
-};
+use crate::{workspace_runtime::WorkspaceResourceNames, workspaces::Workspace};
 
 use super::{DeleteProgress, KubernetesCoordinator, ReconcileError, ResourceBuilder};
 
 impl KubernetesCoordinator {
-    /// Starts deletion or confirms that Kubernetes has finished removing the namespace.
+    /// Starts deletion or confirms that Kubernetes has removed every owned workspace resource.
     /// The caller must only mark the database row deleted after receiving `Gone`.
     pub async fn delete_or_confirm(
         &self,
         workspace: &Workspace,
     ) -> Result<DeleteProgress, ReconcileError> {
         let workspace_id = workspace.id;
-        let namespace_name = &workspace.runtime.namespace;
+        let namespace_name = workspace.runtime.namespace();
         let runtime_names = self.builder.runtime_names(workspace)?;
         let names = &runtime_names.resources;
         let binding_name = self.builder.cluster_admin_binding_name(workspace)?;
@@ -44,59 +41,21 @@ impl KubernetesCoordinator {
             return Ok(DeleteProgress::DeletionRequested);
         }
 
-        if workspace.runtime.namespace_scope == WorkspaceNamespaceScope::Shared {
-            return self
-                .delete_shared_workspace_resources(workspace, names)
-                .await;
-        }
-
         let namespaces = Api::<Namespace>::all(self.client.clone());
         let Some(namespace) = namespaces.get_opt(namespace_name).await? else {
             return Ok(DeleteProgress::Gone);
         };
-
         self.builder
-            .verify_delete_ownership(&namespace.metadata, workspace_id)?;
-        let service_accounts =
-            Api::<ServiceAccount>::namespaced(self.client.clone(), namespace_name);
-        if delete_owned_if_present(
-            &service_accounts,
-            &names.service_account,
-            &self.builder,
-            workspace_id,
-        )
-        .await?
-        {
-            return Ok(DeleteProgress::DeletionRequested);
-        }
-        let ingresses = Api::<Ingress>::namespaced(self.client.clone(), namespace_name);
-        if delete_owned_if_present(
-            &ingresses,
-            &names.web_shell_ingress,
-            &self.builder,
-            workspace_id,
-        )
-        .await?
-        {
-            // Keep deletion deliberately staged: do not start Namespace removal
-            // until the externally visible Web Shell route is confirmed gone.
-            return Ok(DeleteProgress::DeletionRequested);
-        }
-        if namespace.metadata.deletion_timestamp.is_some() {
-            return Ok(DeleteProgress::Terminating);
-        }
-        namespaces
-            .delete(namespace_name, &DeleteParams::default())
-            .await?;
-        Ok(DeleteProgress::DeletionRequested)
+            .verify_installation_ownership(&namespace.metadata)?;
+        self.delete_workspace_resources(workspace, names).await
     }
 
-    async fn delete_shared_workspace_resources(
+    async fn delete_workspace_resources(
         &self,
         workspace: &Workspace,
         names: &WorkspaceResourceNames,
     ) -> Result<DeleteProgress, ReconcileError> {
-        let namespace = &workspace.runtime.namespace;
+        let namespace = workspace.runtime.namespace();
         let workspace_id = workspace.id;
         let mapping_resources = ListParams::default().labels(&format!(
             "{}={},{}={},{}",
@@ -161,7 +120,7 @@ impl KubernetesCoordinator {
         {
             return Ok(DeleteProgress::Terminating);
         }
-        self.delete_shared_workspace_remaining(namespace, names, workspace_id, &mapping_policies)
+        self.delete_workspace_remaining(namespace, names, workspace_id, &mapping_policies)
             .await
     }
 
@@ -195,7 +154,7 @@ impl KubernetesCoordinator {
         Ok(false)
     }
 
-    async fn delete_shared_workspace_remaining(
+    async fn delete_workspace_remaining(
         &self,
         namespace: &str,
         names: &WorkspaceResourceNames,

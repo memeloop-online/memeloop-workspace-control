@@ -41,7 +41,7 @@ pub(super) async fn workspace_response(
     workspace: Workspace,
     expose_connection: bool,
 ) -> Result<WorkspaceResponse, ApiError> {
-    let namespace = workspace.runtime.namespace.clone();
+    let namespace = workspace.runtime.namespace().to_owned();
     let runtime_names = crate::workspace_runtime::WorkspaceRuntimeNames::for_workspace(
         &state.config.installation_id,
         &workspace.runtime,

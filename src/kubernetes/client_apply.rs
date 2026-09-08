@@ -1,4 +1,3 @@
-use crate::workspace_runtime::WorkspaceNamespaceScope;
 use crate::workspaces::Workspace;
 use k8s_openapi::api::{
     apps::v1::StatefulSet,
@@ -32,7 +31,7 @@ impl KubernetesCoordinator {
             .name
             .as_deref()
             .ok_or(ReconcileError::MissingObjectName)?;
-        if namespace_name != workspace.runtime.namespace {
+        if namespace_name != workspace.runtime.namespace() {
             return Err(ReconcileError::RuntimeIdentityMismatch);
         }
         self.apply_namespace(workspace, desired).await?;
@@ -52,28 +51,23 @@ impl KubernetesCoordinator {
         workspace: &Workspace,
         desired: &DesiredResources,
     ) -> Result<(), ReconcileError> {
-        let namespace_name = &workspace.runtime.namespace;
+        let namespace_name = workspace.runtime.namespace();
         let namespaces = Api::<Namespace>::all(self.client.clone());
         if let Some(existing) = namespaces.get_metadata_opt(namespace_name).await? {
-            if workspace.runtime.namespace_scope == WorkspaceNamespaceScope::Shared {
-                self.builder
-                    .verify_installation_ownership(&existing.metadata)?;
-                if let Some(actual) = existing
-                    .metadata
-                    .labels
-                    .as_ref()
-                    .and_then(|labels| labels.get(super::super::WORKSPACE_ID_LABEL))
-                {
-                    return Err(super::super::OwnershipError::LabelMismatch {
-                        key: super::super::WORKSPACE_ID_LABEL,
-                        expected: "absent for a shared namespace".to_owned(),
-                        actual: Some(actual.clone()),
-                    }
-                    .into());
+            self.builder
+                .verify_installation_ownership(&existing.metadata)?;
+            if let Some(actual) = existing
+                .metadata
+                .labels
+                .as_ref()
+                .and_then(|labels| labels.get(super::super::WORKSPACE_ID_LABEL))
+            {
+                return Err(super::super::OwnershipError::LabelMismatch {
+                    key: super::super::WORKSPACE_ID_LABEL,
+                    expected: "absent from the product namespace".to_owned(),
+                    actual: Some(actual.clone()),
                 }
-            } else {
-                self.builder
-                    .verify_delete_ownership(&existing.metadata, workspace.id)?;
+                .into());
             }
         }
         namespaces
@@ -324,7 +318,7 @@ impl KubernetesCoordinator {
             .namespace
             .as_deref()
             .ok_or(ReconcileError::MissingObjectName)?;
-        if namespace != workspace.runtime.namespace {
+        if namespace != workspace.runtime.namespace() {
             return Err(ReconcileError::RuntimeIdentityMismatch);
         }
         let apply = PatchParams::apply(FIELD_MANAGER);

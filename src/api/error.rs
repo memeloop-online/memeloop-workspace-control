@@ -22,7 +22,7 @@ pub enum ApiError {
     IdempotencyInProgress,
     EncryptionUnavailable,
     WorkspaceNotConnectable,
-    SharedNamespaceConflict,
+    ProductNamespaceConflict,
     KubernetesUnavailable,
     Kubernetes(kube::Error),
     Injection(crate::injections::InjectionError),
@@ -77,7 +77,7 @@ impl ApiError {
             | Self::IdempotencyInProgress
             | Self::EncryptionUnavailable
             | Self::WorkspaceNotConnectable
-            | Self::SharedNamespaceConflict
+            | Self::ProductNamespaceConflict
             | Self::KubernetesUnavailable
             | Self::Kubernetes(_)) => operational_response(error),
             Self::Injection(error) => injection_response(error),

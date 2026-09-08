@@ -5,12 +5,12 @@ use crate::{
     config::InstallationId,
     storage::StorageError,
     templates::WorkspaceTemplateDocument,
-    workspace_runtime::{WorkspaceNamespaceScope, WorkspaceRuntimeIdentity},
+    workspace_runtime::WorkspaceRuntimeIdentity,
     workspaces::{Workspace, WorkspaceState},
 };
 
 pub(crate) const WORKSPACE_COLUMNS: &str = "id, short_id, organization_id, owner_id, name, \
-    template_id, template_snapshot_yaml, runtime_namespace_scope, runtime_namespace, state, \
+    template_id, template_snapshot_yaml, state, \
     generation, created_at, updated_at";
 
 pub(crate) fn select_workspace_sql(installation: &str, id: &str) -> String {
@@ -64,12 +64,7 @@ where
         WorkspaceTemplateDocument::parse(&yaml).map_err(|_| StorageError::InvalidWorkspace)?;
     let id = Uuid::parse_str(&row.try_get::<String, _>("id")?)?;
     let short_id: String = row.try_get("short_id")?;
-    let namespace_scope: String = row.try_get("runtime_namespace_scope")?;
-    let runtime = WorkspaceRuntimeIdentity {
-        namespace_scope: WorkspaceNamespaceScope::from_database(&namespace_scope)
-            .ok_or(StorageError::InvalidWorkspace)?,
-        namespace: row.try_get("runtime_namespace")?,
-    };
+    let runtime = WorkspaceRuntimeIdentity;
     runtime
         .validate_for_workspace(installation_id, id, &short_id)
         .map_err(|_| StorageError::InvalidWorkspace)?;

@@ -44,7 +44,6 @@ pub struct AdmittedWorkspaceCreation<'a> {
     pub command: CreateWorkspace,
     pub inline_injections: Option<(&'a EnvelopeCipher, &'a [InjectionItem])>,
     pub admitted_template_yaml: &'a str,
-    pub shared_namespace: Option<&'a str>,
     pub allow_cluster_access: bool,
     pub actor_user_id: Uuid,
     pub now: i64,
@@ -53,7 +52,6 @@ pub struct AdmittedWorkspaceCreation<'a> {
 struct WorkspaceCreationOptions<'a> {
     inline: Option<(&'a EnvelopeCipher, &'a [InjectionItem])>,
     admitted_template_yaml: Option<&'a str>,
-    shared_namespace: Option<&'a str>,
     allow_cluster_access: bool,
     actor_user_id: Uuid,
     now: i64,
@@ -145,7 +143,6 @@ impl Database {
             WorkspaceCreationOptions {
                 inline: None,
                 admitted_template_yaml: None,
-                shared_namespace: None,
                 allow_cluster_access,
                 actor_user_id,
                 now,
@@ -168,7 +165,6 @@ impl Database {
             WorkspaceCreationOptions {
                 inline: Some((cipher, inline)),
                 admitted_template_yaml: None,
-                shared_namespace: None,
                 allow_cluster_access,
                 actor_user_id,
                 now,
@@ -185,7 +181,6 @@ impl Database {
             command,
             inline_injections,
             admitted_template_yaml,
-            shared_namespace,
             allow_cluster_access,
             actor_user_id,
             now,
@@ -195,7 +190,6 @@ impl Database {
             WorkspaceCreationOptions {
                 inline: inline_injections,
                 admitted_template_yaml: Some(admitted_template_yaml),
-                shared_namespace,
                 allow_cluster_access,
                 actor_user_id,
                 now,
@@ -222,7 +216,6 @@ impl Database {
             injection_refs: &injection_refs,
             inline: options.inline,
             admitted_template_yaml: options.admitted_template_yaml,
-            shared_namespace: options.shared_namespace,
             allow_cluster_access: options.allow_cluster_access,
             actor_user_id: options.actor_user_id,
             now: options.now,

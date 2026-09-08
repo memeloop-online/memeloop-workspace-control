@@ -317,7 +317,7 @@ async fn mapping_status(
     };
     let ingresses = kube::Api::<k8s_openapi::api::networking::v1::Ingress>::namespaced(
         client,
-        &workspace.runtime.namespace,
+        workspace.runtime.namespace(),
     );
     match ingresses
         .get_opt(&format!("port-{}", mapping.id.simple()))

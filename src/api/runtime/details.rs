@@ -93,7 +93,7 @@ pub(super) fn storage_identity(
     workspace: &Workspace,
 ) -> Result<StorageIdentity, crate::workspace_runtime::WorkspaceRuntimeIdentityError> {
     Ok((
-        workspace.runtime.namespace.clone(),
+        workspace.runtime.namespace().to_owned(),
         crate::workspace_runtime::WorkspaceRuntimeNames::for_workspace(
             installation_id,
             &workspace.runtime,

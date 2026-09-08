@@ -41,11 +41,6 @@ pub struct AppConfig {
     #[arg(long, env = "MWC_INTERNAL_SSH_HOST")]
     pub internal_ssh_host: Option<String>,
 
-    /// Namespace used for newly created prefixed workspaces. Omit to keep one Namespace per
-    /// workspace. Existing workspaces retain the placement stored with their runtime identity.
-    #[arg(long, env = "MWC_WORKSPACE_SHARED_NAMESPACE")]
-    pub workspace_shared_namespace: Option<String>,
-
     /// Public origin used for ttyd links, for example https://shell.example.com.
     #[arg(long, env = "MWC_WEB_SHELL_PUBLIC_ORIGIN")]
     pub web_shell_public_origin: Option<String>,
@@ -94,9 +89,6 @@ impl AppConfig {
             .is_some_and(|host| !valid_ssh_host(host))
         {
             return Err(ConfigError::InvalidInternalSshHost);
-        }
-        if let Some(namespace) = self.workspace_shared_namespace.as_deref() {
-            validate_dns_label(namespace, 63, "workspace shared namespace")?;
         }
         if self
             .web_shell_public_origin
@@ -165,11 +157,6 @@ pub struct InstallationId(String);
 impl InstallationId {
     pub fn as_str(&self) -> &str {
         &self.0
-    }
-
-    pub fn workspace_namespace(&self, workspace_short_id: &str) -> Result<String, ConfigError> {
-        validate_dns_label(workspace_short_id, 30, "workspace short id")?;
-        Ok(format!("ws-{}-{workspace_short_id}", self.0))
     }
 }
 

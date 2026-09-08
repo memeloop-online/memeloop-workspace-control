@@ -38,10 +38,10 @@ pub(super) fn operational_response(error: ApiError) -> ErrorResponse {
             "workspace_not_connectable",
             "new Web Shell and SSH authorization requires a ready workspace",
         ),
-        ApiError::SharedNamespaceConflict => response(
+        ApiError::ProductNamespaceConflict => response(
             StatusCode::CONFLICT,
-            "shared_namespace_conflict",
-            "the configured shared workspace namespace has conflicting ownership",
+            "product_namespace_conflict",
+            "the product namespace has conflicting installation ownership",
         ),
         ApiError::KubernetesUnavailable => response(
             StatusCode::SERVICE_UNAVAILABLE,

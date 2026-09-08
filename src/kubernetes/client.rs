@@ -86,7 +86,7 @@ impl KubernetesCoordinator {
         workspace: &Workspace,
         expected: i32,
     ) -> Result<bool, ReconcileError> {
-        let namespace_name = &workspace.runtime.namespace;
+        let namespace_name = workspace.runtime.namespace();
         let names = self.builder.runtime_names(workspace)?;
         let Some(stateful_set) =
             Api::<StatefulSet>::namespaced(self.client.clone(), namespace_name)
@@ -126,7 +126,7 @@ pub async fn workspace_ssh_node_port(
         &workspace.short_id,
     )
     .map_err(|error| kube::Error::Service(error.to_string().into()))?;
-    let service = Api::<Service>::namespaced(client, &workspace.runtime.namespace)
+    let service = Api::<Service>::namespaced(client, workspace.runtime.namespace())
         .get_opt(&names.resources.ssh_service)
         .await?;
     Ok(service.as_ref().and_then(node_port_from_service))

@@ -2,7 +2,7 @@ use memeloop_workspace_control::{
     injections::{InjectionItem, InjectionKind, InjectionValue, resolve_injections},
     kubernetes::{
         BuildError, ORGANIZATION_ID_LABEL, OWNER_INSTALLATION_LABEL, OWNER_USER_ID_LABEL,
-        OwnershipError, ResourceBuilder,
+        OwnershipError, ResourceBuilder, WORKSPACE_ID_LABEL,
     },
     quota::Resources,
     templates::WorkspaceTemplateSpec,
@@ -46,8 +46,7 @@ fn workspace(state: WorkspaceState) -> Workspace {
         owner_id: Uuid::now_v7(),
         name: "test-workspace".to_owned(),
         template_id: Some(Uuid::now_v7()),
-        runtime: WorkspaceRuntimeIdentity::new(&"public-a".parse().unwrap(), id, &short_id, None)
-            .unwrap(),
+        runtime: WorkspaceRuntimeIdentity::new(id, &short_id).unwrap(),
         template: WorkspaceTemplateSpec::standard(
             "registry.example/workspace:1",
             AccessMode::Public,
@@ -65,17 +64,11 @@ fn workspace(state: WorkspaceState) -> Workspace {
     }
 }
 
-fn shared_workspace(short_id: &str, id: Uuid) -> Workspace {
+fn second_workspace(short_id: &str, id: Uuid) -> Workspace {
     let mut workspace = workspace(WorkspaceState::Ready);
     workspace.id = id;
     workspace.short_id = short_id.to_owned();
-    workspace.runtime = WorkspaceRuntimeIdentity::new(
-        &"public-a".parse().unwrap(),
-        id,
-        short_id,
-        Some("ws-public-a-shared"),
-    )
-    .unwrap();
+    workspace.runtime = WorkspaceRuntimeIdentity::new(id, short_id).unwrap();
     workspace.template.access_mode = AccessMode::Internal;
     workspace.template.cluster_access = true;
     workspace
@@ -183,7 +176,7 @@ fn runtime_resource_names_are_derived_from_the_workspace_short_id() {
 
     assert_eq!(
         metadata_name(&resources.namespace.metadata),
-        "ws-public-a-800000000001abcd"
+        "memeloop-workspace-control"
     );
     assert_eq!(
         metadata_name(&resources.stateful_set.metadata),
@@ -286,11 +279,11 @@ fn runtime_resource_names_are_derived_from_the_workspace_short_id() {
 
 #[test]
 fn prefixed_workspaces_share_a_namespace_without_resource_or_selector_collisions() {
-    let first = shared_workspace(
+    let first = second_workspace(
         "8000000000000001",
         Uuid::parse_str("018f0000-0000-7000-8000-000000000001").unwrap(),
     );
-    let second = shared_workspace(
+    let second = second_workspace(
         "8000000000000002",
         Uuid::parse_str("018f0000-0000-7000-8000-000000000002").unwrap(),
     );
@@ -732,7 +725,7 @@ fn templates_without_cluster_access_never_receive_a_service_account_token() {
 }
 
 #[test]
-fn builds_isolated_single_replica_workspace_with_standard_components() {
+fn builds_single_replica_workspace_with_standard_components() {
     let workspace = workspace(WorkspaceState::Ready);
     let resources = builder().build(&workspace).unwrap();
     let names = runtime_names(&workspace);
@@ -742,13 +735,12 @@ fn builds_isolated_single_replica_workspace_with_standard_components() {
     );
     let namespace_labels = resources.namespace.metadata.labels.as_ref().unwrap();
     assert_eq!(
-        namespace_labels["workspace.memeloop.dev/organization-id"],
-        workspace.organization_id.to_string()
+        namespace_labels["workspace.memeloop.dev/owner-installation"],
+        "public-a"
     );
-    assert_eq!(
-        namespace_labels["workspace.memeloop.dev/owner-user-id"],
-        workspace.owner_id.to_string()
-    );
+    assert!(!namespace_labels.contains_key("workspace.memeloop.dev/workspace-id"));
+    assert!(!namespace_labels.contains_key("workspace.memeloop.dev/organization-id"));
+    assert!(!namespace_labels.contains_key("workspace.memeloop.dev/owner-user-id"));
     assert_eq!(
         resources.stateful_set.spec.as_ref().unwrap().replicas,
         Some(1)
@@ -1265,20 +1257,30 @@ fn stopped_workspace_keeps_resources_and_scales_to_zero() {
 }
 
 #[test]
-fn delete_guard_requires_both_installation_and_workspace_labels() {
+fn delete_guards_match_namespace_installation_and_resource_workspace() {
     let workspace = workspace(WorkspaceState::Ready);
     let resources = builder().build(&workspace).unwrap();
     builder()
-        .verify_delete_ownership(&resources.namespace.metadata, workspace.id)
+        .verify_installation_ownership(&resources.namespace.metadata)
         .unwrap();
     assert!(matches!(
         ResourceBuilder {
             installation_id: "other".parse().unwrap(),
             ..builder()
         }
-        .verify_delete_ownership(&resources.namespace.metadata, workspace.id),
+        .verify_installation_ownership(&resources.namespace.metadata),
         Err(OwnershipError::LabelMismatch {
             key: OWNER_INSTALLATION_LABEL,
+            ..
+        })
+    ));
+    builder()
+        .verify_delete_ownership(&resources.stateful_set.metadata, workspace.id)
+        .unwrap();
+    assert!(matches!(
+        builder().verify_delete_ownership(&resources.stateful_set.metadata, Uuid::now_v7()),
+        Err(OwnershipError::LabelMismatch {
+            key: WORKSPACE_ID_LABEL,
             ..
         })
     ));

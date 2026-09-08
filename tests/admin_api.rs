@@ -61,7 +61,6 @@ async fn management_api_enforces_system_and_organization_boundaries() {
             instance_id: "test".to_owned(),
             ssh_public_host: None,
             internal_ssh_host: None,
-            workspace_shared_namespace: None,
             web_shell_public_origin: None,
             port_mapping_public_domain: None,
             prometheus_url: None,
@@ -437,7 +436,7 @@ async fn management_api_enforces_system_and_organization_boundaries() {
     let scaling: Value = body_json(scaling).await;
     assert_eq!(scaling["database_mode"], "sqlite");
     assert_eq!(scaling["configured_replicas"], 1);
-    assert_eq!(scaling["schema_version"], 20);
+    assert_eq!(scaling["schema_version"], 21);
 }
 
 #[tokio::test]
@@ -476,7 +475,6 @@ async fn admin_user_initial_key_policy_rejects_escalation_and_invalid_expiry() {
             instance_id: "test".to_owned(),
             ssh_public_host: None,
             internal_ssh_host: None,
-            workspace_shared_namespace: None,
             web_shell_public_origin: None,
             port_mapping_public_domain: None,
             prometheus_url: None,
@@ -615,7 +613,6 @@ async fn creating_a_user_with_an_organization_membership_is_atomic_and_authorize
             instance_id: "test".to_owned(),
             ssh_public_host: None,
             internal_ssh_host: None,
-            workspace_shared_namespace: None,
             web_shell_public_origin: None,
             port_mapping_public_domain: None,
             prometheus_url: None,
@@ -788,7 +785,6 @@ async fn user_and_organization_management_are_paginated_and_safe() {
             instance_id: "test".to_owned(),
             ssh_public_host: None,
             internal_ssh_host: None,
-            workspace_shared_namespace: None,
             web_shell_public_origin: None,
             port_mapping_public_domain: None,
             prometheus_url: None,
@@ -983,7 +979,6 @@ async fn user_page_search_treats_like_metacharacters_literally() {
             instance_id: "test".to_owned(),
             ssh_public_host: None,
             internal_ssh_host: None,
-            workspace_shared_namespace: None,
             web_shell_public_origin: None,
             port_mapping_public_domain: None,
             prometheus_url: None,

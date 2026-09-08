@@ -90,7 +90,7 @@ pub(super) async fn authorized_key(
         .map_err(|_| ApiError::Unauthorized)?
         .resources
         .service,
-        workspace.runtime.namespace,
+        workspace.runtime.namespace(),
     );
     let line = format!(
         "restrict,port-forwarding,permitopen=\"{target}\" {} {} mwc-user-{user_id}\n",
