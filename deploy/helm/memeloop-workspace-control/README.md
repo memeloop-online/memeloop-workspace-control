@@ -93,6 +93,19 @@ The chart refuses to render a Web Shell domain without that plugin and an exact
 Set `higress.podLabels` to the labels actually present on the K3S Higress gateway Pods. The same
 selector is used by both the control-plane and workspace NetworkPolicies.
 
+### Internet-only workspace egress
+
+Templates may set `egress_policy: internet_only`. This adds a Pod NetworkPolicy that permits only
+UDP/TCP 53 to the configured DNS Pods and public IPv4/IPv6 destinations, excluding private,
+loopback, link-local, CGNAT, multicast, and other reserved ranges. Configure the DNS workload with
+`workspace.egress.dnsNamespace` and `workspace.egress.dnsPodLabels`; these values must identify
+the actual in-cluster resolver, not merely its Service name. Add public node addresses and any
+nonstandard Pod or Service CIDRs to `workspace.egress.additionalBlockedCidrs`.
+
+NetworkPolicy does not govern host/node traffic and cannot remove the interval before a newly
+created policy is enforced. Validate DNS and egress behavior against the installed CNI before
+enabling this policy for production templates.
+
 ### Workspace HTTP port mappings
 
 Set `public.portMappingDomain` to a DNS suffix dedicated to workspace applications, such as

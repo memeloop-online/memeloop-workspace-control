@@ -1,6 +1,6 @@
 import { parse, stringify } from "yaml";
 
-import type { AccessMode, WorkspaceStoragePolicy, WorkspaceTemplate } from "../types";
+import type { AccessMode, EgressPolicy, WorkspaceStoragePolicy, WorkspaceTemplate } from "../types";
 
 export const DEFAULT_STORAGE_POLICY: WorkspaceStoragePolicy = {
   runtime_tmp_memory_mib: 512,
@@ -56,6 +56,7 @@ export interface TemplateDraft {
   buildkit: boolean;
   storagePolicy: TemplateStoragePolicyDraft;
   clusterAccess: boolean;
+  egressPolicy: EgressPolicy;
   runtimeClassName: string;
   requiredNodes: string;
   preferredNodes: string;
@@ -94,6 +95,7 @@ const TEMPLATE_FIELD_SCHEMA: TemplateFieldSchema = {
       home_reserve_mib: null,
     },
     cluster_access: null,
+    egress_policy: null,
     runtime_class_name: null,
     required_node_names: null,
     preferred_node_names: null,
@@ -133,6 +135,7 @@ export function emptyTemplateDraft(): TemplateDraft {
     buildkit: false,
     storagePolicy: storagePolicyDraft(DEFAULT_STORAGE_POLICY),
     clusterAccess: false,
+    egressPolicy: "unrestricted",
     runtimeClassName: "",
     requiredNodes: "",
     preferredNodes: "",
@@ -177,6 +180,7 @@ export function templateDraftToYaml(draft: TemplateDraft): string {
     buildkit: draft.buildkit,
     storage_policy: storagePolicy,
     cluster_access: draft.clusterAccess,
+    egress_policy: draft.egressPolicy,
   };
   if (draft.runtimeClassName.trim()) spec.runtime_class_name = draft.runtimeClassName.trim();
   if (requestEphemeral !== null) (spec.pod_requests as Record<string, unknown>).ephemeral_storage_mib = requestEphemeral;
@@ -214,6 +218,7 @@ export function templateDraftFromYaml(yaml: string): TemplateDraft {
     buildkit: Boolean(spec.buildkit),
     storagePolicy: storagePolicyDraft(storagePolicy),
     clusterAccess: Boolean(spec.cluster_access),
+    egressPolicy: spec.egress_policy === "internet_only" ? "internet_only" : "unrestricted",
     runtimeClassName: String(spec.runtime_class_name ?? ""),
     requiredNodes: listText(spec.required_node_names),
     preferredNodes: listText(spec.preferred_node_names),

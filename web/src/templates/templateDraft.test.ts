@@ -53,6 +53,12 @@ test("new templates emit backend-compatible storage and ephemeral defaults", () 
   assert.match(yaml, /home_reserve_mib: 1024/u);
   assert.doesNotMatch(yaml, /home_reserve_mib: null/u);
   assert.doesNotMatch(yaml, /runtime_class_name/u);
+  assert.match(yaml, /egress_policy: unrestricted/u);
+});
+
+test("internet-only egress policy round-trips through template YAML", () => {
+  const draft = { ...emptyTemplateDraft(), name: "internet", egressPolicy: "internet_only" as const };
+  assert.equal(templateDraftFromYaml(templateDraftToYaml(draft)).egressPolicy, "internet_only");
 });
 
 test("an optional RuntimeClass name round-trips through the template YAML", () => {

@@ -14,7 +14,7 @@ import {
   templateDraftToYaml,
 } from "./templates/templateDraft";
 import type { NumericPolicy, TemplateDraft } from "./templates/templateDraft";
-import type { AccessMode, WorkspaceTemplate } from "./types";
+import type { AccessMode, EgressPolicy, WorkspaceTemplate } from "./types";
 
 interface Props {
   api: ApiClient;
@@ -185,6 +185,7 @@ export function TemplateEditor({ api, organizationId, templates, canGrantCluster
             </fieldset>
             <Check label="BuildKit" help={t("buildkitHelp")} checked={draft.buildkit} update={(buildkit) => setDraft({ ...draft, buildkit })} />
             <Check label={t("maintenanceAccess")} help={t("maintenanceAccessHelp")} checked={draft.clusterAccess} disabled={!canGrantClusterAccess} update={(clusterAccess) => setDraft({ ...draft, clusterAccess })} />
+            <label><Field label={t("egressPolicy")} help={t("egressPolicyHelp")} /><select value={draft.egressPolicy} onChange={(event) => setDraft({ ...draft, egressPolicy: event.target.value as EgressPolicy })}><option value="unrestricted">{t("egressUnrestricted")}</option><option value="internet_only">{t("egressInternetOnly")}</option></select></label>
             <label className="wide"><Field label={t("runtimeClassName")} help={t("runtimeClassNameHelp")} /><input value={draft.runtimeClassName} onChange={(event) => setDraft({ ...draft, runtimeClassName: event.target.value })} placeholder="gvisor-sandbox" /></label>
             <label className="wide"><Field label={t("requiredNodes")} help={t("nodeListHelp")} /><input value={draft.requiredNodes} onChange={(event) => setDraft({ ...draft, requiredNodes: event.target.value })} placeholder="westlake, haixia" /></label>
             <label className="wide"><Field label={t("preferredNodes")} help={t("nodeListHelp")} /><input value={draft.preferredNodes} onChange={(event) => setDraft({ ...draft, preferredNodes: event.target.value })} /></label>

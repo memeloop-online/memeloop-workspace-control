@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use ipnet::IpNet;
 use k8s_openapi::{
     api::{
         apps::v1::StatefulSet,
@@ -58,6 +59,7 @@ pub struct ResourceBuilder {
     pub higress_namespace: String,
     pub higress_pod_labels: BTreeMap<String, String>,
     pub higress_source_cidrs: Vec<String>,
+    pub internet_egress: InternetEgressConfig,
     pub jump_host_namespace: String,
     pub jump_host_pod_labels: BTreeMap<String, String>,
     pub storage_class_name: Option<String>,
@@ -66,6 +68,76 @@ pub struct ResourceBuilder {
     pub higress_gateway_name: String,
     pub higress_https_section_name: String,
     pub internal_ssh_node_port_enabled: bool,
+}
+
+/// Operator-provided DNS identity and exceptional blocks for `internet_only` templates.
+///
+/// DNS is selected by its configured namespace and Pod labels, rather than a presumed service
+/// IP. Operators must add public node addresses and nonstandard Pod/Service CIDRs to
+/// `additional_blocked_cidrs`.
+#[derive(Debug, Clone)]
+pub struct InternetEgressConfig {
+    pub dns_namespace: String,
+    pub dns_pod_labels: BTreeMap<String, String>,
+    pub additional_blocked_cidrs: Vec<IpNet>,
+}
+
+impl InternetEgressConfig {
+    pub fn new(
+        dns_namespace: String,
+        dns_pod_labels: BTreeMap<String, String>,
+        additional_blocked_cidrs: Vec<IpNet>,
+    ) -> Result<Self, InternetEgressConfigError> {
+        let config = Self {
+            dns_namespace,
+            dns_pod_labels,
+            additional_blocked_cidrs,
+        };
+        config.validate()?;
+        Ok(config)
+    }
+
+    pub fn validate(&self) -> Result<(), InternetEgressConfigError> {
+        if !valid_dns_label(&self.dns_namespace) {
+            return Err(InternetEgressConfigError::DnsNamespace);
+        }
+        if self.dns_pod_labels.is_empty()
+            || self.dns_pod_labels.iter().any(|(key, value)| {
+                key.is_empty()
+                    || key.len() > 253
+                    || value.len() > 63
+                    || key.chars().any(char::is_whitespace)
+                    || value.chars().any(char::is_whitespace)
+            })
+        {
+            return Err(InternetEgressConfigError::DnsPodLabels);
+        }
+        Ok(())
+    }
+}
+
+fn valid_dns_label(value: &str) -> bool {
+    value.len() <= 63
+        && !value.is_empty()
+        && value
+            .as_bytes()
+            .first()
+            .is_some_and(u8::is_ascii_alphanumeric)
+        && value
+            .as_bytes()
+            .last()
+            .is_some_and(u8::is_ascii_alphanumeric)
+        && value.bytes().all(|character| {
+            character.is_ascii_lowercase() || character.is_ascii_digit() || character == b'-'
+        })
+}
+
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum InternetEgressConfigError {
+    #[error("egress DNS namespace must be a lower-case DNS label")]
+    DnsNamespace,
+    #[error("egress DNS Pod labels must be non-empty and contain no whitespace")]
+    DnsPodLabels,
 }
 
 #[derive(Debug)]
@@ -164,9 +236,11 @@ impl ResourceBuilder {
                 &self.higress_namespace,
                 &self.higress_pod_labels,
                 &self.higress_source_cidrs,
+                &self.internet_egress,
                 &self.jump_host_namespace,
                 &self.jump_host_pod_labels,
                 workspace.template.access_mode,
+                workspace.template.egress_policy,
                 self.internal_ssh_node_port_enabled,
             ),
             injections,

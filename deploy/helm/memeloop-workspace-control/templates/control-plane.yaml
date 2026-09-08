@@ -65,6 +65,12 @@ spec:
             {{- end }}
             - name: MWC_TTYD_IMAGE
               value: {{ .Values.workspace.ttydImage | quote }}
+            - name: MWC_EGRESS_DNS_NAMESPACE
+              value: {{ .Values.workspace.egress.dnsNamespace | quote }}
+            - name: MWC_EGRESS_DNS_POD_LABELS_JSON
+              value: {{ .Values.workspace.egress.dnsPodLabels | toJson | quote }}
+            - name: MWC_EGRESS_ADDITIONAL_BLOCKED_CIDRS_JSON
+              value: {{ .Values.workspace.egress.additionalBlockedCidrs | toJson | quote }}
             {{- if .Values.workspace.internalSshHost }}
             - name: MWC_INTERNAL_SSH_HOST
               value: {{ .Values.workspace.internalSshHost | quote }}

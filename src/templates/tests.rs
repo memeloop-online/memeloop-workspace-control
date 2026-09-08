@@ -22,6 +22,7 @@ fn yaml_round_trip_contains_only_explicit_template_fields() {
     assert!(yaml.contains("build_scratch_gib: 12"));
     assert!(yaml.contains("buildkit_cache_gib: 8"));
     assert!(yaml.contains("runtime_class_name: null"));
+    assert!(yaml.contains("egress_policy: unrestricted"));
     assert_eq!(WorkspaceTemplateDocument::parse(&yaml).unwrap(), document);
     let json = serde_json::to_value(&document.spec).unwrap();
     assert_eq!(json["access_mode"], "internal");

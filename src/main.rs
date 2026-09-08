@@ -1,13 +1,14 @@
 use std::{collections::BTreeMap, io, sync::Arc};
 
 use clap::Parser;
+use ipnet::IpNet;
 use memeloop_workspace_control::{
     admin::{Cli, Command, execute_admin, execute_database},
     api::{AppState, internal_router, router},
     config::AppConfig,
     crypto::EnvelopeCipher,
     jobs::{ControlPlaneJobHandler, JobWorker, WebhookDeliveryHandler, WorkspaceReconcileHandler},
-    kubernetes::{KubernetesCoordinator, ResourceBuilder},
+    kubernetes::{InternetEgressConfig, KubernetesCoordinator, ResourceBuilder},
     plugins::PluginRuntime,
     storage::Database,
 };
@@ -340,12 +341,61 @@ fn resource_builder(
         Err(std::env::VarError::NotPresent) => Vec::new(),
         Err(error) => return Err(io::Error::new(io::ErrorKind::InvalidInput, error)),
     };
+    let egress_dns_namespace = std::env::var("MWC_EGRESS_DNS_NAMESPACE").map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "MWC_EGRESS_DNS_NAMESPACE is required when Kubernetes coordination is enabled",
+        )
+    })?;
+    let egress_dns_pod_labels = match std::env::var("MWC_EGRESS_DNS_POD_LABELS_JSON") {
+        Ok(value) => serde_json::from_str(&value).map_err(|error| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("MWC_EGRESS_DNS_POD_LABELS_JSON must be a JSON string map: {error}"),
+            )
+        })?,
+        Err(std::env::VarError::NotPresent) => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "MWC_EGRESS_DNS_POD_LABELS_JSON is required when Kubernetes coordination is enabled",
+            ));
+        }
+        Err(error) => return Err(io::Error::new(io::ErrorKind::InvalidInput, error)),
+    };
+    let additional_blocked_cidrs = match std::env::var("MWC_EGRESS_ADDITIONAL_BLOCKED_CIDRS_JSON") {
+        Ok(value) => serde_json::from_str::<Vec<String>>(&value)
+            .map_err(|error| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("MWC_EGRESS_ADDITIONAL_BLOCKED_CIDRS_JSON must be a JSON string array: {error}"),
+                )
+            })?
+            .into_iter()
+            .map(|cidr| {
+                cidr.parse::<IpNet>().map_err(|error| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        format!("MWC_EGRESS_ADDITIONAL_BLOCKED_CIDRS_JSON has invalid CIDR {cidr:?}: {error}"),
+                    )
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?,
+        Err(std::env::VarError::NotPresent) => Vec::new(),
+        Err(error) => return Err(io::Error::new(io::ErrorKind::InvalidInput, error)),
+    };
+    let internet_egress = InternetEgressConfig::new(
+        egress_dns_namespace,
+        egress_dns_pod_labels,
+        additional_blocked_cidrs,
+    )
+    .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
     Ok(ResourceBuilder {
         installation_id: config.installation_id.clone(),
         ttyd_image,
         higress_namespace,
         higress_pod_labels,
         higress_source_cidrs,
+        internet_egress,
         jump_host_namespace: jump_host_namespace.clone(),
         jump_host_pod_labels: BTreeMap::from([(
             "app.kubernetes.io/name".to_owned(),

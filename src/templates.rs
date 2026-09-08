@@ -45,6 +45,8 @@ pub struct WorkspaceTemplateSpec {
     pub storage_policy: WorkspaceStoragePolicy,
     #[serde(default)]
     pub cluster_access: bool,
+    #[serde(default)]
+    pub egress_policy: EgressPolicy,
     /// An optional Kubernetes RuntimeClass for the workspace Pod.
     ///
     /// When omitted, Kubernetes uses its normal runtime selection. A configured class is passed
@@ -57,6 +59,15 @@ pub struct WorkspaceTemplateSpec {
     pub preferred_node_names: Vec<String>,
     #[serde(default)]
     pub node_selector: BTreeMap<String, String>,
+}
+
+/// The egress boundary applied to a workspace Pod by its NetworkPolicy.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum EgressPolicy {
+    #[default]
+    Unrestricted,
+    InternetOnly,
 }
 
 /// Bounded, Pod-lifetime storage for data that can be regenerated safely.
@@ -230,6 +241,7 @@ impl WorkspaceTemplateSpec {
             buildkit: false,
             storage_policy: WorkspaceStoragePolicy::default(),
             cluster_access: false,
+            egress_policy: EgressPolicy::Unrestricted,
             runtime_class_name: None,
             required_node_names: Vec::new(),
             preferred_node_names: Vec::new(),

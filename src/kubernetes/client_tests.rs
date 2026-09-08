@@ -397,6 +397,12 @@ mod coordinator_tests {
                 higress_namespace: "higress-system".to_owned(),
                 higress_pod_labels: BTreeMap::new(),
                 higress_source_cidrs: Vec::new(),
+                internet_egress: InternetEgressConfig::new(
+                    "kube-system".to_owned(),
+                    BTreeMap::from([("k8s-app".to_owned(), "kube-dns".to_owned())]),
+                    Vec::new(),
+                )
+                .unwrap(),
                 jump_host_namespace: "access".to_owned(),
                 jump_host_pod_labels: BTreeMap::new(),
                 storage_class_name: None,

@@ -1,11 +1,11 @@
 use memeloop_workspace_control::{
     injections::{InjectionItem, InjectionKind, InjectionValue, resolve_injections},
     kubernetes::{
-        BuildError, ORGANIZATION_ID_LABEL, OWNER_INSTALLATION_LABEL, OWNER_USER_ID_LABEL,
-        OwnershipError, ResourceBuilder, WORKSPACE_ID_LABEL,
+        BuildError, InternetEgressConfig, ORGANIZATION_ID_LABEL, OWNER_INSTALLATION_LABEL,
+        OWNER_USER_ID_LABEL, OwnershipError, ResourceBuilder, WORKSPACE_ID_LABEL,
     },
     quota::Resources,
-    templates::WorkspaceTemplateSpec,
+    templates::{EgressPolicy, WorkspaceTemplateSpec},
     workspace_runtime::{WorkspaceRuntimeIdentity, WorkspaceRuntimeNames},
     workspaces::{AccessMode, Workspace, WorkspaceState},
 };
@@ -22,6 +22,12 @@ fn builder() -> ResourceBuilder {
             "higress-gateway".to_owned(),
         )]),
         higress_source_cidrs: vec!["100.64.0.6/31".to_owned()],
+        internet_egress: InternetEgressConfig::new(
+            "kube-system".to_owned(),
+            BTreeMap::from([("k8s-app".to_owned(), "kube-dns".to_owned())]),
+            Vec::new(),
+        )
+        .unwrap(),
         jump_host_namespace: "workspace-access".to_owned(),
         jump_host_pod_labels: std::collections::BTreeMap::from([(
             "app.kubernetes.io/name".to_owned(),
@@ -165,6 +171,100 @@ fn workspace_pod_uses_the_template_runtime_class_without_a_fallback() {
         .spec
         .unwrap();
     assert_eq!(standard_pod.runtime_class_name, None);
+}
+
+#[test]
+fn unrestricted_egress_keeps_the_existing_ingress_only_policy() {
+    let policy = builder()
+        .build(&workspace(WorkspaceState::Ready))
+        .unwrap()
+        .network_policy;
+    let spec = policy.spec.unwrap();
+    assert_eq!(spec.policy_types.unwrap(), vec!["Ingress"]);
+    assert_eq!(spec.egress, None);
+}
+
+#[test]
+fn internet_only_egress_allows_selected_dns_and_public_addresses_only() {
+    let mut sandboxed = workspace(WorkspaceState::Ready);
+    sandboxed.template.egress_policy = EgressPolicy::InternetOnly;
+    let mut egress_builder = builder();
+    egress_builder.internet_egress = InternetEgressConfig::new(
+        "platform-dns".to_owned(),
+        BTreeMap::from([("app".to_owned(), "resolver".to_owned())]),
+        vec![
+            "198.51.100.25/32".parse().unwrap(),
+            "2001:db8:ffff::/48".parse().unwrap(),
+        ],
+    )
+    .unwrap();
+    let policy = egress_builder.build(&sandboxed).unwrap().network_policy;
+    let spec = policy.spec.unwrap();
+    assert_eq!(spec.policy_types.unwrap(), vec!["Ingress", "Egress"]);
+    let egress = spec.egress.unwrap();
+    assert_eq!(egress.len(), 3);
+
+    let dns = &egress[0];
+    let dns_peer = &dns.to.as_ref().unwrap()[0];
+    assert_eq!(
+        dns_peer
+            .namespace_selector
+            .as_ref()
+            .unwrap()
+            .match_labels
+            .as_ref()
+            .unwrap()["kubernetes.io/metadata.name"],
+        "platform-dns"
+    );
+    assert_eq!(
+        dns_peer
+            .pod_selector
+            .as_ref()
+            .unwrap()
+            .match_labels
+            .as_ref()
+            .unwrap()["app"],
+        "resolver"
+    );
+    let dns_ports = dns.ports.as_ref().unwrap();
+    assert_eq!(dns_ports.len(), 2);
+    assert!(dns_ports.iter().all(|port| port.port
+        == Some(k8s_openapi::apimachinery::pkg::util::intstr::IntOrString::Int(53))));
+    assert!(
+        dns_ports
+            .iter()
+            .any(|port| port.protocol.as_deref() == Some("UDP"))
+    );
+    assert!(
+        dns_ports
+            .iter()
+            .any(|port| port.protocol.as_deref() == Some("TCP"))
+    );
+
+    let ipv4 = egress[1].to.as_ref().unwrap()[0].ip_block.as_ref().unwrap();
+    assert_eq!(ipv4.cidr, "0.0.0.0/0");
+    let ipv4_except = ipv4.except.as_ref().unwrap();
+    assert!(ipv4_except.contains(&"10.0.0.0/8".to_owned()));
+    assert!(ipv4_except.contains(&"100.64.0.0/10".to_owned()));
+    assert!(ipv4_except.contains(&"198.51.100.25/32".to_owned()));
+
+    let ipv6 = egress[2].to.as_ref().unwrap()[0].ip_block.as_ref().unwrap();
+    assert_eq!(ipv6.cidr, "::/0");
+    let ipv6_except = ipv6.except.as_ref().unwrap();
+    assert!(ipv6_except.contains(&"fc00::/7".to_owned()));
+    assert!(ipv6_except.contains(&"fe80::/10".to_owned()));
+    assert!(ipv6_except.contains(&"ff00::/8".to_owned()));
+    assert!(ipv6_except.contains(&"2001:db8:ffff::/48".to_owned()));
+}
+
+#[test]
+fn egress_dns_configuration_rejects_an_empty_selector_or_invalid_namespace() {
+    assert!(
+        InternetEgressConfig::new("Bad.Namespace".to_owned(), BTreeMap::new(), Vec::new()).is_err()
+    );
+    assert!(
+        InternetEgressConfig::new("kube-system".to_owned(), BTreeMap::new(), Vec::new()).is_err()
+    );
 }
 
 #[test]

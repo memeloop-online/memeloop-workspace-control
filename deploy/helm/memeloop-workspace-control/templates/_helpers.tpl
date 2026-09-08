@@ -74,6 +74,17 @@ app.kubernetes.io/instance: {{ include "mwc.name" . }}
 {{- if not .Values.workspace.ttydImage -}}
 {{- fail "workspace.ttydImage must be an explicitly pinned image" -}}
 {{- end -}}
+{{- if or (not .Values.workspace.egress.dnsNamespace) (not (regexMatch "^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$" .Values.workspace.egress.dnsNamespace)) -}}
+{{- fail "workspace.egress.dnsNamespace must be a lower-case DNS label" -}}
+{{- end -}}
+{{- if empty .Values.workspace.egress.dnsPodLabels -}}
+{{- fail "workspace.egress.dnsPodLabels must select the DNS Pods" -}}
+{{- end -}}
+{{- range $cidr := .Values.workspace.egress.additionalBlockedCidrs -}}
+{{- if not (regexMatch "^(([0-9]{1,3}[.]){3}[0-9]{1,3}|[0-9A-Fa-f:]+)/[0-9]{1,3}$" $cidr) -}}
+{{- fail "workspace.egress.additionalBlockedCidrs entries must be CIDRs" -}}
+{{- end -}}
+{{- end -}}
 {{- if and .Values.public.webShellDomain (empty .Values.higress.podLabels) -}}
 {{- fail "higress.podLabels must identify the gateway Pods when public Web Shell is configured" -}}
 {{- end -}}

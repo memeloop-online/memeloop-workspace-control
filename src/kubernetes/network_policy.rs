@@ -2,14 +2,56 @@ use std::collections::BTreeMap;
 
 use k8s_openapi::{
     api::networking::v1::{
-        IPBlock, NetworkPolicy, NetworkPolicyIngressRule, NetworkPolicyPeer, NetworkPolicyPort,
-        NetworkPolicySpec,
+        IPBlock, NetworkPolicy, NetworkPolicyEgressRule, NetworkPolicyIngressRule,
+        NetworkPolicyPeer, NetworkPolicyPort, NetworkPolicySpec,
     },
     apimachinery::pkg::{apis::meta::v1::LabelSelector, util::intstr::IntOrString},
 };
 
-use super::namespaced_metadata;
-use crate::{workspace_runtime::WorkspaceRuntimeNames, workspaces::AccessMode};
+use super::{InternetEgressConfig, namespaced_metadata};
+use crate::{
+    templates::EgressPolicy, workspace_runtime::WorkspaceRuntimeNames, workspaces::AccessMode,
+};
+
+const PRIVATE_OR_RESERVED_IPV4: &[&str] = &[
+    "0.0.0.0/8",
+    "10.0.0.0/8",
+    "100.64.0.0/10",
+    "127.0.0.0/8",
+    "169.254.0.0/16",
+    "172.16.0.0/12",
+    "192.0.0.0/24",
+    "192.0.2.0/24",
+    "192.31.196.0/24",
+    "192.52.193.0/24",
+    "192.88.99.0/24",
+    "192.175.48.0/24",
+    "192.168.0.0/16",
+    "198.18.0.0/15",
+    "198.51.100.0/24",
+    "203.0.113.0/24",
+    "224.0.0.0/4",
+    "240.0.0.0/4",
+];
+
+const PRIVATE_OR_RESERVED_IPV6: &[&str] = &[
+    "::/96",
+    "::ffff:0:0/96",
+    "64:ff9b::/96",
+    "64:ff9b:1::/48",
+    "100::/64",
+    "2001::/23",
+    "2001:2::/48",
+    "2001:10::/28",
+    "2001:20::/28",
+    "2001:db8::/32",
+    "2002::/16",
+    "3fff::/20",
+    "5f00::/16",
+    "fc00::/7",
+    "fe80::/10",
+    "ff00::/8",
+];
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn build(
@@ -19,15 +61,18 @@ pub(super) fn build(
     higress_namespace: &str,
     higress_pod_labels: &BTreeMap<String, String>,
     higress_source_cidrs: &[String],
+    internet_egress: &InternetEgressConfig,
     jump_host_namespace: &str,
     jump_host_pod_labels: &BTreeMap<String, String>,
     access_mode: AccessMode,
+    egress_policy: EgressPolicy,
     internal_ssh_node_port_enabled: bool,
 ) -> NetworkPolicy {
     let ssh_rule = match access_mode {
         AccessMode::Public => ingress_rule(jump_host_namespace, jump_host_pod_labels, 2222),
         AccessMode::Internal => internal_cluster_ssh_rule(internal_ssh_node_port_enabled),
     };
+    let internet_only = egress_policy == EgressPolicy::InternetOnly;
     NetworkPolicy {
         metadata: namespaced_metadata(
             &runtime.resources.network_policy,
@@ -39,7 +84,13 @@ pub(super) fn build(
                 match_labels: Some(pod_labels.clone()),
                 ..LabelSelector::default()
             }),
-            policy_types: Some(vec!["Ingress".to_owned()]),
+            policy_types: Some(
+                ["Ingress", "Egress"]
+                    .into_iter()
+                    .take(if internet_only { 2 } else { 1 })
+                    .map(str::to_owned)
+                    .collect(),
+            ),
             ingress: Some(vec![
                 ingress_rule_with_ip_blocks(
                     higress_namespace,
@@ -49,8 +100,77 @@ pub(super) fn build(
                 ),
                 ssh_rule,
             ]),
+            egress: internet_only.then(|| internet_egress_rules(internet_egress)),
             ..NetworkPolicySpec::default()
         }),
+    }
+}
+
+fn internet_egress_rules(config: &InternetEgressConfig) -> Vec<NetworkPolicyEgressRule> {
+    vec![
+        dns_egress_rule(&config.dns_namespace, &config.dns_pod_labels),
+        public_egress_rule("0.0.0.0/0", PRIVATE_OR_RESERVED_IPV4, config),
+        public_egress_rule("::/0", PRIVATE_OR_RESERVED_IPV6, config),
+    ]
+}
+
+fn dns_egress_rule(
+    namespace: &str,
+    pod_labels: &BTreeMap<String, String>,
+) -> NetworkPolicyEgressRule {
+    NetworkPolicyEgressRule {
+        to: Some(vec![NetworkPolicyPeer {
+            namespace_selector: Some(LabelSelector {
+                match_labels: Some(BTreeMap::from([(
+                    "kubernetes.io/metadata.name".to_owned(),
+                    namespace.to_owned(),
+                )])),
+                ..LabelSelector::default()
+            }),
+            pod_selector: Some(LabelSelector {
+                match_labels: Some(pod_labels.clone()),
+                ..LabelSelector::default()
+            }),
+            ..NetworkPolicyPeer::default()
+        }]),
+        ports: Some(vec![network_port("UDP", 53), network_port("TCP", 53)]),
+    }
+}
+
+fn public_egress_rule(
+    cidr: &str,
+    default_except: &[&str],
+    config: &InternetEgressConfig,
+) -> NetworkPolicyEgressRule {
+    let ipv4 = cidr == "0.0.0.0/0";
+    let mut except = default_except
+        .iter()
+        .map(|cidr| (*cidr).to_owned())
+        .collect::<Vec<_>>();
+    except.extend(
+        config
+            .additional_blocked_cidrs
+            .iter()
+            .filter(|blocked| blocked.addr().is_ipv4() == ipv4)
+            .map(ToString::to_string),
+    );
+    NetworkPolicyEgressRule {
+        to: Some(vec![NetworkPolicyPeer {
+            ip_block: Some(IPBlock {
+                cidr: cidr.to_owned(),
+                except: Some(except),
+            }),
+            ..NetworkPolicyPeer::default()
+        }]),
+        ..NetworkPolicyEgressRule::default()
+    }
+}
+
+fn network_port(protocol: &str, port: i32) -> NetworkPolicyPort {
+    NetworkPolicyPort {
+        port: Some(IntOrString::Int(port)),
+        protocol: Some(protocol.to_owned()),
+        ..NetworkPolicyPort::default()
     }
 }
 

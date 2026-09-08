@@ -32,6 +32,13 @@ workspace:
   ttydImage: ""
   # Stable Tailnet node DNS name or IP. Enables per-workspace, auto-assigned SSH NodePorts.
   internalSshHost: ""
+  egress:
+    # Select only the DNS Pods that internet_only templates may query on UDP/TCP 53.
+    dnsNamespace: kube-system
+    dnsPodLabels:
+      k8s-app: kube-dns
+    # Add public node IPs and nonstandard Pod/Service CIDRs that must not be reachable.
+    additionalBlockedCidrs: []
 
 # Optional read-only startup packages can be supplied by ConfigMap or PVC.
 # Dynamically inspected and administrator-approved packages are persisted in
