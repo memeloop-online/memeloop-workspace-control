@@ -384,15 +384,19 @@ error. Main refactor `80a1a67` separates gateway validation from resource assemb
 weakening lint rules. Follow-up CI `34263765347` passed production checking, then stopped on
 the renderer test's boolean-comparison lint. Main `c094554` replaces the string search with
 a structural absent-field assertion; rustfmt passed. Verification-only CI `34266603901`
-is now running for `67b1f53` on `ci/ttyd-san-c63cb93`. This validates the committed product,
-lint fixes and cache setup; the worker's uncommitted lifecycle tests are NOT included.
-`http_fixture_clocks` continues lifecycle regressions. Main review requires full-call assertions
-that the SAN filter survives an Ingress DELETE until absence is observed, including a retained
-finalizer, and a missing-UID deletion rejection case. The tests are being split into bounded
-fixture and scenario modules; do not treat unexecuted tests as acceptance.
+PASSED for `67b1f53` on `ci/ttyd-san-c63cb93`, including the full test and deployment-check
+steps. Images were intentionally skipped. This validates the product, lint fixes and cache
+setup but does not include the new lifecycle regression commit `54f9409`.
+`http_fixture_clocks` completed lifecycle regressions in `54f9409`. Main review fixes include
+full-call assertions that the SAN filter survives Ingress DELETE until absence is observed,
+a retained finalizer over multiple calls, and missing-UID deletion rejection. The 413-line
+scenario module shares 249/248-line harness and fixtures; formatting/diff checks passed.
+These newly committed tests still require CI execution; do not treat them as acceptance yet.
 `release_manifest_plan` (Luna) completed the Rust-dependency CI cache in `618c300`, with an
 immutable upstream action pin. It now prepares a read-only gap analysis for authenticated
-WebSocket acceptance; no cluster changes are delegated.
+WebSocket acceptance. Its gap analysis is complete; the agent now implements a client-only
+upstream certificate acceptance mode without executing it. `key_template_ui_review` prepares
+a separate real-browser ticket/interactive-terminal/replay runner. No cluster changes are delegated.
 Local YAML parsing with duplicate-key rejection passed for the CI workflow; the immutable
 cache pin and unchanged full `--all-features --no-fail-fast` test step were asserted.
 Actual cache execution and lifecycle test results still require GitHub Actions.
