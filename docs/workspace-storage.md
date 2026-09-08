@@ -14,7 +14,7 @@ volume bounds contain a single workspace.
 | Interactive temporary space | 512 MiB memory `emptyDir` for the workspace and a separate 128 MiB memory `emptyDir` for ttyd | `/tmp` and `/var/tmp`; ttyd cannot exhaust the workspace shell's temporary space |
 | Regenerable build data | 12 GiB node-local `emptyDir` | compiler `TMPDIR`, Cargo target output, `$HOME/.cache` for new/clean Homes, and package-manager caches |
 | Rootless image builds | 8 GiB node-local `emptyDir` | BuildKit state, cache, configuration, socket, temporary files and `buildctl` |
-| Codex scratch | 2 GiB node-local `emptyDir` | Only `$HOME/.codex/.tmp`; the rest of `.codex` remains durable |
+| Codex scratch | 2 GiB node-local `emptyDir` | Only `$HOME/.codex/tmp` and `$HOME/.codex/.tmp`; the rest of `.codex` remains durable |
 
 Templates may override volume sizes. The Home emergency reserve is selected automatically as
 the smaller of 1 GiB and 10% of the PVC; templates may choose a smaller explicit value through
@@ -73,8 +73,9 @@ for this recovery channel even while an optional sidecar reports unready.
 
 ## Codex state and logs
 
-The whole `.codex` directory is never placed on an ephemeral volume. Conversation/session data and
-SQLite state stay on Home; only `.codex/.tmp` is regenerable. MWC never runs a sidecar, scheduled
+The whole `.codex` directory is never placed on an ephemeral volume. Conversation/session data,
+logs, SQLite state and its WAL/SHM files stay on Home; only `.codex/tmp` and `.codex/.tmp` are
+regenerable. MWC never runs a sidecar, scheduled
 cleanup, online `VACUUM`, or any other process that concurrently edits Codex SQLite files.
 
 Current Codex releases retain log rows for ten days and bound each thread/process log stream to
