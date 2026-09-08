@@ -13,6 +13,7 @@ use base64::{Engine, engine::general_purpose::STANDARD};
 use http_body_util::BodyExt;
 use memeloop_workspace_control::{
     api::{AppState, router},
+    auth::ApiKeyScope,
     config::AppConfig,
     crypto::EnvelopeCipher,
     storage::Database,
@@ -23,7 +24,7 @@ use uuid::Uuid;
 
 const TOKEN: &str = "injection-user-00000000000000000000000000";
 
-async fn app(with_cipher: bool) -> (Router, Uuid) {
+async fn app(with_cipher: bool) -> (Router, Database, Uuid) {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
@@ -60,20 +61,30 @@ async fn app(with_cipher: bool) -> (Router, Uuid) {
     let state = if with_cipher {
         AppState::with_cipher(
             config,
-            database,
+            database.clone(),
             EnvelopeCipher::from_base64(&STANDARD.encode([9_u8; 32])).unwrap(),
         )
     } else {
-        AppState::new(config, database)
+        AppState::new(config, database.clone())
     };
-    (router(Arc::new(state)), user.user_id)
+    (router(Arc::new(state)), database, user.user_id)
 }
 
 fn request(method: Method, uri: &str, key: Option<&str>, body: Option<Value>) -> Request<Body> {
+    request_as(TOKEN, method, uri, key, body)
+}
+
+fn request_as(
+    token: &str,
+    method: Method,
+    uri: &str,
+    key: Option<&str>,
+    body: Option<Value>,
+) -> Request<Body> {
     let mut builder = Request::builder()
         .method(method)
         .uri(uri)
-        .header("Authorization", format!("Bearer {TOKEN}"));
+        .header("Authorization", format!("Bearer {token}"));
     if let Some(key) = key {
         builder = builder.header("Idempotency-Key", key);
     }
@@ -94,8 +105,94 @@ async fn response_body(response: axum::response::Response) -> (StatusCode, Vec<u
 }
 
 #[tokio::test]
+async fn user_injection_writes_require_a_workspace_write_scope() {
+    let (app, database, user_id) = app(true).await;
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    let expiry = now + 24 * 60 * 60;
+    let read_only = database
+        .create_api_key(
+            user_id,
+            "Read-only injection key",
+            vec![ApiKeyScope::ReadWorkspace],
+            Some(expiry),
+            None,
+            now,
+        )
+        .await
+        .unwrap();
+    let writer = database
+        .create_api_key(
+            user_id,
+            "Workspace injection writer",
+            vec![ApiKeyScope::ChangeWorkspaceState],
+            Some(expiry),
+            None,
+            now,
+        )
+        .await
+        .unwrap();
+
+    let item = |key: &str| {
+        json!({
+            "key": key,
+            "kind": "environment_variable",
+            "target": key.to_ascii_uppercase(),
+            "value": {"encoding": "utf8", "value": "not-returned"},
+            "sensitive": true,
+            "locked": false,
+            "version": 0,
+            "file_mode": null,
+            "owner": null,
+            "group": null,
+            "template_selector": null,
+            "labels": {}
+        })
+    };
+
+    let denied = app
+        .clone()
+        .oneshot(request_as(
+            &read_only.token,
+            Method::PUT,
+            &format!("/api/v1/injections/user/{user_id}/read-only"),
+            Some("read-only-write"),
+            Some(item("read-only")),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+
+    let allowed = app
+        .clone()
+        .oneshot(request_as(
+            &writer.token,
+            Method::PUT,
+            &format!("/api/v1/injections/user/{user_id}/writer"),
+            Some("writer-write"),
+            Some(item("writer")),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(allowed.status(), StatusCode::OK);
+
+    let listed = app
+        .oneshot(request(
+            Method::GET,
+            &format!("/api/v1/injections/user/{user_id}"),
+            None,
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(body_json_array_length(listed).await, 1);
+}
+
+#[tokio::test]
 async fn injection_api_is_write_only_versioned_and_idempotent() {
-    let (app, user_id) = app(true).await;
+    let (app, _, user_id) = app(true).await;
     let secret = "line one\n\n  line two\n";
     let item = json!({
         "key": "credentials",
@@ -236,7 +333,7 @@ async fn injection_api_is_write_only_versioned_and_idempotent() {
 
 #[tokio::test]
 async fn injection_write_requires_configured_encryption_key() {
-    let (app, user_id) = app(false).await;
+    let (app, _, user_id) = app(false).await;
     let response = app
         .oneshot(request(
             Method::PUT,
@@ -264,7 +361,7 @@ async fn injection_write_requires_configured_encryption_key() {
 
 #[tokio::test]
 async fn injection_delete_is_idempotent_and_removes_the_summary() {
-    let (app, user_id) = app(true).await;
+    let (app, _, user_id) = app(true).await;
     let uri = format!("/api/v1/injections/user/{user_id}/temporary-token");
     let item = json!({
         "key": "temporary-token",
@@ -342,7 +439,7 @@ async fn injection_delete_is_idempotent_and_removes_the_summary() {
 
 #[tokio::test]
 async fn injection_batch_delete_validates_once_and_is_idempotent() {
-    let (app, user_id) = app(true).await;
+    let (app, _, user_id) = app(true).await;
     for (key, target) in [("first", "FIRST_VALUE"), ("second", "SECOND_VALUE")] {
         let response = app
             .clone()
