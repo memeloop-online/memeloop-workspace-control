@@ -415,8 +415,21 @@ issuer expiry, while explicit over-parent requests remain forbidden. `http_fixtu
 completed deterministic short-lived-issuer regression `14d5060`; main review follow-up
 `681da5f` separates scope escalation from an explicit over-parent expiry case, so neither
 assertion can pass for the other reason. Main reviewed both; formatting/diff checks passed.
-Fix and regression are pushed as `df281ea`; main publication CI `34270275217` is running.
-Watch session `20896` follows that exact run. No failed job is still running.
+Fix and regression are published as `df281ea`; main CI `34270275217` PASSED verification
+and all four image publications. Watch session `20896` exited 0 and is no longer running.
+Main independently fetched each public OCI index and verified its SHA-256 against the registry
+header for `sha-df281ea` (no image layers downloaded, authentication held only in memory):
+
+| Image suffix | Verified OCI index digest |
+| --- | --- |
+| control plane | `sha256:b5b946a6855dbd937404fb77a014aa8ddc1efb35e26fb5d5e11c6113e228632c` |
+| `-ttyd` | `sha256:c2a7ff260d2f1de7f129865fb93d9cc24d80311e202ef668fcbec1bacfa6ace6` |
+| `-workspace` | `sha256:c37fa3729f548bec8a693c956f05017fb5af08f508145253b23ea843579be12b` |
+| `-ssh-jump` | `sha256:6b1db4a26be39a32136a9a03c97f94378a7d94b6bdb9a7d6e84323e0f7efb6a8` |
+
+`release_manifest_plan` owns updating only the staged final Application source/image pins.
+Keep manual sync, existingClaim, migration gates and mTLS-disabled configuration; do not
+deploy the schema-22 release over a schema-19 database or push the staging branch wholesale.
 Browser runner review requires UUID v7 acceptance, CDP socket identity from `webSocketCreated`,
 and rendered xterm-buffer matching (not an assumed DOM renderer or command-input echo).
 The browser worker is correcting these before live execution.
@@ -432,8 +445,7 @@ wait (no explicit 401/403 was recorded). Fresh-ticket recovery was not reached. 
 browser contexts and temporary token file were cleaned by `finally`. Do not claim full browser
 acceptance. The browser worker owns a real-local-Chromium rejected-upgrade fixture and precise
 CDP rejection evidence correction; a close/timeout alone must never count as rejection.
-CI `34270275217` has passed verification and entered image publication; control-plane image
-build is still running, so the full release is not yet confirmed.
+Release publication is confirmed above; deployment and browser replay acceptance remain pending.
 Main reviewed GitOps `8d8a4e7`; client-only live acceptance PASSED with the already verified
 ttyd `6f430bf` image. Session `27715` exited 0; result is
 `/tmp/mwc-higress-ttyd-client-20260908.json`. Valid / absent / restored / untrusted / restored
