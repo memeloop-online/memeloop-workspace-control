@@ -9,6 +9,11 @@ Do not enable this until the certificate material and the Higress controller beh
 been verified in the target cluster. Production acceptance is not yet complete. This feature
 does not widen any NetworkPolicy source, CIDR, Service type, NodePort, or host-port access.
 
+The 2026-09-08 canary failed server-name validation on Higress 2.2.3: a wrong SNI still
+received HTTP 200. The current Ingress annotations are insufficient to assert certificate
+SAN verification. Keep deployment gated until explicit upstream SAN validation is configured
+and the negative test passes; sending SNI alone is not server-identity verification.
+
 ## Enablement
 
 Set all three environment variables in the control-plane process, or set none of them:
@@ -55,7 +60,7 @@ workspace container does not mount it. ttyd is started with `--ssl`, `--ssl-cert
 
 The Higress client Secret is an operator-managed TLS client credential, conventionally with
 the standard `tls.crt` and `tls.key` keys. Higress also requires its companion CA Secret named
-`<clientSecretName>-cacert`; that CA validates ttyd's server certificate. The client Secret's
+`<clientSecretName>-cacert`, with the documented key `cacert`; that CA validates ttyd's server certificate. The client Secret's
 private key must remain available only to Higress, never to a workspace Pod, ConfigMap, API
 response, or browser.
 
@@ -73,8 +78,9 @@ CA private keys.
 
 ## Name and SNI requirements
 
-Higress is configured with HTTPS upstream, certificate verification, client Secret reference,
-and SNI equal to the target Service FQDN:
+The current Ingress requests HTTPS upstream, certificate verification, a client Secret reference,
+and SNI equal to the target Service FQDN. An explicit SAN-validation configuration is still required
+for the installed Higress version:
 
 ```text
 w-<workspace-short-id>.memeloop-workspace-control.svc.cluster.local
