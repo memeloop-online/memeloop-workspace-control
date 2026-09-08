@@ -111,6 +111,14 @@ then verify SSH/kernel/K3s/storage/services and uncordon. User controls console 
 Uncommitted ttyd Basic-auth draft was rejected: upstream `/token` returns the configured
 credential. Worker is removing it and implementing native TLS client authentication instead.
 Never publish the rejected Basic draft or widen SNAT allowances before live acceptance.
+Kernel canary actually rebooted: root SSH returned with `5.15.220-1.el8.elrepo.x86_64`;
+old 4.18 default remains and `next_entry` was consumed. Node is Ready and uncordoned;
+K3s readyz passed after initial etcd warm-up. Overseas Higress controller 2/2, gateway 1/1,
+Wiki 3/3 and Wiki volume healthy/attached. Headplane's two-replica volume remains degraded
+(haixia running, replacement/old replicas stopped); node worker is inspecting recovery without
+deleting data. Do not begin another runtime restart until that recovery is resolved.
+CI `34236197357` reached tests; admin fixture fixes are `7bb67aa` (schema22 and bounded parent
+key expiry). Main will push the committed revision; mTLS work remains uncommitted/isolated.
 
 Migration handoff review corrected a dangerous conflation: `rust-dev-test` and Coder TOKEN center
 dev are distinct 100 GiB volumes. Both actual PVC→PV claim UIDs match. Final count is four
