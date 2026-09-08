@@ -119,6 +119,14 @@ Wiki 3/3 and Wiki volume healthy/attached. Headplane's two-replica volume remain
 deleting data. Do not begin another runtime restart until that recovery is resolved.
 CI `34236197357` reached tests; admin fixture fixes are `7bb67aa` (schema22 and bounded parent
 key expiry). Main will push the committed revision; mTLS work remains uncommitted/isolated.
+Follow-up recovery evidence `b2ad9e4`: Headplane replacement replica is queued behind
+versetensor's existing single concurrent rebuild slot. Preserve both data and concurrency
+settings; no destructive repair is justified. gVisor worker is staging verified official
+artifacts/scripts on serv and doing read-only preflight while the rebuild proceeds.
+The jump-host namespace fallback now uses the canonical namespace (`1adee76`).
+Main has prepared all-or-none mTLS environment parsing and eight-combination tests; wait for
+the runtime worker's matching config type/manifests before committing that dependent change.
+CI `34241444782` failed; fixture worker owns the next log-based correction.
 
 Migration handoff review corrected a dangerous conflation: `rust-dev-test` and Coder TOKEN center
 dev are distinct 100 GiB volumes. Both actual PVC→PV claim UIDs match. Final count is four
