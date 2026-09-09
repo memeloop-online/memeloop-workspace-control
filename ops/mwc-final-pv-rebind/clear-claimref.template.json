@@ -1,0 +1,8 @@
+[
+  {"op":"test","path":"/metadata/resourceVersion","value":"<RE-READ-PV-RESOURCEVERSION>"},
+  {"op":"test","path":"/spec/persistentVolumeReclaimPolicy","value":"Retain"},
+  {"op":"test","path":"/spec/claimRef/namespace","value":"<SOURCE-NAMESPACE>"},
+  {"op":"test","path":"/spec/claimRef/name","value":"<PRESERVED-PVC-NAME>"},
+  {"op":"test","path":"/spec/claimRef/uid","value":"<SOURCE-PVC-UID>"},
+  {"op":"remove","path":"/spec/claimRef"}
+]

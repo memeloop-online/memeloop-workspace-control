@@ -1,0 +1,8 @@
+[
+  {"op":"test","path":"/metadata/resourceVersion","value":"42982896"},
+  {"op":"test","path":"/spec/claimRef/namespace","value":"ws-k3si-7032544955-b268ff46894a14b9"},
+  {"op":"test","path":"/spec/claimRef/name","value":"workspace-data-w-b268ff46894a14b9-0"},
+  {"op":"test","path":"/spec/claimRef/uid","value":"ae9f3ccf-458d-4f3a-a1a2-97c5e2f84c96"},
+  {"op":"test","path":"/spec/persistentVolumeReclaimPolicy","value":"Delete"},
+  {"op":"replace","path":"/spec/persistentVolumeReclaimPolicy","value":"Retain"}
+]

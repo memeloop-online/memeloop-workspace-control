@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: workspace-data-w-97645a0fb4771b1d-0
+  namespace: memeloop-workspace-control
+  labels:
+    app.kubernetes.io/component: workspace
+    app.kubernetes.io/managed-by: memeloop-workspace-control
+    workspace.memeloop.dev/organization-id: 01a0436a-8659-7250-9980-087f006d8f49
+    workspace.memeloop.dev/owner-installation: k3si-7032544955
+    workspace.memeloop.dev/owner-user-id: 01a04369-e74f-7273-a5c6-77c5d61cb3c9
+    workspace.memeloop.dev/workspace-id: 01a06180-f1c9-7a01-9764-5a0fb4771b1d
+spec:
+  accessModes: [ReadWriteOnce]
+  resources: {requests: {storage: 60Gi}}
+  storageClassName: mwc-longhorn-large-delete
+  volumeMode: Filesystem
+  volumeName: pvc-bf5e159e-bf80-47ae-bda3-58affce88008
