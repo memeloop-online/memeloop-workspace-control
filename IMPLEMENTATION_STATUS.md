@@ -753,6 +753,10 @@ schema bridge, writer shutdown, retained-volume and rollback gates.
 - Follow-up CI `34335481096` compiled past the import and rejected a redundant
   `ProjectedVolumeSource::default()` update (all fields already provided). Removed it
   without weakening lint; follow the next corrected revision.
+- Corrected `0f72957` pushed; CI `34335872689` confirmed IN_PROGRESS.
+  Continue this exact run rather than rerunning either failed revision. Pending next:
+  verify/publication, control-only GitOps UI/trust-code upgrade, then separately deploy
+  prepared certificate App and enable/accept mTLS with the protected restart window.
 
 - Borrowing restriction for ports `31871` and `32671` was lifted by the user on 2026-09-09;
   preserve the normal snapshot, writer-freeze, volume-binding and rollback gates.
