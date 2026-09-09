@@ -77,3 +77,16 @@ directory.
 Continue remaining isolation and resource-pressure acceptance. Delete only
 these test resources afterward, including the template, member, organization and
 temporary RuntimeClass. Keep the four daily-use workspaces unchanged.
+
+## Resource and credential boundary
+
+The memory-backed workspace's member process has `CapEff=0` and `NoNewPrivs=1`.
+Docker/containerd sockets and the Kubernetes service-account token are absent.
+The guest reports `Seccomp=0`; this is gVisor's emulated process view and is not
+evidence that the host sentry's seccomp protection is disabled.
+
+The host Pod cgroup limits are 0.6 CPU, 1152 MiB memory and 1024 PIDs, including
+the ttyd sidecar. Two CPU workers were terminated after five seconds; host
+`nr_throttled` increased from 4 to 21 and `throttled_usec` from 67131 to 710882.
+The command completed normally. This verifies actual CPU throttling on this Pod,
+not per-process quotas or all resource exhaustion scenarios.
