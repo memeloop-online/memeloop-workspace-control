@@ -194,16 +194,13 @@ export default function App() {
         <div className="ambient one" aria-hidden="true" /><div className="ambient two" aria-hidden="true" />
         <section className="login-card">
           <BrandIcon className="large" size={54} />
-          <p className="eyebrow">MEMELOOP CONTROL PLANE</p>
           <div className="display-controls"><LanguagePicker locale={locale} setLocale={setLocale} /><button type="button" onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>{theme === "dark" ? t("themeLight") : t("themeDark")}</button></div>
           <h1>{t("loginTitle")}</h1>
-          <p className="login-copy">{t("loginCopy")}</p>
           <form onSubmit={login}>
             <label>{t("token")}<input autoFocus type="password" minLength={32} required value={tokenDraft} onChange={(event) => setTokenDraft(event.target.value)} placeholder={t("tokenPlaceholder")} /></label>
             <button className="button primary full" disabled={loading}>{loading ? t("signingIn") : t("signIn")}</button>
           </form>
           {fatal && <div className="error-banner">{fatal}</div>}
-          <div className="trust-row"><span>{t("envelopeEncryption")}</span><span>RBAC</span><span>{t("auditTrail")}</span></div>
         </section>
       </main>
     );

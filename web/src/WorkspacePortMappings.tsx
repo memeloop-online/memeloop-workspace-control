@@ -109,7 +109,7 @@ export function WorkspacePortMappings({ api, workspaceId, workspaceReady, onErro
       if (event.target === dialog.current) dialog.current?.close();
     }}>
       <div className="port-mappings-dialog-content">
-        <header><div><span className="eyebrow">{t("portMappings")}</span><h3 id={titleId}>{t("portMappings")}</h3></div><div className="port-mappings-header-actions"><button type="button" className="port-mappings-refresh" disabled={loading} onClick={() => void load()}>{loading ? t("portMappingRefreshing") : t("portMappingRefresh")}</button><button type="button" className="port-mappings-close" aria-label={t("close")} onClick={() => dialog.current?.close()}>×</button></div></header>
+        <header><h3 id={titleId}>{t("portMappings")}</h3><div className="port-mappings-header-actions"><button type="button" className="port-mappings-refresh" disabled={loading} onClick={() => void load()}>{loading ? t("portMappingRefreshing") : t("portMappingRefresh")}</button><button type="button" className="port-mappings-close" aria-label={t("close")} onClick={() => dialog.current?.close()}>×</button></div></header>
         <p className="port-mappings-intro">{t("portMappingIntro")}</p>
         <form className="port-mappings-form" onSubmit={(event) => void add(event)}>
           <label>{t("internalPort")}<input disabled={!workspaceReady || saving} type="number" min={1} max={65535} step={1} required value={port} onChange={(event) => setPort(event.target.value)} placeholder={t("portMappingPortPlaceholder")} /></label>

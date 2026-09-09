@@ -73,7 +73,7 @@ export function AuditPanel({ api, organizationId, systemAdmin, onError }: { api:
   }
 
   return <section className="panel-stack audit-page">
-    <div className="section-heading"><div><p className="eyebrow">AUDIT</p><h2>{t("auditTitle")}</h2></div></div>
+    <div className="section-heading"><h2>{t("auditTitle")}</h2></div>
     <form className={`audit-filters${systemAdmin ? " with-scope" : ""}`} onSubmit={applyFilters}>
       <label>{t("auditSearch")}<input type="search" value={draft.q} onChange={(event) => setDraft({ ...draft, q: event.target.value })} placeholder={t("auditSearchHint")} /></label>
       <label>{t("auditAction")}<input value={draft.action} onChange={(event) => setDraft({ ...draft, action: event.target.value })} placeholder="workspace.create" /></label>

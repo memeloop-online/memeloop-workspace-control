@@ -193,7 +193,7 @@ export function AdminPanel({ api, principal, organizationId, onError, onOrganiza
 
   return <section className="panel-stack">
     <div className="section-heading">
-      <div><p className="eyebrow">{t("administrationEyebrow")}</p><h2>{t("administrationTitle")}</h2></div>
+      <h2>{t("administrationTitle")}</h2>
       <a className="button" href="/api/v1/openapi.json" target="_blank" rel="noreferrer">{t("openApi")}</a>
     </div>
 
@@ -298,7 +298,7 @@ function IdentityQuotaCard({
 
 function ImageAllowlist({ images, image, onImageChange, onAllow }: { images: ImagePolicy[]; image: string; onImageChange: (value: string) => void; onAllow: () => void }) {
   const { t } = useI18n();
-  return <div className="system-card"><h3>{t("imageAllowlist")} · {t("imageContract")}</h3><label>{t("ociImage")}<input value={image} onChange={(event) => onImageChange(event.target.value)} placeholder={t("imagePlaceholder")} /></label><button className="button" disabled={!image.trim()} onClick={onAllow}>{t("allowImage")}</button><div className="state-bars">{images.map((item) => <div key={item.image}><code>{item.image}</code><strong>{item.enabled ? t("enabled") : t("disabled")}</strong></div>)}</div></div>;
+  return <div className="system-card"><h3>{t("imageAllowlist")}</h3><label>{t("ociImage")}<input value={image} onChange={(event) => onImageChange(event.target.value)} placeholder={t("imagePlaceholder")} /></label><button className="button" disabled={!image.trim()} onClick={onAllow}>{t("allowImage")}</button><div className="state-bars">{images.map((item) => <div key={item.image}><code>{item.image}</code><strong>{item.enabled ? t("enabled") : t("disabled")}</strong></div>)}</div></div>;
 }
 
 function workspaceStateLabel(state: string, t: (key: "stateProvisioning" | "stateReady" | "stateStopping" | "stateStopped" | "stateStarting" | "stateRestarting" | "stateDeleting" | "stateDeleted" | "stateFailed") => string) {

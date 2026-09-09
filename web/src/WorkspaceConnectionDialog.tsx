@@ -18,7 +18,7 @@ export function WorkspaceConnectionDialog({ connection, workspaceHostKey, jumpHo
       if (event.target === dialog.current) dialog.current.close();
     }}>
       <div className="connection-dialog-content">
-        <header><div><span className="eyebrow">SSH</span><h3 id={titleId}>{t("sshConnectionTitle")}</h3></div><button className="connection-dialog-close" aria-label={t("close")} onClick={() => dialog.current?.close()}>×</button></header>
+        <header><h3 id={titleId}>{t("sshConnectionTitle")}</h3><button className="connection-dialog-close" aria-label={t("close")} onClick={() => dialog.current?.close()}>×</button></header>
         <p className="connection-dialog-intro">{t("sshConnectionIntro")}</p>
         <dl className="connection-facts">
           <div><dt>{t("displayName")}</dt><dd>{connection.display_name}</dd></div>

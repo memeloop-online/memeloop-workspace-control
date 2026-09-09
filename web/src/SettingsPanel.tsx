@@ -77,7 +77,7 @@ export function SettingsPanel({
   }
 
   return <section className="panel-stack settings-page">
-    <div className="section-heading"><div><p className="eyebrow">SETTINGS</p><h2>{t("settingsTitle")}</h2></div></div>
+    <div className="section-heading"><h2>{t("settingsTitle")}</h2></div>
     <div className="settings-grid settings-grid-refined">
       <ProfileCard
         avatarDraft={avatarDraft}
@@ -131,7 +131,7 @@ function ProfileCard({
   return <section className="settings-card settings-profile-card">
     <div className="settings-card-heading">
       <UserAvatar displayName={profile.display_name} userId={principal.user_id} avatarUrl={profile.avatar_url} size="large" />
-      <div><h3>{t("profileSettings")}</h3><p>{t("profileSettingsHelp")}</p></div>
+      <div><h3>{t("profileSettings")}</h3></div>
     </div>
     <form className="settings-form" onSubmit={onSave}>
       <label>

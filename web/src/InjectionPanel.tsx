@@ -212,7 +212,7 @@ export function InjectionPanel(props: Props) {
   return (
     <section className="panel-stack">
       <div className="section-heading">
-        <div><p className="eyebrow">{t("credentials")}</p><h2>{t("credentialsTitle")}</h2></div>
+        <h2>{t("credentialsTitle")}</h2>
         <button className="button" onClick={() => void runPreview()}>{t("credentialsPreview")}</button>
       </div>
       <div className="scope-tabs" role="tablist" aria-label={t("credentials")}>

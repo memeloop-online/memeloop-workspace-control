@@ -76,7 +76,7 @@ export function PluginPanel({
   }
 
   return <section className="panel-stack plugin-page" aria-labelledby="plugin-page-title">
-    <div className="section-heading"><div><p className="eyebrow">PLUGINS</p><h2 id="plugin-page-title">{t("pluginsTitle")}</h2><p className="section-copy">{t("pluginsDescription")}</p></div>{systemAdmin && <button className="button primary" type="button" onClick={() => setInstallerTarget(null)}>{t("pluginInstall")}</button>}</div>
+    <div className="section-heading"><h2 id="plugin-page-title">{t("pluginsTitle")}</h2>{systemAdmin && <button className="button primary" type="button" onClick={() => setInstallerTarget(null)}>{t("pluginInstall")}</button>}</div>
     {catalogState === "error" && <div className="error-banner" role="alert">{error}<button type="button" onClick={() => void load()}>{t("pluginRetry")}</button></div>}
     {catalogState === "loading" ? <div className="empty" role="status">{t("pluginsLoading")}</div> : catalogState === "empty" ? (
       <div className="empty plugin-empty"><strong>{t("pluginsEmpty")}</strong><span>{systemAdmin ? t("pluginsEmptyHint") : t("pluginsEmptyMemberHint")}</span></div>

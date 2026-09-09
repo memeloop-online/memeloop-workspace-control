@@ -30,7 +30,6 @@ code { font-family: "DM Mono", ui-monospace, monospace; }
 .ambient.two { width: 350px; height: 350px; background: #557ee9; left: -100px; bottom: 3%; }
 .login-card { width: min(460px, calc(100vw - 32px)); padding: 46px; border: 1px solid rgba(255,255,255,.1); border-radius: 24px; background: rgba(13,17,25,.86); box-shadow: 0 35px 100px #0009; backdrop-filter: blur(22px); position: relative; }
 .login-card h1 { font-size: 2.1rem; letter-spacing: -.05em; margin: 10px 0 12px; }
-.login-copy { color: var(--muted); line-height: 1.7; margin-bottom: 28px; }
 .login-card form { display: grid; gap: 16px; }
 .display-controls { display: flex; justify-content: flex-end; gap: 7px; margin: -20px -20px 8px 0; }
 .display-controls button, .utility-button { color: var(--muted); border: 1px solid var(--line); background: var(--surface-2); border-radius: 8px; padding: 6px 9px; cursor: pointer; font-size: .75rem; }
@@ -39,9 +38,6 @@ input, select, textarea { width: 100%; color: var(--text); background: #090d14; 
 input:focus, select:focus, textarea:focus { border-color: #57cfa2; box-shadow: 0 0 0 3px #57cfa21f; }
 textarea { resize: vertical; font-family: "DM Mono", monospace; line-height: 1.55; tab-size: 2; }
 .error-banner { margin-top: 16px; color: #ffc2c9; background: #401a21; border: 1px solid #6c2833; padding: 12px; border-radius: 9px; font-size: .84rem; }
-.trust-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 24px; }
-.trust-row span { font-size: .75rem; color: #96a2b6; border: 1px solid #2b3443; background: #111722; border-radius: 99px; padding: 5px 9px; }
-
 .brand-mark { width: 38px; height: 38px; display: grid; place-items: center; border-radius: 11px; color: #07110d; font-weight: 800; background: linear-gradient(135deg, #92ffd1, #56dcb0); box-shadow: 0 7px 25px #65e6b329; }
 .brand-mark.large { width: 54px; height: 54px; font-size: 1.2rem; border-radius: 15px; }
 .eyebrow { color: var(--accent); font: 500 .75rem "DM Mono", monospace; letter-spacing: .16em; margin: 0 0 6px; }
@@ -381,7 +377,6 @@ textarea { resize: vertical; font-family: "DM Mono", monospace; line-height: 1.5
 
 .plugin-page { align-content: start; }
 .plugin-page .section-heading { align-items: center; }
-.section-copy { max-width: 650px; color: var(--muted); font-size: .75rem; line-height: 1.55; margin: 7px 0 0; }
 .read-only-badge { color: #9fb4ad; border: 1px solid #294036; border-radius: 99px; padding: 6px 10px; font: .65rem "DM Mono", monospace; }
 .plugin-notice { display: grid; gap: 3px; margin: 0; padding: 12px 14px; border: 1px solid #294036; border-radius: 10px; background: #0a1312; }
 .plugin-notice strong { color: #b7c8c1; }.plugin-notice span { color: var(--muted); }
