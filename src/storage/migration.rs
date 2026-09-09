@@ -123,26 +123,105 @@ mod current_tests {
     }
 
     #[tokio::test]
-    async fn pre_22_sqlite_version_is_rejected_without_conversion() {
-        let installation: InstallationId = "schema-test".parse().unwrap();
-        let database = Database::connect("sqlite::memory:", installation)
-            .await
-            .unwrap();
-        let Database::Sqlite { pool, .. } = &database else {
-            unreachable!()
+    async fn pre_22_and_future_sqlite_versions_are_rejected_without_conversion() {
+        for version in [20, 21, 23] {
+            let installation: InstallationId = "schema-test".parse().unwrap();
+            let database = Database::connect("sqlite::memory:", installation)
+                .await
+                .unwrap();
+            let Database::Sqlite { pool, .. } = &database else {
+                unreachable!()
+            };
+            sqlx::query(schema::MIGRATION_TABLE)
+                .execute(pool)
+                .await
+                .unwrap();
+            sqlx::query("INSERT INTO schema_migrations (version, applied_at) VALUES (?1, 1)")
+                .bind(version)
+                .execute(pool)
+                .await
+                .unwrap();
+            assert!(matches!(
+                database.migrate().await,
+                Err(StorageError::UnsupportedDatabaseVersion)
+            ));
+            assert_eq!(database.schema_version().await.unwrap(), version);
+        }
+    }
+
+    #[tokio::test]
+    async fn postgres_accepts_only_fresh_or_current_schema_when_configured() {
+        let Ok(url) = std::env::var("MWC_TEST_POSTGRES_URL") else {
+            eprintln!("skipping PostgreSQL migration test: MWC_TEST_POSTGRES_URL is not set");
+            return;
         };
-        sqlx::query(schema::MIGRATION_TABLE)
-            .execute(pool)
+        let admin = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&url)
             .await
             .unwrap();
-        sqlx::query("INSERT INTO schema_migrations (version, applied_at) VALUES (21, 1)")
-            .execute(pool)
+        let fresh_schema = format!("mwc_schema_fresh_{}", uuid::Uuid::now_v7().simple());
+        let fresh = postgres_database(&url, &fresh_schema, None).await;
+        fresh.migrate().await.unwrap();
+        assert_eq!(
+            fresh.schema_version().await.unwrap(),
+            schema::SCHEMA_VERSION
+        );
+        fresh.migrate().await.unwrap();
+        drop(fresh);
+        for version in [20, 21, 23] {
+            let name = format!("mwc_schema_old_{}", uuid::Uuid::now_v7().simple());
+            let database = postgres_database(&url, &name, Some(version)).await;
+            assert!(matches!(
+                database.migrate().await,
+                Err(StorageError::UnsupportedDatabaseVersion)
+            ));
+            assert_eq!(database.schema_version().await.unwrap(), version);
+            drop(database);
+            sqlx::query(&format!("DROP SCHEMA {name} CASCADE"))
+                .execute(&admin)
+                .await
+                .unwrap();
+        }
+        sqlx::query(&format!("DROP SCHEMA {fresh_schema} CASCADE"))
+            .execute(&admin)
             .await
             .unwrap();
-        assert!(matches!(
-            database.migrate().await,
-            Err(StorageError::UnsupportedDatabaseVersion)
-        ));
-        assert_eq!(database.schema_version().await.unwrap(), 21);
+        admin.close().await;
+    }
+
+    async fn postgres_database(url: &str, schema_name: &str, version: Option<i64>) -> Database {
+        let admin = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(1)
+            .connect(url)
+            .await
+            .unwrap();
+        sqlx::query(&format!("CREATE SCHEMA {schema_name}"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        admin.close().await;
+        let mut scoped = url::Url::parse(url).unwrap();
+        scoped
+            .query_pairs_mut()
+            .append_pair("options", &format!("-c search_path={schema_name}"));
+        let database = Database::connect(scoped.as_str(), "schema-pg".parse().unwrap())
+            .await
+            .unwrap();
+        if let Some(version) = version {
+            let Database::Postgres { pool, .. } = &database else {
+                unreachable!()
+            };
+            sqlx::query(schema::MIGRATION_TABLE)
+                .execute(pool)
+                .await
+                .unwrap();
+            sqlx::query("INSERT INTO schema_migrations (version, applied_at) VALUES ($1, 1)")
+                .bind(version)
+                .execute(pool)
+                .await
+                .unwrap();
+        }
+        database
     }
 }
