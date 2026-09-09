@@ -690,6 +690,28 @@ schema bridge, writer shutdown, retained-volume and rollback gates.
   `memeloop-workspace-control`; only stream/count metadata was inspected, not log contents.
 - User reconfirmed no MWC workspaces are in use. Exact old-namespace closeout review
   delegated read-only; final Coder workspace remains excluded from in-environment migration.
+- GitOps child sync at a9bb4e4 SUCCEEDED; control rollout completed and the running
+  imageID exactly matches the verified digest above. `/livez` and `/readyz` both return
+  `{"status":"ok"}`. Original owner token returns HTTP 200 from `/api/v1/me` and
+  each of the four workspace detail endpoints, all `ready`. An initial list request
+  without required query parameters returned 400; this was not an authentication failure.
+  No workspace Pod restarted during this control-only update.
+- Old-source closeout COMPLETED: independently reviewed absence of Pods/PVCs, zero
+  StatefulSets, no cross-namespace RBAC/webhook dependencies, and canonical route targets.
+  Verified private source manifests exist, then deleted exactly the old control namespace
+  `mwc-k3si-7032544955` and four `ws-k3si-7032544955-<workspace-short-id>` namespaces
+  listed in the completed migration inventory. `kubectl wait --for=delete` succeeded.
+  No PV, snapshot, backup or Coder resource was deleted. Recovery uses retained manifests
+  and volumes; source namespaces can be recreated if a separately reviewed rollback needs them.
+- GitOps `4c2221e` moves the wildcard-certificate renewal destination from the old control
+  namespace to `memeloop-workspace-control`; acme reports Synced at that commit.
+  Main and routing Apps now both report Synced/Healthy after old namespace retirement.
+  GitOps `2343f92` restores their original automated prune/self-heal policies against
+  target-only desired state. The migration Application remains paused for final Coder handoff.
+  All five canonical PVCs remain Bound to the original PVs; all five Pods remain Ready.
+- Closeout scope is the five obsolete namespaces, not a claim that every remaining ledger item
+  is complete. External Coder migration and protected sandbox/mTLS/gVisor rollout gates remain;
+  installation identity and recovery artifacts must not be blindly renamed or removed.
 
 - Borrowing restriction for ports `31871` and `32671` was lifted by the user on 2026-09-09;
   preserve the normal snapshot, writer-freeze, volume-binding and rollback gates.

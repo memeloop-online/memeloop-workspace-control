@@ -8,8 +8,19 @@ workspace. Do not start the latter cutover from itself: an external agent must p
 its source claim is 100 GiB and is in scope for preservation.
 
 This runbook deliberately does not contain a namespace-deletion command or a destructive
-"one-shot" script. No old namespace may be cleaned up until every acceptance and rollback-window
-gate below has been signed off.
+"one-shot" script. Cleanup is scoped to the accepted migration phase: the five obsolete MWC
+namespaces can be retired independently of the still-running Coder workspace once they contain
+no Pods or PVCs, all target references are verified, and the source manifests and retained
+volumes/backups remain available for recovery. Coder cleanup has its own later acceptance gate.
+
+## Current checkpoint (2026-09-09)
+
+The control database and four MWC workspaces are already in `memeloop-workspace-control`.
+The five original PVs were rebound without data copying. SSH host-key continuity, remote
+commands and browser terminal interaction passed for all four workspaces. Production schema is
+22; the current release accepts schema 22 only. The historical bridge/offline instructions below
+describe the completed operation, **not steps to repeat**. See `IMPLEMENTATION_STATUS.md` for
+release digests and recovery backup locations. Only the final Coder workspace awaits migration.
 
 ## Recorded read-only baseline (2026-09-08)
 
@@ -70,9 +81,10 @@ change record; do not record secret values or database contents.
    command, Web Shell, retained Codex data, routes/NodePorts, and reconciler health). Re-enable the
    target MWC GitOps/reconciler only after it has target-only desired state. Keep the old MWC
    resources intact throughout their rollback window.
-8. This completes the MWC platform phase. The independent Coder migration is a later external-only
-   single-workspace change; it must not interrupt the healthy four MWC workspaces. The final global
-   cleanup gate applies only after that second phase is accepted.
+8. This completes the MWC platform phase. Retire its empty source namespaces after scoped
+   dependency review while retaining volume snapshots and source manifests. The independent Coder
+   migration is a later external-only single-workspace change; it must not interrupt the healthy
+   four MWC workspaces. Do not keep obsolete MWC namespaces solely to wait for Coder migration.
 
 ## PV direct-rebind procedure (one workspace at a time)
 
