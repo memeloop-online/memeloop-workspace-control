@@ -656,6 +656,11 @@ schema bridge, writer shutdown, retained-volume and rollback gates.
 - External-agent copy/paste handoff updated in `9e34202`: only the remaining Coder workspace,
   explicitly forbidding a repeat of the completed four-MWC/database migration. Includes
   client-connection access limits, preserved session/state boundaries and exact source PV.
+- Source closeout resumed after verified production schema 22: `key_template_permissions`
+  owns removal of temporary schema20/schema21 upgrade modules and their obsolete tests.
+  Retain fresh-22 initialization, existing-22 validation and rejection of unsupported schemas.
+  This is code-only cleanup; no further database migration is needed or authorized by it.
+  `http_fixture_clocks` independently owns worker complexity refactor and extended retry tests.
 
 - Borrowing restriction for ports `31871` and `32671` was lifted by the user on 2026-09-09;
   preserve the normal snapshot, writer-freeze, volume-binding and rollback gates.
