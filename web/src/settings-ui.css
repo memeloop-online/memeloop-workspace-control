@@ -83,7 +83,7 @@
   min-width: 0;
   display: grid;
   gap: 7px;
-  color: #b3bed0;
+  color: var(--text-secondary);
   font-size: .78rem;
   font-weight: 650;
 }
@@ -97,7 +97,7 @@
 
 .api-key-scope-picker > legend {
   padding: 0;
-  color: #d2d9e5;
+  color: var(--text-secondary);
   font-size: .8rem;
   font-weight: 700;
 }
@@ -201,13 +201,13 @@
 
 .api-key-scope-copy small {
   overflow: hidden;
-  color: #728097;
+  color: var(--text-secondary);
   font-size: .7rem;
   line-height: 1.4;
 }
 
 .api-key-scope-card[data-selected="true"] .api-key-scope-copy small {
-  color: #9bd7ba;
+  color: var(--text-secondary);
 }
 
 .api-key-create-actions {
@@ -232,7 +232,7 @@
 
 .api-key-template-picker > legend {
   padding: 0 6px 0 0;
-  color: #d2d9e5;
+  color: var(--text-secondary);
   font-size: .8rem;
   font-weight: 700;
 }
@@ -242,7 +242,7 @@
   grid-template-columns: none !important;
   align-items: center;
   gap: 8px !important;
-  color: #b9c4d5 !important;
+  color: var(--text-secondary) !important;
   font-size: .78rem !important;
   font-weight: 600 !important;
   cursor: pointer;
@@ -365,7 +365,7 @@
   width: fit-content;
   max-width: 100%;
   padding: 3px 6px;
-  color: #90a0b6;
+  color: var(--text-secondary);
   background: #121c29;
   border-radius: 5px;
   overflow: hidden;
@@ -374,7 +374,7 @@
 }
 
 .api-key-list-identity span {
-  color: var(--muted);
+  color: var(--text-secondary);
   font-size: .72rem;
   line-height: 1.45;
 }
@@ -391,14 +391,14 @@
 }
 
 .api-key-facts dt {
-  color: #748197;
+  color: var(--text-secondary);
   font-size: .7rem;
 }
 
 .api-key-facts dd {
   margin: 4px 0 0;
   overflow-wrap: anywhere;
-  color: #c7d1df;
+  color: var(--text);
   font-size: .74rem;
   line-height: 1.35;
 }
@@ -445,7 +445,7 @@
 }
 
 :root[data-theme="light"] .api-key-scope-copy small {
-  color: #63748a;
+  color: var(--text-secondary);
 }
 
 :root[data-theme="light"] .api-key-template-picker {

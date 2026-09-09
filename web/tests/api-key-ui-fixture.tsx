@@ -18,7 +18,17 @@ const templates = Array.from({ length: 24 }, (_, index) => ({
   enabled: true,
 })) as WorkspaceTemplate[];
 const allowedTemplateIds = restricted ? templates.filter((_, index) => index % 2 === 0).map(({ id }) => id) : null;
-const keys: ApiKeySummary[] = [];
+const keys: ApiKeySummary[] = [{
+  id: "key-fixture-existing",
+  name: "Existing fixture key",
+  prefix: "mwc_fixture_existing",
+  last_used_at: 1_788_000_000,
+  created_at: 1_787_000_000,
+  scopes: ["read_workspace"],
+  expires_at: 1_789_000_000,
+  allowed_template_ids: null,
+  revoked_at: null,
+}];
 
 const api = {
   apiKeys: async () => keys,

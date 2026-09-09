@@ -8,6 +8,7 @@
   --surface-2: #131925;
   --line: #222a39;
   --muted: #8e99ad;
+  --text-secondary: #aab4c7;
   --text: #eef2fa;
   --accent: #79f2c0;
   --accent-dark: #113b31;
@@ -287,7 +288,7 @@ textarea { resize: vertical; font-family: "DM Mono", monospace; line-height: 1.5
 .settings-card-heading { display: flex; align-items: center; gap: 13px; margin-bottom: 16px; }
 .settings-card-heading p, .card-heading p { margin: 3px 0 0; }
 .settings-form { display: grid; gap: 12px; }
-.settings-form label, label.settings-form, .api-key-create label { display: grid; gap: 6px; color: #aab4c7; font-size: .8rem; font-weight: 600; }
+.settings-form label, label.settings-form, .api-key-create label { display: grid; gap: 6px; color: var(--text-secondary); font-size: .8rem; font-weight: 600; }
 .settings-form .field-help { margin: -5px 0 0; }
 .settings-form .button { justify-self: start; }
 .success-inline { color: var(--accent) !important; margin: 0 !important; }
@@ -545,6 +546,7 @@ textarea { resize: vertical; font-family: "DM Mono", monospace; line-height: 1.5
   --surface-2: #edf2f8;
   --line: #d9e1ec;
   --muted: #5f6d80;
+  --text-secondary: #4d5c70;
   --text: #172033;
   --accent: #08785b;
   --accent-dark: #d8f3e9;
@@ -688,6 +690,8 @@ textarea { resize: vertical; font-family: "DM Mono", monospace; line-height: 1.5
   .app-shell {
     height: 100dvh;
     min-height: 0;
+    inline-size: 100%;
+    max-inline-size: 100%;
     display: grid;
     grid-template-columns: 1fr;
     grid-template-rows: minmax(0, 1fr) auto;
@@ -696,6 +700,8 @@ textarea { resize: vertical; font-family: "DM Mono", monospace; line-height: 1.5
   .content {
     grid-row: 1;
     min-height: 0;
+    inline-size: 100%;
+    max-inline-size: 100%;
     padding-bottom: 0;
     overflow-y: auto;
     overscroll-behavior-y: contain;
@@ -703,6 +709,8 @@ textarea { resize: vertical; font-family: "DM Mono", monospace; line-height: 1.5
   .sidebar {
     position: static;
     grid-row: 2;
+    inline-size: 100%;
+    max-inline-size: 100%;
   }
   .panel-stack { padding-bottom: 18px; }
 }
