@@ -708,6 +708,221 @@ async fn workspace_usage_summary_aggregates_in_sql_and_honors_template_scope() {
 }
 
 #[tokio::test]
+async fn organization_usage_summary_requires_workspace_read_access() {
+    let (app, database, admin_id) = test_app().await;
+    let (allowed_organization_id, _) =
+        seeded_organization(&database, admin_id, "Usage access allowed", 10).await;
+    let (other_organization_id, _) =
+        seeded_organization(&database, admin_id, "Usage access denied", 11).await;
+
+    let unauthenticated = app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            &format!("/api/v1/organizations/{allowed_organization_id}/usage-summary"),
+            None,
+            None,
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(unauthenticated.status(), StatusCode::UNAUTHORIZED);
+
+    let key_now = unix_timestamp();
+    let member = database
+        .create_user_with_initial_key(
+            "Usage summary member",
+            MEMBER_TOKEN,
+            false,
+            memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(false),
+            key_now + 24 * 60 * 60,
+            key_now,
+        )
+        .await
+        .unwrap();
+    database
+        .upsert_membership(allowed_organization_id, member.user_id, Role::Member, 12)
+        .await
+        .unwrap();
+    let forbidden = app
+        .oneshot(request(
+            Method::GET,
+            &format!("/api/v1/organizations/{other_organization_id}/usage-summary"),
+            Some(MEMBER_TOKEN),
+            None,
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(forbidden.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn organization_usage_summary_is_organization_wide_and_template_scoped() {
+    let (app, database, admin_id) = test_app().await;
+    let (organization_id, allowed_template_id) =
+        seeded_organization(&database, admin_id, "HTTP usage summary", 10).await;
+    let other_template = database
+        .create_workspace_template(
+            CreateWorkspaceTemplate {
+                organization_id: Some(organization_id),
+                yaml: WorkspaceTemplateDocument::new(
+                    "HTTP usage other template".to_owned(),
+                    WorkspaceTemplateSpec::standard(
+                        "registry.example/workspace:1",
+                        AccessMode::Internal,
+                        Resources {
+                            cpu_millis: 300,
+                            memory_mib: 400,
+                            gpu_count: 2,
+                            disk_gib: 5,
+                        },
+                    ),
+                )
+                .to_yaml()
+                .unwrap(),
+            },
+            true,
+            11,
+        )
+        .await
+        .unwrap();
+    seeded_workspace(
+        &database,
+        organization_id,
+        admin_id,
+        allowed_template_id,
+        "usage-allowed",
+        12,
+    )
+    .await;
+    seeded_workspace(
+        &database,
+        organization_id,
+        admin_id,
+        other_template.id,
+        "usage-other",
+        13,
+    )
+    .await;
+
+    let unrestricted = app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            &format!(
+                "/api/v1/organizations/{organization_id}/usage-summary?search=usage-allowed&cursor=ignored"
+            ),
+            Some(ADMIN_TOKEN),
+            None,
+            None,
+        ))
+        .await
+        .unwrap();
+    let (status, unrestricted_body) = body(unrestricted).await;
+    assert_eq!(status, StatusCode::OK);
+    let unrestricted: Value = serde_json::from_slice(&unrestricted_body).unwrap();
+    assert_eq!(unrestricted["total_count"], 2);
+    assert_eq!(
+        unrestricted["requested"],
+        json!({"cpu_millis": 1300, "memory_mib": 2448, "gpu_count": 2, "disk_gib": 25})
+    );
+    assert_eq!(unrestricted["state_counts"], json!({"provisioning": 2}));
+    assert_eq!(
+        unrestricted["actual"],
+        json!({"cpu_millis": null, "memory_mib": null, "disk_bytes": null})
+    );
+    assert!(unrestricted["observed_at"].is_null());
+    assert_eq!(
+        unrestricted["availability"],
+        json!({"cpu": "unavailable", "memory": "unavailable", "disk": "unavailable"})
+    );
+    assert_eq!(unrestricted["coverage"]["total_workspaces"], 2);
+    assert_eq!(unrestricted["coverage"]["eligible_workspaces"], 2);
+    assert_eq!(
+        unrestricted["coverage"]["template_label_coverage"],
+        "complete"
+    );
+
+    let restricted_key = database
+        .create_api_key(
+            admin_id,
+            "usage summary restricted",
+            memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(true),
+            Some(unix_timestamp() + 24 * 60 * 60),
+            Some(vec![allowed_template_id]),
+            unix_timestamp(),
+        )
+        .await
+        .unwrap();
+    let restricted = app
+        .oneshot(request(
+            Method::GET,
+            &format!("/api/v1/organizations/{organization_id}/usage-summary"),
+            Some(&restricted_key.token),
+            None,
+            None,
+        ))
+        .await
+        .unwrap();
+    let (status, restricted_body) = body(restricted).await;
+    assert_eq!(status, StatusCode::OK);
+    let restricted: Value = serde_json::from_slice(&restricted_body).unwrap();
+    assert_eq!(restricted["total_count"], 1);
+    assert_eq!(
+        restricted["requested"],
+        json!({"cpu_millis": 1000, "memory_mib": 2048, "gpu_count": 0, "disk_gib": 20})
+    );
+    assert_eq!(restricted["state_counts"], json!({"provisioning": 1}));
+    assert_eq!(
+        restricted["actual"],
+        json!({"cpu_millis": null, "memory_mib": null, "disk_bytes": null})
+    );
+    assert_eq!(
+        restricted["availability"],
+        json!({"cpu": "unknown", "memory": "unknown", "disk": "unknown"})
+    );
+    assert_eq!(restricted["coverage"]["total_workspaces"], 2);
+    assert_eq!(restricted["coverage"]["eligible_workspaces"], 1);
+    assert_eq!(
+        restricted["coverage"]["template_label_coverage"],
+        "incomplete"
+    );
+}
+
+#[tokio::test]
+async fn organization_usage_summary_openapi_declares_the_response_shape() {
+    let (app, _, _) = test_app().await;
+    let response = app
+        .oneshot(request(
+            Method::GET,
+            "/api/v1/openapi.json",
+            Some(ADMIN_TOKEN),
+            None,
+            None,
+        ))
+        .await
+        .unwrap();
+    let (status, response_body) = body(response).await;
+    assert_eq!(status, StatusCode::OK);
+    let openapi: Value = serde_json::from_slice(&response_body).unwrap();
+    let response_schema = &openapi["paths"]["/api/v1/organizations/{organization_id}/usage-summary"]
+        ["get"]["responses"]["200"]["content"]["application/json"]["schema"];
+    let schema_name = response_schema["$ref"]
+        .as_str()
+        .unwrap()
+        .rsplit('/')
+        .next()
+        .unwrap();
+    let schema = &openapi["components"]["schemas"][schema_name];
+    assert_eq!(schema["properties"]["total_count"]["type"], "integer");
+    assert!(schema["properties"]["requested"].is_object());
+    assert!(schema["properties"]["state_counts"].is_object());
+    assert!(schema["properties"]["actual"].is_object());
+    assert!(schema["properties"]["coverage"].is_object());
+}
+
+#[tokio::test]
 async fn workspace_page_openapi_declares_the_summary_shape() {
     let (app, _, _) = test_app().await;
     let response = app
