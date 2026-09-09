@@ -6,8 +6,8 @@ use k8s_openapi::{
         core::v1::{
             ConfigMapVolumeSource, Container, ContainerPort, EmptyDirVolumeSource, KeyToPath,
             PersistentVolumeClaim, PersistentVolumeClaimSpec, PodSpec, PodTemplateSpec,
-            ProjectedVolumeSource, ResourceRequirements, SecretProjection, Volume,
-            VolumeProjection, VolumeResourceRequirements,
+            ProjectedVolumeSource, ResourceRequirements, SecretProjection, SecretVolumeSource,
+            Volume, VolumeProjection, VolumeResourceRequirements,
         },
     },
     apimachinery::pkg::{

@@ -742,6 +742,14 @@ schema bridge, writer shutdown, retained-volume and rollback gates.
   and the original Secret resourceVersion remains unchanged. No replacement occurred.
   GitOps local `3bb4987` prepares a separate certificate Application pinned to d337c74;
   not pushed/applied yet. Its six resources contain no certificate or private-key material.
+- UI fix `6fc1c84` passed npm check/build, API-key browser fixture at360/768/1440,
+  and real-API local-frontend screenshots. Main visually checked the Chinese360 workspace
+  and1440 settings results; mobile section/button now fit x14..346 rather than clipping.
+  Temporary UI credentials removed; reported Vite/port-forward processes were confirmed absent.
+  Source pushed; production is still a9bb4e4 until the new release passes.
+- CI `34334537723` FAILED: independent trust refactor accidentally removed the
+  SecretVolumeSource import still needed by other workspace volumes. Main restored that import;
+  rerun the corrected source only, not the failed revision. No local Rust builds.
 
 - Borrowing restriction for ports `31871` and `32671` was lifted by the user on 2026-09-09;
   preserve the normal snapshot, writer-freeze, volume-binding and rollback gates.
