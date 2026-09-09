@@ -1,109 +1,65 @@
 # gVisor sandbox node operations
 
-This runbook prepares a K3s node to provide the **optional** `runsc` containerd handler. It does
-not change K3s' default runtime, create a `RuntimeClass`, label a Kubernetes Node, or make a
-workload use gVisor. Those are separate reviewed changes. gVisor increases isolation but does not
-make a workload risk-free and can reduce Linux syscall, networking, filesystem, observability and
-device compatibility.
+This is the short runbook for enabling the optional `runsc` handler on one K3s node. It keeps
+`runc` as the default and does not enable production gVisor workloads until the canary passes.
 
-## Current admission position (2026-09-09)
+## Current state: `serv-146231`
 
-The observed cluster has seven Ready amd64 nodes, all using K3s `v1.36.2+k3s1` with containerd
-`2.3.2-k3s2`. They therefore use the K3s v3 template path below. This is an observation, not a
-promise that every node is suitable.
+- Target identity is Kubernetes node `serv-146231`, host `serv.146231.com`, address
+  `100.64.0.10`. The user authorized its AlmaLinux 8 to 9 upgrade and necessary reboots; no
+  node-data backup is required. Follow [the OS upgrade plan](SERV-146231-OS-UPGRADE-PLAN.md)
+  for the current maintenance/recovery state instead of recording node-event history here.
+- ELRepo `5.15.220-1.el8.elrepo` is installed and has booted successfully. For the official
+  EL8 kernel's K3s issue and the temporary K3s shutdown during Leapp, follow the OS plan.
+- AlmaLinux 9 is not installed yet. The current EL8 systemd 239 is below gVisor's
+  systemd-cgroup requirement of 244. `runsc` and a gVisor `RuntimeClass` are not installed;
+  do not label this node or schedule a gVisor workload yet.
 
-`serv-146231` successfully booted the approved ELRepo `5.15.220-1.el8.elrepo` kernel;
-the previous 4.18 kernel remains the saved boot default for rollback. Its AlmaLinux 8.10
-systemd 239 still fails the supported gVisor systemd-cgroup prerequisite. It remains
-**excluded**: do not add `sandbox.memeloop.dev/gvisor-ready=true`. It is also an overseas
-edge/control-plane node. The user approved OS-upgrade planning, not execution;
-see [the separate OS plan](SERV-146231-OS-UPGRADE-PLAN.md) for execution and recovery gates.
+The cgroup decision is fixed for this K3s setup: cgroup v2 and K3s' `SystemdCgroup=true` send
+the CRI path as a systemd slice such as
+`kubepods-burstable-pod<UID>.slice:cri-containerd:<sandbox-id>`. gVisor's default filesystem
+driver does not interpret that slice path. After AlmaLinux 9 is ready, use gVisor's systemd
+driver only when systemd is >=244; do not switch kubelet/runc to cgroupfs as a workaround.
 
-`iv-yeahgdnw8wwh2yppho5e` is the only presently identified non-control-plane, non-NAS candidate;
-it has kernel 5.15 and about 4 CPU / 3.8 GiB allocatable capacity. It is not automatically
-approved: it is schedulable and has existing system workloads, so a maintenance/capacity review is
-required. Do not disrupt control-plane nodes, active workspace nodes, GPU nodes, the NAS, or the
-overseas edge merely to make a sandbox pool.
+## Install the handler after the OS upgrade
 
-The user subsequently selected `100.64.0.10` for testing and authorized direct SSH operations.
-Its Kubernetes name is `serv-146231`; its host name is `serv.146231.com`. Root SSH is now
-verified. The authorized kernel upgrade and node rejoin completed; do not repeat them.
-No runsc handler or RuntimeClass has been installed. Retain the known bootable kernels,
-and complete the separate userspace prerequisite before runtime registration.
+1. On the exact target node, run the read-only preflight from the reviewed scripts directory:
 
-An approved read-only host-mount inspection on iv found a cgroup v2 filesystem and a generated
-containerd `config.toml` at version 3. Its listed handlers are the existing `runc` and
-`runhcs-wcow-process`; no `runsc` handler or custom v3 template is present. Its K3s config
-explicitly uses `flannel-iface: tailscale0`. No `default_runtime_name`, `sandbox_image`, or
-`disable-network-policy` line was present in the limited whitelist output; absence from that
-output is not proof of an effective runtime or network-policy setting, so validate those behavior
-paths with the canary.
+   ```bash
+   sudo ./gvisor-node-preflight.sh
+   ```
 
-The first one-shot read-only Job could not start because iv had no local pause image and its
-existing image path failed before the Job command ran: `HEAD
-https://harbor.k3s.onetwo.website/v2/docker-io/rancher/mirrored-pause/manifests/3.6?ns=docker.io`
-returned `502 Bad Gateway`. A later read-only `k3s ctr -n k8s.io images ls` check found no local
-pause image. Treat restoration of the correct pinned pause image/cache as a separate approved
-node-reliability action; do not hide this condition by repeatedly scheduling diagnostic Pods or by
-changing the default runtime. The separately assigned operations agent subsequently restored
-Harbor, and a CRI pause-image pull succeeded. That image-pull prerequisite is now resolved.
+   It must report the target's active K3s service, Linux kernel >=5.6, containerd 2.x with the
+   K3s v3 template, cgroup v2 with systemd >=244, and `runc` still as the default. Resolve a
+   failed check before installing anything.
+2. Download a current pinned official gVisor release and verify its published SHA-256 at the
+   time of installation. The archive must contain `runsc`, `containerd-shim-runsc-v1` and the
+   adjacent `gvisor-bin/` sidecars. Do not copy a historical digest into this document.
+3. Install only on the target node and explicitly request the one K3s restart:
 
-Labels are an assertion about the **measured host**. Add `sandbox.memeloop.dev/gvisor-ready=true`
-only after the preflight, archive checksum, K3s restart and an actual `runsc` canary on that exact
-node all succeed. Remove the label before the handler is removed. Never infer it from OS type,
-kernel family, an old inventory, or another node's result.
+   ```bash
+   sudo ./gvisor-node-install.sh \
+     --node "$(hostname)" --archive /path/to/gvisor-archive.tar.* \
+     --sha256 '<current-official-release-sha256>' --apply --restart-k3s
+   ```
 
-## Node preparation
+   The installer stores versioned binaries, extends
+   `/var/lib/rancher/k3s/agent/etc/containerd/config-v3.toml.tmpl`, and leaves `runc` as the
+   default. On cgroup v2 it configures runsc with `systemd-cgroup = "true"`; it also keeps a
+   timestamped template copy for handler rollback. The restart affects Pods and image
+   operations on this node, so keep the node in its OS maintenance state during the restart.
 
-Use a verified direct node SSH or console recovery path. Do not use a privileged diagnostic Pod,
-another operational host, or an unreviewed jump path. The controller workstation used during the
-initial investigation could read the Kubernetes API but had no usable BatchMode SSH identity for
-the seven documented Tailnet node addresses; that is not evidence that SSH is broken.
+## RuntimeClass and canary
 
-Copy the scripts to the explicitly approved node and first run the read-only check as root:
+After the handler restart, verify the K3s service, rendered containerd configuration, CRI
+plugin, and node readiness. Create a temporary `gvisor-canary` RuntimeClass with handler
+`runsc` and scheduling selector `kubernetes.io/hostname: serv-146231`. Use it only for a
+disposable, non-privileged canary exercising the workspace network, volume, process, signal
+and observability paths. If the node remains cordoned, give only that canary the
+`node.kubernetes.io/unschedulable:NoSchedule` toleration. Do not begin with privileged,
+`hostNetwork`, GPU, host-device or hostPath workloads.
 
-```bash
-sudo ./gvisor-node-preflight.sh
-```
-
-It checks K3s service state, architecture, embedded containerd major version, cgroup mount type,
-kernel, the required v3 template location, and only warns for host-policy facts that need canary
-evidence. Keep its output with the change record. It intentionally does not read registry files,
-secrets, or alter the node.
-
-For containerd 2.x, K3s renders `/var/lib/rancher/k3s/agent/etc/containerd/config.toml` from
-`config-v3.toml.tmpl`; K3s recommends extending the `base` template rather than copying rendered
-configuration. The installer appends this handler and leaves runc as default:
-
-```toml
-[plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.runsc]
-  runtime_type = "io.containerd.runsc.v1"
-[plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.runsc.options]
-  TypeUrl = "io.containerd.runsc.v1.options"
-```
-
-Obtain a pinned gVisor release archive and independently verified SHA-256 from the official
-release. The archive must include `runsc`, `containerd-shim-runsc-v1`, and the adjacent
-`gvisor-bin/` directory. The installer refuses a missing checksum, host-name mismatch, absent
-sidecars, an existing runsc stanza, or an implicit restart:
-
-```bash
-sudo ./gvisor-node-install.sh \
-  --node "$(hostname)" --archive /path/to/gvisor-archive.tar.* \
-  --sha256 '<verified-64-hex-sha256>' --apply --restart-k3s
-```
-
-The restart is real operational impact: K3s/containerd is restarted on that node to render and
-load the handler. It can interrupt local Pods and image operations. Do it only after the node is
-approved, capacity is reviewed, and a recovery path is verified; it is never appropriate as a
-blind all-node rollout. Existing Pods continue using their created runtime, but workload movement
-or restart can expose capacity/compatibility problems.
-
-## RuntimeClass, canary, and overhead
-
-After a successful single-node handler verification, GitOps may review a separate RuntimeClass.
-This is illustrative only; it is not a live manifest and must not be applied until the label is
-measured on at least one node:
+The RuntimeClass shape is:
 
 ```yaml
 apiVersion: node.k8s.io/v1
@@ -116,36 +72,25 @@ scheduling:
     sandbox.memeloop.dev/gvisor-ready: "true"
 ```
 
-Kubernetes merges this selector with a Pod's selector, so conflicts reject admission. Start with
-a disposable, non-privileged canary that explicitly sets `runtimeClassName: gvisor`, is pinned to
-the approved node, and exercises the workspace's actual network, volume, process, signal and
-observability paths. Do not test GPU, `hostNetwork`, privileged containers, host devices,
-hostPath, or workloads that require unsupported kernel interfaces as the first canary.
+Create this production RuntimeClass and add `sandbox.memeloop.dev/gvisor-ready=true` only after the
+handler and canary pass on this exact node. Compare the canary with the normal runtime and
+measure CPU, memory, PID, ephemeral-storage and startup overhead before declaring a production
+overhead value. Remove the temporary canary and its RuntimeClass when testing ends.
+A passing handler check alone is not RuntimeClass acceptance.
 
-gVisor consumes host resources beyond application requests. Measure steady and peak CPU, memory,
-PID, ephemeral-storage and startup latency on the exact image/profile before declaring
-`RuntimeClass.overhead.podFixed`; do not guess a universal number. Until that measurement exists,
-avoid overcommitting the candidate and treat scheduler accounting as incomplete. Kubernetes
-accounts a declared overhead in scheduling and Pod cgroups, but a made-up value is worse than an
-explicitly documented capacity reservation.
+## Rollback
 
-## Acceptance, rollback, and updates
+First remove or stop gVisor workloads and wait until none use `runsc`; remove the readiness
+label and do not delete a RuntimeClass while workloads still reference it. Restore the
+timestamped containerd template copy under
+`/var/lib/rancher/k3s/agent/etc/containerd/gvisor-backups/`, remove the handler links and
+versioned binaries after confirming they are unused, restart only this node's K3s service, and
+verify the node returns Ready with `runc` as the default.
 
-Acceptance evidence for one node is: preflight output; archive source and checksum; rendered
-`config.toml` containing the `runsc` handler; `k3s`/`k3s-agent` active after the approved restart;
-one canary scheduled only to the labelled node; canary logs and functional tests; and a comparison
-against the normal runtime. Include failures, not just success output.
+If the AlmaLinux upgrade itself cannot be repaired, use the OS plan's rebuild/rejoin path. The
+approved OS event has no backup-based rollback promise; this document does not add one.
 
-Rollback the workload first: remove `runtimeClassName` (or scale down/delete the disposable
-canary) and wait until no Pods use `gvisor`. Remove the `gvisor-ready` label so no new sandbox Pods
-schedule there. In a maintenance window, restore the timestamped template backup under
-`/var/lib/rancher/k3s/agent/etc/containerd/gvisor-backups/`, remove the handler/binaries only
-after confirming no use, then restart only that node's K3s service and verify it returns Ready.
-Do not delete the RuntimeClass while workloads still reference it; that can make later Pod
-creation fail. A rollback can still interrupt local workloads, so it is not zero-risk.
-
-Update gVisor one node at a time with the same checksum, preflight, canary and rollback gates.
-Reassess kernel and cgroup state after K3s/OS upgrades. Reference material: [K3s advanced
-containerd configuration](https://docs.k3s.io/advanced), [gVisor installation](https://gvisor.dev/docs/user_guide/install/),
+References: [K3s advanced containerd configuration](https://docs.k3s.io/advanced),
+[gVisor installation](https://gvisor.dev/docs/user_guide/install/),
 [gVisor containerd configuration](https://gvisor.dev/docs/user_guide/containerd/configuration/),
 and [Kubernetes RuntimeClass](https://kubernetes.io/docs/concepts/containers/runtime-class/).

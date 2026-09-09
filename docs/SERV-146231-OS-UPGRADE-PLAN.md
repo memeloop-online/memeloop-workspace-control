@@ -28,6 +28,17 @@ rejoin it using the supported K3s procedure.
 
 ## Leapp assessment and execution
 
+The updated EL8 4.18 kernel boots the operating system, but this node's K3s/etcd
+does not recover under it. K3s recovers under the installed ELRepo 5.15 kernel;
+Leapp cannot identify that kernel's distribution package and refuses to proceed.
+Use the official EL8 kernel for Leapp while keeping this node's K3s temporarily
+stopped and disabled. Keep the node cordoned and the other control-plane members
+healthy. This is planned single-node downtime, not permission to change etcd data
+or bypass Leapp's kernel check. Restore K3s's original enabled state and start it
+after EL9 boots. If assessment prevents starting the upgrade transaction,
+restore the known working 5.15 boot and K3s instead. Once EL9 userspace changes
+begin, use the recovery procedure below rather than treating an EL8 kernel as rollback.
+
 1. Fully update AlmaLinux 8 using the current AlmaLinux ELevate procedure, reboot as required
    by that procedure, and verify that the node returns before continuing.
 2. Install the current ELevate/Leapp packages from the official procedure and run
