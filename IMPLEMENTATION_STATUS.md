@@ -5,6 +5,14 @@ compaction. Do not repeat completed audits unless new evidence contradicts them.
 
 Last updated: 2026-09-09
 
+Latest continuation: user confirms no MWC workspace is currently in use; sequential
+restart acceptance may proceed after the repaired ttyd image passes CI. This does not
+authorize stopping the final Coder workspace. CI `34346622739` failed linking the
+static libwebsockets build because upstream CMake metadata exports the unbuilt
+`websockets_shared` target. Apply the same static-target metadata correction used by
+ttyd's upstream cross-build script; keep protocol sources unchanged. New CI and
+production no-client-certificate rejection remain required before further rollout.
+
 ## Execution ledger — resume here
 
 This is the single execution ledger. Historical sections below are evidence for their recorded

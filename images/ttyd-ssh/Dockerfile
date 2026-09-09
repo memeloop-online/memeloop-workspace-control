@@ -22,6 +22,8 @@ RUN curl --fail --location --silent --show-error --retry 3 \
     && echo "${LWS_TARBALL_SHA256}  lws.tar.gz" | sha256sum --check --strict \
     && mkdir lws \
     && tar --extract --file lws.tar.gz --gzip --strip-components=1 --directory lws \
+    && grep -Fxq 'set(LIBWEBSOCKETS_LIBRARIES websockets websockets_shared)' lws/cmake/libwebsockets-config.cmake.in \
+    && sed -i 's/set(LIBWEBSOCKETS_LIBRARIES websockets websockets_shared)/set(LIBWEBSOCKETS_LIBRARIES websockets)/' lws/cmake/libwebsockets-config.cmake.in \
     && cmake -S lws -B lws-build \
         -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local \
         -DLWS_WITH_EVLIB_PLUGINS=OFF -DLWS_WITH_LIBUV=ON -DLWS_WITH_MBEDTLS=OFF \
