@@ -29,7 +29,7 @@ client CA. Co-owning that key in `ttyd-server-tls` would make renewal unsafe.
 
 ## Required product contract before this can be enabled
 
-The current product mounts one Secret with `tls.crt`, `tls.key`, and `ca.crt`.
+The previously deployed mTLS configuration mounts one Secret with `tls.crt`, `tls.key`, and `ca.crt`.
 That cannot safely be cert-manager-owned when the trust CA and issuing CA are
 different. Product commit `815ff90` implements the required separate,
 read-only client-CA Secret volume. Its all-or-none configuration adds
@@ -49,9 +49,30 @@ cross-namespace controller. Subsequent leaf renewals need no trust copy;
 cert-manager updates the two leaf Secrets itself. This is intentionally manual
 only for CA lifecycle, whose normal cadence is years rather than days.
 
-The GitOps Application that adds this directory must be authorized for both
-`memeloop-workspace-control` and `higress-system`. Do not apply it until both
+The GitOps Application that adds this directory must be authorized for
+`memeloop-workspace-control`, `higress-system`, and the monitoring object in `cert-manager`.
+Do not apply it until both
 CA Secrets have been provisioned and verified by the certificate operator.
+
+### Initial provisioning
+
+From the product repository, inspect the explicit target context, then run:
+
+```bash
+node --experimental-strip-types scripts/provision-ttyd-ca.ts --context default
+node --experimental-strip-types scripts/provision-ttyd-ca.ts --context default --apply
+```
+
+Replace `default` with the approved context for that installation. The first command checks
+destinations only. The second generates two independent ten-year ECDSA roots and creates
+the four CA/trust Secrets above. It refuses existing destinations and uses Kubernetes create,
+so it cannot overwrite a concurrent operator's certificate. Private temporary files are removed
+on exit; signing keys remain only in the CA Secrets. Protect those Secrets in cluster backups.
+On partial failure, preserve the created Secrets and investigate; this is not a rotation command.
+
+On 2026-09-09 this bootstrap completed in the target cluster. Public-only trust contents were
+compared in memory with their opposite roots; all checks passed without certificate output.
+No leaf consumer or workload was changed by provisioning.
 
 ## CA lifecycle and monitoring
 
