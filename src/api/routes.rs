@@ -7,8 +7,8 @@ use axum::{
 
 use super::{
     AppState, admin, auth, catalog, diagnostics, events, health, injections, metrics, openapi,
-    organizations, plugins, port_mappings, ready, runtime, ssh, system_info, ui, user_quota,
-    web_shell, webhooks, workspace_image_update, workspaces,
+    organization_usage, organizations, plugins, port_mappings, ready, runtime, ssh, system_info,
+    ui, user_quota, web_shell, webhooks, workspace_image_update, workspaces,
 };
 
 pub(super) fn router(state: Arc<AppState>) -> Router {
@@ -69,6 +69,10 @@ fn system_and_identity_routes(router: ApiRouter) -> ApiRouter {
 fn organization_routes(router: ApiRouter) -> ApiRouter {
     router
         .route(
+            "/api/v1/organizations/{organization_id}/usage-summary",
+            get(organization_usage::get),
+        )
+        .route(
             "/api/v1/organizations",
             get(organizations::list_page).post(organizations::create),
         )
@@ -103,6 +107,10 @@ fn organization_routes(router: ApiRouter) -> ApiRouter {
         .route(
             "/api/v1/organizations/{organization_id}/quota",
             get(admin::get_quota).put(admin::set_quota),
+        )
+        .route(
+            "/api/v1/organizations/{organization_id}/usage-summary",
+            get(runtime::organization_summary),
         )
         .route(
             "/api/v1/admin/users/{user_id}/quota",

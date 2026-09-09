@@ -22,6 +22,7 @@ mod events;
 mod idempotency;
 mod injections;
 mod metrics;
+mod organization_usage;
 mod organizations;
 mod plugins;
 mod port_mappings;
@@ -51,6 +52,7 @@ pub struct AppState {
     kubernetes_client: Option<kube::Client>,
     jump_host_public_key: Option<crate::storage::WorkspaceSshPublicIdentity>,
     pub(super) plugins: PluginRuntime,
+    organization_metrics: runtime::organization_metrics::OrganizationMetricsCache,
 }
 
 impl AppState {
@@ -67,6 +69,7 @@ impl AppState {
             kubernetes_client: None,
             jump_host_public_key: None,
             plugins,
+            organization_metrics: Default::default(),
         }
     }
 
@@ -83,6 +86,7 @@ impl AppState {
             kubernetes_client: None,
             jump_host_public_key: None,
             plugins,
+            organization_metrics: Default::default(),
         }
     }
 
@@ -253,6 +257,7 @@ async fn system_info(State(state): State<Arc<AppState>>) -> Json<SystemInfoRespo
         workspaces::get,
         runtime::list,
         runtime::get,
+        organization_usage::get,
         workspaces::action,
         workspace_image_update::update,
         port_mappings::list,
@@ -320,6 +325,7 @@ async fn system_info(State(state): State<Arc<AppState>>) -> Json<SystemInfoRespo
         workspaces::SshPortStrategy,
         runtime::WorkspaceRuntimeResponse,
         runtime::WorkspaceRuntimeEntry,
+        organization_usage::OrganizationUsageSummary,
         runtime::StorageTelemetry,
         runtime::StorageTelemetryStatus,
         runtime::StoragePressure,

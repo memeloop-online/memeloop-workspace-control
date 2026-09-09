@@ -26,6 +26,7 @@ use crate::{
 use super::{ApiError, AppState, auth::principal};
 
 mod details;
+pub(super) mod organization_metrics;
 mod pod_views;
 mod storage_metrics;
 
