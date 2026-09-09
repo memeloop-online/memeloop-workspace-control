@@ -738,6 +738,10 @@ schema bridge, writer shutdown, retained-volume and rollback gates.
   each trust matches the correct opposite root and contains no private key. No leaf, ingress,
   runtime setting or workload changed. Local private temporary files were removed.
   Stable root-CA automatic expiry monitoring remains an explicit gap; leaf alerts are prepared.
+- Bootstrap repeat-safety checked against the existing server root: repeated `--apply` exits1
+  and the original Secret resourceVersion remains unchanged. No replacement occurred.
+  GitOps local `3bb4987` prepares a separate certificate Application pinned to d337c74;
+  not pushed/applied yet. Its six resources contain no certificate or private-key material.
 
 - Borrowing restriction for ports `31871` and `32671` was lifted by the user on 2026-09-09;
   preserve the normal snapshot, writer-freeze, volume-binding and rollback gates.
