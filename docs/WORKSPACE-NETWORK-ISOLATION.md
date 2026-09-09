@@ -46,6 +46,26 @@ Do not copy example IPs into production. Revisit this inventory when adding hybr
 a host's public address is not excluded merely because its Tailnet address is private.
 Missing DNS identity fails configuration for an `internet_only` workspace.
 
+### Hybrid-cloud address inventory
+
+For the current cluster, Kubernetes Node status contains only internal addresses.
+It is not a complete public-address inventory. Existing host-network
+`prometheus-node-exporter` Pods in `monitoring` can expose the assigned host IPv6
+addresses through a read-only `/proc/net/if_inet6` inspection. Include all assigned
+global-unicast addresses, including deprecated addresses that remain assigned;
+the default-route source address alone is insufficient.
+
+That source does not reveal a router's public IPv4 NAT address. The existing
+peer-relay endpoint synchronization on NAS obtains a NAT observation from
+`tailscale netcheck`; it is not a central, continuously refreshed inventory for
+all nodes. Do not install an additional privileged discovery Pod merely to
+duplicate the available host-network inspection path.
+
+The current additional CIDRs are a point-in-time inventory. Automatic address
+updates remain required before treating rotating residential public addresses
+as continuously protected. Updating a values file is also insufficient unless
+existing workspace policies receive the new exclusions.
+
 ## Ingress and gateway trust
 
 The platform applies per-workspace SSH and ttyd ingress rules. Public SSH uses the configured
