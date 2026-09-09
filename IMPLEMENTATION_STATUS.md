@@ -488,8 +488,11 @@ Native ttyd acceptance already passed; do not repeat it. Never apply broad SNAT 
 authentication boundary verified end to end. Shared-namespace cutover still requires the
 schema bridge, writer shutdown, retained-volume and rollback gates.
 
-1. Do not deploy the already-published schema-20 release while ports `31871` and `32671` are
-   borrowed.
+1. **2026-09-09 authorization received:** the user confirmed no MWC workspace is in use.
+   Ports `31871` and `32671` are released; stopping and migrating the four MWC workspaces
+   is authorized. Resume from fresh storage/snapshot checks and GitOps automation freeze,
+   not from repeated completed feature/CI audits. The current Coder TOKEN center dev
+   remains excluded. Node major-OS-upgrade authorization remains planning-only.
 2. After the borrowing task explicitly finishes, stop and snapshot `maintainance` and
    `rust-dev-test`, deploy the schema-20 bridge, and verify database migration plus all four
    workspace reconciliations without cleaning durable `.codex` state.
@@ -512,7 +515,23 @@ schema bridge, writer shutdown, retained-volume and rollback gates.
 
 ## Safety invariants
 
-- Do not interrupt ports `31871` or `32671` until the borrowing task reports completion.
+### Active cutover checkpoint — 2026-09-09
+
+- User released all MWC workspaces for downtime; Coder remains excluded.
+- Live control plane is still the pre-bridge `d0bba81` image. Before any mutation,
+  its supported `database export` produced `/var/lib/mwc/pre-cutover-20260909-schema19.json`.
+  An off-Pod copy is saved under the private workspace backup directory
+  `.mwc-migration-backups/2026-09-09/pre-cutover-schema19.json`, mode 0600.
+  Parsed metadata confirms schema 19, installation `k3si-7032544955`, 22 tables;
+  SHA-256 `6cb27107deea070f1090703d66d9cdf9c3c7630592904dcc5d84acd2719ddad0`.
+  Credential values remain encrypted as stored; the export is sensitive and not committed.
+  This online preflight backup does not replace the final frozen-writer backup.
+- All four MWC Longhorn volumes currently report attached/healthy, including game-forking.
+- Main/routing/migration Argo Applications all still have automated prune/self-heal enabled.
+  A minimal GitOps freeze is being prepared before lifecycle or volume changes.
+
+- Borrowing restriction for ports `31871` and `32671` was lifted by the user on 2026-09-09;
+  preserve the normal snapshot, writer-freeze, volume-binding and rollback gates.
 - Never expose tokens, private keys, decrypted credentials, certificates, or database snapshots.
 - Workspace image changes require the stopped-state, exact-digest, policy, generation,
   idempotency, audit, and reconcile gates; do not edit SQLite directly.
