@@ -23,8 +23,8 @@ This is the short runbook for enabling the optional `runsc` handler on one K3s n
   picked up this configuration without a K3s restart. Mounted Home and scratch
   volumes are separate and are not covered by this root-filesystem cap.
 
-Keep the root overlay setting when upgrading runsc: the installer-generated
-configuration does not currently preserve this node-specific option. The exact
+Use `--rootfs-memory-mib 128` when installing this sandbox configuration on a
+new node. Keep the root overlay setting when upgrading runsc. The exact
 node configuration and reversal instructions are in GitOps under
 `apps/memeloop-workspace-control/node-configuration/`.
 

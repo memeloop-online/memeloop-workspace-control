@@ -98,7 +98,7 @@ run_install() {
   GVISOR_NODE_TEST_CGROUP_FS=cgroup2fs \
   GVISOR_NODE_TEST_SYSTEMD_VERSION=252 \
   GVISOR_NODE_TEST_SERVICE=k3s \
-  bash "$installer" --node "$host_name" --archive "$fixture/incoming.tar" --sha256 "$checksum" --apply --restart-k3s
+  bash "$installer" --node "$host_name" --archive "$fixture/incoming.tar" --sha256 "$checksum" --apply --restart-k3s "$@"
 }
 
 run_preflight() {
@@ -203,5 +203,18 @@ if PATH="$fake_bin:$PATH" GVISOR_NODE_TEST_MODE=1 GVISOR_NODE_TEST_ROOT="$fixtur
   printf 'hostname mismatch was accepted\n' >&2
   exit 1
 fi
+
+make_fixture
+make_archive
+run_install --rootfs-memory-mib 128 >/dev/null
+grep -Fqx '  overlay2 = "root:memory,size=128m"' "$fixture/usr/local/lib/gvisor/$checksum/runsc.toml"
+
+make_fixture
+make_archive
+if run_install --rootfs-memory-mib 0 >/dev/null 2>&1; then
+  printf 'invalid root filesystem memory limit was accepted\n' >&2
+  exit 1
+fi
+[[ ! -e "$fixture/usr/local/lib/gvisor/$checksum" ]]
 
 printf 'gVisor node installer/preflight fixture tests passed\n'

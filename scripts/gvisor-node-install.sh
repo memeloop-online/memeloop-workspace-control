@@ -8,7 +8,7 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: gvisor-node-install.sh --node NAME --archive FILE --sha256 HEX --apply --restart-k3s
+Usage: gvisor-node-install.sh --node NAME --archive FILE --sha256 HEX --apply --restart-k3s [--rootfs-memory-mib N]
 
 This script must run on the approved node as root. --node is compared with this host's hostname;
 it is not a Kubernetes API lookup. If a Kubernetes Node name differs from the host name, verify
@@ -16,6 +16,8 @@ that mapping independently before running this script. The script never changes 
 runtime or adds Kubernetes labels. --restart-k3s is explicit because K3s must regenerate/reload
 its containerd configuration. Do not use it before a maintenance decision and a verified
 SSH/console recovery path exist.
+--rootfs-memory-mib bounds root-filesystem changes in application memory (16..4096 MiB).
+Mounted volumes are unaffected. Omit this option to use runsc's default filesystem overlay.
 EOF
 }
 fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
@@ -53,7 +55,7 @@ done
 require_command systemctl
 require_command k3s
 
-node='' archive='' checksum='' apply=false restart=false
+node='' archive='' checksum='' apply=false restart=false rootfs_memory_mib=''
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --node)
@@ -74,6 +76,14 @@ while [[ $# -gt 0 ]]; do
     --apply)
       apply=true
       shift
+      ;;
+    --rootfs-memory-mib)
+      [[ $# -ge 2 && ${2:-} =~ ^[1-9][0-9]{0,3}$ ]] \
+        || fail '--rootfs-memory-mib requires an integer from 16 to 4096'
+      rootfs_memory_mib=$2
+      (( rootfs_memory_mib >= 16 && rootfs_memory_mib <= 4096 )) \
+        || fail '--rootfs-memory-mib must be from 16 to 4096'
+      shift 2
       ;;
     --restart-k3s)
       restart=true
@@ -454,13 +464,17 @@ done
 cat > "$stage_dir/runsc.toml" <<EOF
 binary_name = "$version_dir_logical/runsc"
 grouping = true
+
+[runsc_config]
 EOF
 if [[ $cgroup_mode == v2 ]]; then
   cat >> "$stage_dir/runsc.toml" <<'EOF'
 
-[runsc_config]
   systemd-cgroup = "true"
 EOF
+fi
+if [[ -n $rootfs_memory_mib ]]; then
+  printf '  overlay2 = "root:memory,size=%sm"\n' "$rootfs_memory_mib" >> "$stage_dir/runsc.toml"
 fi
 chmod 0644 -- "$stage_dir/runsc.toml"
 
