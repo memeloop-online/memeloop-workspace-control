@@ -25,7 +25,8 @@ Cilium/Calico, split clusters, or restore the removed runtime-profile abstractio
 | MIG-04 | Last active Coder TOKEN center dev workspace | External-agent cutover only; pending execution. Copyable procedure is in `docs/FINAL-MIGRATION-RUNBOOK.md`, updated for completed MWC migration. Source PVC 100Gi; do not stop this workspace from inside itself. |
 | MIG-05 | Delete superseded namespaces/resources and retired code/names | Five old MWC namespaces deleted and absence confirmed; bridge code removed/deployed. Remaining Coder cleanup belongs to MIG-04. Preserve immutable installation identity and recovery artifacts. |
 | IMG-01 | Upgrade maintainance and rust-dev-test to verified images | COMPLETE. Borrower released both ports; images upgraded during accepted cutover. Old unreferenced 20260902 policies disabled. |
-| UI-01 | Final UI closeout | Production 768/1440 checks pass; 360px has 15px right-edge clipping. Main inspected actual screenshots, also found low-contrast settings metadata. `canonical_ui_acceptance` owns bounded CSS fix and viewport regression; no full-feature re-audit. |
+| UI-01 | Responsive layout/settings contrast closeout | COMPLETE for the bounded fix. 0f72957 deployed; actual Chinese light-theme360/1440 screenshots confirm margins and readable metadata. Earlier768 fixture passes retained; no whole-feature re-audit. |
+| UI-02 | Total actual usage in workspace summary | Current production screenshot still shows allocated totals only. Assigned read-only tracing of summary API/fields to explain missing total-consumption visualization; never substitute current-page sums for organization totals. |
 | SEC-01 | Actual NetworkPolicy enforcement, same-/cross-node tests | Harbor recovered by separate ops. Ingress deny passed all four paths; cross-node ingress selector allow FAILED. Egress matrix passed 12 checks. Boundary retry passed 30 checks including same/other node API/kubelet denial, Kubernetes Service denial, public TCP and DNS retained. Evidence: `/tmp/mwc-network-{acceptance,egress,boundaries-alidns}-20260908.json`; all disposable namespaces deleted. No test process remains running. Other-node and startup coverage remain. |
 | SEC-02 | Product egress isolation and least-source ingress | Source `0f062b8`, review fix `5589e35` (global-unicast IPv6, optional DNS fail-closed). Deployment and full SEC-01 evidence pending. Live policy remains ingress-only with broad ttyd sources: external tenant acceptance is NOT passed. |
 | SEC-03 | Template optional `runtime_class_name`, API/YAML/UI/Pod rendering | Source `37fc09b` included in deployed release; full CI passed. Live gVisor acceptance remains blocked on SEC-04. No silent fallback; existing ordinary templates unchanged. |
@@ -757,6 +758,37 @@ schema bridge, writer shutdown, retained-volume and rollback gates.
   Continue this exact run rather than rerunning either failed revision. Pending next:
   verify/publication, control-only GitOps UI/trust-code upgrade, then separately deploy
   prepared certificate App and enable/accept mTLS with the protected restart window.
+- 2026-09-09 next continuation: prior turn was progress (code, live API-key acceptance,
+  CA bootstrap); continued the same CI `34335872689`, now fully SUCCESS.
+  Control OCI index verified against GHCR bytes/header:
+  `sha256:76f0702d5f61b4866105ed009ccefa672ace31aefcd6ce0a8208a593fce9a6fd`.
+  GitOps `99efae9` deployed 0f72957; control rollout and readyz pass.
+- Certificate App deployed through GitOps `21daea0` after a transient Argo repository-fetch
+  timeout recovered on refresh. Both leaf Certificates Ready; in-memory signature/EKU/SAN
+  checks pass. Prometheus returns readiness1 for both actual Certificate namespace/name labels.
+  Root CA and leaf private keys were never printed. Production UI final screenshots delegated.
+- GitOps `e6b1779` enables all four mTLS settings after leaf/trust readiness; Helm rendered
+  scoped gateway RBAC and control rollout completed Synced/Healthy. Requested only
+  tiddlywiki restart via owner API (202) as first combined mTLS/browser canary.
+  Remaining three workspaces have not yet been restarted for mTLS.
+- Canary tiddlywiki reachedReady with projected server/client-trust Secrets and its owned SAN
+  EnvoyFilter. Browser runner session13960 PASSED real shell/resize/replay rejection/fresh ticket
+  through the configured TLS gateway. However, this is POSITIVE-PATH evidence only:
+  a direct no-client-cert request from its workspace container returnedHTTP200
+  (`curl -q --noproxy '*' -k` to localhost7681 and the actual shell base path).
+  TLS mount is absent from the workspace container. Explicit `/usr/bin/ttyd --version`
+  reports1.7.7-40e79c7. Therefore client-certificate enforcement is NOT accepted and rollout
+  to the other three workspaces is paused. Exact upstream behavior investigation assigned;
+  earlier standalone negative matrices cannot override this contradictory production evidence.
+- Follow-up distinguishes SNI: correct server CA plus service-FQDN/SNI and no client certificate
+  failed with curl35, while no-SNI IP access with `-k` returned200. The latter is still an
+  actual unauthenticated access path. Replacement-image CI must include both DNS/SNI and
+  IP/no-SNI URLs, with server SANs matching both, and valid-client baselines before negative tests.
+  Upstream ttyd issue1551 and official pinned build scripts identify MbedTLS release artifacts;
+  unchanged-source OpenSSL image plus explicit client-certificate regression assigned.
+- UI-01 actual production screenshots in `mwc-ui01-deployed-0f72957` confirm360 margins and
+ 1440 settings contrast; main inspected the deployed360 screenshot. This closes the bounded
+ responsive defect, not the separately observed missing aggregate actual-usage display (UI-02).
 
 - Borrowing restriction for ports `31871` and `32671` was lifted by the user on 2026-09-09;
   preserve the normal snapshot, writer-freeze, volume-binding and rollback gates.

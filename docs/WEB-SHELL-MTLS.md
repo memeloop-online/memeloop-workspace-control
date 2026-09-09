@@ -1,5 +1,20 @@
 # Web Shell upstream mTLS
 
+## Production gate discovered on 2026-09-09
+
+The current `ttyd 1.7.7-40e79c7` official Docker binary uses Mbed TLS. A real
+configured workspace accepted a direct HTTPS request without a client certificate,
+even with `--ssl-ca`. Therefore it is **not an accepted client-authentication boundary**.
+The rollout is paused after one workspace; its normal gateway browser flow works,
+but that positive path does not prove that unauthenticated direct access is rejected.
+
+[Upstream issue #1551](https://github.com/tsl0922/ttyd/issues/1551) reports this
+release-binary behavior. The replacement uses unchanged upstream ttyd source with
+OpenSSL-backed libwebsockets. Its release gate must explicitly validate the server CA
+and SAN in *every* request, then reject absent and untrusted client certificates.
+A server-trust failure is not evidence of client-certificate enforcement.
+The older canary results below remain historical observations, not a waiver of this gate.
+
 This optional configuration makes the Higress-to-ttyd upstream mutually authenticated.
 It protects ttyd when a CNI or cross-node SNAT makes an otherwise permitted gateway source
 address reachable directly. It does not replace external-auth: browser WebSocket requests
