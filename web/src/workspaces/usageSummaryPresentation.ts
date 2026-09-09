@@ -2,7 +2,7 @@ import type { UsageAvailability } from "../types";
 
 export function usagePercentage(actual: number | null, requested: number): number | null {
   if (actual === null || requested <= 0) return null;
-  return Math.max(0, Math.round((actual / requested) * 100));
+  return Math.max(0, Math.round((actual / requested) * 10_000) / 100);
 }
 
 export function usageBarPercentage(percentage: number | null): number | null {

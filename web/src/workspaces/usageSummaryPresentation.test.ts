@@ -14,6 +14,7 @@ test("actual usage percentage compares runtime observation with requested capaci
   assert.equal(usagePercentage(1_500, 1_000), 150);
   assert.equal(usageBarPercentage(usagePercentage(1_500, 1_000)), 100);
   assert.equal(usagePercentage(250, 1_000), 25);
+  assert.equal(usagePercentage(22, 27_000), 0.08);
   assert.equal(usagePercentage(null, 1_000), null);
   assert.equal(usagePercentage(0, 0), null);
 });
