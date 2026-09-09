@@ -661,6 +661,11 @@ schema bridge, writer shutdown, retained-volume and rollback gates.
   Retain fresh-22 initialization, existing-22 validation and rejection of unsupported schemas.
   This is code-only cleanup; no further database migration is needed or authorized by it.
   `http_fixture_clocks` independently owns worker complexity refactor and extended retry tests.
+- `c6505c7` extracts job-result persistence without weakening lint and adds 12 pending waits
+  followed by exactly-once completion, real-failure-budget preservation, and wrong-owner tests.
+  `c00ce94` deletes schema20/schema21 modules and conversion branches (452 net lines removed).
+  Both are pushed; fresh CI `34323729617` runs on `c00ce94`. Additional isolated PostgreSQL
+  and SQLite unsupported-version boundary coverage is assigned; no local Rust builds.
 
 - Borrowing restriction for ports `31871` and `32671` was lifted by the user on 2026-09-09;
   preserve the normal snapshot, writer-freeze, volume-binding and rollback gates.
