@@ -88,7 +88,7 @@ impl WorkspaceReconcileHandler {
                     .await
                     .map_err(job_error)?
                 {
-                    return Err(JobHandlerError(
+                    return Err(JobHandlerError::Pending(
                         "workspace StatefulSet is not ready yet".to_owned(),
                     ));
                 }
@@ -102,7 +102,7 @@ impl WorkspaceReconcileHandler {
                     .await
                     .map_err(job_error)?
                 {
-                    return Err(JobHandlerError(
+                    return Err(JobHandlerError::Pending(
                         "workspace StatefulSet has not scaled to zero yet".to_owned(),
                     ));
                 }
@@ -127,9 +127,11 @@ impl WorkspaceReconcileHandler {
                     .await?;
                 Ok(())
             }
-            DeleteProgress::DeletionRequested | DeleteProgress::Terminating => Err(
-                JobHandlerError("workspace namespace deletion is still in progress".to_owned()),
-            ),
+            DeleteProgress::DeletionRequested | DeleteProgress::Terminating => {
+                Err(JobHandlerError::Pending(
+                    "workspace namespace deletion is still in progress".to_owned(),
+                ))
+            }
         }
     }
 
@@ -301,14 +303,14 @@ fn normalize_ssh_target(
 impl JobHandler for WorkspaceReconcileHandler {
     async fn handle(&self, job: &ClaimedJob) -> Result<(), JobHandlerError> {
         if job.kind != "reconcile_workspace" {
-            return Err(JobHandlerError(format!(
+            return Err(JobHandlerError::Failed(format!(
                 "unsupported background job kind {}",
                 job.kind
             )));
         }
-        let workspace_id = job
-            .workspace_id
-            .ok_or_else(|| JobHandlerError("workspace job has no workspace id".to_owned()))?;
+        let workspace_id = job.workspace_id.ok_or_else(|| {
+            JobHandlerError::Failed("workspace job has no workspace id".to_owned())
+        })?;
         let workspace = match self.database.get_workspace(workspace_id).await {
             Ok(workspace) => workspace,
             Err(StorageError::WorkspaceNotFound) => {
@@ -322,7 +324,7 @@ impl JobHandler for WorkspaceReconcileHandler {
 }
 
 fn job_error(error: impl std::fmt::Display) -> JobHandlerError {
-    JobHandlerError(error.to_string())
+    JobHandlerError::Failed(error.to_string())
 }
 
 fn unix_timestamp() -> Result<i64, JobHandlerError> {

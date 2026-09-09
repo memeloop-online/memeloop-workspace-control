@@ -70,7 +70,7 @@ impl WebhookDeliveryHandler {
             .await
             .map_err(job_error)?;
         if !response.status().is_success() {
-            return Err(JobHandlerError(format!(
+            return Err(JobHandlerError::Failed(format!(
                 "webhook endpoint returned HTTP {}",
                 response.status()
             )));
@@ -101,13 +101,13 @@ impl JobHandler for ControlPlaneJobHandler {
                 self.workspace
                     .as_ref()
                     .ok_or_else(|| {
-                        JobHandlerError("Kubernetes coordination is disabled".to_owned())
+                        JobHandlerError::Failed("Kubernetes coordination is disabled".to_owned())
                     })?
                     .handle(job)
                     .await
             }
             "deliver_webhook" => self.webhook.deliver(job).await,
-            _ => Err(JobHandlerError(format!(
+            _ => Err(JobHandlerError::Failed(format!(
                 "unsupported background job kind {}",
                 job.kind
             ))),
@@ -121,5 +121,5 @@ struct DeliveryJob {
     event_id: Uuid,
 }
 fn job_error(error: impl std::fmt::Display) -> JobHandlerError {
-    JobHandlerError(error.to_string())
+    JobHandlerError::Failed(error.to_string())
 }

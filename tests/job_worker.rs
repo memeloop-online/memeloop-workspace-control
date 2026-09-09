@@ -26,10 +26,21 @@ impl JobHandler for CountingHandler {
     async fn handle(&self, _job: &ClaimedJob) -> Result<(), JobHandlerError> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         if self.fail {
-            Err(JobHandlerError("temporary failure".to_owned()))
+            Err(JobHandlerError::Failed("temporary failure".to_owned()))
         } else {
             Ok(())
         }
+    }
+}
+
+struct PendingHandler {
+    calls: AtomicUsize,
+}
+
+impl JobHandler for PendingHandler {
+    async fn handle(&self, _job: &ClaimedJob) -> Result<(), JobHandlerError> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        Err(JobHandlerError::Pending("waiting for readiness".to_owned()))
     }
 }
 
@@ -84,6 +95,45 @@ async fn failed_worker_execution_is_deferred_with_bounded_retry() {
     assert!(!worker.run_once(101).await.unwrap());
     assert!(worker.run_once(102).await.unwrap());
     assert_eq!(handler.calls.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn pending_worker_execution_is_deferred_without_consuming_retry_budget() {
+    let database = database().await;
+    let job_id = database
+        .enqueue_job(
+            NewJob {
+                kind: "test".to_owned(),
+                workspace_id: None,
+                payload: json!({}),
+                available_at: 100,
+            },
+            100,
+        )
+        .await
+        .unwrap();
+    let handler = Arc::new(PendingHandler {
+        calls: AtomicUsize::new(0),
+    });
+    let worker = JobWorker::new(database.clone(), handler.clone(), "replica-a".to_owned());
+
+    assert!(worker.run_once(100).await.unwrap());
+    assert!(!worker.run_once(101).await.unwrap());
+    assert!(worker.run_once(105).await.unwrap());
+    assert_eq!(handler.calls.load(Ordering::SeqCst), 2);
+
+    let (status, attempts, available_at): (String, i64, i64) =
+        sqlx::query_as("SELECT status, attempts, available_at FROM jobs WHERE id = ?1")
+            .bind(job_id.to_string())
+            .fetch_one(match &database {
+                Database::Sqlite { pool, .. } => pool,
+                Database::Postgres { .. } => unreachable!(),
+            })
+            .await
+            .unwrap();
+    assert_eq!(status, "pending");
+    assert_eq!(attempts, 0);
+    assert_eq!(available_at, 110);
 }
 
 #[tokio::test]

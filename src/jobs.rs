@@ -9,6 +9,7 @@ mod kubernetes;
 mod webhook;
 
 const MAX_JOB_ATTEMPTS: i64 = 10;
+const PENDING_JOB_DELAY_SECONDS: i64 = 5;
 
 pub use kubernetes::WorkspaceReconcileHandler;
 pub use webhook::{ControlPlaneJobHandler, WebhookDeliveryHandler};
@@ -59,7 +60,12 @@ impl<H: JobHandler> JobWorker<H> {
                 .await?
         {
             self.database
-                .defer_job(job.id, &self.lease_owner, now.saturating_add(5), now)
+                .defer_job_without_attempt(
+                    job.id,
+                    &self.lease_owner,
+                    now.saturating_add(PENDING_JOB_DELAY_SECONDS),
+                    now,
+                )
                 .await?;
             return Ok(true);
         }
@@ -69,6 +75,22 @@ impl<H: JobHandler> JobWorker<H> {
             Ok(()) => {
                 self.database
                     .complete_job(job.id, &self.lease_owner, now)
+                    .await
+            }
+            Err(JobHandlerError::Pending(error)) => {
+                tracing::debug!(
+                    job_id = %job.id,
+                    attempts = job.attempts,
+                    error = %error,
+                    "job execution is waiting for external readiness"
+                );
+                self.database
+                    .defer_job_without_attempt(
+                        job.id,
+                        &self.lease_owner,
+                        now.saturating_add(PENDING_JOB_DELAY_SECONDS),
+                        now,
+                    )
                     .await
             }
             Err(error) => {
@@ -166,8 +188,12 @@ fn unix_timestamp() -> Result<i64, JobWorkerError> {
 }
 
 #[derive(Debug, Error)]
-#[error("{0}")]
-pub struct JobHandlerError(pub String);
+pub enum JobHandlerError {
+    #[error("{0}")]
+    Failed(String),
+    #[error("{0}")]
+    Pending(String),
+}
 
 #[derive(Debug, Error)]
 pub enum JobWorkerError {
