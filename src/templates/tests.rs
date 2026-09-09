@@ -67,8 +67,10 @@ spec:
 
 #[test]
 fn scratch_medium_round_trips_and_rejects_unknown_values() {
-    let mut policy = WorkspaceStoragePolicy::default();
-    policy.scratch_medium = ScratchMedium::Memory;
+    let policy = WorkspaceStoragePolicy {
+        scratch_medium: ScratchMedium::Memory,
+        ..WorkspaceStoragePolicy::default()
+    };
     let json = serde_json::to_value(policy).unwrap();
     assert_eq!(json["scratch_medium"], "memory");
     assert_eq!(
