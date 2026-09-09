@@ -76,6 +76,11 @@ jobs:
       - run: cargo fmt --all -- --check
       - name: Verify node installer rollback fixtures
         run: bash tests/gvisor_node_scripts.sh
+      - name: Verify ttyd client-certificate enforcement
+        timeout-minutes: 15
+        run: |
+          docker build --tag mwc-ttyd-ci images/ttyd-ssh
+          bash tests/ttyd_mtls.sh mwc-ttyd-ci
       - name: Enforce production maintainability limits
         run: >-
           cargo clippy --locked --lib --bins --all-features --
