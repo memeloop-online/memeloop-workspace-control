@@ -105,6 +105,7 @@ impl<'a> WorkspacePod<'a> {
     pub fn workspace_init_container(
         &self,
         image: &str,
+        resources: ResourceRequirements,
         names: &WorkspaceResourceNames,
     ) -> Container {
         Container {
@@ -116,6 +117,7 @@ impl<'a> WorkspacePod<'a> {
             args: Some(vec!["prepare-layout".to_owned()]),
             env: Some(self.platform_env()),
             volume_mounts: Some(self.development_mounts(names)),
+            resources: Some(resources),
             security_context: Some(root_security_context(false)),
             ..Container::default()
         }

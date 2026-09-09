@@ -73,3 +73,34 @@ fn sshd_set_env_quotes_spaces_and_quotation_marks() {
     ));
     assert!(!config.contains("CARGO_HOME="));
 }
+
+#[test]
+fn workspace_init_container_reuses_workspace_resource_requirements() {
+    let template = template();
+    let pod = WorkspacePod::from_template(&template);
+    let resources = ResourceRequirements {
+        requests: Some(pod.resource_requests()),
+        limits: Some(pod.resource_limits()),
+        ..ResourceRequirements::default()
+    };
+    let names = resource_names();
+    let workspace = pod.workspace_container(&template.image, resources.clone(), &names);
+    let init = pod.workspace_init_container(&template.image, resources, &names);
+
+    assert_eq!(init.resources, workspace.resources);
+    let init_resources = init.resources.expect("init container resources");
+    assert_eq!(
+        init_resources
+            .requests
+            .as_ref()
+            .and_then(|values| values.get("ephemeral-storage")),
+        Some(&Quantity("2048Mi".to_owned()))
+    );
+    assert_eq!(
+        init_resources
+            .limits
+            .as_ref()
+            .and_then(|values| values.get("ephemeral-storage")),
+        Some(&Quantity("14592Mi".to_owned()))
+    );
+}

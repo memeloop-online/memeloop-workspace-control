@@ -98,7 +98,11 @@ fn pod_spec(
     containers: Vec<Container>,
     names: &WorkspaceResourceNames,
 ) -> PodSpec {
-    let mut init_containers = vec![pod.workspace_init_container(&workspace.template.image, names)];
+    let mut init_containers = vec![pod.workspace_init_container(
+        &workspace.template.image,
+        workspace_resources(pod, workspace),
+        names,
+    )];
     if let Some(buildkit_bootstrap) = pod.buildkit_bootstrap_container() {
         init_containers.push(buildkit_bootstrap);
     }
