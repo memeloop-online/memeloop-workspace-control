@@ -1,7 +1,7 @@
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: workspace-data-w-b405d2441aee149-0
+  name: workspace-data-w-b405d2441a1ee149-0
   namespace: memeloop-workspace-control
   labels:
     app.kubernetes.io/component: workspace

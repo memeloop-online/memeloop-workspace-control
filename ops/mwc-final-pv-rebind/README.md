@@ -5,6 +5,11 @@ GitOps or a controller.  It deliberately names four MWC workspace volumes
 only; the independent `coder` namespace and its 100Gi Coder home PV are out
 of scope.
 
+For the separately ordered SSH NodePort transfer and generated-resource
+continuity rules, see `SERVICE-CONTINUITY.md`.  Do not retain an old NodePort
+Service merely because its other old namespace resources remain for rollback:
+the cluster-wide port must be released before the canonical Service is made.
+
 The target namespace is `memeloop-workspace-control`.  The target namespace
 must exist before the target PVCs are created.  Its absence before that point
 is an expected precondition, not a failure.
