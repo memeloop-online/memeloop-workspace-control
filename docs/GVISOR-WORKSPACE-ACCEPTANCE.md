@@ -1,6 +1,6 @@
 # gVisor workspace acceptance
 
-The disposable API workspace is still under test; this is not production acceptance.
+The memory-backed API workspace is still under test; this is not production acceptance.
 
 ## Test resources
 
@@ -11,6 +11,13 @@ The disposable API workspace is still under test; this is not production accepta
 - Pod: `memeloop-workspace-control/w-a4781e53dfe4b006-0`
 - RuntimeClass: `gvisor-workspace-acceptance-20260909`
 - Disposable SSH key directory: `/tmp/mwc-gvisor-ssh-4NG3K6`
+
+The original workspace `01a08792-557e-79e0-a478-1e53dfe4b006` has been deleted
+through the product API (HTTP 202). Its Pod, StatefulSet, Services, ConfigMaps,
+Secrets, NetworkPolicies, Ingresses and PVC are absent; its PV is also gone.
+A subsequent workspace GET returned HTTP 404. Only disposable test data was
+removed. The memory-backed workspace and shared test organization/user/template
+remain for the checks below.
 
 The member's one-hour API key successfully created the workspace with only
 workspace creation, read, connection, state-change and deletion scopes.
