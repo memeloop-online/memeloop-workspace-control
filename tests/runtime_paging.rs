@@ -653,34 +653,49 @@ async fn workspace_usage_summary_aggregates_in_sql_and_honors_template_scope() {
         .record_workspace_observation(deleted, WorkspaceObservation::Deleted, admin_id, 18)
         .await
         .unwrap();
+    let deleting = seeded_workspace(
+        &database,
+        organization_id,
+        admin_id,
+        default_template_id,
+        "usage-deleting",
+        19,
+    )
+    .await;
+    database
+        .request_workspace_action(deleting, WorkspaceAction::Delete, admin_id, 20)
+        .await
+        .unwrap();
 
     let summary = database
         .workspace_usage_summary(organization_id, None)
         .await
         .unwrap();
-    assert_eq!(summary.total_count, 2);
-    assert_eq!(summary.active_count, 1);
+    assert_eq!(summary.total_count, 3);
+    assert_eq!(summary.active_count, 2);
     assert_eq!(
         summary.requested,
         Resources {
-            cpu_millis: 1_500,
-            memory_mib: 2_600,
+            cpu_millis: 2_500,
+            memory_mib: 4_648,
             gpu_count: 3,
-            disk_gib: 26,
+            disk_gib: 46,
         }
     );
     assert_eq!(summary.state_counts.get("stopped"), Some(&1));
     assert_eq!(summary.state_counts.get("provisioning"), Some(&1));
+    assert_eq!(summary.state_counts.get("deleting"), Some(&1));
 
     let restricted = database
         .workspace_usage_summary(organization_id, Some(&[default_template_id]))
         .await
         .unwrap();
-    assert_eq!(restricted.total_count, 1);
-    assert_eq!(restricted.active_count, 0);
-    assert_eq!(restricted.requested.cpu_millis, 1_200);
-    assert_eq!(restricted.state_counts.len(), 1);
+    assert_eq!(restricted.total_count, 2);
+    assert_eq!(restricted.active_count, 1);
+    assert_eq!(restricted.requested.cpu_millis, 2_200);
+    assert_eq!(restricted.state_counts.len(), 2);
     assert_eq!(restricted.state_counts.get("stopped"), Some(&1));
+    assert_eq!(restricted.state_counts.get("deleting"), Some(&1));
 
     assert_eq!(
         database

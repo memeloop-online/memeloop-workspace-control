@@ -52,58 +52,38 @@ async fn workspace_usage_summary_for_templates(
 ) -> Result<WorkspaceUsageSummary, StorageError> {
     let sqlite_filter = usage_filter_sql("?1", "?2", allowed_template_ids, '?');
     let postgres_filter = usage_filter_sql("$1", "$2", allowed_template_ids, '$');
-    let sqlite_aggregate_sql = usage_aggregate_sql(&sqlite_filter, false);
-    let postgres_aggregate_sql = usage_aggregate_sql(&postgres_filter, true);
-    let sqlite_states_sql = usage_states_sql(&sqlite_filter);
-    let postgres_states_sql = usage_states_sql(&postgres_filter);
+    let sqlite_sql = usage_states_sql(&sqlite_filter, false);
+    let postgres_sql = usage_states_sql(&postgres_filter, true);
 
     match database {
         Database::Sqlite {
             pool,
             installation_id,
         } => {
-            let mut aggregate = sqlx::query(&sqlite_aggregate_sql)
-                .bind(installation_id.as_str())
-                .bind(organization_id.to_string());
-            let mut states = sqlx::query(&sqlite_states_sql)
+            let mut query = sqlx::query(&sqlite_sql)
                 .bind(installation_id.as_str())
                 .bind(organization_id.to_string());
             for template_id in allowed_template_ids.unwrap_or_default() {
-                aggregate = aggregate.bind(template_id.to_string());
-                states = states.bind(template_id.to_string());
+                query = query.bind(template_id.to_string());
             }
-            let aggregate = decode_usage_summary(&aggregate.fetch_one(pool).await?)?;
-            let state_counts = decode_state_counts(states.fetch_all(pool).await?)?;
-            Ok(WorkspaceUsageSummary {
-                state_counts,
-                ..aggregate
-            })
+            decode_usage_summary(query.fetch_all(pool).await?)
         }
         Database::Postgres {
             pool,
             installation_id,
         } => {
-            let mut aggregate = sqlx::query(&postgres_aggregate_sql)
-                .bind(installation_id.as_str())
-                .bind(organization_id.to_string());
-            let mut states = sqlx::query(&postgres_states_sql)
+            let mut query = sqlx::query(&postgres_sql)
                 .bind(installation_id.as_str())
                 .bind(organization_id.to_string());
             for template_id in allowed_template_ids.unwrap_or_default() {
-                aggregate = aggregate.bind(template_id.to_string());
-                states = states.bind(template_id.to_string());
+                query = query.bind(template_id.to_string());
             }
-            let aggregate = decode_usage_summary(&aggregate.fetch_one(pool).await?)?;
-            let state_counts = decode_state_counts(states.fetch_all(pool).await?)?;
-            Ok(WorkspaceUsageSummary {
-                state_counts,
-                ..aggregate
-            })
+            decode_usage_summary(query.fetch_all(pool).await?)
         }
     }
 }
 
-fn usage_aggregate_sql(filter: &str, postgres: bool) -> String {
+fn usage_states_sql(filter: &str, postgres: bool) -> String {
     let cast = |value: &str| {
         if postgres {
             format!("CAST({value} AS BIGINT)")
@@ -112,23 +92,14 @@ fn usage_aggregate_sql(filter: &str, postgres: bool) -> String {
         }
     };
     format!(
-        "SELECT {total_count} AS total_count, {cpu_millis} AS cpu_millis, \
-         {memory_mib} AS memory_mib, {gpu_count} AS gpu_count, {disk_gib} AS disk_gib, \
-         {active_count} AS active_count FROM workspaces WHERE {filter}",
+        "SELECT state, {total_count} AS workspace_count, {cpu_millis} AS cpu_millis, \
+         {memory_mib} AS memory_mib, {gpu_count} AS gpu_count, {disk_gib} AS disk_gib \
+         FROM workspaces WHERE {filter} GROUP BY state",
         total_count = cast("COUNT(*)"),
         cpu_millis = cast("COALESCE(SUM(cpu_millis), 0)"),
         memory_mib = cast("COALESCE(SUM(memory_mib), 0)"),
         gpu_count = cast("COALESCE(SUM(gpu_count), 0)"),
         disk_gib = cast("COALESCE(SUM(disk_gib), 0)"),
-        active_count = cast(
-            "COALESCE(SUM(CASE WHEN state NOT IN ('stopped', 'failed') THEN 1 ELSE 0 END), 0)"
-        ),
-    )
-}
-
-fn usage_states_sql(filter: &str) -> String {
-    format!(
-        "SELECT state, COUNT(*) AS workspace_count FROM workspaces WHERE {filter} GROUP BY state"
     )
 }
 
@@ -157,26 +128,51 @@ fn usage_filter_sql(
     filter
 }
 
-fn decode_usage_summary<R: Row>(row: &R) -> Result<WorkspaceUsageSummary, StorageError>
+fn decode_usage_summary<R: Row>(rows: Vec<R>) -> Result<WorkspaceUsageSummary, StorageError>
 where
     for<'a> &'a str: sqlx::ColumnIndex<R>,
+    String: for<'decode> sqlx::Decode<'decode, R::Database> + sqlx::Type<R::Database>,
     i64: for<'decode> sqlx::Decode<'decode, R::Database> + sqlx::Type<R::Database>,
 {
-    let read_u64 = |column| {
-        u64::try_from(row.try_get::<i64, _>(column)?).map_err(|_| StorageError::InvalidWorkspace)
-    };
-    Ok(WorkspaceUsageSummary {
-        total_count: read_u64("total_count")?,
-        requested: Resources {
+    let mut summary = WorkspaceUsageSummary::default();
+    for row in rows {
+        let read_u64 = |column| {
+            u64::try_from(row.try_get::<i64, _>(column)?)
+                .map_err(|_| StorageError::InvalidWorkspace)
+        };
+        let state: String = row.try_get("state")?;
+        let count = read_u64("workspace_count")?;
+        let requested = Resources {
             cpu_millis: read_u64("cpu_millis")?,
             memory_mib: read_u64("memory_mib")?,
             gpu_count: u32::try_from(row.try_get::<i64, _>("gpu_count")?)
                 .map_err(|_| StorageError::InvalidWorkspace)?,
             disk_gib: read_u64("disk_gib")?,
-        },
-        state_counts: BTreeMap::new(),
-        active_count: read_u64("active_count")?,
-    })
+        };
+        summary.total_count = summary
+            .total_count
+            .checked_add(count)
+            .ok_or(StorageError::InvalidWorkspace)?;
+        summary.requested = summary
+            .requested
+            .checked_add(requested)
+            .map_err(|_| StorageError::InvalidWorkspace)?;
+        if usage_state_has_live_runtime(&state) {
+            summary.active_count = summary
+                .active_count
+                .checked_add(count)
+                .ok_or(StorageError::InvalidWorkspace)?;
+        }
+        summary.state_counts.insert(state, count);
+    }
+    Ok(summary)
+}
+
+fn usage_state_has_live_runtime(state: &str) -> bool {
+    matches!(
+        state,
+        "provisioning" | "ready" | "starting" | "restarting" | "stopping" | "deleting"
+    )
 }
 
 pub(super) async fn workspace_page_summary(
