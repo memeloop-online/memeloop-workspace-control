@@ -21,7 +21,10 @@ preserved ports with trusted host keys and `.codex/sessions` present. Rollout se
 `10356` exited 0. GitOps is Synced/Healthy; all four Pods use the exact new digest.
 Temporary token files and trusted known-hosts files were removed. Final Coder was not touched.
 Strict SSH verification is complete. UI-02 HTTP wiring is committed as `a1bd8a3`;
-SQL single-query aggregation is `ae6e6b5`. `organization_metrics_impl` now owns the
+SQL single-query aggregation is `ae6e6b5`; its verification-branch CI `34356903038`
+passed completely (including PostgreSQL, frontend, Helm and bootstrap tests).
+This does not cover the later HTTP wiring/tests `a1bd8a3`/`a6bc4d1`/`cab5837`.
+`organization_metrics_impl` now owns the
 remaining bounded collector/cache after the previous implementation stalled; the previous
 collector worker is interrupted and must not resume overlapping edits. `usage_summary_sql`
 owns HTTP regression tests. Frontend work is complete. Main owns review, deployment and ledger.
@@ -56,7 +59,7 @@ Cilium/Calico, split clusters, or restore the removed runtime-profile abstractio
 | SEC-06 | External sandbox release acceptance | Pending SEC-01..05. Verify network escape paths, privilege/credential boundaries, CPU/memory/disk/PID pressure, SSH/Web Shell, restart/reschedule; fail closed. Installing components alone is not acceptance. |
 | SEC-07 | ttyd/Higress client authentication and certificate lifecycle | OpenSSL replacement CI `34348344598` PASS; GitOps `3bf7374` deployed. Four-workspace browser/SSH/no-client rejection rollout PASS (2026-09-09). Independent CA roles/cert-manager leaf expiry alerts deployed; leaf rotation requires planned ttyd restart, automatic root expiry telemetry remains pending. |
 | OPS-01 | Operator-only setup and automated product checks | Hardened installer `5bd4b95` passed real-tar fixture tests, CI hook `4b5c8b0`; node preparation `7b250f7`. Host registration/canary still pending eligible kernel and recovery checks. |
-| CLEAN-01 | Superseded API keys/cache injections/image policies | 2026-09-09 owner API metadata confirms one explicitly scoped key, no legacy/bootstrap/migration key names, and seven organization injections with no cache-directory environment targets. No repeat deletion needed for these owner/organization items. Old unreferenced 20260902 image policies already disabled (IMG-01); broader system-account key inventory is not established by the owner-only check. No secret values read. |
+| CLEAN-01 | Superseded API keys/cache injections/image policies | Metadata closeout PASS 2026-09-09: all four users paginated to exhaustion, three active keys, each explicitly scoped, no legacy/bootstrap/migration active names. Owner has one key and organization has seven injections without cache-directory environment targets. Old unreferenced 20260902 image policies already disabled (IMG-01). No further key/cache deletion indicated; no secret values inspected or active keys revoked. |
 
 2026-09-08 read-only runtime snapshot: 262 Pods have no explicit RuntimeClass, one uses `nvidia`,
 and no `gvisor`/`runsc` RuntimeClass exists. This does not prove each node's default handler.
