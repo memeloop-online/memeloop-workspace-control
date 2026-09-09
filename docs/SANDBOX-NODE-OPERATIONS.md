@@ -69,7 +69,11 @@ Configure an explicit kubelet `podPidsLimit` during node maintenance. This node 
 The installation and rollback template lives in GitOps under
 `apps/memeloop-workspace-control/node-configuration/`. Preserve a stricter existing
 limit. After restarting K3s, verify kubelet `configz` and the new canary's actual
-host cgroup `pids.max`; a process count reported inside the guest is not sufficient.
+host cgroup `pids.max`. This limits host tasks, not the number of guest processes:
+the live gVisor workspace spawned 1100 short-lived guest children with a host
+limit of 1024 and no host PID-limit hits. Do not advertise this setting as a
+guest process quota. Retain host CPU/memory limits and verify recovery under
+bounded guest-process pressure.
 
 After the handler restart, verify the K3s service, rendered containerd configuration, CRI
 plugin, and node readiness. Create a temporary `gvisor-canary` RuntimeClass with handler

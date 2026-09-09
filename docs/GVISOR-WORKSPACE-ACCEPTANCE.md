@@ -91,6 +91,20 @@ the ttyd sidecar. Two CPU workers were terminated after five seconds; host
 The command completed normally. This verifies actual CPU throttling on this Pod,
 not per-process quotas or all resource exhaustion scenarios.
 
+A bounded guest-process test spawned 1100 short-lived `/bin/sleep` children
+from an unprivileged Node.js process. All 1100 spawned, no spawn errors were
+reported, and the runner reaped its children and returned normally. Both workspace
+containers remained Ready without restarts. The host Pod cgroup reported no
+PID-limit hits and no OOM events during the test.
+
+Therefore the host `pids.max=1024` must not be described as a 1024-process limit
+inside the guest. gVisor multiplexes guest execution onto host tasks; these are
+different accounting boundaries. This bounded check demonstrates recovery, not
+protection against every process-exhaustion workload. CPU and memory limits at
+the host sandbox boundary remain necessary. See the upstream
+[resource model](https://gvisor.dev/docs/architecture_guide/resources/) and
+[compatibility guidance](https://gvisor.dev/docs/user_guide/compatibility/).
+
 ## Missing-runtime failure
 
 A disposable template referenced nonexistent RuntimeClass
