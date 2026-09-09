@@ -527,8 +527,14 @@ schema bridge, writer shutdown, retained-volume and rollback gates.
   Credential values remain encrypted as stored; the export is sensitive and not committed.
   This online preflight backup does not replace the final frozen-writer backup.
 - All four MWC Longhorn volumes currently report attached/healthy, including game-forking.
-- Main/routing/migration Argo Applications all still have automated prune/self-heal enabled.
-  A minimal GitOps freeze is being prepared before lifecycle or volume changes.
+- GitOps `61fbcfb` is pushed on current master and applied by `cluster-apps` (Synced/Succeeded).
+  Main/routing/migration Applications all now have no `syncPolicy.automated`.
+  The change removes only nine automation lines; no release/namespace change was mixed in.
+- All four workspace API `stop` calls returned 202 with stable per-workspace idempotency
+  keys `cutover-20260909-stop-<UUID>`. Readback confirms four StatefulSets replicas=0,
+  no workspace Pods, and database states `stopped`; only the control-plane Pod remains.
+  A second private off-Pod export `stopped-workspaces-schema19.json` captures this state.
+  Fresh Longhorn snapshots and the bridge promotion are the next steps.
 
 - Borrowing restriction for ports `31871` and `32671` was lifted by the user on 2026-09-09;
   preserve the normal snapshot, writer-freeze, volume-binding and rollback gates.
