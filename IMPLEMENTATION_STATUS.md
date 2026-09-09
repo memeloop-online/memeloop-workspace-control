@@ -6,4 +6,5 @@
 - [ ] 磁盘边界：完成内存缓存版本上线与真实工作区验证，确认 Home 和会话持久化不受影响。
 - [ ] 完成 gVisor 真实工作区验收及正式 RuntimeClass 注册。
 - [ ] 操作员流程：补齐符合条件节点的注册、canary 和恢复检查。
+- [ ] 界面：发布浅色主题表单标签对比度修复并回归。
 - [ ] 最后 Coder TOKEN center dev：按 `docs/FINAL-MIGRATION-RUNBOOK.md` 由外部代理迁移，当前工作区不可自停。

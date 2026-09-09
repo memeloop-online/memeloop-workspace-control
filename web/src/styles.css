@@ -33,7 +33,7 @@ code { font-family: "DM Mono", ui-monospace, monospace; }
 .login-card form { display: grid; gap: 16px; }
 .display-controls { display: flex; justify-content: flex-end; gap: 7px; margin: -20px -20px 8px 0; }
 .display-controls button, .utility-button { color: var(--muted); border: 1px solid var(--line); background: var(--surface-2); border-radius: 8px; padding: 6px 9px; cursor: pointer; font-size: .75rem; }
-.login-card label, .create-card label, .editor-card label, .standalone-label { color: #aab4c7; font-size: .78rem; font-weight: 600; letter-spacing: .02em; display: grid; gap: 8px; }
+.login-card label, .create-card label, .editor-card label, .standalone-label { color: var(--text-secondary); font-size: .78rem; font-weight: 600; letter-spacing: .02em; display: grid; gap: 8px; }
 input, select, textarea { width: 100%; color: var(--text); background: #090d14; border: 1px solid #2a3343; border-radius: 9px; padding: 11px 12px; outline: none; transition: border-color .15s, box-shadow .15s; }
 input:focus, select:focus, textarea:focus { border-color: #57cfa2; box-shadow: 0 0 0 3px #57cfa21f; }
 textarea { resize: vertical; font-family: "DM Mono", monospace; line-height: 1.55; tab-size: 2; }
@@ -90,13 +90,13 @@ textarea { resize: vertical; font-family: "DM Mono", monospace; line-height: 1.5
 .template-summary dd { color: #b5c5bf; font-size: .75rem; margin: 0; overflow: hidden; text-overflow: ellipsis; }
 .template-summary code { white-space: nowrap; }
 .workspace-resource-editor { margin: 0; padding: 12px; border: 1px solid #294036; border-radius: 10px; }
-.workspace-resource-editor legend { padding: 0 6px; color: #aab4c7; font-size: .78rem; font-weight: 600; }
+.workspace-resource-editor legend { padding: 0 6px; color: var(--text-secondary); font-size: .78rem; font-weight: 600; }
 .workspace-resource-fields { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
 .profile-note, .risk-note { margin: 0; border-radius: 9px; padding: 11px 12px; font-size: .7rem; line-height: 1.55; }
 .profile-note { color: #9fb4ad; border: 1px solid #294036; background: #0a1312; }
 .risk-note { color: #ffc2c9; border: 1px solid #71323c; background: #371a20; }
 .injection-ref-picker { border: 1px solid #294036; border-radius: 9px; padding: 12px; display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-.injection-ref-picker legend { color: #aab4c7; font-size: .72rem; padding: 0 6px; }
+.injection-ref-picker legend { color: var(--text-secondary); font-size: .72rem; padding: 0 6px; }
 .injection-ref-picker > div { display: grid; align-content: start; gap: 7px; }
 .injection-ref-picker strong { color: #829087; font-size: .75rem; }
 .injection-ref-picker label { display: flex; align-items: center; gap: 7px; font: .75rem "DM Mono", monospace; }
@@ -104,7 +104,7 @@ textarea { resize: vertical; font-family: "DM Mono", monospace; line-height: 1.5
 .injection-ref-picker small, .injection-ref-picker p { color: #6f7c78; font-size: .75rem; margin: 0; }
 .injection-ref-picker p { grid-column: 1 / -1; line-height: 1.5; }
 .credential-reference-picker { position: relative; display: grid; align-content: end; gap: 8px; min-width: 0; }
-.compact-field-label { color: #aab4c7; font-size: .78rem; font-weight: 600; letter-spacing: .02em; }
+.compact-field-label { color: var(--text-secondary); font-size: .78rem; font-weight: 600; letter-spacing: .02em; }
 .credential-reference-trigger { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 10px; color: var(--text); background: #090d14; border: 1px solid #2a3343; border-radius: 9px; padding: 11px 12px; cursor: pointer; text-align: left; }
 .credential-reference-trigger:hover, .credential-reference-trigger[aria-expanded="true"] { border-color: #57cfa2; }
 .credential-reference-popover { position: absolute; z-index: 12; top: calc(100% + 7px); left: 0; width: min(720px, calc(100vw - 52px)); padding: 12px; color: var(--text); background: var(--surface); border: 1px solid #344054; border-radius: 11px; box-shadow: 0 20px 55px #000b; }
@@ -225,7 +225,7 @@ textarea { resize: vertical; font-family: "DM Mono", monospace; line-height: 1.5
 .card-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .card-heading h3 { margin: 0; }
 .template-form { display: grid; grid-template-columns: repeat(4, 1fr); gap: 13px; margin: 15px 0; padding: 15px; border: 1px solid #294036; border-radius: 11px; background: #0f1817; }
-.template-form label { color: #aab4c7; font-size: .7rem; font-weight: 600; display: grid; gap: 7px; }
+.template-form label { color: var(--text-secondary); font-size: .7rem; font-weight: 600; display: grid; gap: 7px; }
 .template-form .wide { grid-column: span 2; }
 .template-form .full { grid-column: 1 / -1; }
 .template-list { margin-top: 14px; }
@@ -249,7 +249,7 @@ textarea { resize: vertical; font-family: "DM Mono", monospace; line-height: 1.5
 .editor-tabs button.active { color: var(--text); border-color: var(--accent); }
 .template-editor .template-form { margin: 0 0 15px; }
 .template-editor .form-actions { gap: 8px; }
-.yaml-editor { display: grid; gap: 8px; color: #aab4c7; font-size: .75rem; }
+.yaml-editor { display: grid; gap: 8px; color: var(--text-secondary); font-size: .75rem; }
 .yaml-editor textarea { min-height: 560px; white-space: pre; }
 .check-field { display: flex !important; align-items: center; align-self: end; min-height: 42px; gap: 8px !important; padding: 7px 2px; }
 .check-field input { width: auto; }
