@@ -9,17 +9,19 @@ completion claim.
 - The user authorized the AlmaLinux 8 to 9 upgrade and its necessary reboots. No backup is
   required for this node; OS execution and recovery are described in
   [the OS upgrade plan](SERV-146231-OS-UPGRADE-PLAN.md).
-- ELRepo `5.15.220-1.el8.elrepo` is installed and has booted successfully. Today's EL8 update
-  completed; the stock 4.18 boot then hit a K3s/etcd TLS timeout, and a one-shot 5.15 boot
-  restored K3s readiness. Follow the OS plan for the temporary K3s shutdown needed to run
-  Leapp on the official kernel.
-- AlmaLinux 9 is not installed. `runsc` and a gVisor `RuntimeClass` are not installed, so the
-  node is not gVisor-accepted and no completion status may be inferred.
+- AlmaLinux 9.8 has booted with kernel `5.14.0-687.42.1.el9_8` and systemd 252.
+  K3s automatic startup is restored and the node is Ready. The Wiki still waits for
+  the maintenance cordon to be lifted before its volume can attach.
+- `runsc release-20260831.0` is installed as an optional handler; runc remains the default.
+  The temporary `gvisor-canary` passed basic non-root execution, filesystem, process,
+  DNS and loopback checks. Actual resource boundaries and full workspace acceptance
+  remain; the production gVisor readiness label has not been set.
 
 ## Compatibility decision
 
-The current system is AlmaLinux 8 with systemd 239 and cgroup v2. gVisor's systemd cgroup
-driver requires systemd >=244, so the current OS cannot use that driver.
+The former AlmaLinux 8 systemd 239 could not support gVisor's systemd cgroup driver.
+AlmaLinux 9's systemd 252 meets its >=244 version requirement; runtime integration
+still needs the checks below.
 
 K3s uses `SystemdCgroup=true` and supplies paths such as
 `kubepods-burstable-pod<UID>.slice:cri-containerd:<sandbox-id>`. The gVisor filesystem cgroup
@@ -34,7 +36,8 @@ systemd versions below 244. Therefore:
 
 ## Next execution
 
-After the OS plan reports AlmaLinux 9 and a healthy K3s/etcd node:
+On this node continue with actual resource-boundary and workspace acceptance;
+do not repeat installation. The sequence for a fresh eligible node is:
 
 1. Run `gvisor-node-preflight.sh` on `serv-146231`. It must pass the kernel, active K3s,
    containerd-v3 template, cgroup v2 and systemd >=244 checks while retaining `runc` as the
@@ -65,6 +68,9 @@ installer's timestamped `config-v3.toml.tmpl` copy from
 `/var/lib/rancher/k3s/agent/etc/containerd/gvisor-backups/`, remove unused runsc links/binaries,
 restart this node's K3s service, and verify Ready with runc as default. Keep the RuntimeClass
 while any workload references it; remove it only after those references are gone.
+
+This node had no custom template before installation, so no old-template backup exists.
+Remove only the installed `runsc` stanzas, keeping the base template and unrelated changes.
 
 For an OS-upgrade failure, follow the OS plan's console repair or AlmaLinux 9 rebuild/rejoin
 path. The approved event has no backup-based rollback promise.

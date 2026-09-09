@@ -9,11 +9,13 @@ This is the short runbook for enabling the optional `runsc` handler on one K3s n
   `100.64.0.10`. The user authorized its AlmaLinux 8 to 9 upgrade and necessary reboots; no
   node-data backup is required. Follow [the OS upgrade plan](SERV-146231-OS-UPGRADE-PLAN.md)
   for the current maintenance/recovery state instead of recording node-event history here.
-- ELRepo `5.15.220-1.el8.elrepo` is installed and has booted successfully. For the official
-  EL8 kernel's K3s issue and the temporary K3s shutdown during Leapp, follow the OS plan.
-- AlmaLinux 9 is not installed yet. The current EL8 systemd 239 is below gVisor's
-  systemd-cgroup requirement of 244. `runsc` and a gVisor `RuntimeClass` are not installed;
-  do not label this node or schedule a gVisor workload yet.
+- AlmaLinux 9.8 has booted with kernel `5.14.0-687.42.1.el9_8` and systemd 252.
+  K3s automatic startup is restored and the node is Ready. The Wiki waits for the
+  node to leave maintenance mode before its volume can attach.
+- The optional `runsc` handler is installed; runc remains the default. A temporary
+  `gvisor-canary` passed the basic non-root, filesystem, process, DNS and loopback checks.
+  Full workspace/resource acceptance is still pending. Do not reinstall the handler
+  or publish the production readiness label on this node.
 
 The cgroup decision is fixed for this K3s setup: cgroup v2 and K3s' `SystemdCgroup=true` send
 the CRI path as a systemd slice such as
@@ -21,7 +23,7 @@ the CRI path as a systemd slice such as
 driver does not interpret that slice path. After AlmaLinux 9 is ready, use gVisor's systemd
 driver only when systemd is >=244; do not switch kubelet/runc to cgroupfs as a workaround.
 
-## Install the handler after the OS upgrade
+## Install the handler on another eligible node
 
 1. On the exact target node, run the read-only preflight from the reviewed scripts directory:
 
@@ -86,6 +88,10 @@ timestamped containerd template copy under
 `/var/lib/rancher/k3s/agent/etc/containerd/gvisor-backups/`, remove the handler links and
 versioned binaries after confirming they are unused, restart only this node's K3s service, and
 verify the node returns Ready with `runc` as the default.
+
+If no template existed before installation, there is no old template backup. Remove only
+the added `runsc` stanzas from the new template, preserving the base template and any
+unrelated changes. This is the case on `serv-146231`.
 
 If the AlmaLinux upgrade itself cannot be repaired, use the OS plan's rebuild/rejoin path. The
 approved OS event has no backup-based rollback promise; this document does not add one.

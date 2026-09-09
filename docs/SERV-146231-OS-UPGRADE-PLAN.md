@@ -1,5 +1,10 @@
 # serv-146231 AlmaLinux 8 to 9 upgrade plan
 
+The OS upgrade is complete: AlmaLinux 9.8, kernel `5.14.0-687.42.1.el9_8`,
+systemd 252, K3s enabled and active, and Node Ready. Do not repeat ELevate.
+The node remains in maintenance for gVisor acceptance; restore Wiki scheduling
+and volume attachment when that maintenance ends.
+
 The user approved the AlmaLinux 8 to 9 upgrade and the required reboots for
 `100.64.0.10` (`serv-146231`, `serv.146231.com`). This is a single-node control-plane
 maintenance event. It covers the OS and the checks needed to return this node to service;
