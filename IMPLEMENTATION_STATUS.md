@@ -672,6 +672,13 @@ schema bridge, writer shutdown, retained-volume and rollback gates.
   SQLite rejects 20/21/23 without conversion. PostgreSQL uses independent generated schemas
   for fresh/current22 and 20/21/23 rejection; CI supplies MWC_TEST_POSTGRES_URL.
   Wait for this newest complete verification/publication before selecting the final rollout pins.
+- CI `34324256107` verify PASSED; three auxiliary image jobs succeeded and control-image
+  publication remains active. Watch session `51213` follows this exact run; do not start
+  another watcher or rebuild just because an observation yields.
+- Post-cutover monitoring readback: Prometheus reports
+  `up{namespace="memeloop-workspace-control"}` = 1 for the control-plane internal service.
+  Canonical ServiceMonitor selects the internal auth-port `/metrics`; all four workspace
+  Pods' containers are Ready. This proves scrape continuity, not full sandbox acceptance.
 
 - Borrowing restriction for ports `31871` and `32671` was lifted by the user on 2026-09-09;
   preserve the normal snapshot, writer-freeze, volume-binding and rollback gates.
