@@ -534,7 +534,18 @@ schema bridge, writer shutdown, retained-volume and rollback gates.
   keys `cutover-20260909-stop-<UUID>`. Readback confirms four StatefulSets replicas=0,
   no workspace Pods, and database states `stopped`; only the control-plane Pod remains.
   A second private off-Pod export `stopped-workspaces-schema19.json` captures this state.
-  Fresh Longhorn snapshots and the bridge promotion are the next steps.
+  Private resource backups of the control namespace and four MWC namespaces are also saved.
+- Four fresh Longhorn snapshots `mwc-freeze-<shortid>-20260909` are ready with empty errors:
+  `bd2dc9ca6aa2b1b5`, `b268ff46894a14b9`, `97645a0fb4771b1d`, `b405d2441a1ee149`.
+  Snapshot-controller temporarily attaches detached volumes itself; no workspace was started.
+  Detached/unknown after completion is normal, not a health failure.
+- GitOps `4586f23` promotes only the verified schema-20 bridge pins while preserving freeze.
+  It is pushed/applied; a scoped manual sync of only the MWC Application (no prune) succeeded.
+  Bridge image pulled successfully, but startup FAILED with `SchemaUpgradeDataInvalid`.
+  Rollout waiter ended with timeout. Main scaled only the frozen control StatefulSet to zero
+  to stop crash retries; workspace replicas remain zero. Do not advance to schema 22 or move
+  any PV. Diagnose bridge validation against the private stopped-state export; snapshots and
+  original claims are intact. No upgrade success is claimed.
 
 - Borrowing restriction for ports `31871` and `32671` was lifted by the user on 2026-09-09;
   preserve the normal snapshot, writer-freeze, volume-binding and rollback gates.
