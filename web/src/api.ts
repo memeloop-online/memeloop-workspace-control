@@ -13,6 +13,7 @@ import type {
   MembershipPage,
   Organization,
   OrganizationPage,
+  OrganizationUsageSummary,
   Principal,
   Resources,
   ResolvedInjection,
@@ -183,6 +184,10 @@ export class ApiClient {
 
   quota(organizationId: string): Promise<Resources | null> {
     return this.request(`/api/v1/organizations/${organizationId}/quota`);
+  }
+
+  usageSummary(organizationId: string): Promise<OrganizationUsageSummary> {
+    return this.request(`/api/v1/organizations/${encodeURIComponent(organizationId)}/usage-summary`);
   }
 
   setQuota(organizationId: string, resources: Resources): Promise<void> {

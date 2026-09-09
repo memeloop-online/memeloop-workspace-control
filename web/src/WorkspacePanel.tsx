@@ -11,7 +11,7 @@ import { aggregateRuntimeUsage } from "./workspaceMetrics";
 import { WorkspaceCreationForm } from "./workspaces/WorkspaceCreationForm";
 import { WorkspaceStats } from "./workspaces/WorkspaceStats";
 import "./workspace-ui.css";
-import type { CreateWorkspace, Principal, Resources, StoredInjection, WorkspaceResponse, WorkspaceRuntime, WorkspaceSummary, WorkspaceTemplate } from "./types";
+import type { CreateWorkspace, OrganizationUsageSummary, Principal, Resources, StoredInjection, WorkspaceResponse, WorkspaceRuntime, WorkspaceSummary, WorkspaceTemplate } from "./types";
 
 const PAGE_SIZE = 50;
 const EMPTY_WORKSPACES: WorkspaceResponse[] = [];
@@ -48,6 +48,9 @@ export function WorkspacePanel(props: Props) {
   const [items, setItems] = useState<WorkspaceResponse[]>([]);
   const [summary, setSummary] = useState<WorkspaceSummary | null>(null);
   const [quota, setQuota] = useState<Resources | null>(null);
+  const [usageSummary, setUsageSummary] = useState<OrganizationUsageSummary | null>(null);
+  const [usageSummaryOrganization, setUsageSummaryOrganization] = useState<string | null>(null);
+  const [usageSummaryStale, setUsageSummaryStale] = useState(false);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [history, setHistory] = useState<(string | null)[]>([null]);
   const [page, setPage] = useState(1);
@@ -65,6 +68,8 @@ export function WorkspacePanel(props: Props) {
   const activeIdsRef = useRef<string[]>([]);
   const listAnchorRef = useRef<HTMLDivElement>(null);
   const runtimeGeneration = useRef(0);
+  const usageGeneration = useRef(0);
+  const usageRequestActive = useRef(false);
   const scope = `${props.organizationId}\u0000${debouncedSearch.trim()}`;
   const scopeRef = useRef(scope);
   scopeRef.current = scope;
@@ -94,6 +99,28 @@ export function WorkspacePanel(props: Props) {
     let active = true;
     void props.api.quota(props.organizationId).then((value) => active && setQuota(value)).catch(() => active && setQuota(null));
     return () => { active = false; };
+  }, [props.api, props.organizationId]);
+
+  useEffect(() => {
+    const requestGeneration = ++usageGeneration.current;
+    usageRequestActive.current = false;
+    setUsageSummary(null); setUsageSummaryOrganization(null); setUsageSummaryStale(false);
+    const refresh = async () => {
+      if (usageRequestActive.current || document.visibilityState !== "visible") return;
+      usageRequestActive.current = true;
+      try {
+        const value = await props.api.usageSummary(props.organizationId);
+        if (usageGeneration.current === requestGeneration) { setUsageSummary(value); setUsageSummaryOrganization(props.organizationId); setUsageSummaryStale(false); }
+      } catch {
+        // Keep the last organization observation visible; an absent metric remains unknown, never zero.
+        if (usageGeneration.current === requestGeneration) setUsageSummaryStale(true);
+      } finally {
+        if (usageGeneration.current === requestGeneration) usageRequestActive.current = false;
+      }
+    };
+    void refresh();
+    const timer = window.setInterval(() => void refresh(), 30_000);
+    return () => { ++usageGeneration.current; window.clearInterval(timer); };
   }, [props.api, props.organizationId]);
 
   useEffect(() => {
@@ -264,7 +291,7 @@ export function WorkspacePanel(props: Props) {
         ? t("restartWorkspaceConfirm")
         : "";
   return <section className="panel-stack workspace-panel">
-    <WorkspaceStats summary={summary} quota={quota} />
+    <WorkspaceStats summary={usageSummaryOrganization === props.organizationId ? usageSummary : null} quota={quota} stale={usageSummaryStale} />
     <div className="section-heading"><div><p className="eyebrow">{t("workspaces")}</p><h2>{t("workspaces")}</h2></div>{canCreate && <button className="button primary" onClick={() => setShowCreate((current) => !current)}>{showCreate ? t("collapse") : t("newWorkspace")}</button>}</div>
     {canCreate && showCreate && <WorkspaceCreationForm name={name} templateId={templateId} templates={templates} resourceDraft={resourceDraft} explicitInjectionRefs={explicitInjectionRefs} organizationInjections={organizationInjections} userInjections={userInjections} organizationRefs={organizationRefs} userRefs={userRefs} submitting={submitting} onNameChange={setName} onTemplateChange={chooseTemplate} onResourceChange={updateResource} onReferenceModeChange={setReferenceMode} onOrganizationRefsChange={setOrganizationRefs} onUserRefsChange={setUserRefs} onSubmit={create} />}
     <label className="workspace-search">{t("searchWorkspaces")}<input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder={t("searchWorkspacesHint")} /></label>

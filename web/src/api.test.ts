@@ -38,3 +38,16 @@ test("administrator API-key requests page summaries and send the revocation reas
     globalThis.fetch = originalFetch;
   }
 });
+
+test("organization usage summary uses the dedicated aggregate endpoint", async () => {
+  const originalFetch = globalThis.fetch;
+  let request = "";
+  globalThis.fetch = async (input) => {
+    request = String(input);
+    return Response.json({ total_count: 0, state_counts: {}, requested: {}, actual: {}, observed_at: null, availability: {}, coverage: {} });
+  };
+  try {
+    await new ApiClient("operator-token").usageSummary("organization / one");
+    assert.equal(request, "/api/v1/organizations/organization%20%2F%20one/usage-summary");
+  } finally { globalThis.fetch = originalFetch; }
+});
