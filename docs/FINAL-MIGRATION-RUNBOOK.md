@@ -1,7 +1,8 @@
 # Final Coder TOKEN center dev migration runbook
 
 This is an external-agent handoff, not authorization to change a cluster. Perform it outside the
-Coder source workspace. This repository must not stop, inspect, or migrate the source.
+Coder source workspace. Do not stop or migrate that workspace from inside itself;
+read-only inspection does not authorize its shutdown.
 
 ## Scope and completed-history boundary
 
