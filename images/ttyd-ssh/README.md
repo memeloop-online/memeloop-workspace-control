@@ -14,8 +14,8 @@ The Dockerfile verifies the upstream source archives before building:
 
 | Component | Upstream revision | SHA-256 archive checksum |
 | --- | --- | --- |
-| ttyd | `40e79c706be14029b391f369bee6613c31667abb` | `a04cead2cf8fccc8a73d03c53d1617680322c9655e031f0105395af100d296bd` |
-| libwebsockets | `4415e84c095857629863804e941b9e1c2e9347ef` (`v4.3.3`) | `6fd33527b410a37ebc91bb64ca51bdabab12b076bc99d153d7c5dd405e4bdf90` |
+| ttyd | `40e79c706be14029b391f369bee6613c31667abb` | `1f6f53a5021a2cee4af9b975f3dc7a3185bd261c23a84f7b680285f6c1a50341` |
+| libwebsockets | `4415e84c095857629863804e941b9e1c2e9347ef` (`v4.3.3`) | `a85b3dbcf42b97722f829538acffca50d77441cec5e76b8223ac36611ae10332` |
 
 After building a local image, run the isolated Docker-capable test:
 
