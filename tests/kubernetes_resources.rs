@@ -6,7 +6,7 @@ use memeloop_workspace_control::{
         WORKSPACE_ID_LABEL,
     },
     quota::Resources,
-    templates::{EgressPolicy, WorkspaceTemplateSpec},
+    templates::{EgressPolicy, ScratchMedium, WorkspaceTemplateSpec},
     workspace_runtime::{WorkspaceRuntimeIdentity, WorkspaceRuntimeNames},
     workspaces::{AccessMode, Workspace, WorkspaceState},
 };
@@ -1446,14 +1446,17 @@ fn regenerable_data_uses_bounded_pod_lifetime_storage() {
         volume("build-scratch").size_limit.as_ref().unwrap().0,
         "14Gi"
     );
+    assert_eq!(volume("build-scratch").medium, None);
     assert_eq!(
         volume("buildkit-cache").size_limit.as_ref().unwrap().0,
         "9Gi"
     );
+    assert_eq!(volume("buildkit-cache").medium, None);
     assert_eq!(
         volume("codex-scratch").size_limit.as_ref().unwrap().0,
         "3Gi"
     );
+    assert_eq!(volume("codex-scratch").medium, None);
     assert_eq!(
         volume("runtime-ssh").size_limit.as_ref().unwrap().0,
         "128Mi"
@@ -1583,6 +1586,63 @@ fn regenerable_data_uses_bounded_pod_lifetime_storage() {
     let sshd = &resources.workspace_config.data.as_ref().unwrap()["sshd_config"];
     assert!(sshd.contains("AuthorizedKeysFile /run/mwc-ssh/authorized_keys"));
     assert!(sshd.contains("Banner /run/mwc-ssh/storage-banner"));
+}
+
+#[test]
+fn memory_scratch_uses_tmpfs_without_changing_container_resources() {
+    let mut workspace = workspace(WorkspaceState::Ready);
+    workspace.template.buildkit = true;
+    let disk_resources = builder().build(&workspace).unwrap();
+
+    workspace.template.storage_policy.scratch_medium = ScratchMedium::Memory;
+    let memory_resources = builder().build(&workspace).unwrap();
+    let disk_pod = disk_resources
+        .stateful_set
+        .spec
+        .unwrap()
+        .template
+        .spec
+        .unwrap();
+    let memory_pod = memory_resources
+        .stateful_set
+        .spec
+        .unwrap()
+        .template
+        .spec
+        .unwrap();
+    let memory_volume = |name: &str| {
+        memory_pod
+            .volumes
+            .as_ref()
+            .unwrap()
+            .iter()
+            .find(|volume| volume.name == name)
+            .unwrap()
+            .empty_dir
+            .as_ref()
+            .unwrap()
+    };
+    for name in ["build-scratch", "buildkit-cache", "codex-scratch"] {
+        assert_eq!(memory_volume(name).medium.as_deref(), Some("Memory"));
+    }
+
+    for container_name in ["workspace", "buildkitd"] {
+        let disk_container = disk_pod
+            .containers
+            .iter()
+            .find(|container| container.name == container_name)
+            .unwrap();
+        let memory_container = memory_pod
+            .containers
+            .iter()
+            .find(|container| container.name == container_name)
+            .unwrap();
+        assert_eq!(&memory_container.resources, &disk_container.resources);
+    }
+    assert_eq!(
+        &memory_pod.init_containers.as_ref().unwrap()[0].resources,
+        &disk_pod.init_containers.as_ref().unwrap()[0].resources
+    );
 }
 
 #[test]

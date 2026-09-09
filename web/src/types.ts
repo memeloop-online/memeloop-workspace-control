@@ -177,6 +177,7 @@ export interface WorkspaceStoragePolicy {
   build_scratch_gib: number;
   buildkit_cache_gib: number;
   codex_scratch_gib: number;
+  scratch_medium: "disk" | "memory";
   home_reserve_mib: number | null;
 }
 

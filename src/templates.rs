@@ -78,6 +78,7 @@ pub enum EgressPolicy {
 #[serde(default, deny_unknown_fields)]
 pub struct WorkspaceStoragePolicy {
     pub runtime_tmp_memory_mib: u64,
+    pub scratch_medium: ScratchMedium,
     pub build_scratch_gib: u64,
     pub buildkit_cache_gib: u64,
     pub codex_scratch_gib: u64,
@@ -88,12 +89,25 @@ impl Default for WorkspaceStoragePolicy {
     fn default() -> Self {
         Self {
             runtime_tmp_memory_mib: 512,
+            scratch_medium: ScratchMedium::Disk,
             build_scratch_gib: 12,
             buildkit_cache_gib: 8,
             codex_scratch_gib: 2,
             home_reserve_mib: None,
         }
     }
+}
+
+/// Backing medium for regenerable build, BuildKit, and Codex scratch volumes.
+///
+/// Disk uses node-local storage. Memory makes these `emptyDir` volumes tmpfs-backed; bytes written
+/// there are charged to the writing container's memory cgroup.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ScratchMedium {
+    #[default]
+    Disk,
+    Memory,
 }
 
 impl WorkspaceStoragePolicy {

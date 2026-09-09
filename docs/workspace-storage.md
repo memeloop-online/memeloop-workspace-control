@@ -25,6 +25,22 @@ This limit is containment, not reservation. New templates request 2 GiB for the 
 container, editable in the template form or YAML source. When enabled, BuildKit requests 1 GiB
 separately and its limit follows the configured BuildKit cache boundary.
 
+### Scratch backing medium
+
+`spec.storage_policy.scratch_medium` selects the backing medium for `build-scratch`,
+`buildkit-cache`, and `codex-scratch`: `disk` (the default) keeps their existing node-local
+`emptyDir` behavior, while `memory` renders all three as `emptyDir.medium: Memory`. This is an
+explicit template choice; it is not inferred from `runtime_class_name` or any RuntimeClass.
+
+Memory-backed scratch is tmpfs. Its written bytes are charged to the container that writes them
+(including BuildKit's own container), and therefore contribute to Pod memory pressure. The
+volume `sizeLimit` remains a cap, not extra RAM: a full or pressured memory cgroup can OOM before
+that size is reached. MWC does not automatically add memory requests, limits, or quota for this
+mode. The existing ephemeral-storage requests and limits remain unchanged.
+In `disk` mode, `sizeLimit` is
+also not a hard reservation or synchronous quota; kubelet can still evict Pods under node
+ephemeral-storage pressure.
+
 For a new or cleaned Home, MWC links regenerable cache paths into build scratch. A non-empty
 cache is never deleted or replaced automatically. Stop the workspace, clean that cache
 explicitly, and start it again; the empty path is then linked to the bounded layer.

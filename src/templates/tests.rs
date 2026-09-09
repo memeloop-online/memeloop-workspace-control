@@ -19,6 +19,7 @@ fn yaml_round_trip_contains_only_explicit_template_fields() {
     assert!(yaml.contains("access_mode: internal"));
     assert!(yaml.contains("workspace_user: node-dev"));
     assert!(yaml.contains("runtime_tmp_memory_mib: 512"));
+    assert!(yaml.contains("scratch_medium: disk"));
     assert!(yaml.contains("build_scratch_gib: 12"));
     assert!(yaml.contains("buildkit_cache_gib: 8"));
     assert!(yaml.contains("runtime_class_name: null"));
@@ -28,6 +29,55 @@ fn yaml_round_trip_contains_only_explicit_template_fields() {
     assert_eq!(json["access_mode"], "internal");
     assert_eq!(json["workspace_user"], "node-dev");
     assert!(json.get("accessMode").is_none());
+}
+
+#[test]
+fn storage_policy_defaults_scratch_medium_to_disk_for_existing_templates() {
+    let yaml = r#"
+apiVersion: workspace.memeloop.dev/v1
+kind: WorkspaceTemplate
+metadata:
+  name: existing-template
+spec:
+  image: registry.example/dev:latest
+  access_mode: internal
+  resources:
+    cpu_millis: 1000
+    memory_mib: 1024
+    gpu_count: 0
+    disk_gib: 20
+  pod_requests:
+    cpu_millis: 1000
+    memory_mib: 1024
+  workspace_user: workspace
+  workspace_home: /workspace
+  storage_policy:
+    runtime_tmp_memory_mib: 512
+    build_scratch_gib: 12
+    buildkit_cache_gib: 8
+    codex_scratch_gib: 2
+    home_reserve_mib: null
+"#;
+    let document = WorkspaceTemplateDocument::parse(yaml).unwrap();
+    assert_eq!(
+        document.spec.storage_policy.scratch_medium,
+        ScratchMedium::Disk
+    );
+}
+
+#[test]
+fn scratch_medium_round_trips_and_rejects_unknown_values() {
+    let mut policy = WorkspaceStoragePolicy::default();
+    policy.scratch_medium = ScratchMedium::Memory;
+    let json = serde_json::to_value(policy).unwrap();
+    assert_eq!(json["scratch_medium"], "memory");
+    assert_eq!(
+        serde_json::from_value::<WorkspaceStoragePolicy>(json).unwrap(),
+        policy
+    );
+    assert!(
+        serde_json::from_str::<WorkspaceStoragePolicy>(r#"{"scratch_medium":"memoryy"}"#).is_err()
+    );
 }
 
 #[test]

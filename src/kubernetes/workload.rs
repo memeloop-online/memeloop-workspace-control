@@ -17,7 +17,7 @@ use k8s_openapi::{
 };
 
 use crate::{
-    templates::WorkspaceStoragePolicy,
+    templates::{ScratchMedium, WorkspaceStoragePolicy},
     workspace_runtime::{WorkspaceResourceNames, WorkspaceRuntimeNames},
     workspaces::Workspace,
 };
@@ -271,7 +271,7 @@ fn workspace_volumes(
             name: "build-scratch".to_owned(),
             empty_dir: Some(bounded_empty_dir(
                 &format!("{}Gi", policy.build_scratch_gib),
-                None,
+                scratch_medium(policy),
             )),
             ..Volume::default()
         },
@@ -279,7 +279,7 @@ fn workspace_volumes(
             name: "buildkit-cache".to_owned(),
             empty_dir: Some(bounded_empty_dir(
                 &format!("{}Gi", policy.buildkit_cache_gib),
-                None,
+                scratch_medium(policy),
             )),
             ..Volume::default()
         },
@@ -287,7 +287,7 @@ fn workspace_volumes(
             name: "codex-scratch".to_owned(),
             empty_dir: Some(bounded_empty_dir(
                 &format!("{}Gi", policy.codex_scratch_gib),
-                None,
+                scratch_medium(policy),
             )),
             ..Volume::default()
         },
@@ -296,6 +296,13 @@ fn workspace_volumes(
         volumes.push(ttyd_tls_volume(mtls));
     }
     volumes
+}
+
+fn scratch_medium(policy: &WorkspaceStoragePolicy) -> Option<&'static str> {
+    match policy.scratch_medium {
+        ScratchMedium::Disk => None,
+        ScratchMedium::Memory => Some("Memory"),
+    }
 }
 
 fn ttyd_tls_volume(mtls: &super::TtydMtlsConfig) -> Volume {

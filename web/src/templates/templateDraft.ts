@@ -7,6 +7,7 @@ export const DEFAULT_STORAGE_POLICY: WorkspaceStoragePolicy = {
   build_scratch_gib: 12,
   buildkit_cache_gib: 8,
   codex_scratch_gib: 2,
+  scratch_medium: "disk",
   home_reserve_mib: 1024,
 };
 
@@ -36,6 +37,7 @@ export interface TemplateStoragePolicyDraft {
   build_scratch_gib: string;
   buildkit_cache_gib: string;
   codex_scratch_gib: string;
+  scratch_medium: "disk" | "memory";
   home_reserve_mib: string;
 }
 
@@ -92,6 +94,7 @@ const TEMPLATE_FIELD_SCHEMA: TemplateFieldSchema = {
       build_scratch_gib: null,
       buildkit_cache_gib: null,
       codex_scratch_gib: null,
+      scratch_medium: null,
       home_reserve_mib: null,
     },
     cluster_access: null,
@@ -157,6 +160,7 @@ export function templateDraftToYaml(draft: TemplateDraft): string {
     build_scratch_gib: parseRequiredNumber(draft.storagePolicy.build_scratch_gib, TEMPLATE_NUMBER_POLICIES.buildScratch),
     buildkit_cache_gib: parseRequiredNumber(draft.storagePolicy.buildkit_cache_gib, TEMPLATE_NUMBER_POLICIES.buildkitCache),
     codex_scratch_gib: parseRequiredNumber(draft.storagePolicy.codex_scratch_gib, TEMPLATE_NUMBER_POLICIES.codexScratch),
+    scratch_medium: draft.storagePolicy.scratch_medium,
     home_reserve_mib: parseOptionalNumber(draft.storagePolicy.home_reserve_mib, TEMPLATE_NUMBER_POLICIES.homeReserve),
   };
 
@@ -233,8 +237,15 @@ function parseStoragePolicy(value: unknown): WorkspaceStoragePolicy {
     build_scratch_gib: Number(policy.build_scratch_gib ?? DEFAULT_STORAGE_POLICY.build_scratch_gib),
     buildkit_cache_gib: Number(policy.buildkit_cache_gib ?? DEFAULT_STORAGE_POLICY.buildkit_cache_gib),
     codex_scratch_gib: Number(policy.codex_scratch_gib ?? DEFAULT_STORAGE_POLICY.codex_scratch_gib),
+    scratch_medium: parseScratchMedium(policy.scratch_medium),
     home_reserve_mib: policy.home_reserve_mib == null ? null : Number(policy.home_reserve_mib),
   };
+}
+
+function parseScratchMedium(value: unknown): "disk" | "memory" {
+  if (value === undefined) return "disk";
+  if (value === "disk" || value === "memory") return value;
+  throw new Error("Invalid WorkspaceTemplate YAML: scratch_medium must be disk or memory");
 }
 
 function requiredRecord(value: unknown): Record<string, unknown> {
@@ -262,6 +273,7 @@ function storagePolicyDraft(policy: WorkspaceStoragePolicy): TemplateStoragePoli
     build_scratch_gib: String(policy.build_scratch_gib),
     buildkit_cache_gib: String(policy.buildkit_cache_gib),
     codex_scratch_gib: String(policy.codex_scratch_gib),
+    scratch_medium: policy.scratch_medium ?? "disk",
     home_reserve_mib: optionalNumberText(policy.home_reserve_mib),
   };
 }

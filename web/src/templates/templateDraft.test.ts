@@ -39,6 +39,7 @@ test("template form normalization preserves the bounded storage policy", () => {
     build_scratch_gib: "14",
     buildkit_cache_gib: "9",
     codex_scratch_gib: "3",
+    scratch_medium: "memory",
     home_reserve_mib: "768",
   };
   const parsed = templateDraftFromYaml(templateDraftToYaml(draft));
@@ -51,9 +52,19 @@ test("new templates emit backend-compatible storage and ephemeral defaults", () 
   assert.match(yaml, /ephemeral_storage_mib: 2048/u);
   assert.match(yaml, /ephemeral_storage_limit_mib: 14592/u);
   assert.match(yaml, /home_reserve_mib: 1024/u);
+  assert.match(yaml, /scratch_medium: disk/u);
   assert.doesNotMatch(yaml, /home_reserve_mib: null/u);
   assert.doesNotMatch(yaml, /runtime_class_name/u);
   assert.match(yaml, /egress_policy: unrestricted/u);
+});
+
+test("scratch storage medium defaults to disk for historical YAML and rejects unknown values", () => {
+  const yaml = templateDraftToYaml({ ...emptyTemplateDraft(), name: "historical" });
+  assert.equal(templateDraftFromYaml(yaml.replace("    scratch_medium: disk\n", "")).storagePolicy.scratch_medium, "disk");
+  assert.throws(
+    () => templateDraftFromYaml(yaml.replace("scratch_medium: disk", "scratch_medium: network")),
+    /scratch_medium must be disk or memory/u,
+  );
 });
 
 test("internet-only egress policy round-trips through template YAML", () => {

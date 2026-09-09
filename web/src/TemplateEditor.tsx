@@ -181,6 +181,19 @@ export function TemplateEditor({ api, organizationId, templates, canGrantCluster
               <NumberField label={`${t("buildScratch")} (GiB)`} help={t("buildScratchHelp")} value={draft.storagePolicy.build_scratch_gib} policy={TEMPLATE_NUMBER_POLICIES.buildScratch} update={(build_scratch_gib) => setDraft({ ...draft, storagePolicy: { ...draft.storagePolicy, build_scratch_gib } })} />
               <NumberField label={`${t("buildkitCache")} (GiB)`} help={t("buildkitCacheHelp")} value={draft.storagePolicy.buildkit_cache_gib} policy={TEMPLATE_NUMBER_POLICIES.buildkitCache} update={(buildkit_cache_gib) => setDraft({ ...draft, storagePolicy: { ...draft.storagePolicy, buildkit_cache_gib } })} />
               <NumberField label={`${t("codexScratch")} (GiB)`} help={t("codexScratchHelp")} value={draft.storagePolicy.codex_scratch_gib} policy={TEMPLATE_NUMBER_POLICIES.codexScratch} update={(codex_scratch_gib) => setDraft({ ...draft, storagePolicy: { ...draft.storagePolicy, codex_scratch_gib } })} />
+              <label>
+                <Field label={t("scratchMedium")} help={t("scratchMediumHelp")} />
+                <select
+                  value={draft.storagePolicy.scratch_medium}
+                  onChange={(event) => setDraft({
+                    ...draft,
+                    storagePolicy: { ...draft.storagePolicy, scratch_medium: event.target.value as "disk" | "memory" },
+                  })}
+                >
+                  <option value="disk">{t("scratchMediumDisk")}</option>
+                  <option value="memory">{t("scratchMediumMemory")}</option>
+                </select>
+              </label>
               <NumberField optional label={`${t("homeReserve")} (MiB)`} help={t("homeReserveHelp")} value={draft.storagePolicy.home_reserve_mib} policy={TEMPLATE_NUMBER_POLICIES.homeReserve} update={(home_reserve_mib) => setDraft({ ...draft, storagePolicy: { ...draft.storagePolicy, home_reserve_mib } })} />
             </fieldset>
             <Check label="BuildKit" help={t("buildkitHelp")} checked={draft.buildkit} update={(buildkit) => setDraft({ ...draft, buildkit })} />
