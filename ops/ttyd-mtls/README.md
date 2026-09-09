@@ -60,51 +60,32 @@ cert-manager targets. Expiry or an unexpected CA key change is an incident,
 not a leaf renewal.
 
 **Current cluster state:** cert-manager v1.21.0 exposes its metrics Service on
-`cert-manager/cert-manager:9402`, but it has no ServiceMonitor and there is no
-cert-manager PrometheusRule. Therefore neither leaf nor CA expiry alerting is
-currently deployed; do not represent it as monitored.
+`cert-manager/cert-manager:9402`, but it had no ServiceMonitor or
+cert-manager PrometheusRule before this prepared manifest. The installed
+Prometheus selects `release: monitoring` ServiceMonitors/Rules from all
+Namespaces. `monitoring.yaml` therefore adds a ServiceMonitor matching the
+live controller Service labels and its `http-metrics` port. It sets
+`honorLabels: true` so cert-manager's own Certificate `namespace` label stays
+available to rules, which are limited to these two leaf Certificate names.
+This remains unobserved until the reviewed GitOps sync is complete; do not
+describe it as active beforehand.
 
-**Leaf alerting to add before enablement:** add a narrowly selected
-ServiceMonitor for that Service and a PrometheusRule using cert-manager's
-`certmanager_certificate_expiration_timestamp_seconds` and
-`certmanager_certificate_ready_status` metrics. Scope every selector to the
-two Certificate names and their namespaces. Page at 14 days and warn at 30
-days, for example:
-
-```promql
-# warning: <= 30 days to a managed ttyd leaf expiry
-(certmanager_certificate_expiration_timestamp_seconds{
-  name=~"ttyd-(server|client)-certificate",
-  exported_namespace=~"memeloop-workspace-control|higress-system"
-} - time()) < 30 * 24 * 60 * 60
-
-# critical: either leaf is not Ready for 10 minutes
-min_over_time(certmanager_certificate_ready_status{
-  name=~"ttyd-(server|client)-certificate",
-  exported_namespace=~"memeloop-workspace-control|higress-system",
-  condition="Ready"
-}[10m]) == 0
-```
-
-Metric label spelling must be checked against the first scraped series before
-committing the rule (`name`/`exported_namespace` are the expected
-cert-manager labels). The ServiceMonitor and PrometheusRule are intentionally
-not included here because the monitoring Application/selector contract has not
-yet been reviewed.
-
-**Stable-CA expiry alerting still to land:** a CA Secret is not a cert-manager
-Certificate and has no expiry metric. Add one least-privilege exporter or
-CronJob in each CA namespace that can `get` only its named CA Secret, parses
-only `tls.crt` in-memory, and exports
-`mwc_ttyd_ca_expiration_timestamp_seconds{role="server|client"}`. Alert at 180
-days (warning) and 90 days (critical):
+The live v1.21.0 metrics endpoint confirms the exact metric labels are `name`
+and `namespace` (not `exported_namespace`). The prepared leaf alerts are:
+not Ready for 10 minutes (critical), past cert-manager's renewal timestamp for
+15 minutes (critical), and expiry within 14 days (warning). They use
+`certmanager_certificate_ready_status`,
+`certmanager_certificate_renewal_timestamp_seconds`, and
+`certmanager_certificate_expiration_timestamp_seconds` respectively.
 
 ```promql
-(mwc_ttyd_ca_expiration_timestamp_seconds{role=~"server|client"} - time())
-  < 180 * 24 * 60 * 60
+certmanager_certificate_ready_status{condition="True",name=~"ttyd-(server|client)-certificate",namespace=~"memeloop-workspace-control|higress-system"} != 1
 ```
 
-Until that exporter and its ServiceMonitor/PrometheusRule are deployed, the
+**Stable-CA expiry:** a CA Secret is not a cert-manager Certificate and has no
+cert-manager expiry metric. No exporter, CronJob, or periodic synchronization
+component is proposed or included here. Until the existing monitoring
+foundation is separately assessed for a least-privilege CA-expiry probe, the
 certificate operator must record the two CA NotAfter dates in the approved
 operations inventory and review them at least monthly. This is a manual
 control, not an alert.

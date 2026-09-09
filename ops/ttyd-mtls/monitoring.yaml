@@ -1,0 +1,76 @@
+# The installed Prometheus selects ServiceMonitors and PrometheusRules with
+# release=monitoring across all namespaces. The Service selector and port are
+# read from the live cert-manager v1.21.0 Service.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: mwc-ttyd-cert-manager
+  namespace: cert-manager
+  labels:
+    release: monitoring
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: controller
+      app.kubernetes.io/instance: cert-manager
+      app.kubernetes.io/name: cert-manager
+  endpoints:
+    - port: http-metrics
+      interval: 30s
+      scrapeTimeout: 10s
+      # Preserve cert-manager's own `namespace` metric label. Without this,
+      # Prometheus' target namespace label would rename it to
+      # `exported_namespace` and weaken the exact Certificate selectors below.
+      honorLabels: true
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: mwc-ttyd-certificate-lifecycle
+  namespace: memeloop-workspace-control
+  labels:
+    release: monitoring
+spec:
+  groups:
+    - name: mwc.ttyd-certificate-lifecycle
+      rules:
+        - alert: MWCTtydLeafCertificateNotReady
+          expr: |
+            certmanager_certificate_ready_status{
+              condition="True",
+              name=~"ttyd-(server|client)-certificate",
+              namespace=~"memeloop-workspace-control|higress-system"
+            } != 1
+          for: 10m
+          labels:
+            severity: critical
+            component: ttyd-mtls
+          annotations:
+            summary: "MWC ttyd mTLS leaf certificate is not Ready"
+            description: "{{ $labels.namespace }}/{{ $labels.name }} has not been Ready for 10 minutes."
+        - alert: MWCTtydLeafCertificateRenewalOverdue
+          expr: |
+            time() > certmanager_certificate_renewal_timestamp_seconds{
+              name=~"ttyd-(server|client)-certificate",
+              namespace=~"memeloop-workspace-control|higress-system"
+            }
+          for: 15m
+          labels:
+            severity: critical
+            component: ttyd-mtls
+          annotations:
+            summary: "MWC ttyd mTLS leaf certificate renewal is overdue"
+            description: "{{ $labels.namespace }}/{{ $labels.name }} passed its cert-manager renewal timestamp."
+        - alert: MWCTtydLeafCertificateExpiringSoon
+          expr: |
+            (certmanager_certificate_expiration_timestamp_seconds{
+              name=~"ttyd-(server|client)-certificate",
+              namespace=~"memeloop-workspace-control|higress-system"
+            } - time()) < 14 * 24 * 60 * 60
+          for: 15m
+          labels:
+            severity: warning
+            component: ttyd-mtls
+          annotations:
+            summary: "MWC ttyd mTLS leaf certificate expires within 14 days"
+            description: "{{ $labels.namespace }}/{{ $labels.name }} is within the expiry window."
