@@ -25,7 +25,7 @@ pub(super) async fn upgrade_sqlite(
         .await?;
     }
     upgrade_workspaces_sqlite(connection, applied_at).await?;
-    cleanse_idempotency_sqlite(connection).await
+    cleanse_idempotency_sqlite(connection, applied_at).await
 }
 
 pub(super) async fn upgrade_postgres(
@@ -48,7 +48,7 @@ pub(super) async fn upgrade_postgres(
         .await?;
     }
     upgrade_workspaces_postgres(connection, applied_at).await?;
-    cleanse_idempotency_postgres(connection).await
+    cleanse_idempotency_postgres(connection, applied_at).await
 }
 
 async fn upgrade_workspaces_sqlite(
@@ -161,8 +161,16 @@ async fn insert_reconcile_postgres(
     Ok(())
 }
 
-async fn cleanse_idempotency_sqlite(connection: &mut SqliteConnection) -> Result<(), StorageError> {
-    let rows = sqlx::query("SELECT installation_id, scope, key, response_json FROM idempotency_keys WHERE response_json <> ''")
+async fn cleanse_idempotency_sqlite(
+    connection: &mut SqliteConnection,
+    applied_at: i64,
+) -> Result<(), StorageError> {
+    sqlx::query("DELETE FROM idempotency_keys WHERE expires_at <= ?1")
+        .bind(applied_at)
+        .execute(&mut *connection)
+        .await?;
+    let rows = sqlx::query("SELECT installation_id, scope, key, response_json FROM idempotency_keys WHERE response_json <> '' AND expires_at > ?1")
+        .bind(applied_at)
         .fetch_all(&mut *connection).await?;
     for row in rows {
         update_response_sqlite(connection, row).await?;
@@ -170,8 +178,16 @@ async fn cleanse_idempotency_sqlite(connection: &mut SqliteConnection) -> Result
     Ok(())
 }
 
-async fn cleanse_idempotency_postgres(connection: &mut PgConnection) -> Result<(), StorageError> {
-    let rows = sqlx::query("SELECT installation_id, scope, key, response_json FROM idempotency_keys WHERE response_json <> '' FOR UPDATE")
+async fn cleanse_idempotency_postgres(
+    connection: &mut PgConnection,
+    applied_at: i64,
+) -> Result<(), StorageError> {
+    sqlx::query("DELETE FROM idempotency_keys WHERE expires_at <= $1")
+        .bind(applied_at)
+        .execute(&mut *connection)
+        .await?;
+    let rows = sqlx::query("SELECT installation_id, scope, key, response_json FROM idempotency_keys WHERE response_json <> '' AND expires_at > $1 FOR UPDATE")
+        .bind(applied_at)
         .fetch_all(&mut *connection).await?;
     for row in rows {
         update_response_postgres(connection, row).await?;
@@ -310,7 +326,7 @@ mod tests {
 
     use super::*;
 
-    fn yaml_with_legacy_spec(extra: &str) -> String {
+    fn yaml_with_removed_fields(extra: &str) -> String {
         WorkspaceTemplateDocument::new(
             "migration",
             WorkspaceTemplateSpec::standard(
@@ -330,8 +346,8 @@ mod tests {
     }
 
     #[test]
-    fn cleans_empty_legacy_fields_before_final_template_validation() {
-        let yaml = yaml_with_legacy_spec(
+    fn cleans_empty_removed_fields_before_final_template_validation() {
+        let yaml = yaml_with_removed_fields(
             "preserve_home_ownership: true\n  preserve_home_root: false\n  environment: {}\n",
         );
         let migrated = cleanse_yaml(&yaml, StorageError::InvalidTemplate).unwrap();
@@ -341,9 +357,9 @@ mod tests {
     }
 
     #[test]
-    fn rejects_nonempty_or_nonmapping_legacy_environment() {
-        let nonempty = yaml_with_legacy_spec("environment: {TOKEN: secret}\n");
-        let nonmapping = yaml_with_legacy_spec("environment: secret\n");
+    fn rejects_nonempty_or_nonmapping_environment() {
+        let nonempty = yaml_with_removed_fields("environment: {TOKEN: secret}\n");
+        let nonmapping = yaml_with_removed_fields("environment: secret\n");
         assert!(matches!(
             cleanse_yaml(&nonempty, StorageError::InvalidTemplate),
             Err(StorageError::SchemaUpgradeDataInvalid)
@@ -367,13 +383,13 @@ mod tests {
                 .unwrap()
                 .contains("environment")
         );
-        let legacy_secret = r#"{"workspace":{"access_mode":"internal","resources":{},"pod_requests":{},"environment":{"TOKEN":"secret"}}}"#;
+        let removed_field_secret = r#"{"workspace":{"access_mode":"internal","resources":{},"pod_requests":{},"environment":{"TOKEN":"secret"}}}"#;
         assert!(matches!(
-            cleanse_response("actor:create-workspace", legacy_secret),
+            cleanse_response("actor:create-workspace", removed_field_secret),
             Err(StorageError::SchemaUpgradeDataInvalid)
         ));
 
-        let yaml = yaml_with_legacy_spec("environment: {}\n");
+        let yaml = yaml_with_removed_fields("environment: {}\n");
         let template = serde_json::json!({
             "access_mode": "internal",
             "resources": {},
@@ -383,7 +399,7 @@ mod tests {
         });
         let migrated = cleanse_response("actor:create-template", &template.to_string()).unwrap();
         assert!(!migrated.contains("environment:"));
-        let nonempty_yaml = yaml_with_legacy_spec("environment: {TOKEN: secret}\n");
+        let nonempty_yaml = yaml_with_removed_fields("environment: {TOKEN: secret}\n");
         let nonempty_template = serde_json::json!({
             "access_mode": "internal",
             "resources": {},
@@ -425,7 +441,7 @@ mod tests {
 
     #[tokio::test]
     async fn sqlite_v19_bridge_commits_clean_templates_and_rolls_back_bad_environment() {
-        let valid = yaml_with_legacy_spec("preserve_home_ownership: true\n  environment: {}\n");
+        let valid = yaml_with_removed_fields("preserve_home_ownership: true\n  environment: {}\n");
         let database = v19_sqlite_with_template(valid.clone()).await;
         let Database::Sqlite { pool, .. } = &database else {
             unreachable!();
@@ -437,12 +453,13 @@ mod tests {
             "enabled": true,
             "yaml": valid,
         });
-        sqlx::query("INSERT INTO idempotency_keys (installation_id, scope, key, request_hash, response_json, status_code, created_at, expires_at) VALUES (?1, ?2, ?3, ?4, ?5, 200, 1, 2)")
+        sqlx::query("INSERT INTO idempotency_keys (installation_id, scope, key, request_hash, response_json, status_code, created_at, expires_at) VALUES (?1, ?2, ?3, ?4, ?5, 200, 1, ?6)")
             .bind("v20-bridge")
             .bind("actor:create-template")
             .bind("response")
             .bind("hash")
             .bind(response.to_string())
+            .bind(i64::MAX)
             .execute(pool)
             .await
             .unwrap();
@@ -465,7 +482,7 @@ mod tests {
         assert!(!response.contains("preserve_home_ownership"));
         assert!(!response.contains("environment:"));
 
-        let invalid = yaml_with_legacy_spec("environment: {TOKEN: secret}\n");
+        let invalid = yaml_with_removed_fields("environment: {TOKEN: secret}\n");
         let failed = v19_sqlite_with_template(invalid).await;
         assert!(matches!(
             failed.migrate().await,
@@ -480,6 +497,104 @@ mod tests {
             .await
             .unwrap();
         assert!(yaml.contains("environment: {TOKEN: secret}"));
+    }
+
+    #[tokio::test]
+    async fn sqlite_v19_bridge_discards_expired_invalid_idempotency_responses() {
+        let yaml = yaml_with_removed_fields("environment: {}\n");
+        let database = v19_sqlite_with_template(yaml).await;
+        let Database::Sqlite { pool, .. } = &database else {
+            unreachable!();
+        };
+        sqlx::query("INSERT INTO idempotency_keys (installation_id, scope, key, request_hash, response_json, status_code, created_at, expires_at) VALUES (?1, ?2, ?3, ?4, ?5, 500, 1, 1)")
+            .bind("v20-bridge")
+            .bind("actor:create-workspace")
+            .bind("expired-invalid")
+            .bind("hash")
+            .bind("not-json")
+            .execute(pool)
+            .await
+            .unwrap();
+
+        database.migrate().await.unwrap();
+
+        assert_eq!(database.schema_version().await.unwrap(), 20);
+        let remaining: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM idempotency_keys WHERE key = 'expired-invalid'",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        assert_eq!(remaining, 0);
+    }
+
+    #[tokio::test]
+    async fn sqlite_v19_bridge_rejects_invalid_active_idempotency_response() {
+        let yaml = yaml_with_removed_fields("environment: {}\n");
+        let database = v19_sqlite_with_template(yaml).await;
+        let Database::Sqlite { pool, .. } = &database else {
+            unreachable!();
+        };
+        sqlx::query("INSERT INTO idempotency_keys (installation_id, scope, key, request_hash, response_json, status_code, created_at, expires_at) VALUES (?1, ?2, ?3, ?4, ?5, 500, 1, ?6)")
+            .bind("v20-bridge")
+            .bind("actor:create-workspace")
+            .bind("active-invalid")
+            .bind("hash")
+            .bind("not-json")
+            .bind(i64::MAX)
+            .execute(pool)
+            .await
+            .unwrap();
+
+        assert!(matches!(
+            database.migrate().await,
+            Err(StorageError::SchemaUpgradeDataInvalid)
+        ));
+        assert_eq!(database.schema_version().await.unwrap(), 19);
+        let remaining: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM idempotency_keys WHERE key = 'active-invalid'",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        assert_eq!(remaining, 1);
+    }
+
+    #[tokio::test]
+    async fn sqlite_v19_bridge_rolls_back_expired_idempotency_cleanup_on_failure() {
+        let yaml = yaml_with_removed_fields("environment: {}\n");
+        let database = v19_sqlite_with_template(yaml).await;
+        let Database::Sqlite { pool, .. } = &database else {
+            unreachable!();
+        };
+        for (key, response, expires_at) in [
+            ("expired-invalid", "not-json", 1_i64),
+            ("active-invalid", "also-not-json", i64::MAX),
+        ] {
+            sqlx::query("INSERT INTO idempotency_keys (installation_id, scope, key, request_hash, response_json, status_code, created_at, expires_at) VALUES (?1, ?2, ?3, ?4, ?5, 500, 1, ?6)")
+                .bind("v20-bridge")
+                .bind("actor:create-workspace")
+                .bind(key)
+                .bind("hash")
+                .bind(response)
+                .bind(expires_at)
+                .execute(pool)
+                .await
+                .unwrap();
+        }
+
+        assert!(matches!(
+            database.migrate().await,
+            Err(StorageError::SchemaUpgradeDataInvalid)
+        ));
+        assert_eq!(database.schema_version().await.unwrap(), 19);
+        let remaining: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM idempotency_keys WHERE key IN ('expired-invalid', 'active-invalid')",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        assert_eq!(remaining, 2);
     }
 
     #[tokio::test]
@@ -520,7 +635,7 @@ mod tests {
 
     #[tokio::test]
     async fn sqlite_v19_bridge_does_not_enqueue_reconcile_for_active_lease() {
-        let yaml = yaml_with_legacy_spec("environment: {}\n");
+        let yaml = yaml_with_removed_fields("environment: {}\n");
         let database = v19_sqlite_with_template(yaml.clone()).await;
         let Database::Sqlite { pool, .. } = &database else {
             unreachable!();

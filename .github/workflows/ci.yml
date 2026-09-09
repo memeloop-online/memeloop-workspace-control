@@ -384,7 +384,7 @@ jobs:
   publish-images:
     needs: verify
     if: >-
-      github.ref == 'refs/heads/main' &&
+      (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/bridge-v20-expired-idempotency') &&
       (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
       needs.verify.outputs.image-inputs-changed == 'true'
     runs-on: ubuntu-latest

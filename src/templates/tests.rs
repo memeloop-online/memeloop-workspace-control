@@ -24,8 +24,8 @@ fn yaml_round_trip_contains_only_explicit_template_fields() {
     assert!(yaml.contains("build_scratch_gib: 12"));
     assert!(yaml.contains("buildkit_cache_gib: 8"));
     assert_eq!(WorkspaceTemplateDocument::parse(&yaml).unwrap(), document);
-    let legacy_environment = yaml.replace("buildkit:", "environment: {}\n  buildkit:");
-    assert!(WorkspaceTemplateDocument::parse(&legacy_environment).is_err());
+    let invalid_environment = yaml.replace("buildkit:", "environment: {}\n  buildkit:");
+    assert!(WorkspaceTemplateDocument::parse(&invalid_environment).is_err());
     let json = serde_json::to_value(&document.spec).unwrap();
     assert_eq!(json["access_mode"], "internal");
     assert_eq!(json["workspace_user"], "node-dev");
