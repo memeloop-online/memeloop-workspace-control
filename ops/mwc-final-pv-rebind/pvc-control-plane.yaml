@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: data-mwc-k3si-7032544955-0
+  namespace: memeloop-workspace-control
+  labels:
+    app.kubernetes.io/name: memeloop-workspace-control
+    workspace.memeloop.dev/owner-installation: k3si-7032544955
+spec:
+  accessModes: [ReadWriteOnce]
+  volumeMode: Filesystem
+  storageClassName: local-path
+  volumeName: pvc-317ea51a-86f8-4f1c-b2ed-2c111795c331
+  resources:
+    requests:
+      storage: 10Gi

@@ -9,7 +9,7 @@ metadata:
     workspace.memeloop.dev/organization-id: 01a0436a-8659-7250-9980-087f006d8f49
     workspace.memeloop.dev/owner-installation: k3si-7032544955
     workspace.memeloop.dev/owner-user-id: 01a04369-e74f-7273-a5c6-77c5d61cb3c9
-    workspace.memeloop.dev/workspace-id: 01a06180-f652-7cd3-b405-d2441aee149
+    workspace.memeloop.dev/workspace-id: 01a06180-f652-7cd3-b405-d2441a1ee149
 spec:
   accessModes: [ReadWriteOnce]
   resources: {requests: {storage: 100Gi}}

@@ -560,10 +560,19 @@ schema bridge, writer shutdown, retained-volume and rollback gates.
   succeeded; authenticated API readback returns all four workspaces `stopped`.
   The console is recovered, no workspace was restarted, and the auto-sync freezes remain.
 - Repair `49cea2f` on isolated `bridge-v20-expired-idempotency` is reviewed and pushed.
-  CI `34311058524` is running (full Rust tests reached after maintainability checks).
+  CI `34311058524` PASSED verify and all four image publications. Main checked the three
+  expiry/rejection/atomic-rollback regression tests explicitly passed in the CI log.
   Publication permits only main and this exact repair branch, still gated by successful verify.
   The four unexpired stop responses pass the known structural checks; faulty historical
   replay entries are expired. Do not merge the temporary bridge into final schema-22 main.
+- Main fetched public `sha-49cea2f` OCI indexes and verified body SHA-256 equals registry
+  `Docker-Content-Digest`, without downloading layers:
+  control `sha256:1e4afb28d960593b59b1b4c851d4f5d11c4bd840d289f78bf441b971a87d1763`;
+  ttyd `sha256:bb2b7980deabf374b2ed328aa3061b7ba5c3239bcf1dec6bdfa0e8f6eb5d9e69`;
+  workspace `sha256:229bd5214a2c6fdf313f75eba02696e3bc1e79f6d72601d15590a9031b3ebfb1`;
+  jump `sha256:b080fc426824d8b5e8e90abe67450baf055776c3c5cc402b11b4073320403011`.
+  These are temporary bridge images, not replacements for the already verified final
+  schema-22 release or the published Harbor development images.
 - Four-workspace PV rebind artifacts landed in `64846af`. Main corrected their delete gate:
   a retained PV becomes `Released` but keeps `claimRef`; wait for PVC absence/Released,
   then guarded explicit claimRef removal, not automatic claimRef disappearance.
@@ -571,6 +580,47 @@ schema bridge, writer shutdown, retained-volume and rollback gates.
   a JSON snapshot import into a target SQLite database as the earlier runbook implied.
   A direct retained control-PV rebind is under specific technical review (node/path/UID and
   rollback); no control-PV mutation has occurred.
+
+### Canonical cutover execution — 2026-09-09
+
+- Repaired bridge deployed via GitOps `ca268b6`; rollout passed. Export confirms schema 20
+  and four stopped workspaces. New bridge/image-update reconcile jobs drained; three older
+  exhausted pending jobs remain (not evidence of a new bridge failure).
+- Audited image-update API upgraded maintainance and rust-dev-test to the previously verified
+  Harbor 20260907 development images, with generation 7→8 and stopped state preserved.
+- Stopped the bridge writer and copied complete SQLite/WAL/SHM to private `frozen-schema20/`.
+  Read-only integrity check returned `ok`, schema 20 and four stopped workspace rows.
+- Offline Job `mwc-offline-schema22` using verified final `b5b946a` image completed with
+  `database schema version 22`. No API/coordinator was started by the job.
+  A private `frozen-schema22/` copy independently passed integrity/schema/workspace-count checks.
+  Completed Job and temporary read-only helper Pod were removed before volume rebinding.
+- Created exact namespace `memeloop-workspace-control` and replicated four required global
+  Secrets without printing values (daily tokens, encryption, internal auth, wildcard TLS).
+- Guarded `rebind-one.ts` moved the control PV and all four workspace PVs one at a time.
+  Server dry-run validates target namespace/name/PV/storage/identity before any deletion;
+  PVC deletion uses UID+resourceVersion preconditions, PV patches use claim/RV tests.
+  Each source PVC object was removed only after Retain readback; no PV/data was deleted.
+  All five target claims are Bound to their original PVs and retained for rollback.
+  New PVC UIDs: control `dded5eb4-108f-4203-a5c5-793f9c01df61`;
+  maintainance `20d0cc60-056a-45f3-873b-6fc937d06ea8`;
+  tiddlywiki `dcc8e761-e7bd-46a0-af3a-0c89135cf082`;
+  game `bccf3bde-8969-4be8-bba2-5670003d8b72`;
+  rust `420d58ac-1c17-4feb-9fba-359055608ef4`.
+- The strict label guard caught a rust UUID typo before any mutation of that claim.
+  Corrected against live identity, then its rebind passed. This was not a volume/data failure.
+- Transferred exactly four SSH NodePort Services into the target namespace, preserving
+  ports 31871/30953/30732/32671. Old exact Services were backed up and removed to release
+  cluster-wide port allocations; no other source resources were deleted.
+- GitOps `fdc145f` is pushed, preserving other operators' `8685488` changes.
+  It applies the reviewed final schema-22 pins, canonical namespace and sqlite.existingClaim;
+  Helm render confirms no dynamic control PVC template. Auto-sync remains frozen.
+  Scoped target-control rollout PASSED on westlake. Routing App synced to target; removed
+  only the backed-up old console Ingress after target Ingress existed to avoid duplicate-host
+  routing. Original user token authenticated successfully through the normal console URL.
+  Never restart the old schema-20 controller over this DB.
+- Started tiddlywiki first through API (202), target StatefulSet rollout passed and SSH
+  NodePort remains 30953. Then sent individual start requests (202) for the other three.
+  Their readiness plus four-workspace SSH/Web Shell/data acceptance remain pending.
 
 - Borrowing restriction for ports `31871` and `32671` was lifted by the user on 2026-09-09;
   preserve the normal snapshot, writer-freeze, volume-binding and rollback gates.
