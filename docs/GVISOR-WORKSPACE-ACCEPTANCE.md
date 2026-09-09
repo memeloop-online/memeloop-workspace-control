@@ -90,3 +90,15 @@ the ttyd sidecar. Two CPU workers were terminated after five seconds; host
 `nr_throttled` increased from 4 to 21 and `throttled_usec` from 67131 to 710882.
 The command completed normally. This verifies actual CPU throttling on this Pod,
 not per-process quotas or all resource exhaustion scenarios.
+
+## Missing-runtime failure
+
+A disposable template referenced nonexistent RuntimeClass
+`mwc-intentionally-unavailable`. The rendered StatefulSet retained that name,
+and Kubernetes rejected Pod creation with `RuntimeClass ... not found`. No Pod
+ran with runc. The workspace response had no SSH connection, and its Web Shell
+ticket endpoint returned HTTP 409.
+
+The test workspace `01a087da-c992-75a3-90d3-74da722f6aed` was deleted through the
+API; its StatefulSet and PVC are gone. The temporary template was disabled and
+deleted (HTTP 204). No RuntimeClass was created for this negative test.
