@@ -24,10 +24,15 @@ Strict SSH verification is complete. UI-02 HTTP wiring is committed as `a1bd8a3`
 SQL single-query aggregation is `ae6e6b5`; its verification-branch CI `34356903038`
 passed completely (including PostgreSQL, frontend, Helm and bootstrap tests).
 This does not cover the later HTTP wiring/tests `a1bd8a3`/`a6bc4d1`/`cab5837`.
-`organization_metrics_impl` now owns the
-remaining bounded collector/cache after the previous implementation stalled; the previous
-collector worker is interrupted and must not resume overlapping edits. `usage_summary_sql`
-owns HTTP regression tests. Frontend work is complete. Main owns review, deployment and ledger.
+The complete integration is pushed as `d2c61ee`; CI `34360702965` is running.
+Cache `611d3c9` bounds entries to128 and concurrent collections to8, with per-key coalescing.
+Collector `2485d78` and its corrected tests cover template scope, duplicate scrapes,
+sidecar gaps and partial coverage. The equivalent eight queries were executed against
+production Prometheus: active4/PVC4/declared containers11/CPU containers11/memory containers11,
+with non-null CPU, memory and disk sums. This is query evidence, not deployed API acceptance.
+The previous collector worker remains interrupted. Main owns review/deployment/ledger;
+`organization_metrics_impl` follows CI for its module. Final Coder-only runbook is now
+separate from retired platform migration instructions (`065abb6`, clarification `d2c61ee`).
 
 ## Execution ledger — resume here
 
@@ -50,7 +55,7 @@ Cilium/Calico, split clusters, or restore the removed runtime-profile abstractio
 | MIG-05 | Delete superseded namespaces/resources and retired code/names | Five old MWC namespaces deleted and absence confirmed; bridge code removed/deployed. Remaining Coder cleanup belongs to MIG-04. Preserve immutable installation identity and recovery artifacts. |
 | IMG-01 | Upgrade maintainance and rust-dev-test to verified images | COMPLETE. Borrower released both ports; images upgraded during accepted cutover. Old unreferenced 20260902 policies disabled. |
 | UI-01 | Responsive layout/settings contrast closeout | COMPLETE for the bounded fix. 0f72957 deployed; actual Chinese light-theme360/1440 screenshots confirm margins and readable metadata. Earlier768 fixture passes retained; no whole-feature re-audit. |
-| UI-02 | Total actual usage in workspace summary | Frontend `d47940e` passes check/tests/build and360/768/1440 fixtures; SQL aggregate `f210edd` implemented (CI pending). HTTP/Prometheus/cache integration remains in progress. GitOps `6776a77` deployed KSM Pod template and PVC ownership label allowlists; generation7 Ready, four PVC label series observed, organization disk sum37392850944 bytes/count4 independently verified. Disk join no longer needs running Pod identity. Totals ignore search/page and respect template-key scope; no full Workspace loads/current-page sums. Final CI/deployment pending. |
+| UI-02 | Total actual usage in workspace summary | Integrated and pushed `d2c61ee`; full CI `34360702965` running. Frontend checks/fixtures and SQL/PG preflight CI passed. GitOps `6776a77` deployed KSM template/PVC labels. Equivalent eight PromQL queries verified complete coverage (4 workspaces, 11 containers, 4 PVCs). Cache is bounded and per-key coalesced. Final API CI, release and production UI acceptance pending; do not claim deployed. |
 | SEC-01 | Actual NetworkPolicy enforcement, same-/cross-node tests | Harbor recovered by separate ops. Ingress deny passed all four paths; cross-node ingress selector allow FAILED. Egress matrix passed 12 checks. Boundary retry passed 30 checks including same/other node API/kubelet denial, Kubernetes Service denial, public TCP and DNS retained. Evidence: `/tmp/mwc-network-{acceptance,egress,boundaries-alidns}-20260908.json`; all disposable namespaces deleted. No test process remains running. Other-node and startup coverage remain. |
 | SEC-02 | Product egress isolation and least-source ingress | Source `0f062b8`, review fix `5589e35` (global-unicast IPv6, optional DNS fail-closed). Deployment and full SEC-01 evidence pending. Live policy remains ingress-only with broad ttyd sources: external tenant acceptance is NOT passed. |
 | SEC-03 | Template optional `runtime_class_name`, API/YAML/UI/Pod rendering | Source `37fc09b` included in deployed release; full CI passed. Live gVisor acceptance remains blocked on SEC-04. No silent fallback; existing ordinary templates unchanged. |
