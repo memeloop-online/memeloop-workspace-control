@@ -109,10 +109,6 @@ fn organization_routes(router: ApiRouter) -> ApiRouter {
             get(admin::get_quota).put(admin::set_quota),
         )
         .route(
-            "/api/v1/organizations/{organization_id}/usage-summary",
-            get(runtime::organization_summary),
-        )
-        .route(
             "/api/v1/admin/users/{user_id}/quota",
             get(user_quota::get).put(user_quota::set),
         )
