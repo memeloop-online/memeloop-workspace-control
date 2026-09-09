@@ -567,6 +567,132 @@ async fn workspace_page_summary_covers_every_matching_workspace_not_only_the_cur
 }
 
 #[tokio::test]
+async fn workspace_usage_summary_aggregates_in_sql_and_honors_template_scope() {
+    let (_, database, admin_id) = test_app().await;
+    let (organization_id, default_template_id) =
+        seeded_organization(&database, admin_id, "Usage summary aggregate", 10).await;
+    let other_template = database
+        .create_workspace_template(
+            CreateWorkspaceTemplate {
+                organization_id: Some(organization_id),
+                yaml: WorkspaceTemplateDocument::new(
+                    "Usage summary other template".to_owned(),
+                    WorkspaceTemplateSpec::standard(
+                        "registry.example/workspace:1",
+                        AccessMode::Internal,
+                        Resources {
+                            cpu_millis: 300,
+                            memory_mib: 400,
+                            gpu_count: 2,
+                            disk_gib: 5,
+                        },
+                    ),
+                )
+                .to_yaml()
+                .unwrap(),
+            },
+            true,
+            11,
+        )
+        .await
+        .unwrap();
+    let stopped = database
+        .create_workspace(
+            CreateWorkspace {
+                organization_id,
+                owner_id: admin_id,
+                name: "usage-stopped".to_owned(),
+                template_id: default_template_id,
+                resources: Some(Resources {
+                    cpu_millis: 1_200,
+                    memory_mib: 2_200,
+                    gpu_count: 1,
+                    disk_gib: 21,
+                }),
+                organization_injection_refs: None,
+                user_injection_refs: None,
+            },
+            true,
+            admin_id,
+            12,
+        )
+        .await
+        .unwrap()
+        .id;
+    database
+        .request_workspace_action(stopped, WorkspaceAction::Stop, admin_id, 13)
+        .await
+        .unwrap();
+    database
+        .record_workspace_observation(stopped, WorkspaceObservation::Stopped, admin_id, 14)
+        .await
+        .unwrap();
+    seeded_workspace(
+        &database,
+        organization_id,
+        admin_id,
+        other_template.id,
+        "usage-active",
+        15,
+    )
+    .await;
+    let deleted = seeded_workspace(
+        &database,
+        organization_id,
+        admin_id,
+        default_template_id,
+        "usage-deleted",
+        16,
+    )
+    .await;
+    database
+        .request_workspace_action(deleted, WorkspaceAction::Delete, admin_id, 17)
+        .await
+        .unwrap();
+    database
+        .record_workspace_observation(deleted, WorkspaceObservation::Deleted, admin_id, 18)
+        .await
+        .unwrap();
+
+    let summary = database
+        .workspace_usage_summary(organization_id, None)
+        .await
+        .unwrap();
+    assert_eq!(summary.total_count, 2);
+    assert_eq!(summary.active_count, 1);
+    assert_eq!(
+        summary.requested,
+        Resources {
+            cpu_millis: 1_500,
+            memory_mib: 2_600,
+            gpu_count: 3,
+            disk_gib: 26,
+        }
+    );
+    assert_eq!(summary.state_counts.get("stopped"), Some(&1));
+    assert_eq!(summary.state_counts.get("provisioning"), Some(&1));
+
+    let restricted = database
+        .workspace_usage_summary(organization_id, Some(&[default_template_id]))
+        .await
+        .unwrap();
+    assert_eq!(restricted.total_count, 1);
+    assert_eq!(restricted.active_count, 0);
+    assert_eq!(restricted.requested.cpu_millis, 1_200);
+    assert_eq!(restricted.state_counts.len(), 1);
+    assert_eq!(restricted.state_counts.get("stopped"), Some(&1));
+
+    assert_eq!(
+        database
+            .workspace_usage_summary(organization_id, Some(&[]))
+            .await
+            .unwrap()
+            .total_count,
+        0
+    );
+}
+
+#[tokio::test]
 async fn workspace_page_openapi_declares_the_summary_shape() {
     let (app, _, _) = test_app().await;
     let response = app
@@ -660,6 +786,23 @@ async fn postgres_workspace_page_summary_matches_the_filtered_collection() {
         }
     );
     assert_eq!(page.state_counts.get("provisioning"), Some(&2));
+
+    let summary = database
+        .workspace_usage_summary(organization_id, Some(&[template_id]))
+        .await
+        .unwrap();
+    assert_eq!(summary.total_count, 3);
+    assert_eq!(summary.active_count, 3);
+    assert_eq!(
+        summary.requested,
+        Resources {
+            cpu_millis: 3_000,
+            memory_mib: 6_144,
+            gpu_count: 0,
+            disk_gib: 60,
+        }
+    );
+    assert_eq!(summary.state_counts.get("provisioning"), Some(&3));
 
     drop(database);
     sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))

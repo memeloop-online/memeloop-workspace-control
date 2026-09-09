@@ -15,6 +15,8 @@ mod pagination;
 mod row;
 mod summary;
 
+pub use summary::WorkspaceUsageSummary;
+
 pub(super) use row::{
     WORKSPACE_COLUMNS, decode_postgres, decode_sqlite, select_workspace_by_route_key_sql,
     select_workspace_by_short_id_sql, select_workspace_sql,
@@ -69,6 +71,16 @@ pub struct WorkspacePage {
 }
 
 impl Database {
+    /// Returns the aggregate for the complete visible organization scope without loading
+    /// individual workspace records. `None` permits every template; `Some([])` permits none.
+    pub async fn workspace_usage_summary(
+        &self,
+        organization_id: Uuid,
+        allowed_template_ids: Option<&[Uuid]>,
+    ) -> Result<WorkspaceUsageSummary, StorageError> {
+        summary::workspace_usage_summary(self, organization_id, allowed_template_ids).await
+    }
+
     pub async fn list_workspaces_by_ids(
         &self,
         organization_id: Uuid,
