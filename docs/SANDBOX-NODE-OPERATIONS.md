@@ -10,11 +10,12 @@ This is the short runbook for enabling the optional `runsc` handler on one K3s n
   node-data backup is required. Follow [the OS upgrade plan](SERV-146231-OS-UPGRADE-PLAN.md)
   for the current maintenance/recovery state instead of recording node-event history here.
 - AlmaLinux 9.8 has booted with kernel `5.14.0-687.42.1.el9_8` and systemd 252.
-  K3s automatic startup is restored and the node is Ready. The Wiki waits for the
-  node to leave maintenance mode before its volume can attach.
+  K3s automatic startup is restored and the node is Ready and schedulable.
+  The Wiki volume is attached and healthy; Wiki and overseas Higress have recovered.
 - The optional `runsc` handler is installed; runc remains the default. A temporary
   `gvisor-canary` passed the basic non-root, filesystem, process, DNS and loopback checks.
-  Full workspace/resource acceptance is still pending. Do not reinstall the handler
+  Its host Pod cgroup enforced 1024 PIDs, 0.5 CPU and 512 MiB.
+  Full workspace/storage acceptance is still pending. Do not reinstall the handler
   or publish the production readiness label on this node.
 
 The cgroup decision is fixed for this K3s setup: cgroup v2 and K3s' `SystemdCgroup=true` send
@@ -52,6 +53,13 @@ driver only when systemd is >=244; do not switch kubelet/runc to cgroupfs as a w
    operations on this node, so keep the node in its OS maintenance state during the restart.
 
 ## RuntimeClass and canary
+
+Configure an explicit kubelet `podPidsLimit` during node maintenance. This node uses
+1024 in `/var/lib/rancher/k3s/agent/etc/kubelet.conf.d/90-mwc-pids.conf`.
+The installation and rollback template lives in GitOps under
+`apps/memeloop-workspace-control/node-configuration/`. Preserve a stricter existing
+limit. After restarting K3s, verify kubelet `configz` and the new canary's actual
+host cgroup `pids.max`; a process count reported inside the guest is not sufficient.
 
 After the handler restart, verify the K3s service, rendered containerd configuration, CRI
 plugin, and node readiness. Create a temporary `gvisor-canary` RuntimeClass with handler

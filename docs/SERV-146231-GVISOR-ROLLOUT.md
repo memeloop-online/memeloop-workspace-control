@@ -10,12 +10,13 @@ completion claim.
   required for this node; OS execution and recovery are described in
   [the OS upgrade plan](SERV-146231-OS-UPGRADE-PLAN.md).
 - AlmaLinux 9.8 has booted with kernel `5.14.0-687.42.1.el9_8` and systemd 252.
-  K3s automatic startup is restored and the node is Ready. The Wiki still waits for
-  the maintenance cordon to be lifted before its volume can attach.
+  K3s automatic startup is restored and the node is Ready and schedulable.
+  The Wiki volume is attached and healthy; Wiki and overseas Higress have recovered.
 - `runsc release-20260831.0` is installed as an optional handler; runc remains the default.
   The temporary `gvisor-canary` passed basic non-root execution, filesystem, process,
-  DNS and loopback checks. Actual resource boundaries and full workspace acceptance
-  remain; the production gVisor readiness label has not been set.
+  DNS and loopback checks. Its host Pod cgroup enforced 1024 PIDs, 0.5 CPU and 512 MiB.
+  Full workspace and storage-boundary acceptance remain; the production gVisor
+  readiness label has not been set. Temporary canary resources have been removed.
 
 ## Compatibility decision
 

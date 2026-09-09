@@ -2,8 +2,8 @@
 
 The OS upgrade is complete: AlmaLinux 9.8, kernel `5.14.0-687.42.1.el9_8`,
 systemd 252, K3s enabled and active, and Node Ready. Do not repeat ELevate.
-The node remains in maintenance for gVisor acceptance; restore Wiki scheduling
-and volume attachment when that maintenance ends.
+Maintenance has ended. The node is schedulable, the Wiki volume is attached and
+healthy, and Wiki and overseas Higress have recovered.
 
 The user approved the AlmaLinux 8 to 9 upgrade and the required reboots for
 `100.64.0.10` (`serv-146231`, `serv.146231.com`). This is a single-node control-plane
