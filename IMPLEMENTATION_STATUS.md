@@ -789,6 +789,14 @@ schema bridge, writer shutdown, retained-volume and rollback gates.
 - UI-01 actual production screenshots in `mwc-ui01-deployed-0f72957` confirm360 margins and
  1440 settings contrast; main inspected the deployed360 screenshot. This closes the bounded
  responsive defect, not the separately observed missing aggregate actual-usage display (UI-02).
+- `0289521` builds unchanged upstream ttyd with explicitly OpenSSL-backed libwebsockets;
+  `9ad854a` adds mandatory real-container client-certificate CI before publication.
+  Matrix covers DNS/SNI and IP/no-SNI, defaultTLS and TLS1.2, valid/missing/wrong client,
+  with independently trusted server CA and positive recovery around negative requests.
+- CI `34345243464` FAILED at libwebsockets source archive SHA256 verification, before build.
+  Worker owns checking both exact full-commit codeload URLs against recorded checksums.
+  Do not disable checksum checks or deploy this failed build; the other three workspaces
+  remain unmodified and external sandbox acceptance is still NOT passed.
 
 - Borrowing restriction for ports `31871` and `32671` was lifted by the user on 2026-09-09;
   preserve the normal snapshot, writer-freeze, volume-binding and rollback gates.
