@@ -332,7 +332,6 @@ fn ttyd_tls_volume(mtls: &super::TtydMtlsConfig) -> Volume {
                     ..VolumeProjection::default()
                 },
             ]),
-            ..ProjectedVolumeSource::default()
         }),
         ..Volume::default()
     }

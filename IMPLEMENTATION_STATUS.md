@@ -750,6 +750,9 @@ schema bridge, writer shutdown, retained-volume and rollback gates.
 - CI `34334537723` FAILED: independent trust refactor accidentally removed the
   SecretVolumeSource import still needed by other workspace volumes. Main restored that import;
   rerun the corrected source only, not the failed revision. No local Rust builds.
+- Follow-up CI `34335481096` compiled past the import and rejected a redundant
+  `ProjectedVolumeSource::default()` update (all fields already provided). Removed it
+  without weakening lint; follow the next corrected revision.
 
 - Borrowing restriction for ports `31871` and `32671` was lifted by the user on 2026-09-09;
   preserve the normal snapshot, writer-freeze, volume-binding and rollback gates.
