@@ -1,6 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { formatBytesAsGiB, usageBarPercentage, usagePercentage } from "./usageSummaryPresentation.ts";
+import { formatBytesAsGiB, formatCores, usageBarPercentage, usagePercentage } from "./usageSummaryPresentation.ts";
+
+test("small nonzero CPU usage is not displayed as idle", () => {
+  assert.equal(formatCores(22), "0.022");
+  assert.equal(formatCores(1), "0.001");
+  assert.equal(formatCores(1_025), "1.025");
+  assert.equal(formatCores(6_000), "6");
+  assert.equal(formatCores(0), "0");
+});
 
 test("actual usage percentage compares runtime observation with requested capacity", () => {
   assert.equal(usagePercentage(1_500, 1_000), 150);

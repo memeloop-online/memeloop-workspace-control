@@ -10,6 +10,6 @@ export function usageBarPercentage(percentage: number | null): number | null {
 }
 
 export function availabilityLabel(availability: UsageAvailability): "available" | "unavailable" | "unknown" { return availability; }
-export function formatCores(millis: number): string { return (millis / 1000).toFixed(millis % 1000 === 0 ? 0 : 1); }
+export function formatCores(millis: number): string { return String(Number((millis / 1000).toFixed(3))); }
 export function formatGiB(mib: number): string { return (mib / 1024).toFixed(mib % 1024 === 0 ? 0 : 1); }
 export function formatBytesAsGiB(bytes: number): string { return (bytes / 1024 ** 3).toFixed(bytes % (1024 ** 3) === 0 ? 0 : 1); }
