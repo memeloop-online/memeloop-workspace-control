@@ -640,6 +640,17 @@ schema bridge, writer shutdown, retained-volume and rollback gates.
   canonical namespace `memeloop-workspace-control`, preserving other operators' `f6bbf03`.
   Remaining work includes the readiness-retry product fix and CI/release, old source resource
   closeout, image-policy cleanup, final external Coder handoff, and sandbox rollout gates.
+- Readiness fix `2ea34fa` is pushed to main; CI `34320677127` is active.
+  Structured Pending outcomes and workspace-lease contention restore only the current claim's
+  attempt, leaving genuine failure budget intact. Further >10-wait/recovery/lease tests assigned.
+- Confirmed four current workspaces and current template responses do not reference the two
+  20260902 development images. Disabled exactly those old cluster-admin/rust-dev policies
+  through audited, idempotent API calls; no registry image or volume was deleted.
+- Old-source closeout inventory confirms five old namespaces have no Pods/PVCs and all
+  old StatefulSets are zero. Argo still tracks old control resources; keep auto-sync paused
+  until exact cleanup is reviewed. Historical Released/Retain PV
+  `pvc-b4facfbe-fa14-4616-99dd-37e5484a2c41` is not one of the five moved volumes;
+  do not delete it as part of current volume cleanup.
 
 - Borrowing restriction for ports `31871` and `32671` was lifted by the user on 2026-09-09;
   preserve the normal snapshot, writer-freeze, volume-binding and rollback gates.
