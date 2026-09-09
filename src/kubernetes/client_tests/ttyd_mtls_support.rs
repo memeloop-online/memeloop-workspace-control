@@ -139,6 +139,7 @@ pub(super) fn builder(mtls_enabled: bool, web_shell_domain: Option<&str>) -> Res
         ttyd_mtls: mtls_enabled.then(|| {
             TtydMtlsConfig::new(
                 SERVER_SECRET_NAME.to_owned(),
+                "workspace-client-ca".to_owned(),
                 HIGRESS_NAMESPACE.to_owned(),
                 CLIENT_SECRET_NAME.to_owned(),
             )

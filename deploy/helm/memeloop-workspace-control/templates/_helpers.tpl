@@ -75,10 +75,11 @@ app.kubernetes.io/instance: {{ include "mwc.name" . }}
 {{- fail "workspace.ttydImage must be an explicitly pinned image" -}}
 {{- end -}}
 {{- $ttydMtls := .Values.workspace.ttydMtls.serverTlsSecretName -}}
+{{- $ttydMtlsClientCa := .Values.workspace.ttydMtls.clientCaSecretName -}}
 {{- $higressMtlsNamespace := .Values.higress.ttydMtls.clientSecretNamespace -}}
 {{- $higressMtlsName := .Values.higress.ttydMtls.clientSecretName -}}
-{{- if or (and $ttydMtls (or (not $higressMtlsNamespace) (not $higressMtlsName))) (and (not $ttydMtls) (or $higressMtlsNamespace $higressMtlsName)) -}}
-{{- fail "workspace.ttydMtls.serverTlsSecretName and higress.ttydMtls client Secret fields must be set together" -}}
+{{- if or (and $ttydMtls (or (not $ttydMtlsClientCa) (not $higressMtlsNamespace) (not $higressMtlsName))) (and (not $ttydMtls) (or $ttydMtlsClientCa $higressMtlsNamespace $higressMtlsName)) -}}
+{{- fail "workspace.ttydMtls serverTlsSecretName and clientCaSecretName, and higress.ttydMtls client Secret fields must be set together" -}}
 {{- end -}}
 {{- if and $ttydMtls (ne $higressMtlsNamespace .Values.higress.namespace) -}}
 {{- fail "higress.ttydMtls.clientSecretNamespace must equal higress.namespace for exact EnvoyFilter ownership" -}}

@@ -68,6 +68,8 @@ spec:
             {{- if .Values.workspace.ttydMtls.serverTlsSecretName }}
             - name: MWC_TTYD_MTLS_SERVER_SECRET
               value: {{ .Values.workspace.ttydMtls.serverTlsSecretName | quote }}
+            - name: MWC_TTYD_MTLS_CLIENT_CA_SECRET
+              value: {{ .Values.workspace.ttydMtls.clientCaSecretName | quote }}
             - name: MWC_HIGRESS_MTLS_CLIENT_SECRET_NAMESPACE
               value: {{ .Values.higress.ttydMtls.clientSecretNamespace | quote }}
             - name: MWC_HIGRESS_MTLS_CLIENT_SECRET_NAME

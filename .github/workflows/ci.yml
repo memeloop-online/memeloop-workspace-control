@@ -146,9 +146,10 @@ jobs:
             --namespace memeloop-workspace-control \
             -f deploy/helm/memeloop-workspace-control/values.example.yaml \
             --set workspace.ttydMtls.serverTlsSecretName=ttyd-server \
+            --set workspace.ttydMtls.clientCaSecretName=ttyd-client-ca \
             --set higress.ttydMtls.clientSecretNamespace=higress-system \
             --set higress.ttydMtls.clientSecretName=ttyd-client)
-          for variable in MWC_TTYD_MTLS_SERVER_SECRET MWC_HIGRESS_MTLS_CLIENT_SECRET_NAMESPACE MWC_HIGRESS_MTLS_CLIENT_SECRET_NAME; do
+          for variable in MWC_TTYD_MTLS_SERVER_SECRET MWC_TTYD_MTLS_CLIENT_CA_SECRET MWC_HIGRESS_MTLS_CLIENT_SECRET_NAMESPACE MWC_HIGRESS_MTLS_CLIENT_SECRET_NAME; do
             grep -q "name: ${variable}" <<<"${rendered_mtls}"
           done
           printf '%s\n' "${rendered_mtls}" > rendered-mtls.yaml
@@ -159,6 +160,7 @@ jobs:
             --namespace memeloop-workspace-control \
             -f deploy/helm/memeloop-workspace-control/values.example.yaml \
             --set workspace.ttydMtls.serverTlsSecretName=ttyd-server \
+            --set workspace.ttydMtls.clientCaSecretName=ttyd-client-ca \
             --set higress.ttydMtls.clientSecretNamespace=wrong-gateway \
             --set higress.ttydMtls.clientSecretName=ttyd-client \
             > /dev/null 2> mismatched-mtls.log; then
@@ -166,16 +168,22 @@ jobs:
             exit 1
           fi
           grep -q 'must equal higress.namespace' mismatched-mtls.log
-          if linux-amd64/helm template incomplete-mtls \
-            deploy/helm/memeloop-workspace-control \
-            --namespace memeloop-workspace-control \
-            -f deploy/helm/memeloop-workspace-control/values.example.yaml \
-            --set workspace.ttydMtls.serverTlsSecretName=ttyd-server \
-            > /dev/null 2> incomplete-mtls.log; then
-            echo "incomplete ttyd mTLS configuration was accepted" >&2
-            exit 1
-          fi
-          grep -q 'must be set together' incomplete-mtls.log
+          for incomplete in workspace.ttydMtls.serverTlsSecretName workspace.ttydMtls.clientCaSecretName higress.ttydMtls.clientSecretNamespace higress.ttydMtls.clientSecretName; do
+            if linux-amd64/helm template incomplete-mtls \
+              deploy/helm/memeloop-workspace-control \
+              --namespace memeloop-workspace-control \
+              -f deploy/helm/memeloop-workspace-control/values.example.yaml \
+              --set workspace.ttydMtls.serverTlsSecretName=ttyd-server \
+              --set workspace.ttydMtls.clientCaSecretName=ttyd-client-ca \
+              --set higress.ttydMtls.clientSecretNamespace=higress-system \
+              --set higress.ttydMtls.clientSecretName=ttyd-client \
+              --set "${incomplete}=" \
+              > /dev/null 2> incomplete-mtls.log; then
+              echo "incomplete ttyd mTLS configuration was accepted for ${incomplete}" >&2
+              exit 1
+            fi
+            grep -q 'must be set together' incomplete-mtls.log
+          done
           linux-amd64/helm lint deploy/helm/memeloop-workspace-control \
             --namespace memeloop-workspace-control \
             -f deploy/helm/memeloop-workspace-control/values.internal.example.yaml

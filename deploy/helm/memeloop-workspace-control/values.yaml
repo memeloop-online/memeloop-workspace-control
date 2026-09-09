@@ -31,9 +31,12 @@ workspace:
   storageClassName: ""
   ttydImage: ""
   ttydMtls:
-    # Existing Secret in the product namespace. It contains ttyd's `tls.crt`,
-    # `tls.key`, and the client-verification `ca.crt`; it is mounted only by ttyd.
+    # Existing cert-manager-managed server Secret in the product namespace. It
+    # contains ttyd's `tls.crt` and `tls.key`; it is mounted only by ttyd.
     serverTlsSecretName: ""
+    # Existing client-trust Secret in the product namespace containing only
+    # `ca.crt`. It remains separate so cert-manager may renew the server Secret.
+    clientCaSecretName: ""
   # Stable Tailnet node DNS name or IP. Enables per-workspace, auto-assigned SSH NodePorts.
   internalSshHost: ""
   egress:

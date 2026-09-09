@@ -6,7 +6,8 @@ use k8s_openapi::{
         core::v1::{
             ConfigMapVolumeSource, Container, ContainerPort, EmptyDirVolumeSource, KeyToPath,
             PersistentVolumeClaim, PersistentVolumeClaimSpec, PodSpec, PodTemplateSpec,
-            ResourceRequirements, SecretVolumeSource, Volume, VolumeResourceRequirements,
+            ProjectedVolumeSource, ResourceRequirements, SecretProjection, Volume,
+            VolumeProjection, VolumeResourceRequirements,
         },
     },
     apimachinery::pkg::{
@@ -296,27 +297,42 @@ fn workspace_volumes(
 fn ttyd_tls_volume(mtls: &super::TtydMtlsConfig) -> Volume {
     Volume {
         name: "ttyd-tls".to_owned(),
-        secret: Some(SecretVolumeSource {
-            secret_name: Some(mtls.server_tls_secret_name.clone()),
+        projected: Some(ProjectedVolumeSource {
             default_mode: Some(0o400),
-            items: Some(vec![
-                KeyToPath {
-                    key: "tls.crt".to_owned(),
-                    path: "tls.crt".to_owned(),
-                    mode: Some(0o400),
+            sources: Some(vec![
+                VolumeProjection {
+                    secret: Some(SecretProjection {
+                        name: mtls.server_tls_secret_name.clone(),
+                        optional: None,
+                        items: Some(vec![
+                            KeyToPath {
+                                key: "tls.crt".to_owned(),
+                                path: "tls.crt".to_owned(),
+                                mode: Some(0o400),
+                            },
+                            KeyToPath {
+                                key: "tls.key".to_owned(),
+                                path: "tls.key".to_owned(),
+                                mode: Some(0o400),
+                            },
+                        ]),
+                    }),
+                    ..VolumeProjection::default()
                 },
-                KeyToPath {
-                    key: "tls.key".to_owned(),
-                    path: "tls.key".to_owned(),
-                    mode: Some(0o400),
-                },
-                KeyToPath {
-                    key: "ca.crt".to_owned(),
-                    path: "ca.crt".to_owned(),
-                    mode: Some(0o400),
+                VolumeProjection {
+                    secret: Some(SecretProjection {
+                        name: mtls.client_ca_secret_name.clone(),
+                        optional: None,
+                        items: Some(vec![KeyToPath {
+                            key: "ca.crt".to_owned(),
+                            path: "ca.crt".to_owned(),
+                            mode: Some(0o400),
+                        }]),
+                    }),
+                    ..VolumeProjection::default()
                 },
             ]),
-            ..SecretVolumeSource::default()
+            ..ProjectedVolumeSource::default()
         }),
         ..Volume::default()
     }

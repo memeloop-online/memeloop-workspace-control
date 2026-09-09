@@ -75,12 +75,15 @@ pub struct ResourceBuilder {
 
 /// Operator-provisioned mutual TLS material for the ttyd upstream.
 ///
-/// `server_tls_secret_name` is mounted only into ttyd and must provide `tls.crt`,
-/// `tls.key`, and `ca.crt`. The Higress client private key stays in its configured
-/// Secret and must never be copied into a workspace Pod.
+/// `server_tls_secret_name` is mounted only into ttyd and must provide `tls.crt`
+/// and `tls.key`. `client_ca_secret_name` must provide `ca.crt`; separating it
+/// from the cert-manager-managed server Secret permits native certificate renewal.
+/// The Higress client private key stays in its configured Secret and must never be
+/// copied into a workspace Pod.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TtydMtlsConfig {
     pub server_tls_secret_name: String,
+    pub client_ca_secret_name: String,
     pub higress_client_secret_namespace: String,
     pub higress_client_secret_name: String,
 }
@@ -88,11 +91,13 @@ pub struct TtydMtlsConfig {
 impl TtydMtlsConfig {
     pub fn new(
         server_tls_secret_name: String,
+        client_ca_secret_name: String,
         higress_client_secret_namespace: String,
         higress_client_secret_name: String,
     ) -> Result<Self, TtydMtlsConfigError> {
         let config = Self {
             server_tls_secret_name,
+            client_ca_secret_name,
             higress_client_secret_namespace,
             higress_client_secret_name,
         };
@@ -103,6 +108,7 @@ impl TtydMtlsConfig {
     fn validate(&self) -> Result<(), TtydMtlsConfigError> {
         for value in [
             &self.server_tls_secret_name,
+            &self.client_ca_secret_name,
             &self.higress_client_secret_name,
         ] {
             if !valid_dns_subdomain(value) {

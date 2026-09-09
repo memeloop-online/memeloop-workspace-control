@@ -90,8 +90,13 @@ mod tests {
             &BTreeMap::new(),
             "higress-system",
             &BTreeMap::from([("app".into(), "higress-gateway".into())]),
-            &TtydMtlsConfig::new("server".into(), "higress-system".into(), "client".into())
-                .unwrap(),
+            &TtydMtlsConfig::new(
+                "server".into(),
+                "client-ca".into(),
+                "higress-system".into(),
+                "client".into(),
+            )
+            .unwrap(),
         );
         let value = serde_json::to_value(filter).unwrap();
         let patch = &value["spec"]["configPatches"][0];

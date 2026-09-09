@@ -103,6 +103,7 @@ fn ttyd_mtls_is_complete_and_isolated_to_the_ttyd_container() {
     resource_builder.ttyd_mtls = Some(
         TtydMtlsConfig::new(
             "ttyd-server-tls".to_owned(),
+            "ttyd-client-ca".to_owned(),
             "higress-system".to_owned(),
             "ttyd-client".to_owned(),
         )
@@ -154,18 +155,38 @@ fn ttyd_mtls_is_complete_and_isolated_to_the_ttyd_container() {
         .iter()
         .find(|volume| volume.name == "ttyd-tls")
         .unwrap();
-    let secret = tls_volume.secret.as_ref().unwrap();
-    assert_eq!(secret.secret_name.as_deref(), Some("ttyd-server-tls"));
-    assert_eq!(secret.optional, None);
+    let projected = tls_volume.projected.as_ref().unwrap();
+    assert_eq!(projected.default_mode, Some(0o400));
+    let sources = projected.sources.as_ref().unwrap();
+    assert_eq!(sources.len(), 2);
+    let server_secret = sources[0].secret.as_ref().unwrap();
+    assert_eq!(server_secret.name, "ttyd-server-tls");
+    assert_eq!(server_secret.optional, None);
     assert_eq!(
-        secret
+        server_secret
             .items
             .as_ref()
             .unwrap()
             .iter()
-            .map(|item| item.key.as_str())
+            .map(|item| (item.key.as_str(), item.path.as_str(), item.mode))
             .collect::<Vec<_>>(),
-        ["tls.crt", "tls.key", "ca.crt"]
+        [
+            ("tls.crt", "tls.crt", Some(0o400)),
+            ("tls.key", "tls.key", Some(0o400)),
+        ]
+    );
+    let client_ca_secret = sources[1].secret.as_ref().unwrap();
+    assert_eq!(client_ca_secret.name, "ttyd-client-ca");
+    assert_eq!(client_ca_secret.optional, None);
+    assert_eq!(
+        client_ca_secret
+            .items
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|item| (item.key.as_str(), item.path.as_str(), item.mode))
+            .collect::<Vec<_>>(),
+        [("ca.crt", "ca.crt", Some(0o400))]
     );
 
     let annotations = resources
@@ -220,14 +241,26 @@ fn ttyd_mtls_requires_the_configured_gateway_namespace_and_selector() {
     let workspace = workspace(WorkspaceState::Ready);
     let mut resource_builder = builder();
     resource_builder.ttyd_mtls = Some(
-        TtydMtlsConfig::new("server".into(), "other-gateway".into(), "client".into()).unwrap(),
+        TtydMtlsConfig::new(
+            "server".into(),
+            "client-ca".into(),
+            "other-gateway".into(),
+            "client".into(),
+        )
+        .unwrap(),
     );
     assert!(matches!(
         resource_builder.build(&workspace),
         Err(BuildError::TtydMtlsGatewayNamespaceMismatch)
     ));
     resource_builder.ttyd_mtls = Some(
-        TtydMtlsConfig::new("server".into(), "higress-system".into(), "client".into()).unwrap(),
+        TtydMtlsConfig::new(
+            "server".into(),
+            "client-ca".into(),
+            "higress-system".into(),
+            "client".into(),
+        )
+        .unwrap(),
     );
     resource_builder.higress_pod_labels.clear();
     assert!(matches!(
