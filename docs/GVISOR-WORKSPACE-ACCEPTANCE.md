@@ -36,7 +36,37 @@ logs or files for the original. Revoke test keys during final cleanup.
 
 ## Remaining checks
 
-Confirm startup, SSH and browser terminal interaction, PVC persistence across API
-restart, and memory-backed scratch after upgrading the test template. Delete only
+Startup reached Ready under `4.19.0-gvisor`. An exec check found no Kubernetes
+service-account token. Strict host-key-verified SSH on port 30640 logged in as
+UID/GID 1000 and wrote `/home/user/mwc-acceptance-state`; its SHA-256 is
+`c97b160dc75e813e7bacd13fc312dec42c73500903c4802c2807b12659184dc9`.
+The restart API returned HTTP 202 and replaced the Pod. Strict SSH reconnected
+with the same pinned host key and returned the same file hash, confirming Home
+data and SSH identity survived the restart.
+
+The browser acceptance runner passed command output, terminal resize, consumed
+ticket rejection, and fresh-ticket recovery on the original workspace.
+
+From an SSH session, DNS resolved `example.com` and TCP `1.1.1.1:443` connected.
+Connections to `100.64.0.1:6443`, `100.64.0.10:10250`, `10.43.0.1:443`,
+and `169.254.169.254:80` did not connect within 2.5 seconds. These finite probes
+do not prove all network paths or dynamic public-address isolation.
+
+The memory-template workspace is `01a087be-5b8d-7021-bbb8-17d8c506c1cd`,
+Pod `w-bbb817d8c506c1cd-0`. Its rendered build and Codex scratch volumes both
+specify `Memory`. It started successfully, and host-side filesystem inspection
+confirmed both mounts are tmpfs (the guest reports gVisor's proxy filesystem).
+The Codex temporary-directory symlink points to `/var/lib/mwc/codex-scratch/tmp`.
+BuildKit is disabled, so its cache volume is not mounted.
+
+Before its API restart, the member UID wrote temporary scratch markers and a
+persistent `/home/user/.codex/sessions/mwc-acceptance` marker with SHA-256
+`75b07bb3ffb3b8ad63e79b983fbef8fd0ee8e7292144b4e7d3b57bd682074087`.
+Restart returned HTTP 202. The replacement Pod reached Ready, the persistent
+marker retained that hash, and both scratch markers were absent. This verifies
+Pod-lifetime scratch cleanup without discarding the persistent Codex session
+directory.
+
+Continue remaining isolation and resource-pressure acceptance. Delete only
 these test resources afterward, including the template, member, organization and
 temporary RuntimeClass. Keep the four daily-use workspaces unchanged.
