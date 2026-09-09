@@ -1,23 +1,25 @@
 # gVisor workspace acceptance
 
-The memory-backed API workspace is still under test; this is not production acceptance.
+The formal-RuntimeClass API workspace is still under network test; this is not
+external-tenant production acceptance.
 
 ## Test resources
 
 - Organization: `01a08772-8b61-7ec0-8571-d93646ea457e`
 - Member user: `01a08792-5359-7220-96c8-e74af1b613c5`
 - Template: `01a08792-54a4-7803-8295-7a06c104e3fb`
-- Workspace: `01a08792-557e-79e0-a478-1e53dfe4b006`
-- Pod: `memeloop-workspace-control/w-a4781e53dfe4b006-0`
-- RuntimeClass: `gvisor-workspace-acceptance-20260909`
-- Disposable SSH key directory: `/tmp/mwc-gvisor-ssh-4NG3K6`
+- Workspace: `01a08815-fa3a-78b0-9ebf-c0a07822806e`
+- Pod: `memeloop-workspace-control/w-9ebfc0a07822806e-0`
+- RuntimeClass: `gvisor` (retain during test cleanup)
+- Disposable SSH key directory: removed after connection tests
 
 The original workspace `01a08792-557e-79e0-a478-1e53dfe4b006` has been deleted
 through the product API (HTTP 202). Its Pod, StatefulSet, Services, ConfigMaps,
 Secrets, NetworkPolicies, Ingresses and PVC are absent; its PV is also gone.
 A subsequent workspace GET returned HTTP 404. Only disposable test data was
-removed. The memory-backed workspace and shared test organization/user/template
-remain for the checks below.
+removed. The subsequent memory-backed workspace was also deleted after startup
+policy-refresh acceptance. Only the formal-class workspace and shared test
+organization/user/template remain.
 
 The member's one-hour API key successfully created the workspace with only
 workspace creation, read, connection, state-change and deletion scopes.
@@ -26,16 +28,14 @@ No organization/user injection references were selected. The template uses
 Node Dev image on `serv-146231`.
 
 A generated test public key was added through the workspace injection API
-(`acceptance-ssh`, HTTP 200). Its private key stays in the restricted temporary
-directory above, never in Git or Kubernetes. Remove that directory's generated
-key pair when connection testing is complete.
+(`acceptance-ssh`, HTTP 200). Its private key was held only in a restricted
+temporary directory, never in Git or Kubernetes, and was deleted after testing.
 
 The test template was subsequently updated through `PUT /api/v1/templates/{id}`
 to `scratch_medium: memory` (HTTP 200), and a separate list request returned the
 saved value. The existing workspace retains its original disk-backed template
-snapshot; restarting it alone does not apply template edits. Create a replacement
-test workspace from the updated template after finishing the original's connection
-and persistence checks.
+snapshot; restarting it alone does not apply template edits. The subsequent
+replacement test workspace captured the updated memory-backed template.
 
 The key was kept in process memory only and is no longer available. For further
 member-authenticated tests, mint a short-lived replacement rather than searching
@@ -116,3 +116,31 @@ ticket endpoint returned HTTP 409.
 The test workspace `01a087da-c992-75a3-90d3-74da722f6aed` was deleted through the
 API; its StatefulSet and PVC are gone. The temporary template was disabled and
 deleted (HTTP 204). No RuntimeClass was created for this negative test.
+
+## Formal RuntimeClass
+
+Argo CD now manages RuntimeClass `gvisor` from the internal GitOps repository,
+under `apps/memeloop-workspace-control/runtime`. Its handler is `runsc` and its
+node selector requires `sandbox.memeloop.dev/gvisor-ready=true`.
+
+The test template was changed to reference this class. New test workspace
+`01a08815-fa3a-78b0-9ebf-c0a07822806e` (Pod `w-9ebfc0a07822806e-0`) first had a
+bound PVC but remained Unschedulable: no node matched the runtime selector and
+template node affinity. It did not run with runc. After the accepted node
+`serv-146231` was labeled, the same Pod scheduled there and both containers
+became Ready. The guest kernel reports `4.19.0-gvisor`; the ordinary `user`
+account is UID 1000 with `CapEff=0` and `NoNewPrivs=1`, without a mounted
+Kubernetes service-account token.
+
+No daily-use workspace changed runtime. Node registration confirms runtime
+availability, not completed external-tenant network isolation. Keep the formal
+class and registered node when cleaning up the disposable acceptance workspace;
+remove only the temporary acceptance class after its last Pod is gone.
+
+Cleanup after the startup-policy test removed workspace
+`01a087be-5b8d-7021-bbb8-17d8c506c1cd` through the API (HTTP 202). Its
+StatefulSet, Pod, Services, Secrets, ConfigMaps, NetworkPolicy, Ingresses and PVC
+are absent. No Pod referenced `gvisor-workspace-acceptance-20260909`, so that
+temporary RuntimeClass was deleted. The generated SSH key pair and known-hosts
+file were deleted from their dedicated temporary directory. These were
+disposable test artifacts; no daily workspace or formal RuntimeClass was removed.

@@ -14,9 +14,13 @@ This is the short runbook for enabling the optional `runsc` handler on one K3s n
   The Wiki volume is attached and healthy; Wiki and overseas Higress have recovered.
 - The optional `runsc` handler is installed; runc remains the default. A temporary
   `gvisor-canary` passed the basic non-root, filesystem, process, DNS and loopback checks.
-  Its host Pod cgroup enforced 1024 PIDs, 0.5 CPU and 512 MiB.
-  Full workspace/storage acceptance is still pending. Do not reinstall the handler
-  or publish the production readiness label on this node.
+  Its host Pod cgroup was configured for 1024 host tasks, 0.5 CPU and 512 MiB.
+  API workspace startup, SSH/Web Shell, persistent Home, scratch cleanup and
+  bounded resource checks are recorded in
+  [workspace acceptance](GVISOR-WORKSPACE-ACCEPTANCE.md).
+  The node is registered with `sandbox.memeloop.dev/gvisor-ready=true`;
+  the formal `gvisor` RuntimeClass is managed by GitOps. Do not reinstall the
+  handler. External-tenant network isolation is still a separate pending gate.
 - The runsc handler uses `overlay2 = "root:memory,size=128m"`. A disposable
   container reached the 128 MiB root-filesystem limit, received `ENOSPC`, and
   continued executing commands; deleting its file restored writes. New sandboxes

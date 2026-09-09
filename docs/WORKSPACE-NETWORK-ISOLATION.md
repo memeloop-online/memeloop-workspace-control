@@ -66,6 +66,18 @@ updates remain required before treating rotating residential public addresses
 as continuously protected. Updating a values file is also insufficient unless
 existing workspace policies receive the new exclusions.
 
+The control plane refreshes existing, database-backed workspace NetworkPolicies
+at startup. It pages through installation-owned policies, skips deleting
+workspaces, and patches only the policy specification. A concurrent deletion
+does not recreate the policy; version conflicts re-read and recheck ownership.
+This applies changed operator configuration after a control-plane rollout
+without restarting workspace Pods.
+
+Live acceptance temporarily removed the IPv6 allow rule from the disposable
+memory workspace, making its policy stricter. The GitOps rollout restored the
+configured rule and reported one refreshed policy. The workspace Pod UID stayed
+unchanged. This proves startup refresh, not continuous public-address discovery.
+
 ## Ingress and gateway trust
 
 The platform applies per-workspace SSH and ttyd ingress rules. Public SSH uses the configured
