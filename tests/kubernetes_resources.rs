@@ -2,7 +2,8 @@ use memeloop_workspace_control::{
     injections::{InjectionItem, InjectionKind, InjectionValue, resolve_injections},
     kubernetes::{
         BuildError, InternetEgressConfig, ORGANIZATION_ID_LABEL, OWNER_INSTALLATION_LABEL,
-        OWNER_USER_ID_LABEL, OwnershipError, ResourceBuilder, TtydMtlsConfig, WORKSPACE_ID_LABEL,
+        OWNER_USER_ID_LABEL, OwnershipError, ResourceBuilder, TEMPLATE_ID_LABEL, TtydMtlsConfig,
+        WORKSPACE_ID_LABEL,
     },
     quota::Resources,
     templates::{EgressPolicy, WorkspaceTemplateSpec},
@@ -517,6 +518,7 @@ fn observability_labels_do_not_change_statefulset_immutable_fields() {
 
     assert!(!selector.contains_key(ORGANIZATION_ID_LABEL));
     assert!(!selector.contains_key(OWNER_USER_ID_LABEL));
+    assert!(!selector.contains_key(TEMPLATE_ID_LABEL));
     assert_eq!(
         pod_labels[ORGANIZATION_ID_LABEL],
         workspace.organization_id.to_string()
@@ -525,8 +527,13 @@ fn observability_labels_do_not_change_statefulset_immutable_fields() {
         pod_labels[OWNER_USER_ID_LABEL],
         workspace.owner_id.to_string()
     );
+    assert_eq!(
+        pod_labels[TEMPLATE_ID_LABEL],
+        workspace.template_id.unwrap().to_string()
+    );
     assert!(!claim_labels.contains_key(ORGANIZATION_ID_LABEL));
     assert!(!claim_labels.contains_key(OWNER_USER_ID_LABEL));
+    assert!(!claim_labels.contains_key(TEMPLATE_ID_LABEL));
 }
 
 #[test]
@@ -1106,6 +1113,7 @@ fn builds_single_replica_workspace_with_standard_components() {
     assert!(!namespace_labels.contains_key("workspace.memeloop.dev/workspace-id"));
     assert!(!namespace_labels.contains_key("workspace.memeloop.dev/organization-id"));
     assert!(!namespace_labels.contains_key("workspace.memeloop.dev/owner-user-id"));
+    assert!(!namespace_labels.contains_key("workspace.memeloop.dev/template-id"));
     assert_eq!(
         resources.stateful_set.spec.as_ref().unwrap().replicas,
         Some(1)

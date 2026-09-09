@@ -51,6 +51,10 @@ pub const OWNER_INSTALLATION_LABEL: &str = "workspace.memeloop.dev/owner-install
 pub const WORKSPACE_ID_LABEL: &str = "workspace.memeloop.dev/workspace-id";
 pub const ORGANIZATION_ID_LABEL: &str = "workspace.memeloop.dev/organization-id";
 pub const OWNER_USER_ID_LABEL: &str = "workspace.memeloop.dev/owner-user-id";
+/// Carries the immutable template identity into Prometheus' `kube_pod_labels`
+/// series so a template-restricted API key can never obtain an organization-wide
+/// aggregate and filter it after the fact.
+pub const TEMPLATE_ID_LABEL: &str = "workspace.memeloop.dev/template-id";
 const COMPONENT_LABEL: &str = "app.kubernetes.io/component";
 const MANAGED_BY_LABEL: &str = "app.kubernetes.io/managed-by";
 
@@ -487,6 +491,9 @@ impl ResourceBuilder {
             OWNER_USER_ID_LABEL.to_owned(),
             workspace.owner_id.to_string(),
         );
+        if let Some(template_id) = workspace.template_id {
+            labels.insert(TEMPLATE_ID_LABEL.to_owned(), template_id.to_string());
+        }
         labels
     }
 
