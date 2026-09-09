@@ -317,7 +317,7 @@ mod tests {
             sample(2.0),
             sample(1.0),
             sample(2.0),
-            sample(2.0),
+            sample(1.0),
             sample(2.0),
             sample(123.0),
             sample(1.0),
