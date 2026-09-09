@@ -679,6 +679,17 @@ schema bridge, writer shutdown, retained-volume and rollback gates.
   `up{namespace="memeloop-workspace-control"}` = 1 for the control-plane internal service.
   Canonical ServiceMonitor selects the internal auth-port `/metrics`; all four workspace
   Pods' containers are Ready. This proves scrape continuity, not full sandbox acceptance.
+- CI `34324256107` completed SUCCESS, including all four image publications.
+  Verified GHCR `sha-a9bb4e4` control OCI bytes against the registry digest:
+  `sha256:faf59c80e5896a308814cd5df81d3f5f69d1a771c83be6e32627064d23bab2fc`.
+  GitOps `eb05819` changes only control source revision and control image digest;
+  existing workspace images and ttyd pins remain unchanged. First push encountered a
+  transient Forgejo internal error; retry succeeded. Parent applied the new source;
+  requested only the MWC child sync at a9bb4e4, with prune disabled. Rollout pending.
+- Loki query_range over six hours returns a stream for namespace
+  `memeloop-workspace-control`; only stream/count metadata was inspected, not log contents.
+- User reconfirmed no MWC workspaces are in use. Exact old-namespace closeout review
+  delegated read-only; final Coder workspace remains excluded from in-environment migration.
 
 - Borrowing restriction for ports `31871` and `32671` was lifted by the user on 2026-09-09;
   preserve the normal snapshot, writer-freeze, volume-binding and rollback gates.
