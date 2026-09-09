@@ -203,7 +203,7 @@ Finish the single-model release, promote the verified development images, and le
 with one collision-free resource layout across the database, Kubernetes, source, tests, docs, and
 product terminology.
 
-## Completed production migration
+## Historical checkpoint — schema19 migration (2026-09-07)
 
 - The control plane is running schema 19. Its database stores only the dedicated Namespace scope
   and Namespace; every resource name and route is derived from the installation and workspace IDs.
@@ -233,7 +233,7 @@ product terminology.
   `.mwc-migration-backups/2026-09-07/control-plane-pre-v19.json` and
   `.mwc-migration-backups/2026-09-07/control-plane-v19.json`. Never print their contents.
 
-## Current deployed release
+## Historical release — 554a130 (superseded)
 
 - Product revision: `554a13033800ec10d31b0c4d1a3758623a187290`.
 - GitHub Actions run `34155589876` passed the complete frontend, Rust, SQLite,
@@ -265,7 +265,7 @@ product terminology.
 - The three active templates and image policies now point to these immutable images. Three unused
   duplicate templates were disabled and deleted through the audited API.
 
-## Source closeout completed
+## Historical source closeout — schema19 (superseded)
 
 - The clean schema baseline initializes new databases directly at schema 19 and rejects older
   database versions with one generic unsupported-version error. Historical transformation SQL,
@@ -278,7 +278,7 @@ product terminology.
   are below the 400-line maintainability target. The final main-branch suite and tracked-tree scan
   for removed compatibility terminology pass.
 
-## Active closeout
+## Historical closeout preparation — before canonical cutover
 
 - `tiddlywiki-dev` and `game-forking` are Ready on the latest Node/Rust, BuildKit and ttyd images.
   Their canonical PVCs and SSH host keys are unchanged. Host-key-checked SSH verified Node 24.20,
@@ -329,7 +329,7 @@ product terminology.
   YAML documents and four workspace snapshots parse, all seven old environment maps are empty,
   and the seven ownership fields are safe for the bridge transaction to remove.
 
-## Next actions
+## Historical rollout sequence — do not resume from this section
 
 Current priority (supersedes historical rollout ordering below): productize the verified Higress
 server-name validation fix and continue the gated migration with the published release.

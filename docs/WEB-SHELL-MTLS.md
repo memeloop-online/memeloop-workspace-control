@@ -18,10 +18,11 @@ published release, real reconciliation/cleanup and authenticated WebSocket accep
 
 ## Enablement
 
-Set all three environment variables in the control-plane process, or set none of them:
+Set all four environment variables in the control-plane process, or set none of them:
 
 ```text
 MWC_TTYD_MTLS_SERVER_SECRET=ttyd-server-tls
+MWC_TTYD_MTLS_CLIENT_CA_SECRET=ttyd-client-trust
 MWC_HIGRESS_MTLS_CLIENT_SECRET_NAMESPACE=higress-system
 MWC_HIGRESS_MTLS_CLIENT_SECRET_NAME=ttyd-client
 ```
@@ -37,6 +38,7 @@ The Helm chart supplies the same values and injects the environment variables:
 workspace:
   ttydMtls:
     serverTlsSecretName: ttyd-server-tls
+    clientCaSecretName: ttyd-client-trust
 higress:
   ttydMtls:
     clientSecretNamespace: higress-system
@@ -49,16 +51,19 @@ is referenced by Higress in its configured Namespace; it is not copied into a wo
 
 ## Required Secrets and certificate roles
 
-`ttyd-server-tls` must contain exactly the required mounted keys below. Kubernetes refuses
+`ttyd-server-tls` must contain the required mounted keys below. Kubernetes refuses
 the Pod if a required key is absent; it is deliberately not an optional volume.
 
 ```text
 tls.crt  ttyd server certificate (EKU: serverAuth)
 tls.key  ttyd server private key
-ca.crt   CA certificate that validates the Higress client certificate
 ```
 
-The volume is mounted read-only only at `/etc/mwc-ttyd-tls` in the `ttyd` container. The
+`ttyd-client-trust` contains `ca.crt`, the public CA bundle validating the Higress client
+certificate. The server certificate's own issuing CA is deliberately not used as client trust.
+This separation lets cert-manager renew its server leaf Secret without overwriting client trust.
+
+These keys are projected read-only only at `/etc/mwc-ttyd-tls` in the `ttyd` container. The
 workspace container does not mount it. ttyd is started with `--ssl`, `--ssl-cert`,
 `--ssl-key`, and `--ssl-ca`, so it requires a valid client certificate.
 
@@ -71,7 +76,7 @@ response, or browser.
 Use separate certificate roles and preferably separate issuing CAs:
 
 - ttyd's certificate has `serverAuth`; Higress validates it using the companion `-cacert` CA.
-- Higress's certificate has `clientAuth`; ttyd validates it using `ttyd-server-tls/ca.crt`.
+- Higress's certificate has `clientAuth`; ttyd validates it using `ttyd-client-trust/ca.crt`.
 - A ttyd server private key is neither a client credential nor a CA signing key. Do not reuse
   it as the Higress client key or let it sign client certificates. Keep CA private keys outside
   workload Secrets.
@@ -119,7 +124,7 @@ the mTLS configuration or its namespace-scoped Role:
    their exact per-workspace SAN filters. Match the database workspace identity and installation
    ownership labels for every deletion. Preserve unrelated HTTP port-mapping Ingresses and
    gateway filters. Stop on an ownership mismatch.
-3. Confirm no owned Web Shell Ingress or SAN filter remains, then remove all three mTLS settings
+3. Confirm no owned Web Shell Ingress or SAN filter remains, then remove all four mTLS settings
    and the conditional gateway Role/RoleBinding.
 
 Do not assume a control-plane restart automatically requeues every settled workspace. A completed
