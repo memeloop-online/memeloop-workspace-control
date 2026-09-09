@@ -20,8 +20,11 @@ All four workspaces passed new-image readiness, no-client IP rejection
 preserved ports with trusted host keys and `.codex/sessions` present. Rollout session
 `10356` exited 0. GitOps is Synced/Healthy; all four Pods use the exact new digest.
 Temporary token files and trusted known-hosts files were removed. Final Coder was not touched.
-The ttyd worker owns strict SSH verification, backend worker owns UI-02 organization aggregation, and
-`organization_usage_ui` owns the matching frontend. Main owns deployment and ledger.
+Strict SSH verification is complete. UI-02 HTTP wiring is committed as `a1bd8a3`;
+SQL single-query aggregation is `ae6e6b5`. `organization_metrics_impl` now owns the
+remaining bounded collector/cache after the previous implementation stalled; the previous
+collector worker is interrupted and must not resume overlapping edits. `usage_summary_sql`
+owns HTTP regression tests. Frontend work is complete. Main owns review, deployment and ledger.
 
 ## Execution ledger — resume here
 
