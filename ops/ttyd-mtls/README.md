@@ -1,0 +1,127 @@
+# ttyd upstream mTLS certificate lifecycle
+
+This directory prepares only the native cert-manager leaf certificates. It is
+not an enablement action: it does not set Helm mTLS values, create an Ingress,
+restart a workspace, alter Higress, or copy certificate material.
+
+## Minimal topology
+
+Two independently operated CA Secrets exist outside Git:
+
+| CA Secret | Namespace | Signs | Private-key boundary |
+| --- | --- | --- | --- |
+| `ttyd-server-ca` | `memeloop-workspace-control` | `ttyd-server-tls` | Never leaves its operator-controlled Secret. |
+| `ttyd-client-ca` | `higress-system` | `ttyd-client` | Never leaves its operator-controlled Secret. |
+
+`certificates.yaml` creates namespaced `Issuer` objects that refer to those
+pre-existing CA Secrets and 90-day ECDSA leaf `Certificate` resources. The
+leaves renew 30 days early with `rotationPolicy: Always`:
+
+- `ttyd-server-tls`: `serverAuth`, with the only DNS SAN
+  `*.memeloop-workspace-control.svc.cluster.local`.
+- `ttyd-client`: `clientAuth`, consumed by Higress through its established
+  client-certificate SDS reference.
+
+No CA `Certificate`, self-signed root, Secret stub, copier, CronJob, or new
+controller belongs in this GitOps directory. In particular, cert-manager's
+leaf `ca.crt` is the *issuing leaf CA*, while ttyd must trust the independent
+client CA. Co-owning that key in `ttyd-server-tls` would make renewal unsafe.
+
+## Required product contract before this can be enabled
+
+The current product mounts one Secret with `tls.crt`, `tls.key`, and `ca.crt`.
+That cannot safely be cert-manager-owned when the trust CA and issuing CA are
+different. Product commit `815ff90` implements the required separate,
+read-only client-CA Secret volume. Its all-or-none configuration adds
+`MWC_TTYD_MTLS_CLIENT_CA_SECRET=ttyd-client-trust` (Helm:
+`workspace.ttydMtls.clientCaSecretName`):
+
+| Consumer | Credential (cert-manager managed) | Separate public trust input |
+| --- | --- | --- |
+| ttyd | `memeloop-workspace-control/ttyd-server-tls`, keys `tls.crt`, `tls.key` | `memeloop-workspace-control/ttyd-client-trust` Secret, key `ca.crt`, mounted only into ttyd and passed to `--ssl-ca` |
+| Higress | `higress-system/ttyd-client`, keys `tls.crt`, `tls.key` | `higress-system/ttyd-client-cacert` Secret, key `cacert`, as Higress's documented `<clientSecretName>-cacert` companion |
+
+The two trust destination Secrets contain public CA certificates only. They are not
+rendered into Git. At the approved first rollout an operator copies only the
+public certificate from each CA Secret into the opposite consumer destination,
+without printing it, copying a CA private key, or using a broad
+cross-namespace controller. Subsequent leaf renewals need no trust copy;
+cert-manager updates the two leaf Secrets itself. This is intentionally manual
+only for CA lifecycle, whose normal cadence is years rather than days.
+
+The GitOps Application that adds this directory must be authorized for both
+`memeloop-workspace-control` and `higress-system`. Do not apply it until both
+CA Secrets have been provisioned and verified by the certificate operator.
+
+## CA lifecycle and monitoring
+
+The CA Secrets are stable operational assets, not implicitly auto-rotated
+cert-manager targets. Expiry or an unexpected CA key change is an incident,
+not a leaf renewal.
+
+**Current cluster state:** cert-manager v1.21.0 exposes its metrics Service on
+`cert-manager/cert-manager:9402`, but it has no ServiceMonitor and there is no
+cert-manager PrometheusRule. Therefore neither leaf nor CA expiry alerting is
+currently deployed; do not represent it as monitored.
+
+**Leaf alerting to add before enablement:** add a narrowly selected
+ServiceMonitor for that Service and a PrometheusRule using cert-manager's
+`certmanager_certificate_expiration_timestamp_seconds` and
+`certmanager_certificate_ready_status` metrics. Scope every selector to the
+two Certificate names and their namespaces. Page at 14 days and warn at 30
+days, for example:
+
+```promql
+# warning: <= 30 days to a managed ttyd leaf expiry
+(certmanager_certificate_expiration_timestamp_seconds{
+  name=~"ttyd-(server|client)-certificate",
+  exported_namespace=~"memeloop-workspace-control|higress-system"
+} - time()) < 30 * 24 * 60 * 60
+
+# critical: either leaf is not Ready for 10 minutes
+min_over_time(certmanager_certificate_ready_status{
+  name=~"ttyd-(server|client)-certificate",
+  exported_namespace=~"memeloop-workspace-control|higress-system",
+  condition="Ready"
+}[10m]) == 0
+```
+
+Metric label spelling must be checked against the first scraped series before
+committing the rule (`name`/`exported_namespace` are the expected
+cert-manager labels). The ServiceMonitor and PrometheusRule are intentionally
+not included here because the monitoring Application/selector contract has not
+yet been reviewed.
+
+**Stable-CA expiry alerting still to land:** a CA Secret is not a cert-manager
+Certificate and has no expiry metric. Add one least-privilege exporter or
+CronJob in each CA namespace that can `get` only its named CA Secret, parses
+only `tls.crt` in-memory, and exports
+`mwc_ttyd_ca_expiration_timestamp_seconds{role="server|client"}`. Alert at 180
+days (warning) and 90 days (critical):
+
+```promql
+(mwc_ttyd_ca_expiration_timestamp_seconds{role=~"server|client"} - time())
+  < 180 * 24 * 60 * 60
+```
+
+Until that exporter and its ServiceMonitor/PrometheusRule are deployed, the
+certificate operator must record the two CA NotAfter dates in the approved
+operations inventory and review them at least monthly. This is a manual
+control, not an alert.
+
+For a planned CA rollover:
+
+1. Create the replacement CA outside Git and retain the old CA.
+2. Put an old+new public bundle in the opposite consumer trust destination.
+3. Issue/reissue the affected leaf from the new CA, confirm its EKU/SAN and
+   both the gateway SDS and ttyd trust paths.
+4. Recreate affected ttyd Pods in the approved maintenance window; a mounted
+   Secret update alone does not recreate ttyd's TLS context.
+5. After all old leaves have expired and negative/positive mTLS tests pass,
+   remove the old public CA in a later reviewed change.
+
+Never store, log, print, commit, or distribute `tls.key`, a CA private key, or
+the complete Secret object. Before setting the product's all-or-none mTLS
+configuration, run the production checks in `docs/WEB-SHELL-MTLS.md`: exact
+Higress SAN validation, valid and invalid client/server trust paths, direct
+ClusterIP rejection, and the authenticated browser WebSocket flow.

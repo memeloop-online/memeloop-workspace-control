@@ -1,0 +1,72 @@
+# Two deliberately independent trust domains. The two CA Secrets named below
+# are operator-provisioned outside Git and contain the CA private keys. They
+# are stable inputs to cert-manager, not Certificate targets: root rotation is
+# an explicit dual-trust operation documented in README.md.
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: ttyd-server-ca-issuer
+  namespace: memeloop-workspace-control
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  ca:
+    secretName: ttyd-server-ca
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: ttyd-server-certificate
+  namespace: memeloop-workspace-control
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  # This is the native ttyd leaf Secret: cert-manager owns tls.crt/tls.key.
+  secretName: ttyd-server-tls
+  dnsNames:
+    - "*.memeloop-workspace-control.svc.cluster.local"
+  duration: 2160h
+  renewBefore: 720h
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Always
+  issuerRef:
+    group: cert-manager.io
+    kind: Issuer
+    name: ttyd-server-ca-issuer
+  usages: [digital signature, server auth]
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: ttyd-client-ca-issuer
+  namespace: higress-system
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  ca:
+    secretName: ttyd-client-ca
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: ttyd-client-certificate
+  namespace: higress-system
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  # Higress reads this clientAuth leaf directly through its existing SDS path.
+  secretName: ttyd-client
+  commonName: higress-ttyd-upstream
+  duration: 2160h
+  renewBefore: 720h
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Always
+  issuerRef:
+    group: cert-manager.io
+    kind: Issuer
+    name: ttyd-client-ca-issuer
+  usages: [digital signature, client auth]
