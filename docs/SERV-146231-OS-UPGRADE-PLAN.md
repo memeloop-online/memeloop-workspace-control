@@ -1,105 +1,76 @@
 # serv-146231 AlmaLinux 8 to 9 upgrade plan
 
-User decision (2026-09-09): executing this node's AlmaLinux 8 to 9 upgrade is approved.
-The recovery, datastore and storage checks below still apply before the upgrade transaction.
+The user approved the AlmaLinux 8 to 9 upgrade and the required reboots for
+`100.64.0.10` (`serv-146231`, `serv.146231.com`). This is a single-node control-plane
+maintenance event. It covers the OS and the checks needed to return this node to service;
+it does not include a K3s, Longhorn, CNI or gVisor upgrade.
 
-The authorization covers the OS upgrade and its necessary maintenance steps, not unrelated
-K3s, Longhorn or networking upgrades. The target is
-control-plane node `serv-146231` (`serv.146231.com`, cloud/Tailscale address `100.64.0.10`), not a
-disposable workspace worker.
+The node is accepted as having no important local data. No cloud snapshot, off-node backup,
+clone rehearsal or multi-operator sign-off is a prerequisite. Consequently this plan has no
+guaranteed rollback: if the upgraded node cannot be repaired, rebuild it as AlmaLinux 9 and
+rejoin it using the supported K3s procedure.
 
-## Decision and scope
+## Before the maintenance window
 
-The in-place route to investigate is AlmaLinux 8.10 to AlmaLinux 9 via AlmaLinux ELevate/Leapp's
-one-major-version path. AlmaLinux documents AlmaLinux 8 as an eligible EL9 source and requires a
-fully updated source system followed by a reboot before migration. `leapp preupgrade` is only a
-decision input, not permission to proceed. A newly provisioned AlmaLinux 9 replacement remains
-safer because it avoids mutating a live etcd/Longhorn/K3s server in place.
+1. Confirm that the target is `serv-146231` / `100.64.0.10`, and confirm access to the
+   provider or serial console and the ability to reset the node. SSH, Tailscale and GRUB are
+   useful but are not the only recovery path.
+2. Confirm that the other K3s servers are `Ready` and that etcd has quorum without this node.
+   Do not start the upgrade if taking this server offline would lose quorum.
+3. Mark the node unschedulable. Drain only workloads that actually need eviction, using the
+   existing Kubernetes/Longhorn process; do not change replica counts or delete replicas.
+4. Check this node's Longhorn volumes and iSCSI state. Its single-replica wiki volume will
+   be unavailable during maintenance; this outage is accepted. Do not delete its replica
+   or block this change on unrelated degraded volumes elsewhere in the cluster.
+5. Check free space in `/`, `/boot`, `/var` and the K3s data path. Record the currently running
+   kernel and the enabled AlmaLinux, K3s, Tailscale and ELRepo repositories. Keep unrelated
+   package, kernel, K3s and storage changes out of this window.
 
-The purpose is to obtain and verify an installed systemd >=244, which gVisor requires when its
-optional `--systemd-cgroup` driver is enabled. This plan does not promise a given EL9 image or
-completed ELevate transaction meets that requirement: verify systemd, cgroup v2, K3s and runtime
-behavior after the upgrade. It does not alter the previous gVisor cgroup-path conclusion, register
-a handler, or approve a RuntimeClass.
+## Leapp assessment and execution
 
-## Read-only baseline (2026-09-08)
+1. Fully update AlmaLinux 8 using the current AlmaLinux ELevate procedure, reboot as required
+   by that procedure, and verify that the node returns before continuing.
+2. Install the current ELevate/Leapp packages from the official procedure and run
+   `leapp preupgrade`.
+3. Read the current Leapp report and answer file. Resolve every item explicitly labelled
+   `Inhibitor`; a warning or informational entry is not an inhibitor by itself. Typical items
+   to review are unsupported third-party packages or repositories (including ELRepo kernel,
+   K3s and Tailscale), missing EL9 replacements, repository/module conflicts, required
+   answer-file values, and insufficient disk space. Do not treat this list as a substitute for
+   the report and do not suppress an inhibitor without understanding its effect.
+4. Rerun `leapp preupgrade` after each change until the report has no unresolved inhibitors.
+   If the report proposes removing or replacing a package needed for K3s, networking, iSCSI,
+   cloud-init or the firewall, stop and review that specific change before proceeding.
+5. In the approved window, run the official `leapp upgrade` procedure and reboot from the
+   console when instructed. Watch the upgrade boot and keep the node unschedulable. Do not
+   combine this reboot with a K3s or gVisor change.
 
-| Area | Observed state | Consequence |
-| --- | --- | --- |
-| OS | AlmaLinux 8.10, systemd 239, cgroup v2 | Major OS migration is needed for the gVisor systemd-driver prerequisite. |
-| Boot | Running ELRepo `5.15.220-1.el8.elrepo`; saved GRUB default is AlmaLinux 4.18; serial console configured | An EL8 one-shot kernel rollback cannot roll back an EL9 userspace transaction. |
-| K3s | `v1.36.2+k3s1`, enabled and active | Multi-server control-plane maintenance; do not combine a K3s upgrade/configuration change. |
-| Network | public `eth0`, Tailscale `100.64.0.10`, CNI `10.42.5.0/24`, static default route | Test console, public route, Tailscale, DNS and CNI after migration. |
-| Storage | `iscsid` active with a Longhorn iSCSI session | Replica, engine and iSCSI health are gates, not follow-up work. |
-| Tooling | no ELevate/Leapp package installed | No migration tool has been staged or run. |
-| Repos/packages | AlmaLinux, K3s and Tailscale repos enabled; ELRepo kernel packages installed | Preupgrade must explicitly review ELRepo kernel, K3s, Tailscale, iSCSI, cloud-init, CNI and all third-party packages. |
+## Recovery checks after reboot
 
-## Execution gates for a separately approved change
+Keep the node unschedulable until all of these checks pass:
 
-1. **Replacement first.** Assess and price a new AlmaLinux 9 node path. Use in-place upgrade only
-   after an owner accepts its greater outage and rollback risk.
-2. **Console and snapshot.** The user must demonstrate cloud-console login, power reset and a
-   restorable VM/disk snapshot. Capture its ID and trial the restore path on a non-production clone
-   where feasible. SSH, Tailscale, cloud-init and saved GRUB alone are insufficient recovery.
-3. **etcd safety.** The control-plane owner must verify peer readiness and quorum, create a fresh
-   on-demand embedded-etcd snapshot, verify an off-node copy, and name the restore operator. Treat
-   snapshots and their bootstrap material as restricted; never put tokens or contents in this plan.
-4. **Longhorn and applications.** All volumes must be healthy and not rebuilding, including
-   previously degraded `pvc-6a03d5cb-b64b-43e1-b236-5bf3de83a613`. Confirm healthy replicas off
-   node, current tested backups, and enough eligible disk capacity for any eviction. Do not change
-   replica count or delete replicas to satisfy this gate.
-5. **Maintenance plan.** Inventory local workloads, PDBs, ingress/DNS capacity and approved
-   Kubernetes/Longhorn drain/eviction steps. K3s restart behavior does not itself drain a node;
-   the OS event is longer and less predictable.
-6. **Clone and package review.** On a matching clone, perform the official preupgrade assessment
-   and resolve every inhibitor with its owner. Review every proposed removal/replacement, especially
-   ELRepo `kernel-lt`, K3s, Tailscale, iSCSI initiator, cloud-init and network/firewall tooling.
-   A green report is necessary, not sufficient.
-7. **Capacity and isolation.** Record free space for `/`, `/boot`, `/var` and K3s data. Complete
-   the provider snapshot before disk changes. Freeze OS, K3s, Longhorn, CNI, firewall, kernel and
-   gVisor changes into separate maintenance events.
+- Confirm AlmaLinux 9, the expected boot entry, systemd >=244, cgroup v2 and adequate disk
+  space.
+- Confirm console access, the public route, DNS, SSH, Tailscale, cloud-init and the firewall.
+- Confirm iSCSI sessions, Longhorn disks, volumes and replicas, with a controlled application
+  I/O check where applicable.
+- Confirm the K3s server is active, this node is `Ready`, the remaining control-plane members
+  and etcd are healthy, and CoreDNS plus critical workloads recover. Do not upgrade K3s here.
+- Only after the control-plane, storage and network checks pass, make the node schedulable
+  again and verify normal scheduling.
 
-## Later execution outline
+If a check fails, use the console to repair the node or keep it out of service. If repair is
+not practical, rebuild/reprovision an AlmaLinux 9 node and rejoin it through the supported K3s
+control-plane procedure. Retained EL8 kernels cannot roll back the EL9 userspace, and there is
+no snapshot or backup from which to promise restoration. If the surviving etcd quorum is lost,
+cluster recovery requires reconstruction from whatever declarations and credentials remain;
+this plan does not claim a datastore rollback.
 
-1. On the matching clone, preserve the official ELevate preupgrade report, transaction list and
-   post-upgrade logs. Prove provider-console, network, iSCSI, K3s and Longhorn recovery first.
-2. In the approved window, verify every gate, make an independently verified off-node etcd snapshot
-   and cloud disk/VM snapshot, and have console plus etcd/Longhorn/network owners present.
-3. Evacuate only through the approved Kubernetes/Longhorn process. Stop if required replica health
-   cannot be retained or PDBs prevent safe drain.
-4. Fully update EL8, perform its required reboot, then rerun `leapp preupgrade`; review every new
-   inhibitor, answer and package change. Any unapproved change is a stop condition.
-5. Only with explicit approval, run the then-current official AlmaLinux procedure and watch its
-   automatic upgrade boot through cloud console. Do not install gVisor or change K3s in this event.
-6. Keep the node unschedulable until all acceptance checks pass and control-plane, storage and
-   networking owners sign off.
+Stop for a real unresolved Leapp `Inhibitor`, loss of control-plane quorum, or failed
+post-reboot network, iSCSI, K3s or etcd checks. Request the user's console assistance
+if SSH recovery fails.
 
-## Acceptance after upgrade
-
-- Verify AlmaLinux 9, systemd >=244, cgroup v2, selected boot entry and free space; retain package
-  diff and Leapp logs.
-- Verify console, public route, DNS, SSH, Tailscale, cloud-init and firewall backend/rules; prove
-  CNI Pod-to-service traffic instead of assuming EL8 network settings migrated unchanged.
-- Verify iSCSI sessions, Longhorn disks, volumes and replicas, plus controlled application I/O.
-- Verify K3s server/etcd membership, CoreDNS, gateway and critical workloads. Do not upgrade K3s
-  during this validation.
-- Only then re-inspect containerd/K3s cgroup output against gVisor requirements. OS upgrade alone
-  is not RuntimeClass acceptance.
-
-## Rollback boundary and stop conditions
-
-ELevate changes a broad userspace package set. Booting retained EL8 kernels does not restore EL8
-systemd, libraries, network settings or K3s dependencies. The practical rollback is a tested cloud
-disk/VM snapshot restore, or replacement/rebuild from known-good images and protected etcd plus
-application backups. Restoring one control-plane disk after peers advance etcd can create a cluster
-recovery incident; the datastore owner must choose the K3s restore procedure beforehand.
-
-Stop for lost console access, unavailable off-node backup, failed quorum, Longhorn fault/degraded
-or rebuilding state, insufficient replica capacity, an unresolved Leapp inhibitor, unreviewed
-package removal, failed network/iSCSI recovery, or uncertainty about the authoritative datastore
-restore path.
-
-## Sources
+## References
 
 - [AlmaLinux ELevate quickstart](https://wiki.almalinux.org/elevate/ELevate-quickstart-guide.html)
   and [migration paths](https://wiki.almalinux.org/elevate/)
@@ -107,4 +78,3 @@ restore path.
 - [K3s etcd snapshots and restore](https://docs.k3s.io/cli/etcd-snapshot) and
   [manual upgrade behavior](https://docs.k3s.io/upgrades/manual)
 - [Longhorn node eviction](https://longhorn.io/docs/1.12.1/nodes-and-volumes/nodes/disks-or-nodes-eviction/)
-  and [production backups](https://longhorn.io/docs/1.12.1/best-practices/)
