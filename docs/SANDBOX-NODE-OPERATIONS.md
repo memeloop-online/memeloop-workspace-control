@@ -17,6 +17,16 @@ This is the short runbook for enabling the optional `runsc` handler on one K3s n
   Its host Pod cgroup enforced 1024 PIDs, 0.5 CPU and 512 MiB.
   Full workspace/storage acceptance is still pending. Do not reinstall the handler
   or publish the production readiness label on this node.
+- The runsc handler uses `overlay2 = "root:memory,size=128m"`. A disposable
+  container reached the 128 MiB root-filesystem limit, received `ENOSPC`, and
+  continued executing commands; deleting its file restored writes. New sandboxes
+  picked up this configuration without a K3s restart. Mounted Home and scratch
+  volumes are separate and are not covered by this root-filesystem cap.
+
+Keep the root overlay setting when upgrading runsc: the installer-generated
+configuration does not currently preserve this node-specific option. The exact
+node configuration and reversal instructions are in GitOps under
+`apps/memeloop-workspace-control/node-configuration/`.
 
 The cgroup decision is fixed for this K3s setup: cgroup v2 and K3s' `SystemdCgroup=true` send
 the CRI path as a systemd slice such as
