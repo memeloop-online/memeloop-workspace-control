@@ -546,6 +546,19 @@ schema bridge, writer shutdown, retained-volume and rollback gates.
   to stop crash retries; workspace replicas remain zero. Do not advance to schema 22 or move
   any PV. Diagnose bridge validation against the private stopped-state export; snapshots and
   original claims are intact. No upgrade success is claimed.
+- Root cause: schema-19 export omits idempotency records, so its earlier preflight missed stale
+  replay payloads. A temporary read-only control-PVC reader was created while all writers were
+  stopped, and the SQLite/WAL/SHM files were copied to private `frozen-sqlite/` (0600).
+  Actual DB still reports schema 19. Historical replay payloads lack `pod_requests` or contain
+  historical environment values; 369/373 idempotency entries are expired, with four new stop
+  responses remaining. The bridge currently validates expired records and rejects the upgrade.
+  Repair is assigned on an isolated schema-20 bridge branch with expiry/atomicity regressions.
+  No production SQLite edits are authorized or performed. The read-only helper Pod was deleted.
+- GitOps rollback `f7b85dd` is pushed, preserving other operators' latest `e938e3c` changes
+  and all three auto-sync freezes. It restores the pre-bridge release to recover the console
+  while the repaired bridge is built in CI. Scoped rollback sync and StatefulSet rollout
+  succeeded; authenticated API readback returns all four workspaces `stopped`.
+  The console is recovered, no workspace was restarted, and the auto-sync freezes remain.
 
 - Borrowing restriction for ports `31871` and `32671` was lifted by the user on 2026-09-09;
   preserve the normal snapshot, writer-freeze, volume-binding and rollback gates.
