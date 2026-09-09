@@ -621,6 +621,25 @@ schema bridge, writer shutdown, retained-volume and rollback gates.
 - Started tiddlywiki first through API (202), target StatefulSet rollout passed and SSH
   NodePort remains 30953. Then sent individual start requests (202) for the other three.
   Their readiness plus four-workspace SSH/Web Shell/data acceptance remain pending.
+- Post-cutover: all five Pods reached container readiness. Strict host-key-checked SSH
+  commands passed on all four preserved NodePorts as `user`; public host keys exactly match
+  the pre-cutover backed-up identity Secrets, and `/home/user/.codex/sessions` exists in each.
+- Initial browser acceptance returned 503 because four old source Web Shell Ingresses
+  duplicated the canonical paths. Verified ownership/path and stopped old StatefulSets,
+  then removed only those four backed-up duplicate Ingresses. Browser acceptance now
+  PASSES for tiddlywiki/game (real shell I/O, PTY resize, consumed-ticket rejection, fresh ticket).
+- Maintainance/rust image pulls exceeded the worker's ten-error retry budget: Pods became
+  Ready and SSH worked, but API readiness stayed stale. This is a product defect, not a
+  storage/attachment failure. Worker fix assigned to `http_fixture_clocks` (normal readiness
+  waiting must not exhaust true-error budget). Sent audited restart recovery requests (202)
+  for just these two with cached images. Recovery succeeded: browser session `43310`
+  exited 0 for maintainance and rust (real terminal I/O, PTY resize, replay rejection,
+  fresh-ticket recovery). All four post-cutover browser checks now PASS. Temporary token
+  files and browser contexts were cleaned; no token/ticket/trace output was saved.
+- GitOps `4af2f89` updates the app README's Bash and PowerShell credential commands to
+  canonical namespace `memeloop-workspace-control`, preserving other operators' `f6bbf03`.
+  Remaining work includes the readiness-retry product fix and CI/release, old source resource
+  closeout, image-policy cleanup, final external Coder handoff, and sandbox rollout gates.
 
 - Borrowing restriction for ports `31871` and `32671` was lifted by the user on 2026-09-09;
   preserve the normal snapshot, writer-freeze, volume-binding and rollback gates.
