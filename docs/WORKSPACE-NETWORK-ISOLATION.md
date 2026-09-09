@@ -74,7 +74,33 @@ Each eligible node/network path needs measured acceptance:
 5. Independently test runtime privilege and CPU/memory/PID/ephemeral-storage boundaries.
    NetworkPolicy cannot substitute for these controls.
 
-The 2026-09-08 egress/boundary matrices passed the paths recorded in
-`IMPLEMENTATION_STATUS.md`. They do not establish startup enforcement, all-node coverage,
-or full external-tenant acceptance. The production internal workspaces must not be presented
-as accepted untrusted-user sandboxes until those remaining gates pass.
+## Recorded limited NetworkPolicy evidence
+
+On 2026-09-09, disposable, restricted canaries on `haixia` and `westlake`
+used a pre-existing egress default-deny policy.  A container's first Node
+process made one harmless HTTP request to a controlled Pod IP and recorded its
+result before the canary was Ready.  It was blocked both at initial placement
+and after deletion/recreation on the other node.  The same startup/egress
+sample passed once more between `haixia` and the worker
+`iv-yeahgdnw8wwh2yppho5e`; that worker was selected because the existing probe
+image was already cached.  The `haixia`/`westlake` two-node boundary matrix
+also blocked TCP to the tested Kubernetes API, kubelet, node and Service
+targets under the rendered `internet_only` rule while DNS and the configured
+public TCP control continued to work.  Same-node and cross-node egress
+`podSelector` positive controls passed.  This is sampled startup evidence
+only: Kubernetes API ordering and a first-process probe cannot prove that a
+CNI has no first-instruction enforcement window.
+
+The matching cross-node ingress `podSelector` test still failed: traffic from
+the remote Pod was observed at the target as the Flannel/CNI source
+`10.42.4.1`, so its original Pod label was not available for ingress identity.
+Do not widen a policy to treat that CNI address as an authenticated gateway.
+The deployed workspace policy's `10.42.0.0/16` source is a reachability
+compensation for this path, not a user or Higress identity; ttyd's separately
+validated upstream mTLS is required before a shell is accessible.  Network
+reachability and mTLS-authenticated access are distinct acceptance claims.
+
+These observations do not establish every eligible node, IPv6, host or
+metadata behavior, an actual external-tenant workspace lifecycle, or full
+external-sandbox acceptance.  The production internal workspaces must not be
+presented as accepted untrusted-user sandboxes on the basis of this matrix.
