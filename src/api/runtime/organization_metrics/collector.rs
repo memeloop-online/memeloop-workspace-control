@@ -317,7 +317,7 @@ mod tests {
             sample(2.0),
             sample(1.0),
             sample(2.0),
-            sample(1.0),
+            sample(2.0),
             sample(2.0),
             sample(123.0),
             sample(1.0),
@@ -338,7 +338,7 @@ mod tests {
             sample(2.0),
             sample(1.0),
             sample(2.0),
-            sample(1.0),
+            sample(2.0),
             sample(2.0),
             sample(123.0),
             sample(0.0),
@@ -349,5 +349,24 @@ mod tests {
         assert_eq!(metrics.memory_mib, Some(2));
         assert_eq!(metrics.disk_bytes, None);
         assert!(metrics.template_labels_complete);
+    }
+
+    #[test]
+    fn missing_sidecar_metric_cannot_complete_cpu_or_memory() {
+        let metrics = assemble_metrics(
+            false,
+            sample(1000.0),
+            sample(2.0),
+            sample(1.0),
+            sample(2.0),
+            sample(1.0),
+            sample(2.0),
+            sample(123.0),
+            sample(1.0),
+            1,
+            1,
+        );
+        assert_eq!(metrics.cpu_millis, None);
+        assert_eq!(metrics.memory_mib, None);
     }
 }
