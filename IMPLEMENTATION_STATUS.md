@@ -797,6 +797,10 @@ schema bridge, writer shutdown, retained-volume and rollback gates.
   Worker owns checking both exact full-commit codeload URLs against recorded checksums.
   Do not disable checksum checks or deploy this failed build; the other three workspaces
   remain unmodified and external sandbox acceptance is still NOT passed.
+- `742df19` corrects both archive digests to the exact full-commit URLs (prior values
+  mistakenly corresponded to tag/short-ref archives). Worker verified downloaded archive
+  top-level directories match full commits. CI `34346622739` now IN_PROGRESS; follow
+  this run, not the failed34345243464. Checksums remain mandatory.
 
 - Borrowing restriction for ports `31871` and `32671` was lifted by the user on 2026-09-09;
   preserve the normal snapshot, writer-freeze, volume-binding and rollback gates.
