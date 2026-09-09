@@ -30,6 +30,8 @@ mod envoy_filter;
 mod higress;
 mod materialization;
 mod network_policy;
+mod network_refresh;
+pub use network_refresh::NetworkRefreshError;
 mod ownership;
 mod port_mappings;
 mod resource_helpers;

@@ -25,8 +25,8 @@ mod delete;
 
 #[derive(Clone)]
 pub struct KubernetesCoordinator {
-    client: Client,
-    builder: ResourceBuilder,
+    pub(super) client: Client,
+    pub(super) builder: ResourceBuilder,
 }
 
 impl KubernetesCoordinator {

@@ -161,6 +161,8 @@ async fn kubernetes_runtime(
     let client = kube::Client::try_default().await?;
     let builder = kubernetes_config::resource_builder(config)?;
     let coordinator = KubernetesCoordinator::new(client.clone(), builder.clone());
+    let refreshed = coordinator.refresh_network_policies(database).await?;
+    info!(refreshed, "existing workspace network policies refreshed");
     let handler =
         WorkspaceReconcileHandler::new(database.clone(), workspace_cipher, builder, coordinator);
     Ok((Some(client), Some(handler)))
