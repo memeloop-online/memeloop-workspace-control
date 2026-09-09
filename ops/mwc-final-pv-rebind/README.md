@@ -25,6 +25,15 @@ reference or alter the workspace IDs.
 
 ## Required gates
 
+`control-schema22-job.yaml` is an offline-only database job, not a deployment.
+Apply it only after the repaired schema-20 bridge has passed, the schema-20 backup is
+verified, and the old control-plane StatefulSet is zero with no remaining writer Pod.
+It runs the already published schema-22 binary against the source control claim and
+does not launch an API server or coordinator. Require Job completion and schema-22
+metadata verification, then remove its completed Pod before rebinding the control PV.
+Never apply the entire directory with `kubectl apply -f`: these are ordered, individually
+gated artifacts, not a single deployable bundle.
+
 1. The old MWC coordinators must remain stopped/frozen and the four source
    StatefulSets must remain at zero replicas.  Check there is no source
    workload Pod or Longhorn attachment.  This avoids a second writer while a
@@ -55,8 +64,9 @@ kubectl get pv <PV> -o jsonpath='{.metadata.resourceVersion}{"\\n"}{.spec.persis
    --patch-file ops/mwc-final-pv-rebind/retain-*.json`; then read back and
    require `Retain` plus the exact old claim UID.  The patch tests the old
    claim namespace/name as well as UID and `resourceVersion`.
-2. Delete only that exact old PVC, never its PV.  Wait until the PV no longer
-   has an old claim binding.  Re-read the PV after this operation.
+2. Delete only that exact old PVC, never its PV. Wait until that PVC is absent
+   and the retained PV reports `Released`. Its old `claimRef` normally remains;
+   do not wait for Kubernetes to clear it automatically. Re-read the PV.
 3. Construct a JSON Patch from `clear-claimref.template.json` for this one PV:
    substitute the newly read PV `resourceVersion` (after Retain), its exact
    old namespace/name/UID, and its PV name.  Apply it only after all `test`

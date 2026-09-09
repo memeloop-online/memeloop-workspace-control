@@ -559,6 +559,18 @@ schema bridge, writer shutdown, retained-volume and rollback gates.
   while the repaired bridge is built in CI. Scoped rollback sync and StatefulSet rollout
   succeeded; authenticated API readback returns all four workspaces `stopped`.
   The console is recovered, no workspace was restarted, and the auto-sync freezes remain.
+- Repair `49cea2f` on isolated `bridge-v20-expired-idempotency` is reviewed and pushed.
+  CI `34311058524` is running (full Rust tests reached after maintainability checks).
+  Publication permits only main and this exact repair branch, still gated by successful verify.
+  The four unexpired stop responses pass the known structural checks; faulty historical
+  replay entries are expired. Do not merge the temporary bridge into final schema-22 main.
+- Four-workspace PV rebind artifacts landed in `64846af`. Main corrected their delete gate:
+  a retained PV becomes `Released` but keeps `claimRef`; wait for PVC absence/Released,
+  then guarded explicit claimRef removal, not automatic claimRef disappearance.
+- Source review found that product `database import` supports PostgreSQL only. Do not attempt
+  a JSON snapshot import into a target SQLite database as the earlier runbook implied.
+  A direct retained control-PV rebind is under specific technical review (node/path/UID and
+  rollback); no control-PV mutation has occurred.
 
 - Borrowing restriction for ports `31871` and `32671` was lifted by the user on 2026-09-09;
   preserve the normal snapshot, writer-freeze, volume-binding and rollback gates.

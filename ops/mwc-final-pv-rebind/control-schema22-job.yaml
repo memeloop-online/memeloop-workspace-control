@@ -1,0 +1,34 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: mwc-offline-schema22
+  namespace: mwc-k3si-7032544955
+  labels:
+    app.kubernetes.io/name: mwc-offline-schema22
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 300
+  template:
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      containers:
+        - name: migrate
+          image: harbor.k3s.onetwo.website/ghcr-io/memeloop-online/memeloop-workspace-control@sha256:b5b946a6855dbd937404fb77a014aa8ddc1efb35e26fb5d5e11c6113e228632c
+          args:
+            - --installation-id
+            - k3si-7032544955
+            - --database-url
+            - sqlite:///var/lib/mwc/control-plane.sqlite?mode=rwc
+            - database
+            - migrate
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {cpu: "1", memory: 512Mi}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/mwc
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: data-mwc-k3si-7032544955-0

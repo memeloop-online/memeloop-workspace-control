@@ -18,7 +18,7 @@ These observations are evidence, not a replacement for an immediately-pre-cutove
 
 | Logical workload | Current namespace / PVC | PV / storage | Required disposition |
 | --- | --- | --- | --- |
-| Control plane SQLite | `mwc-k3si-7032544955` / `data-mwc-k3si-7032544955-0` (10Gi) | `pvc-317ea51a-86f8-4f1c-b2ed-2c111795c331`, `local-path`, `Delete` | Offline SQLite export/import or an explicitly reviewed local-path PV move; do not assume Longhorn procedures apply. |
+| Control plane SQLite | `mwc-k3si-7032544955` / `data-mwc-k3si-7032544955-0` (10Gi) | `pvc-317ea51a-86f8-4f1c-b2ed-2c111795c331`, `local-path`, `Delete` | Reviewed retained local-path PV rebind after offline migration and file backup; not a Longhorn volume. |
 | maintainance | `ws-k3si-7032544955-bd2dc9ca6aa2b1b5` / `workspace-data-w-bd2dc9ca6aa2b1b5-0` (2Gi) | `pvc-611ec96e-4bd9-4162-b237-dab2b68d3694`, Longhorn, `Delete` | Direct PV rebind only after gates. |
 | tiddlywiki-dev | `ws-k3si-7032544955-b268ff46894a14b9` / `workspace-data-w-b268ff46894a14b9-0` (30Gi) | `pvc-ae9f3ccf-458d-4f3a-a1a2-97c5e2f84c96`, Longhorn, `Delete` | Direct PV rebind only after gates. |
 | game-forking | `ws-k3si-7032544955-97645a0fb4771b1d` / `workspace-data-w-97645a0fb4771b1d-0` (60Gi) | `pvc-bf5e159e-bf80-47ae-bda3-58affce88008`, Longhorn, `Delete` | **Blocked:** volume was `attached/degraded`; restore healthy state and verify snapshots first. |
@@ -50,9 +50,9 @@ change record; do not record secret values or database contents.
 4. After schema-20 acceptance, begin the final offline window: pause old GitOps/reconcilers and
    stop the old control plane. Use the current, verified-and-published schema-22 release to run
    the offline **20 -> 22** migration; it includes both required transformations, so no
-   schema-21 coordinator/process is started. Do not jump 19 directly to 22. A snapshot can be
-   imported only into an empty target already at the same schema version, so migrate before export
-   and before import. If the schema-22 CI/provenance or publication gate is not green, cutover is
+   schema-21 coordinator/process is started. Do not jump 19 directly to 22. This SQLite cutover
+   reuses the retained PV; JSON snapshot import is only supported for PostgreSQL destinations.
+   If the schema-22 CI/provenance or publication gate is not green, cutover is
    prohibited. Schema compatibility is a hard gate, not a cosmetic version bump.
 5. Keep MWC writes frozen and stop the four MWC workspaces from an external operator context.
    The independent 100Gi Coder workspace has no MWC database writer relationship: leave it
@@ -61,8 +61,8 @@ change record; do not record secret values or database contents.
    VolumeAttachment remains for a volume about to move, and Longhorn reports detached before a PV
    claim is moved. Preserve all of `.codex` except explicit pod-lifetime scratch/cache directories:
    `.codex/sessions`, logs, SQLite/WAL, auth/configuration and repositories are durable data.
-6. Import the offline-migrated control-plane database and four MWC workload manifests into the
-   target namespace, then move those four MWC PV bindings one at a time. Start the target control
+6. Rebind the offline-migrated control-plane volume into the target namespace and prepare the
+   four MWC workload manifests, then move those four MWC PV bindings one at a time. Start the target control
    plane only after its database, namespace-bearing records and target resource plan are ready;
    start a single MWC writer only after its binding and integrity checks pass. Do not simultaneously
    mount old and target claims.
@@ -104,16 +104,31 @@ separate downtime estimate.
 
 ## Control-plane SQLite handling
 
-The control-plane PV is `local-path`, not Longhorn. Stop the control-plane and reconciliation,
-then use the product's supported database `export` command to create an encrypted, mode-0600
-external backup without printing its content. Validate the export structurally without exposing
-values. In the target namespace, provision the reviewed target control-plane PVC/storage, deploy
-the correct bridge image, and use the supported `import` command while the service is offline.
-Confirm schema version, installation ID, namespace configuration, all four MWC workspace records,
-and reconciler state through redacted metadata/API checks. Keep the old control-plane PV and
-encrypted export through the rollback window. A local-path PV direct rebind is allowed only with
-storage-owner approval after node affinity/path, reclaim policy, claim UID, and recovery behavior
-are explicitly verified.
+The control-plane PV is `local-path`, not Longhorn. The product's `database import` command
+targets PostgreSQL only; it cannot restore a JSON export into SQLite. An export also omits
+idempotency replay records, so preserve an offline SQLite/WAL/SHM backup in addition to the
+mode-0600 export. Never print either backup's contents.
+
+The 2026-09-09 review approved direct reuse under the user's migration authorization:
+PV `pvc-317ea51a-86f8-4f1c-b2ed-2c111795c331`, source claim
+`mwc-k3si-7032544955/data-mwc-k3si-7032544955-0`, source UID
+`317ea51a-86f8-4f1c-b2ed-2c111795c331`, 10Gi/RWO/Filesystem/local-path.
+Its existing directory and node affinity are on `westlake`; preserve both. The physical
+directory's source-namespace text is not a reason to rename or move stored database files.
+
+After the bridge passes, stop the sole control-plane writer and run the supported schema-22
+`database migrate` command offline against this volume. Verify schema 22 before rebinding.
+Then, with no writer or helper Pod mounting it, guard the exact source claim UID and current PV
+resourceVersion, set reclaim policy to `Retain`, and read it back. Delete only the source PVC;
+wait for PVC absence and PV `Released`, then explicitly clear the guarded old claimRef.
+Create the same-named target claim in `memeloop-workspace-control`, prebound with
+`spec.volumeName` to the retained PV. Verify Bound and the new claim UID in both directions.
+
+Only then start the target control plane with `sqlite.existingClaim` set to this precreated
+claim. Do not use automatic claim templates, and preserve scheduling compatible with the PV's
+`westlake` node affinity. Preserve the encryption/auth Secrets and installation ID.
+Retain the PV, exports, and frozen file backup through acceptance. A schema rollback requires
+restoring the matching offline database backup; rebinding alone does not undo schema changes.
 
 ## Second phase: external Coder single-workspace handoff
 
@@ -193,13 +208,13 @@ healthy first. Do not expose secrets or database contents.
 Pause Argo CD and every old reconciler before moving claims. Take and verify fresh Longhorn
 snapshots. Release production schema 19->20 using the published bridge and validate it. Then stop
 the old coordinator and use the current verified-and-published schema-22 release for offline
-20->22 migration; do not start an intermediate schema-21 process. Export/import only at matching
-schema versions into an empty import target. CI/provenance or publication not green means no
+20->22 migration; do not start an intermediate schema-21 process. Reuse the retained local-path
+SQLite PV through the reviewed procedure; JSON import is PostgreSQL-only. CI/provenance or publication not green means no
 cutover; read exact image digests from successful CI provenance rather than guessing. In this first
 phase, stop only the four MWC writers, confirm their detachment, set their selected PVs to Retain,
 and rebind them one at a time with matching old/new claim UID checks. Never mount old and target
-claims simultaneously. Move/control SQLite only via supported encrypted export/import while
-offline (or a storage-owner-approved local-path move). Preserve all .codex except explicitly
+claims simultaneously. Preserve offline SQLite/WAL/SHM backup and the export, then perform the
+reviewed local-path PV rebind without changing its directory or node affinity. Preserve all .codex except explicitly
 identified disposable tmp caches. Leave Coder running.
 
 Validate Pod/PVC/PV identity, Longhorn attachments, schema, SSH host keys, SSH, Web Shell, routes,
