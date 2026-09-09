@@ -190,39 +190,47 @@ easier. Escalate if any schema transformation is non-reversible.
 ## Copy/paste task for the external cutover agent
 
 ```text
-Perform the final MWC unified-namespace migration as an external operator. Do not begin from the
-running Coder TOKEN center dev workspace and do not stop it from inside itself. Target exactly
-namespace memeloop-workspace-control; retain installation ID k3si-7032544955 and workspace-ID-
-qualified resource names. Do not deploy/delete anything until you have read
-docs/FINAL-MIGRATION-RUNBOOK.md and run scripts/final-migration-readiness.sh read-only.
+只迁移最后一个 Coder TOKEN center dev 工作区。必须从该工作区之外执行。
+先读 memeloop-workspace-control/IMPLEMENTATION_STATUS.md 的最新执行记录及
+docs/FINAL-MIGRATION-RUNBOOK.md 的“Second phase”章节。
 
-Current MWC source namespaces are mwc-k3si-7032544955 and ws-k3si-7032544955-{bd2dc9ca6aa2b1b5,
-b268ff46894a14b9,97645a0fb4771b1d,b405d2441a1ee149}; the independent Coder source namespace is
-coder. The two 100Gi claims are distinct: MWC rust-dev-test is
-workspace-data-w-b405d2441a1ee149-0 -> pvc-fe7130d7-18a2-470e-824e-a0dea84e9a5e; Coder is
-coder-f5c0873c-8b1e-4099-b781-af5477688c39-rust-dev-home ->
-pvc-4d799a12-262f-44ae-b3c2-c8c4cc5dfbc0. Verify each Pod->PVC->PV UID chain separately. The
-Coder chain is external-agent-only. game-forking's Longhorn volume was degraded and must be
-healthy first. Do not expose secrets or database contents.
+2026-09-09 已完成的部分不要重做：控制面和四个 MWC 工作区已迁入
+memeloop-workspace-control，数据库已是 schema 22，原 PV、SSH 端口及主机密钥保留，
+四工作区 SSH 与真实浏览器终端验收通过。不要停止它们，不要回滚数据库版本，
+不要重新执行第一阶段迁移。旧命名空间只属于尚待清理的残留。
 
-Pause Argo CD and every old reconciler before moving claims. Take and verify fresh Longhorn
-snapshots. Release production schema 19->20 using the published bridge and validate it. Then stop
-the old coordinator and use the current verified-and-published schema-22 release for offline
-20->22 migration; do not start an intermediate schema-21 process. Reuse the retained local-path
-SQLite PV through the reviewed procedure; JSON import is PostgreSQL-only. CI/provenance or publication not green means no
-cutover; read exact image digests from successful CI provenance rather than guessing. In this first
-phase, stop only the four MWC writers, confirm their detachment, set their selected PVs to Retain,
-and rebind them one at a time with matching old/new claim UID checks. Never mount old and target
-claims simultaneously. Preserve offline SQLite/WAL/SHM backup and the export, then perform the
-reviewed local-path PV rebind without changing its directory or node affinity. Preserve all .codex except explicitly
-identified disposable tmp caches. Leave Coder running.
+本次唯一源是 coder/coder-f5c0873c-8b1e-4099-b781-af5477688c39-rust-dev-home，
+记录的 PV 是 pvc-4d799a12-262f-44ae-b3c2-c8c4cc5dfbc0，容量100Gi。
+先复核当前 Pod→PVC→PV→claim UID，若已变化或另有迁移代理在操作则停止协调。
+这不是 MWC rust-dev-test 的100Gi卷，不能混用。
 
-Validate Pod/PVC/PV identity, Longhorn attachments, schema, SSH host keys, SSH, Web Shell, routes,
-and durable data for the four MWC workspaces. Keep old MWC namespaces/controllers/PVs for the
-agreed rollback window, then make MWC GitOps target-only. In the later external Coder change,
-retain normal four-MWC service and use the documented managed create -> stop -> Retain -> same-name
-PVC rebind -> start procedure. Only after Coder acceptance and both rollback windows may global
-cleanup prove no old namespace resources remain. Report commands, redacted metadata evidence,
-snapshots, CI digest provenance, downtime interval, acceptance results, and any blocked gate.
-Never use a broad delete-namespace command.
+使用正常 MWC API 创建一个目标工作区，选择兼容源实际 UID/GID、home 挂载路径和
+工具链的 Rust 模板。先验证源的 /home/token-center-dev、/home/rust-dev 等真实路径/
+符号链接及所有权，不凭历史名称猜测，也不递归 chown 整个 home。
+目标空 PVC Bound 后通过 API 停止目标，确认无 Pod 且卷已卸载。
+
+停止源之前保存原连接配置、SSH公钥/主机密钥指纹和会话数据的只读核验记录。
+按已授权窗口停止源 Coder 工作区的所有写入进程与控制器，完成 fresh Longhorn
+快照并验证 ready、无错误、可恢复。保留 .codex/sessions、SQLite/WAL/SHM、
+日志、配置、认证及代码仓库；不能仅因 logs_2.sqlite 较大就删除它。
+直接重绑原卷，无需复制目录。只清理经确认可再生成且已无活跃使用者的构建/
+缓存/临时目录；不得用覆盖整个 home 的清理命令。
+
+源 PV 和目标空 PV 均先改 Retain 并读回；使用 UID/resourceVersion 前置条件
+只删除两个精确的已停止 PVC，绝不删除 PV。源 PV Released 后测试旧 claimRef 再
+清除；用目标原 PVC 名及身份标签，volumeName 指向源 PV，创建替换目标 PVC。
+核验双向 Bound 和新的 claim UID 后才通过 API 启动目标。保留空目标 PV 和快照作回滚。
+
+验证：原 home/代码/.codex 数据、实际 user/UID、CLI 工具、凭据注入、SSH、
+网页终端、单写入者、资源配置和健康卷。主机密钥变化必须经可信通道校验，不能
+直接关掉 StrictHostKeyChecking。
+
+若拥有用户电脑访问权，备份实际客户端 SSH/远程连接配置，仅将旧 Coder 连接的
+主机、端口、用户和必要路径映射改为新实例，尽量保持显示名称与工作目录。
+通过真实重连验证远程工作环境和历史会话可见。若无电脑权限，提供精确新连接字段
+及待用户执行步骤，不声称已自动迁移桌面连接；持久会话可恢复不代表原进程存活。
+
+最后给出验收结果、停机时段、回滚方法、保留资源和精确清理清单。只有源无写入、
+目标验收通过且回滚窗口结束，才清理旧 Coder 控制器/配置/命名空间。不要批量删除
+其他工作区，不要输出任何 token、私钥、凭据明文或数据库内容。
 ```
