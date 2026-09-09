@@ -71,7 +71,23 @@ impl<H: JobHandler> JobWorker<H> {
         }
 
         let result = self.handle_with_lease_heartbeat(&job).await?;
-        let persistence_result = match result {
+        let persistence_result = self.persist_job_result(&job, result, now).await;
+        if let Some(workspace_id) = job.workspace_id {
+            self.database
+                .release_workspace_lease(workspace_id, &self.lease_owner)
+                .await?;
+        }
+        persistence_result?;
+        Ok(true)
+    }
+
+    async fn persist_job_result(
+        &self,
+        job: &ClaimedJob,
+        result: Result<(), JobHandlerError>,
+        now: i64,
+    ) -> Result<(), StorageError> {
+        match result {
             Ok(()) => {
                 self.database
                     .complete_job(job.id, &self.lease_owner, now)
@@ -93,26 +109,26 @@ impl<H: JobHandler> JobWorker<H> {
                     )
                     .await
             }
-            Err(error) => {
-                tracing::warn!(job_id = %job.id, attempts = job.attempts, error = %error, "job execution failed");
-                if job.attempts >= MAX_JOB_ATTEMPTS {
-                    tracing::error!(job_id = %job.id, attempts = job.attempts, "job reached the retry limit");
-                    self.database.fail_job(job.id, &self.lease_owner, now).await
-                } else {
-                    let delay = retry_delay(job.attempts);
-                    self.database
-                        .defer_job(job.id, &self.lease_owner, now.saturating_add(delay), now)
-                        .await
-                }
-            }
-        };
-        if let Some(workspace_id) = job.workspace_id {
-            self.database
-                .release_workspace_lease(workspace_id, &self.lease_owner)
-                .await?;
+            Err(error) => self.persist_failed_job(job, error, now).await,
         }
-        persistence_result?;
-        Ok(true)
+    }
+
+    async fn persist_failed_job(
+        &self,
+        job: &ClaimedJob,
+        error: JobHandlerError,
+        now: i64,
+    ) -> Result<(), StorageError> {
+        tracing::warn!(job_id = %job.id, attempts = job.attempts, error = %error, "job execution failed");
+        if job.attempts >= MAX_JOB_ATTEMPTS {
+            tracing::error!(job_id = %job.id, attempts = job.attempts, "job reached the retry limit");
+            self.database.fail_job(job.id, &self.lease_owner, now).await
+        } else {
+            let delay = retry_delay(job.attempts);
+            self.database
+                .defer_job(job.id, &self.lease_owner, now.saturating_add(delay), now)
+                .await
+        }
     }
 
     async fn handle_with_lease_heartbeat(
