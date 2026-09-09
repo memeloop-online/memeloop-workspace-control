@@ -93,7 +93,7 @@ describe it as active beforehand.
 
 The live v1.21.0 metrics endpoint confirms the exact metric labels are `name`
 and `namespace` (not `exported_namespace`). The prepared leaf alerts are:
-not Ready for 10 minutes (critical), past cert-manager's renewal timestamp for
+missing readiness telemetry or not Ready for 10 minutes (critical), past cert-manager's renewal timestamp for
 15 minutes (critical), and expiry within 14 days (warning). They use
 `certmanager_certificate_ready_status`,
 `certmanager_certificate_renewal_timestamp_seconds`, and

@@ -34,6 +34,24 @@ spec:
   groups:
     - name: mwc.ttyd-certificate-lifecycle
       rules:
+        - alert: MWCTtydLeafCertificateTelemetryMissing
+          expr: |
+            absent(certmanager_certificate_ready_status{
+              condition="True",name="ttyd-server-certificate",
+              namespace="memeloop-workspace-control"
+            })
+            or
+            absent(certmanager_certificate_ready_status{
+              condition="True",name="ttyd-client-certificate",
+              namespace="higress-system"
+            })
+          for: 10m
+          labels:
+            severity: critical
+            component: ttyd-mtls
+          annotations:
+            summary: "MWC ttyd mTLS certificate telemetry is missing"
+            description: "{{ $labels.namespace }}/{{ $labels.name }} has no readiness series; check the Certificate and cert-manager scrape."
         - alert: MWCTtydLeafCertificateNotReady
           expr: |
             certmanager_certificate_ready_status{

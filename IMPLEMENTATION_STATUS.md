@@ -728,6 +728,16 @@ schema bridge, writer shutdown, retained-volume and rollback gates.
   all-or-none validation. `mtls_certificate_rollout` owns native cert-manager leaf manifests
   and stable operator-managed CA/overlapping-root-rotation procedure. No custom CA-sync controller,
   node OS upgrade or production mTLS enablement has been performed.
+- `815ff90` implements independent client-trust projection and all16 env-presence tests;
+  Helm lint/full/partial rendering checks pass, full Rust tests remain CI-only.
+  `8f82fdf`/`ef01dfd` prepare native cert-manager leaves plus a measured-label ServiceMonitor
+  and scoped renewal/Ready/expiry alerts. They are not yet deployed.
+- `5796c4f` provides one-time, explicit-context CA bootstrap that refuses existing Secrets.
+  Ran preflight then apply on default: created two distinct root CA Secrets and two opposite
+  public-only trust Secrets in canonical/Higress namespaces. In-memory comparison confirms
+  each trust matches the correct opposite root and contains no private key. No leaf, ingress,
+  runtime setting or workload changed. Local private temporary files were removed.
+  Stable root-CA automatic expiry monitoring remains an explicit gap; leaf alerts are prepared.
 
 - Borrowing restriction for ports `31871` and `32671` was lifted by the user on 2026-09-09;
   preserve the normal snapshot, writer-freeze, volume-binding and rollback gates.
