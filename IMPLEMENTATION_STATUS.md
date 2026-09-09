@@ -666,6 +666,12 @@ schema bridge, writer shutdown, retained-volume and rollback gates.
   `c00ce94` deletes schema20/schema21 modules and conversion branches (452 net lines removed).
   Both are pushed; fresh CI `34323729617` runs on `c00ce94`. Additional isolated PostgreSQL
   and SQLite unsupported-version boundary coverage is assigned; no local Rust builds.
+- CI `34323729617` verify PASSED; control-image publication was still in progress at the last
+  observation, with the other three image jobs successful. Do not claim full publication yet.
+- Boundary tests `a9bb4e4` are reviewed and pushed; CI `34324256107` is running.
+  SQLite rejects 20/21/23 without conversion. PostgreSQL uses independent generated schemas
+  for fresh/current22 and 20/21/23 rejection; CI supplies MWC_TEST_POSTGRES_URL.
+  Wait for this newest complete verification/publication before selecting the final rollout pins.
 
 - Borrowing restriction for ports `31871` and `32671` was lifted by the user on 2026-09-09;
   preserve the normal snapshot, writer-freeze, volume-binding and rollback gates.
