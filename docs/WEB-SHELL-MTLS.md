@@ -1,18 +1,31 @@
 # Web Shell upstream mTLS
 
-## Production gate discovered on 2026-09-09
+## Production rollout on 2026-09-09
 
-The current `ttyd 1.7.7-40e79c7` official Docker binary uses Mbed TLS. A real
+The previously deployed `ttyd 1.7.7-40e79c7` official Docker binary uses Mbed TLS. A real
 configured workspace accepted a direct HTTPS request without a client certificate,
 even with `--ssl-ca`. Therefore it is **not an accepted client-authentication boundary**.
-The rollout is paused after one workspace; its normal gateway browser flow works,
-but that positive path does not prove that unauthenticated direct access is rejected.
+That finding stopped the rollout until a replacement passed client-authentication tests.
 
 [Upstream issue #1551](https://github.com/tsl0922/ttyd/issues/1551) reports this
 release-binary behavior. The replacement uses unchanged upstream ttyd source with
 OpenSSL-backed libwebsockets. Its release gate must explicitly validate the server CA
 and SAN in *every* request, then reject absent and untrusted client certificates.
 A server-trust failure is not evidence of client-certificate enforcement.
+
+CI `34348344598` passed all checks and published the replacement at
+`sha256:4cf08fd5dff9ed3ac23deb4615b96c7822beea3bfce8bd1f2efaedeb9f98f65b`.
+The CI matrix verifies valid client certificates before and after eight negative cases
+(SNI/IP × default TLS/TLS 1.2 × absent/wrong-CA client certificate).
+GitOps `3bf7374` pins this image through Harbor. All four production workspaces
+passed real browser terminal/resize/ticket-replay acceptance after sequential restarts.
+A direct IP request without a client certificate now
+fails for both default TLS and TLS 1.2, even when curl is explicitly told to ignore server
+trust; rejection is no longer a false positive from a client-side CA/SAN check.
+All four run the pinned image and report Ready; the control Application is Synced/Healthy.
+Strict SSH on all four preserved ports also passed against trusted existing host keys,
+and each workspace retained its `.codex/sessions` directory. No persistent SSH client
+configuration or development image was changed by this rollout.
 The older canary results below remain historical observations, not a waiver of this gate.
 
 This optional configuration makes the Higress-to-ttyd upstream mutually authenticated.
@@ -20,16 +33,17 @@ It protects ttyd when a CNI or cross-node SNAT makes an otherwise permitted gate
 address reachable directly. It does not replace external-auth: browser WebSocket requests
 still require and atomically consume the existing one-time Web Shell ticket.
 
-Do not enable this until the certificate material and the Higress controller behavior have
-been verified in the target cluster. Production acceptance is not yet complete. This feature
+Enable only after verifying certificate material and Higress controller behavior in the
+target cluster. The current installation passed the rollout checks above. This feature
 does not widen any NetworkPolicy source, CIDR, Service type, NodePort, or host-port access.
 
 The initial 2026-09-08 canary failed server-name validation on Higress 2.2.3: a wrong SNI still
 received HTTP 200. Ingress annotations alone are insufficient to assert certificate SAN
 verification. A subsequent canary using an exact-service EnvoyFilter passed the certificate
 tests below. Product lifecycle integration and its nine fake-Kubernetes regression scenarios
-passed full CI `34267525211` (source `a1b9257`). Production enablement still requires the
-published release, real reconciliation/cleanup and authenticated WebSocket acceptance.
+passed full CI `34267525211` (source `a1b9257`). The subsequent production rollout above
+adds real reconciliation and authenticated WebSocket evidence; destructive route-cleanup
+cases remain covered by the recorded lifecycle tests, not by deleting user workspaces.
 
 ## Enablement
 

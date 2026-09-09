@@ -12,8 +12,15 @@ static libwebsockets build because upstream CMake metadata exports the unbuilt
 `websockets_shared` target. Apply the same static-target metadata correction used by
 ttyd's upstream cross-build script; keep protocol sources unchanged. New CI and
 production no-client-certificate rejection remain required before further rollout.
-Correction committed as `6c89500`; CI `34348344598` is running. The ttyd worker
-owns this CI result, backend worker owns UI-02 organization aggregation, and
+Correction committed as `6c89500`; CI `34348344598` completed SUCCESS, including
+the eight negative mTLS cases and all image publishing jobs. GitOps `3bf7374`
+pins ttyd digest `4cf08fd5dff9ed3ac23deb4615b96c7822beea3bfce8bd1f2efaedeb9f98f65b`.
+All four workspaces passed new-image readiness, no-client IP rejection
+(default/TLS1.2), browser terminal/resize/ticket replay, and strict SSH on their
+preserved ports with trusted host keys and `.codex/sessions` present. Rollout session
+`10356` exited 0. GitOps is Synced/Healthy; all four Pods use the exact new digest.
+Temporary token files and trusted known-hosts files were removed. Final Coder was not touched.
+The ttyd worker owns strict SSH verification, backend worker owns UI-02 organization aggregation, and
 `organization_usage_ui` owns the matching frontend. Main owns deployment and ledger.
 
 ## Execution ledger — resume here
@@ -44,6 +51,7 @@ Cilium/Calico, split clusters, or restore the removed runtime-profile abstractio
 | SEC-04 | gVisor node preparation and optional RuntimeClass | User authorized root access and reboot of 100.64.0.10 (`serv-146231`). Kernel 5.15.220 booted; K3s active, old 4.18 remains default for rollback. runsc NOT installed: systemd 239 fails the supported systemd-cgroup prerequisite; do not bypass with filesystem cgroups. User now authorizes OS-upgrade PLANNING only; `gvisor_node_rollout` owns `docs/SERV-146231-OS-UPGRADE-PLAN.md`. Do not execute an OS upgrade yet. |
 | SEC-05 | API-key allowed-template IDs and bypass prevention | Full CI and production safe-path acceptance PASS. Temporary template-bound parent/child keys authenticated; wider-template/longer-expiry mint and scope-exceeded reads returned403; both revoked and returned401. Resource mutation bypass paths remain covered by CI, not production mutation tests. |
 | SEC-06 | External sandbox release acceptance | Pending SEC-01..05. Verify network escape paths, privilege/credential boundaries, CPU/memory/disk/PID pressure, SSH/Web Shell, restart/reschedule; fail closed. Installing components alone is not acceptance. |
+| SEC-07 | ttyd/Higress client authentication and certificate lifecycle | OpenSSL replacement CI `34348344598` PASS; GitOps `3bf7374` deployed. Four-workspace browser/SSH/no-client rejection rollout PASS (2026-09-09). Independent CA roles/cert-manager leaf expiry alerts deployed; leaf rotation requires planned ttyd restart, automatic root expiry telemetry remains pending. |
 | OPS-01 | Operator-only setup and automated product checks | Hardened installer `5bd4b95` passed real-tar fixture tests, CI hook `4b5c8b0`; node preparation `7b250f7`. Host registration/canary still pending eligible kernel and recovery checks. |
 | CLEAN-01 | Superseded API keys/cache injections/image policies | Preserve previous evidence; final transactional cleanup/rotation and deletion verification remain. Never expose secret values. |
 
