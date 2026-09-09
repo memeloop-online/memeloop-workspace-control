@@ -640,7 +640,9 @@ schema bridge, writer shutdown, retained-volume and rollback gates.
   canonical namespace `memeloop-workspace-control`, preserving other operators' `f6bbf03`.
   Remaining work includes the readiness-retry product fix and CI/release, old source resource
   closeout, image-policy cleanup, final external Coder handoff, and sandbox rollout gates.
-- Readiness fix `2ea34fa` is pushed to main; CI `34320677127` is active.
+- Readiness fix `2ea34fa` is pushed to main; CI `34320677127` ended FAILED at
+  `run_once` cognitive complexity 33/25. Assigned extraction of result persistence and
+  >10-pending recovery regressions; do not restart that finished CI run or weaken lint.
   Structured Pending outcomes and workspace-lease contention restore only the current claim's
   attempt, leaving genuine failure budget intact. Further >10-wait/recovery/lease tests assigned.
 - Confirmed four current workspaces and current template responses do not reference the two
@@ -651,6 +653,9 @@ schema bridge, writer shutdown, retained-volume and rollback gates.
   until exact cleanup is reviewed. Historical Released/Retain PV
   `pvc-b4facfbe-fa14-4616-99dd-37e5484a2c41` is not one of the five moved volumes;
   do not delete it as part of current volume cleanup.
+- External-agent copy/paste handoff updated in `9e34202`: only the remaining Coder workspace,
+  explicitly forbidding a repeat of the completed four-MWC/database migration. Includes
+  client-connection access limits, preserved session/state boundaries and exact source PV.
 
 - Borrowing restriction for ports `31871` and `32671` was lifted by the user on 2026-09-09;
   preserve the normal snapshot, writer-freeze, volume-binding and rollback gates.
