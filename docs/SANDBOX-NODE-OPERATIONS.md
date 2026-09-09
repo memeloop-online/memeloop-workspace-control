@@ -6,15 +6,18 @@ workload use gVisor. Those are separate reviewed changes. gVisor increases isola
 make a workload risk-free and can reduce Linux syscall, networking, filesystem, observability and
 device compatibility.
 
-## Current admission position (2026-09-08)
+## Current admission position (2026-09-09)
 
 The observed cluster has seven Ready amd64 nodes, all using K3s `v1.36.2+k3s1` with containerd
 `2.3.2-k3s2`. They therefore use the K3s v3 template path below. This is an observation, not a
 promise that every node is suitable.
 
-`serv-146231` runs kernel `4.18.0-553.139.1.el8_10.x86_64`. It is below the currently adopted
-gVisor minimum kernel `5.6` and is **excluded**: do not install gVisor there and do not add
-`sandbox.memeloop.dev/gvisor-ready=true`. It is also an overseas edge/control-plane node.
+`serv-146231` successfully booted the approved ELRepo `5.15.220-1.el8.elrepo` kernel;
+the previous 4.18 kernel remains the saved boot default for rollback. Its AlmaLinux 8.10
+systemd 239 still fails the supported gVisor systemd-cgroup prerequisite. It remains
+**excluded**: do not add `sandbox.memeloop.dev/gvisor-ready=true`. It is also an overseas
+edge/control-plane node. The user approved OS-upgrade planning, not execution;
+see [the separate OS plan](SERV-146231-OS-UPGRADE-PLAN.md) for execution and recovery gates.
 
 `iv-yeahgdnw8wwh2yppho5e` is the only presently identified non-control-plane, non-NAS candidate;
 it has kernel 5.15 and about 4 CPU / 3.8 GiB allocatable capacity. It is not automatically
@@ -24,9 +27,9 @@ overseas edge merely to make a sandbox pool.
 
 The user subsequently selected `100.64.0.10` for testing and authorized direct SSH operations.
 Its Kubernetes name is `serv-146231`; its host name is `serv.146231.com`. Root SSH is now
-verified. Kernel upgrade preparation is in progress; this authorization does not make the
-current 4.18 kernel eligible. Keep its existing bootable kernel until the replacement kernel,
-storage/network drivers and node rejoin have passed validation.
+verified. The authorized kernel upgrade and node rejoin completed; do not repeat them.
+No runsc handler or RuntimeClass has been installed. Retain the known bootable kernels,
+and complete the separate userspace prerequisite before runtime registration.
 
 An approved read-only host-mount inspection on iv found a cgroup v2 filesystem and a generated
 containerd `config.toml` at version 3. Its listed handlers are the existing `runc` and

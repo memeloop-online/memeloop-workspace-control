@@ -3,7 +3,7 @@
 This is the durable continuation checkpoint. Continue from **Execution ledger** after context
 compaction. Do not repeat completed audits unless new evidence contradicts them.
 
-Last updated: 2026-09-08
+Last updated: 2026-09-09
 
 ## Execution ledger — resume here
 
@@ -19,18 +19,18 @@ Cilium/Calico, split clusters, or restore the removed runtime-profile abstractio
 
 | ID | Work | State / owner / next gate |
 | --- | --- | --- |
-| MIG-01 | Canonical shared Namespace in product and Chart | Source committed: `c0b2a80`, `0a545d3`; not deployed. PostgreSQL fixture raw-SQL fix landed with integration updates; full CI rerun still required. Latest all-target fixture cleanup owned by `http_fixture_clocks`; no rollout until green. |
-| MIG-02 | Required schema 19→20→22 transitions and GitOps promotion | Pending deployment. Code review confirms current release supports atomic offline 20→22 on SQLite/PostgreSQL; no intermediate schema-21 controller needed. First use the published 19→20 bridge, then stop old coordinator before current-release offline migration. CI/image gate remains; snapshots require exact matching schema. Runbook corrections completed in `0e2c8f2`, `8e2321e`, `773e61a`; staged GitOps delta `8587d39` is not pushed/applied. |
-| MIG-03 | Four MWC workloads/PVCs/control-plane volume into canonical Namespace | Pending gated cutover. Reuse verified volumes; snapshot, single writer, SSH/host key/PVC/session validation before retiring old resources. |
-| MIG-04 | Last active Coder TOKEN center dev workspace | External-agent cutover only. Current source PVC is 100 GiB; do not stop this workspace from inside itself. Prepare complete copyable final procedure. |
-| MIG-05 | Delete superseded namespaces/resources and retired code/names | Pending after MIG-02/03/04 acceptance. Remove one-time migration compatibility only after live migration; no false claim of completion while old namespaces remain. |
-| IMG-01 | Upgrade maintainance and rust-dev-test to verified images | Waiting for borrower release of ports 31871/32671; preserve sessions/WAL/logs. 2026-09-08 messaging tool returned unavailable, so release is not confirmed. |
-| UI-01 | Final UI closeout | Source committed `c3596e9`, embedded assets `44eca28`; publish/deploy and targeted responsive regression remain. Do not redo earlier twelve-feature audit. |
+| MIG-01 | Canonical shared Namespace in product and Chart | COMPLETE. Production uses exact `memeloop-workspace-control`; CI `34324256107` and GitOps `eb05819` passed. |
+| MIG-02 | Required schema 19→20→22 transitions and GitOps promotion | COMPLETE. Offline migration and integrity evidence recorded below; production schema22. Compatibility removed in deployed a9bb4e4. Never rerun bridge steps against current DB. |
+| MIG-03 | Four MWC workloads/PVCs/control-plane volume into canonical Namespace | COMPLETE. Five original PVs directly rebound; four strict SSH and real browser ttyd checks passed. All canonical claims Bound. |
+| MIG-04 | Last active Coder TOKEN center dev workspace | External-agent cutover only; pending execution. Copyable procedure is in `docs/FINAL-MIGRATION-RUNBOOK.md`, updated for completed MWC migration. Source PVC 100Gi; do not stop this workspace from inside itself. |
+| MIG-05 | Delete superseded namespaces/resources and retired code/names | Five old MWC namespaces deleted and absence confirmed; bridge code removed/deployed. Remaining Coder cleanup belongs to MIG-04. Preserve immutable installation identity and recovery artifacts. |
+| IMG-01 | Upgrade maintainance and rust-dev-test to verified images | COMPLETE. Borrower released both ports; images upgraded during accepted cutover. Old unreferenced 20260902 policies disabled. |
+| UI-01 | Final UI closeout | Production 768/1440 checks pass; 360px has 15px right-edge clipping. Main inspected actual screenshots, also found low-contrast settings metadata. `canonical_ui_acceptance` owns bounded CSS fix and viewport regression; no full-feature re-audit. |
 | SEC-01 | Actual NetworkPolicy enforcement, same-/cross-node tests | Harbor recovered by separate ops. Ingress deny passed all four paths; cross-node ingress selector allow FAILED. Egress matrix passed 12 checks. Boundary retry passed 30 checks including same/other node API/kubelet denial, Kubernetes Service denial, public TCP and DNS retained. Evidence: `/tmp/mwc-network-{acceptance,egress,boundaries-alidns}-20260908.json`; all disposable namespaces deleted. No test process remains running. Other-node and startup coverage remain. |
 | SEC-02 | Product egress isolation and least-source ingress | Source `0f062b8`, review fix `5589e35` (global-unicast IPv6, optional DNS fail-closed). Deployment and full SEC-01 evidence pending. Live policy remains ingress-only with broad ttyd sources: external tenant acceptance is NOT passed. |
-| SEC-03 | Template optional `runtime_class_name`, API/YAML/UI/Pod rendering | Source committed `37fc09b`; formatting, TypeScript and targeted draft tests passed. Full CI and live runtime acceptance pending. No silent fallback; existing ordinary templates unchanged. |
+| SEC-03 | Template optional `runtime_class_name`, API/YAML/UI/Pod rendering | Source `37fc09b` included in deployed release; full CI passed. Live gVisor acceptance remains blocked on SEC-04. No silent fallback; existing ordinary templates unchanged. |
 | SEC-04 | gVisor node preparation and optional RuntimeClass | User authorized root access and reboot of 100.64.0.10 (`serv-146231`). Kernel 5.15.220 booted; K3s active, old 4.18 remains default for rollback. runsc NOT installed: systemd 239 fails the supported systemd-cgroup prerequisite; do not bypass with filesystem cgroups. User now authorizes OS-upgrade PLANNING only; `gvisor_node_rollout` owns `docs/SERV-146231-OS-UPGRADE-PLAN.md`. Do not execute an OS upgrade yet. |
-| SEC-05 | API-key allowed-template IDs and bypass prevention | Source `f02d7cb`, bypass fixes `205be6e`, `506f13f`, `0f90fd9`; read-only HTTP regression `504b375`. CI failures fixed in `f010ccf`, with explicit child-expiry-above-parent 403 regression retained. Workflow-dispatch CI `34254345334` PASSED for `32945cc`, including all four image publications. Duplicate push CI `34254342932` cancelled. Not deployed/accepted. |
+| SEC-05 | API-key allowed-template IDs and bypass prevention | Full CI and production safe-path acceptance PASS. Temporary template-bound parent/child keys authenticated; wider-template/longer-expiry mint and scope-exceeded reads returned403; both revoked and returned401. Resource mutation bypass paths remain covered by CI, not production mutation tests. |
 | SEC-06 | External sandbox release acceptance | Pending SEC-01..05. Verify network escape paths, privilege/credential boundaries, CPU/memory/disk/PID pressure, SSH/Web Shell, restart/reschedule; fail closed. Installing components alone is not acceptance. |
 | OPS-01 | Operator-only setup and automated product checks | Hardened installer `5bd4b95` passed real-tar fixture tests, CI hook `4b5c8b0`; node preparation `7b250f7`. Host registration/canary still pending eligible kernel and recovery checks. |
 | CLEAN-01 | Superseded API keys/cache injections/image policies | Preserve previous evidence; final transactional cleanup/rotation and deletion verification remain. Never expose secret values. |
@@ -712,6 +712,22 @@ schema bridge, writer shutdown, retained-volume and rollback gates.
 - Closeout scope is the five obsolete namespaces, not a claim that every remaining ledger item
   is complete. External Coder migration and protected sandbox/mTLS/gVisor rollout gates remain;
   installation identity and recovery artifacts must not be blindly renamed or removed.
+- 2026-09-09 continuation: prior turn classified as progress (release and namespace retirement).
+  Main/routing Apps read back Synced/Healthy with automated prune/self-heal restored.
+  Updated the resume table itself, not only its historical appendix, to avoid stale pending rows.
+- SEC-05 production runner `scripts/live-key-boundary-acceptance.ts` passed with temporary
+  ten-minute keys and only read/mint/revoke requests. No workspace/template/injection was changed.
+  All temporary keys were revoked and independently returned401. No credentials were logged.
+- UI-01 production screenshots at
+  `/home/token-center-dev/.codex/visualizations/2026/08/25/01a03b21-c07f-7713-864f-f29b10d74a6f/mwc-ui01-production`
+  cover workspaces/settings at360/768/1440. No double scrollbars observed; 360 right-edge
+  clipping and light-theme metadata contrast need a bounded fix assigned to the same reviewer.
+- mTLS certificate preparation found cert-manager available but no general trust distribution
+  controller. Current single-Secret leaf/trust layout conflicts with cert-manager's ca.crt.
+  `ttyd_independent_client_trust` owns separate projected client-trust Secret and four-value
+  all-or-none validation. `mtls_certificate_rollout` owns native cert-manager leaf manifests
+  and stable operator-managed CA/overlapping-root-rotation procedure. No custom CA-sync controller,
+  node OS upgrade or production mTLS enablement has been performed.
 
 - Borrowing restriction for ports `31871` and `32671` was lifted by the user on 2026-09-09;
   preserve the normal snapshot, writer-freeze, volume-binding and rollback gates.
