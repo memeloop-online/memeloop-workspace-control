@@ -1,4 +1,8 @@
-use std::collections::BTreeMap;
+use std::{
+    collections::BTreeMap,
+    net::IpAddr,
+    sync::{Arc, RwLock},
+};
 
 use ipnet::IpNet;
 use k8s_openapi::{
@@ -26,6 +30,7 @@ mod buildkit;
 mod client;
 #[cfg(test)]
 mod client_tests;
+mod egress_refresh;
 mod envoy_filter;
 mod higress;
 mod http_proxy;
@@ -40,6 +45,9 @@ mod workload;
 mod workspace_pod;
 
 pub use client::{DeleteProgress, KubernetesCoordinator, ReconcileError, workspace_ssh_node_port};
+pub use egress_refresh::{
+    DynamicEgressRefresh, DynamicEgressRefreshConfig, DynamicEgressRefreshError,
+};
 pub use materialization::{InjectionMaterialization, MaterializationError};
 pub use ownership::OwnershipError;
 
@@ -167,6 +175,7 @@ pub struct InternetEgressConfig {
     pub dns_namespace: String,
     pub dns_pod_labels: BTreeMap<String, String>,
     pub additional_blocked_cidrs: Vec<IpNet>,
+    observed_blocked_cidrs: Arc<RwLock<Vec<IpNet>>>,
 }
 
 impl InternetEgressConfig {
@@ -179,9 +188,36 @@ impl InternetEgressConfig {
             dns_namespace,
             dns_pod_labels,
             additional_blocked_cidrs,
+            observed_blocked_cidrs: Arc::new(RwLock::new(Vec::new())),
         };
         config.validate()?;
         Ok(config)
+    }
+
+    pub fn remember_blocked_addresses(&self, addresses: impl IntoIterator<Item = IpAddr>) -> usize {
+        let mut observed = self
+            .observed_blocked_cidrs
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let before = observed.len();
+        for address in addresses {
+            let cidr = IpNet::from(address);
+            if !self.additional_blocked_cidrs.contains(&cidr) && !observed.contains(&cidr) {
+                observed.push(cidr);
+            }
+        }
+        observed.sort_unstable_by_key(ToString::to_string);
+        observed.len() - before
+    }
+
+    pub fn blocked_cidrs(&self) -> Vec<IpNet> {
+        let observed = self
+            .observed_blocked_cidrs
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut blocked = self.additional_blocked_cidrs.clone();
+        blocked.extend(observed.iter().copied());
+        blocked
     }
 
     pub fn validate(&self) -> Result<(), InternetEgressConfigError> {

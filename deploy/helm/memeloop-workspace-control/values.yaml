@@ -46,6 +46,12 @@ workspace:
       k8s-app: kube-dns
     # Add public node IPs and nonstandard Pod/Service CIDRs that must not be reachable.
     additionalBlockedCidrs: []
+    # Resolve these public DNS names and retain every observed address as an additional block.
+    dynamicBlockedHosts: []
+    publicDnsServers:
+      - 1.1.1.1
+      - 1.0.0.1
+    dynamicRefreshSeconds: 300
 
 # Optional read-only startup packages can be supplied by ConfigMap or PVC.
 # Dynamically inspected and administrator-approved packages are persisted in

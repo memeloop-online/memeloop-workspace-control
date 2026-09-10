@@ -81,6 +81,12 @@ spec:
               value: {{ .Values.workspace.egress.dnsPodLabels | toJson | quote }}
             - name: MWC_EGRESS_ADDITIONAL_BLOCKED_CIDRS_JSON
               value: {{ .Values.workspace.egress.additionalBlockedCidrs | toJson | quote }}
+            - name: MWC_EGRESS_DYNAMIC_BLOCKED_HOSTS_JSON
+              value: {{ .Values.workspace.egress.dynamicBlockedHosts | toJson | quote }}
+            - name: MWC_EGRESS_PUBLIC_DNS_SERVERS_JSON
+              value: {{ .Values.workspace.egress.publicDnsServers | toJson | quote }}
+            - name: MWC_EGRESS_DYNAMIC_REFRESH_SECONDS
+              value: {{ .Values.workspace.egress.dynamicRefreshSeconds | quote }}
             {{- if .Values.workspace.internalSshHost }}
             - name: MWC_INTERNAL_SSH_HOST
               value: {{ .Values.workspace.internalSshHost | quote }}

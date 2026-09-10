@@ -93,14 +93,15 @@ pub(super) fn build(
 }
 
 fn internet_egress_rules(config: &InternetEgressConfig) -> Vec<NetworkPolicyEgressRule> {
+    let blocked_cidrs = config.blocked_cidrs();
     let mut rules = vec![dns_egress_rule(
         &config.dns_namespace,
         &config.dns_pod_labels,
     )];
-    if let Some(rule) = public_egress_rule("0.0.0.0/0", PRIVATE_OR_RESERVED_IPV4, config) {
+    if let Some(rule) = public_egress_rule("0.0.0.0/0", PRIVATE_OR_RESERVED_IPV4, &blocked_cidrs) {
         rules.push(rule);
     }
-    if let Some(rule) = public_egress_rule("2000::/3", PRIVATE_OR_RESERVED_IPV6, config) {
+    if let Some(rule) = public_egress_rule("2000::/3", PRIVATE_OR_RESERVED_IPV6, &blocked_cidrs) {
         rules.push(rule);
     }
     rules
@@ -132,14 +133,13 @@ fn dns_egress_rule(
 fn public_egress_rule(
     cidr: &str,
     default_except: &[&str],
-    config: &InternetEgressConfig,
+    blocked_cidrs: &[ipnet::IpNet],
 ) -> Option<NetworkPolicyEgressRule> {
     let allowed = cidr
         .parse::<ipnet::IpNet>()
         .expect("static public CIDR is valid");
     let ipv4 = allowed.addr().is_ipv4();
-    if config
-        .additional_blocked_cidrs
+    if blocked_cidrs
         .iter()
         .any(|blocked| blocked.contains(&allowed))
     {
@@ -150,8 +150,7 @@ fn public_egress_rule(
         .map(|cidr| (*cidr).to_owned())
         .collect::<Vec<_>>();
     except.extend(
-        config
-            .additional_blocked_cidrs
+        blocked_cidrs
             .iter()
             .filter(|blocked| blocked.addr().is_ipv4() == ipv4 && allowed.contains(*blocked))
             .map(ToString::to_string),

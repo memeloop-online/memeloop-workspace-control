@@ -1,9 +1,12 @@
-use std::{collections::BTreeMap, io};
+use std::{collections::BTreeMap, io, time::Duration};
 
 use ipnet::IpNet;
 use memeloop_workspace_control::{
     config::AppConfig,
-    kubernetes::{InternetEgressConfig, ResourceBuilder, TtydMtlsConfig},
+    kubernetes::{
+        DynamicEgressRefresh, DynamicEgressRefreshConfig, InternetEgressConfig, ResourceBuilder,
+        TtydMtlsConfig,
+    },
 };
 
 pub(super) fn resource_builder(config: &AppConfig) -> Result<ResourceBuilder, io::Error> {
@@ -106,6 +109,41 @@ pub(super) fn resource_builder(config: &AppConfig) -> Result<ResourceBuilder, io
     })
 }
 
+pub(super) fn dynamic_egress_refresh(
+    builder: &ResourceBuilder,
+) -> Result<Option<DynamicEgressRefresh>, io::Error> {
+    let hostnames = optional_json_strings("MWC_EGRESS_DYNAMIC_BLOCKED_HOSTS_JSON")?;
+    let Some(hostnames) = hostnames.filter(|hostnames| !hostnames.is_empty()) else {
+        return Ok(None);
+    };
+    let egress = builder.internet_egress.clone().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "dynamic blocked hosts require internet-only egress configuration",
+        )
+    })?;
+    let public_dns_servers = optional_json_strings("MWC_EGRESS_PUBLIC_DNS_SERVERS_JSON")?
+        .unwrap_or_else(|| vec!["1.1.1.1".to_owned(), "1.0.0.1".to_owned()]);
+    let public_dns_servers = public_dns_servers
+        .into_iter()
+        .map(|address| {
+            address
+                .parse()
+                .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let interval = std::env::var("MWC_EGRESS_DYNAMIC_REFRESH_SECONDS")
+        .unwrap_or_else(|_| "300".to_owned())
+        .parse::<u64>()
+        .map(Duration::from_secs)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+    let config = DynamicEgressRefreshConfig::new(hostnames, public_dns_servers, interval)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+    DynamicEgressRefresh::new(config, egress)
+        .map(Some)
+        .map_err(|error| io::Error::other(error))
+}
+
 fn ttyd_mtls_config(gateway_namespace: &str) -> Result<Option<TtydMtlsConfig>, io::Error> {
     let server = optional_env("MWC_TTYD_MTLS_SERVER_SECRET")?;
     let client_ca = optional_env("MWC_TTYD_MTLS_CLIENT_CA_SECRET")?;
@@ -201,6 +239,20 @@ fn optional_cidrs(name: &'static str) -> Result<Option<Vec<IpNet>>, io::Error> {
         })
         .collect::<Result<Vec<_>, _>>()
         .map(Some)
+}
+
+fn optional_json_strings(name: &'static str) -> Result<Option<Vec<String>>, io::Error> {
+    let Some(value) = optional_env(name)? else {
+        return Ok(None);
+    };
+    serde_json::from_str::<Vec<String>>(&value)
+        .map(Some)
+        .map_err(|error| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("{name} must be a JSON string array: {error}"),
+            )
+        })
 }
 
 #[cfg(test)]

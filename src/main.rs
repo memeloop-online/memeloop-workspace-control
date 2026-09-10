@@ -52,8 +52,15 @@ async fn serve(config: AppConfig, database: Database) -> Result<(), Box<dyn std:
     if diagnostics_enabled {
         jemalloc_pprof::activate_jemalloc_profiling().await;
     }
-    let (kubernetes_client, workspace_handler) =
-        kubernetes_runtime(&config, &database, &cipher, kubernetes_enabled).await?;
+    let (shutdown_tx, _) = tokio::sync::watch::channel(false);
+    let (kubernetes_client, workspace_handler, egress_refresh_handle) = kubernetes_runtime(
+        &config,
+        &database,
+        &cipher,
+        kubernetes_enabled,
+        shutdown_tx.subscribe(),
+    )
+    .await?;
     let state = app_state(
         &config,
         database.clone(),
@@ -72,7 +79,6 @@ async fn serve(config: AppConfig, database: Database) -> Result<(), Box<dyn std:
     )?;
     let internal_listen_address =
         internal_listener_address(kubernetes_enabled, diagnostics_enabled)?;
-    let (shutdown_tx, _) = tokio::sync::watch::channel(false);
     let worker_handle = worker.map(|worker| {
         let shutdown = shutdown_tx.subscribe();
         tokio::spawn(async move { worker.run_until_shutdown(shutdown).await })
@@ -94,7 +100,7 @@ async fn serve(config: AppConfig, database: Database) -> Result<(), Box<dyn std:
         })
         .await;
     let _ = shutdown_tx.send(true);
-    await_background_tasks(worker_handle, internal_handle).await?;
+    await_background_tasks(worker_handle, internal_handle, egress_refresh_handle).await?;
     server_result?;
     Ok(())
 }
@@ -102,6 +108,7 @@ async fn serve(config: AppConfig, database: Database) -> Result<(), Box<dyn std:
 type InternalServerHandle = tokio::task::JoinHandle<Result<(), io::Error>>;
 type WorkerHandle =
     tokio::task::JoinHandle<Result<(), memeloop_workspace_control::jobs::JobWorkerError>>;
+type EgressRefreshHandle = tokio::task::JoinHandle<()>;
 
 async fn start_internal_listener(
     address: Option<std::net::SocketAddr>,
@@ -125,12 +132,16 @@ async fn start_internal_listener(
 async fn await_background_tasks(
     worker: Option<WorkerHandle>,
     internal: Option<InternalServerHandle>,
+    egress_refresh: Option<EgressRefreshHandle>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if let Some(handle) = worker {
         handle.await??;
     }
     if let Some(handle) = internal {
         handle.await??;
+    }
+    if let Some(handle) = egress_refresh {
+        handle.await?;
     }
     Ok(())
 }
@@ -148,9 +159,17 @@ async fn kubernetes_runtime(
     database: &Database,
     cipher: &Option<EnvelopeCipher>,
     enabled: bool,
-) -> Result<(Option<kube::Client>, Option<WorkspaceReconcileHandler>), Box<dyn std::error::Error>> {
+    shutdown: tokio::sync::watch::Receiver<bool>,
+) -> Result<
+    (
+        Option<kube::Client>,
+        Option<WorkspaceReconcileHandler>,
+        Option<EgressRefreshHandle>,
+    ),
+    Box<dyn std::error::Error>,
+> {
     if !enabled {
-        return Ok((None, None));
+        return Ok((None, None, None));
     }
     let workspace_cipher = cipher.clone().ok_or_else(|| {
         io::Error::new(
@@ -161,11 +180,27 @@ async fn kubernetes_runtime(
     let client = kube::Client::try_default().await?;
     let builder = kubernetes_config::resource_builder(config)?;
     let coordinator = KubernetesCoordinator::new(client.clone(), builder.clone());
+    let dynamic_egress = kubernetes_config::dynamic_egress_refresh(&builder)?;
+    if let Some(refresh) = &dynamic_egress {
+        let result = refresh.refresh_addresses().await?;
+        info!(
+            resolved_addresses = result.resolved_addresses,
+            added_addresses = result.added_addresses,
+            successful_queries = result.successful_queries,
+            failed_queries = result.failed_queries,
+            "dynamic workspace egress blocks initialized"
+        );
+    }
     let refreshed = coordinator.refresh_network_policies(database).await?;
     info!(refreshed, "existing workspace network policies refreshed");
+    let refresh_handle = dynamic_egress.map(|refresh| {
+        let database = database.clone();
+        let coordinator = coordinator.clone();
+        tokio::spawn(async move { refresh.run(database, coordinator, shutdown).await })
+    });
     let handler =
         WorkspaceReconcileHandler::new(database.clone(), workspace_cipher, builder, coordinator);
-    Ok((Some(client), Some(handler)))
+    Ok((Some(client), Some(handler), refresh_handle))
 }
 
 fn job_worker(
