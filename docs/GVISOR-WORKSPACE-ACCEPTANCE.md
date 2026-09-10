@@ -59,6 +59,14 @@ Connections to `100.64.0.1:6443`, `100.64.0.10:10250`, `10.43.0.1:443`,
 and `169.254.169.254:80` did not connect within 2.5 seconds. These finite probes
 do not prove all network paths or dynamic public-address isolation.
 
+Application mapping acceptance used the formal workspace after its ttyd sidecar
+was upgraded to the authenticated port proxy. The original application port
+was unreachable from another workspace, while port 8443 rejected a client
+without the gateway certificate. Higress rejected an unauthenticated request,
+accepted a one-use bootstrap session, and rejected ticket replay. Adding and
+removing mappings reloaded and cleared the exact route without replacing the
+workspace Pod.
+
 The memory-template workspace is `01a087be-5b8d-7021-bbb8-17d8c506c1cd`,
 Pod `w-bbb817d8c506c1cd-0`. Its rendered build and Codex scratch volumes both
 specify `Memory`. It started successfully, and host-side filesystem inspection

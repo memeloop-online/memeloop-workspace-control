@@ -147,29 +147,26 @@ compensation for this path, not a user or Higress identity; ttyd's separately
 validated upstream mTLS is required before a shell is accessible.  Network
 reachability and mTLS-authenticated access are distinct acceptance claims.
 
-Application port mappings do not yet have that upstream mTLS boundary. A
-disposable HTTP listener on the formal gVisor workspace returned 401 through
-Higress without a session, and 200 after the mapping's one-use bootstrap URL
-established a session. A direct request from the current cluster workspace to
-the target Pod IP on port 3000 also returned the test content without gateway
-authentication. The configured source-CIDR exception allowed that path.
+Application port mappings use the same upstream mTLS identity boundary as the
+Web Shell. Standard Nginx in the ttyd sidecar listens on port 8443, validates
+the Higress client certificate, and forwards only hostnames present in the
+workspace's projected route ConfigMap. Mapping Services retain their public
+application port but target 8443; their NetworkPolicies no longer open the
+original application port.
 
-This demonstrates a cluster-source bypass of application gateway authentication,
-not an `internet_only` workspace escaping its outbound NetworkPolicy. Do not
-claim that only authenticated Higress traffic can reach mapped application ports
-until the upstream identity boundary is implemented. Keep the existing
-MASQUERADE configuration: the cluster networking runbook records it as required
-for cross-node routing. The test listener and mapping were removed afterward.
+Live acceptance on the formal gVisor workspace proved that another cluster
+workspace could not connect to the target Pod IP on port 3000. Connecting to
+8443 without a client certificate returned 400. Higress returned 401 without a
+mapping session; a one-use bootstrap established a session and returned the
+test application with HTTP 200; replaying that ticket returned 401.
 
-The implementation in progress uses standard Nginx in the existing ttyd image,
-listening on the already-reserved port 8443 and reusing its mounted server
-certificate and gateway client CA. A projected ConfigMap allowlists mapping
-hostnames to loopback application ports. Higress must authenticate and validate
-this upstream, and mapping NetworkPolicies must open only 8443, not the original
-application port. Route edits must reload the proxy without replacing the
-workspace Pod. The image component alone does not close the bypass: resource
-coordination, gateway configuration, rollout and live negative tests are required
-before declaring this boundary complete.
+Adding a mapping to an already-running workspace updated the route ConfigMap
+and EnvoyFilter without changing the workspace Pod UID. The new route became
+available through Higress. Deleting each disposable mapping removed its
+Service, Ingress, NetworkPolicy, EnvoyFilter and route entry, again without
+replacing the Pod. The disposable listeners and mappings were removed after
+acceptance. Keep the existing MASQUERADE configuration because the cluster
+networking runbook records it as required for cross-node routing.
 
 These observations do not establish every eligible node, IPv6, host or
 metadata behavior, an actual external-tenant workspace lifecycle, or full
