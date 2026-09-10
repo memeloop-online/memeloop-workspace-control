@@ -53,10 +53,14 @@ LABEL org.opencontainers.image.source="https://github.com/tsl0922/ttyd" \
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        libjson-c5 libssl3 libuv1 openssh-client zlib1g \
+        libjson-c5 libssl3 libuv1 nginx-light openssh-client zlib1g \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=build /src/ttyd-build/ttyd /usr/bin/ttyd
+COPY nginx.conf /etc/mwc-http-proxy.conf
+COPY start.sh /usr/local/bin/mwc-ttyd-start
+RUN chmod 0755 /usr/local/bin/mwc-ttyd-start \
+    && mkdir -p /etc/mwc-http-routes
 
 USER root
 EXPOSE 7681

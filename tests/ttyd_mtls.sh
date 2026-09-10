@@ -122,3 +122,6 @@ for host in localhost 127.0.0.1; do
 done
 
 printf '%s\n' 'ttyd mTLS image test passed'
+
+# Reuse the disposable PKI and image; the existing cleanup trap owns both tests.
+source "$(dirname "$0")/port_proxy_mtls.sh"
