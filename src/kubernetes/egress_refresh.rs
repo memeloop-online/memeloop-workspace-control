@@ -121,25 +121,7 @@ impl DynamicEgressRefresh {
         loop {
             tokio::select! {
                 _ = tokio::time::sleep(self.config.interval) => {
-                    match self.refresh_addresses().await {
-                        Ok(result) if result.added_addresses > 0 => {
-                            match coordinator.refresh_network_policies(&database).await {
-                                Ok(updated) => info!(
-                                    added_addresses = result.added_addresses,
-                                    resolved_addresses = result.resolved_addresses,
-                                    updated,
-                                    "dynamic workspace egress blocks refreshed"
-                                ),
-                                Err(error) => warn!(error = %error, "dynamic workspace policy refresh failed"),
-                            }
-                        }
-                        Ok(result) => info!(
-                            resolved_addresses = result.resolved_addresses,
-                            failed_queries = result.failed_queries,
-                            "dynamic workspace egress blocks unchanged"
-                        ),
-                        Err(error) => warn!(error = %error, "dynamic workspace egress resolution failed"),
-                    }
+                    self.refresh_policies_once(&database, &coordinator).await;
                 }
                 changed = shutdown.changed() => {
                     if changed.is_err() || *shutdown.borrow() {
@@ -147,6 +129,37 @@ impl DynamicEgressRefresh {
                     }
                 }
             }
+        }
+    }
+
+    async fn refresh_policies_once(
+        &self,
+        database: &Database,
+        coordinator: &KubernetesCoordinator,
+    ) {
+        let result = match self.refresh_addresses().await {
+            Ok(result) => result,
+            Err(error) => {
+                warn!(error = %error, "dynamic workspace egress resolution failed");
+                return;
+            }
+        };
+        if result.added_addresses == 0 {
+            info!(
+                resolved_addresses = result.resolved_addresses,
+                failed_queries = result.failed_queries,
+                "dynamic workspace egress blocks unchanged"
+            );
+            return;
+        }
+        match coordinator.refresh_network_policies(database).await {
+            Ok(updated) => info!(
+                added_addresses = result.added_addresses,
+                resolved_addresses = result.resolved_addresses,
+                updated,
+                "dynamic workspace egress blocks refreshed"
+            ),
+            Err(error) => warn!(error = %error, "dynamic workspace policy refresh failed"),
         }
     }
 
