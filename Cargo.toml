@@ -18,7 +18,7 @@ hmac = "0.12"
 ipnet = "2.12.1"
 k8s-openapi = { version = "0.28", features = ["v1_36"] }
 kube = { version = "4.2", default-features = false, features = ["client", "rustls-tls"] }
-reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "stream"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "query", "rustls", "stream"] }
 rand_core = { version = "0.6", features = ["getrandom"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
