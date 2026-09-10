@@ -184,7 +184,7 @@ impl DynamicEgressRefresh {
                 lookup
                     .answers()
                     .iter()
-                    .filter_map(|record| match record.data() {
+                    .filter_map(|record| match &record.data {
                         RData::A(address) => Some(IpAddr::V4(address.0)),
                         RData::AAAA(address) => Some(IpAddr::V6(address.0)),
                         _ => None,
