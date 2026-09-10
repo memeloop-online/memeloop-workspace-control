@@ -314,7 +314,7 @@ async fn delete_first_owned<K>(
     workspace_id: Uuid,
 ) -> Result<bool, ReconcileError>
 where
-    K: Clone + DeserializeOwned + Debug + Resource<DynamicType = ()>,
+    K: Clone + DeserializeOwned + Debug + Resource,
 {
     let Some(existing) = api.list(list).await?.into_iter().next() else {
         return Ok(false);
