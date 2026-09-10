@@ -236,3 +236,60 @@ async fn policy_without_database_record_is_ignored() {
     );
     assert_eq!(requests.lock().unwrap().len(), 1);
 }
+
+#[tokio::test]
+async fn port_mapping_policy_uses_the_same_spec_only_refresh() {
+    let (mut builder, workspace) = fixture();
+    builder.port_mapping_domain = Some("example.test".to_owned());
+    let mapping = crate::storage::PortMapping {
+        id: Uuid::now_v7(),
+        organization_id: workspace.organization_id,
+        workspace_id: workspace.id,
+        internal_port: 3000,
+        display_name: None,
+        created_by: workspace.owner_id,
+        created_at: 1,
+    };
+    let (_, _, desired) = builder
+        .port_mapping_resources(&workspace, &mapping)
+        .unwrap()
+        .unwrap();
+    let mut stale = desired.clone();
+    stale.metadata.resource_version = Some("9".to_owned());
+    stale.spec.as_mut().unwrap().ingress = Some(vec![]);
+    let (coordinator, api, requests) = mock(builder, vec![(200, json!(desired))]);
+    let policies = coordinator
+        .desired_network_policies(&workspace, std::slice::from_ref(&mapping))
+        .unwrap();
+    assert_eq!(policies.len(), 2);
+    assert_eq!(policies[1], desired);
+    assert!(
+        coordinator
+            .patch_network_policy(&api, workspace.id, &stale, &desired)
+            .await
+            .unwrap()
+    );
+    let recorded = requests.lock().unwrap();
+    assert_eq!(recorded.len(), 1);
+    assert_eq!(recorded[0].0, "PATCH");
+    assert!(
+        recorded[0]
+            .1
+            .contains(desired.metadata.name.as_deref().unwrap())
+    );
+    assert_eq!(
+        recorded[0].2,
+        json!({"metadata":{"resourceVersion":"9"},"spec":desired.spec})
+    );
+    drop(recorded);
+
+    let mut foreign = mapping;
+    foreign.organization_id = Uuid::now_v7();
+    assert_eq!(
+        coordinator
+            .desired_network_policies(&workspace, &[foreign])
+            .unwrap()
+            .len(),
+        1
+    );
+}

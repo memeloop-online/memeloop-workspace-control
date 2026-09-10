@@ -65,8 +65,27 @@ impl KubernetesCoordinator {
                     ) {
                         continue;
                     }
+                    let mappings = if policies.iter().any(|(id, policy)| {
+                        *id == workspace.id
+                            && policy.metadata.labels.as_ref().is_some_and(|labels| {
+                                labels.contains_key(super::port_mappings::PORT_MAPPING_ID_LABEL)
+                            })
+                    }) {
+                        database.list_port_mappings(workspace.id).await?
+                    } else {
+                        Vec::new()
+                    };
+                    let desired = self.desired_network_policies(&workspace, &mappings)?;
                     for (_, policy) in policies.iter().filter(|(id, _)| *id == workspace.id) {
-                        updated += u64::from(self.refresh_policy(&api, &workspace, policy).await?);
+                        if let Some(target) = desired
+                            .iter()
+                            .find(|target| target.metadata.name == policy.metadata.name)
+                        {
+                            updated += u64::from(
+                                self.patch_network_policy(&api, workspace.id, policy, target)
+                                    .await?,
+                            );
+                        }
                     }
                 }
             }
@@ -77,6 +96,25 @@ impl KubernetesCoordinator {
         }
     }
 
+    fn desired_network_policies(
+        &self,
+        workspace: &Workspace,
+        mappings: &[crate::storage::PortMapping],
+    ) -> Result<Vec<NetworkPolicy>, BuildError> {
+        let mut policies = vec![self.builder.build(workspace)?.network_policy];
+        for mapping in mappings {
+            if mapping.workspace_id == workspace.id
+                && mapping.organization_id == workspace.organization_id
+                && let Some((_, _, policy)) =
+                    self.builder.port_mapping_resources(workspace, mapping)?
+            {
+                policies.push(policy);
+            }
+        }
+        Ok(policies)
+    }
+
+    #[cfg(test)]
     async fn refresh_policy(
         &self,
         api: &Api<NetworkPolicy>,
@@ -84,6 +122,17 @@ impl KubernetesCoordinator {
         policy: &NetworkPolicy,
     ) -> Result<bool, NetworkRefreshError> {
         let desired = self.builder.build(workspace)?.network_policy;
+        self.patch_network_policy(api, workspace.id, policy, &desired)
+            .await
+    }
+
+    async fn patch_network_policy(
+        &self,
+        api: &Api<NetworkPolicy>,
+        workspace_id: Uuid,
+        policy: &NetworkPolicy,
+        desired: &NetworkPolicy,
+    ) -> Result<bool, NetworkRefreshError> {
         let mut current = policy.clone();
         for attempt in 0..3 {
             if current.metadata.deletion_timestamp.is_some()
@@ -92,7 +141,28 @@ impl KubernetesCoordinator {
                 return Ok(false);
             }
             self.builder
-                .verify_delete_ownership(&current.metadata, workspace.id)?;
+                .verify_delete_ownership(&current.metadata, workspace_id)?;
+            let mapping_label = super::port_mappings::PORT_MAPPING_ID_LABEL;
+            if let Some(expected) = desired
+                .metadata
+                .labels
+                .as_ref()
+                .and_then(|labels| labels.get(mapping_label))
+            {
+                let actual = current
+                    .metadata
+                    .labels
+                    .as_ref()
+                    .and_then(|labels| labels.get(mapping_label));
+                if actual != Some(expected) {
+                    return Err(OwnershipError::LabelMismatch {
+                        key: mapping_label,
+                        expected: expected.clone(),
+                        actual: actual.cloned(),
+                    }
+                    .into());
+                }
+            }
             if current.spec == desired.spec {
                 return Ok(false);
             }

@@ -101,8 +101,8 @@ pub fn hostname(mapping: &PortMapping, wildcard_domain: &str) -> String {
 
 /// This additional policy is intentionally separate from the base workspace
 /// policy: Kubernetes combines policies additively, so it opens only this
-/// declared application port to Higress.  It never opens it to a node, host or
-/// arbitrary namespace.
+/// declared application port to the configured gateway selectors and source CIDRs.
+/// CIDR exceptions provide reachability, not an authenticated gateway identity.
 pub fn network_policy(
     runtime: &WorkspaceRuntimeNames,
     labels: &BTreeMap<String, String>,
