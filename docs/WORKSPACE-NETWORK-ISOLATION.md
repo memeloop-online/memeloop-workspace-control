@@ -82,6 +82,12 @@ does not recreate the policy; version conflicts re-read and recheck ownership.
 This applies changed operator configuration after a control-plane rollout
 without restarting workspace Pods.
 
+The same refresh includes separately rendered port-mapping policies, matched
+against their database records and mapping ownership labels. Live acceptance
+closed a disposable mapping's ingress rules, rolled out the updated control
+plane, and confirmed that port 3000 and its configured gateway sources were
+restored without changing the workspace Pod UID.
+
 Live acceptance temporarily removed the IPv6 allow rule from the disposable
 memory workspace, making its policy stricter. The GitOps rollout restored the
 configured rule and reported one refreshed policy. The workspace Pod UID stayed
@@ -140,6 +146,20 @@ The deployed workspace policy's `10.42.0.0/16` source is a reachability
 compensation for this path, not a user or Higress identity; ttyd's separately
 validated upstream mTLS is required before a shell is accessible.  Network
 reachability and mTLS-authenticated access are distinct acceptance claims.
+
+Application port mappings do not yet have that upstream mTLS boundary. A
+disposable HTTP listener on the formal gVisor workspace returned 401 through
+Higress without a session, and 200 after the mapping's one-use bootstrap URL
+established a session. A direct request from the current cluster workspace to
+the target Pod IP on port 3000 also returned the test content without gateway
+authentication. The configured source-CIDR exception allowed that path.
+
+This demonstrates a cluster-source bypass of application gateway authentication,
+not an `internet_only` workspace escaping its outbound NetworkPolicy. Do not
+claim that only authenticated Higress traffic can reach mapped application ports
+until the upstream identity boundary is implemented. Keep the existing
+MASQUERADE configuration: the cluster networking runbook records it as required
+for cross-node routing. The test listener and mapping were removed afterward.
 
 These observations do not establish every eligible node, IPv6, host or
 metadata behavior, an actual external-tenant workspace lifecycle, or full
