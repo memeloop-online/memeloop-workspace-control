@@ -95,7 +95,8 @@ and observability paths. If the node remains cordoned, give only that canary the
 `node.kubernetes.io/unschedulable:NoSchedule` toleration. Do not begin with privileged,
 `hostNetwork`, GPU, host-device or hostPath workloads.
 
-The RuntimeClass shape is:
+The production RuntimeClass requires both a working runtime and completed
+external-tenant acceptance:
 
 ```yaml
 apiVersion: node.k8s.io/v1
@@ -106,18 +107,22 @@ handler: runsc
 scheduling:
   nodeSelector:
     sandbox.memeloop.dev/gvisor-ready: "true"
+    sandbox.memeloop.dev/tenant-ready: "true"
 ```
 
-Create this production RuntimeClass and add `sandbox.memeloop.dev/gvisor-ready=true` only after the
-handler and canary pass on this exact node. Compare the canary with the normal runtime and
-measure CPU, memory, PID, ephemeral-storage and startup overhead before declaring a production
-overhead value. Remove the temporary canary and its RuntimeClass when testing ends.
-A passing handler check alone is not RuntimeClass acceptance.
+Add `gvisor-ready=true` after the handler and local canary pass. Add
+`tenant-ready=true` only to a non-control-plane worker after the full workspace,
+resource-pressure, network and rescheduling checks pass. Compare the canary with
+the normal runtime and measure CPU, memory, PID, ephemeral-storage and startup
+overhead before declaring a production overhead value. Remove the temporary
+canary and its RuntimeClass when testing ends. A passing handler check alone is
+not RuntimeClass acceptance.
 
 ## Rollback
 
-First remove or stop gVisor workloads and wait until none use `runsc`; remove the readiness
-label and do not delete a RuntimeClass while workloads still reference it. Restore the
+First remove `tenant-ready`, then remove or stop gVisor workloads and wait until
+none use `runsc`; remove `gvisor-ready` and do not delete a RuntimeClass while
+workloads still reference it. Restore the
 timestamped containerd template copy under
 `/var/lib/rancher/k3s/agent/etc/containerd/gvisor-backups/`, remove the handler links and
 versioned binaries after confirming they are unused, restart only this node's K3s service, and

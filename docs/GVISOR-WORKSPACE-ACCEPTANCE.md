@@ -141,7 +141,9 @@ deleted (HTTP 204). No RuntimeClass was created for this negative test.
 
 Argo CD now manages RuntimeClass `gvisor` from the internal GitOps repository,
 under `apps/memeloop-workspace-control/runtime`. Its handler is `runsc` and its
-node selector requires `sandbox.memeloop.dev/gvisor-ready=true`.
+node selector requires both `sandbox.memeloop.dev/gvisor-ready=true` and
+`sandbox.memeloop.dev/tenant-ready=true`. The second label is intentionally
+absent until a non-control-plane worker passes the full acceptance suite.
 
 The test template was changed to reference this class. New test workspace
 `01a08815-fa3a-78b0-9ebf-c0a07822806e` (Pod `w-9ebfc0a07822806e-0`) first had a
@@ -152,10 +154,17 @@ became Ready. The guest kernel reports `4.19.0-gvisor`; the ordinary `user`
 account is UID 1000 with `CapEff=0` and `NoNewPrivs=1`, without a mounted
 Kubernetes service-account token.
 
-No daily-use workspace changed runtime. Node registration confirms runtime
-availability, not completed external-tenant network isolation. Keep the formal
-class and registered node when cleaning up the disposable acceptance workspace;
-remove only the temporary acceptance class after its last Pod is gone.
+No daily-use workspace changed runtime. The working handler on `serv-146231`
+does not qualify that control-plane node for external tenants. Keep the formal
+class and runtime installation when cleaning up the disposable acceptance
+workspace; remove only the temporary acceptance class after its last Pod is
+gone.
+
+A disposable Pod referencing the formal `gvisor` RuntimeClass remained Pending
+with zero eligible nodes after the tenant selector was added. The scheduler
+reported that no node matched the required affinity, and the Pod was deleted.
+This verifies that a working handler alone cannot receive a new tenant sandbox
+and that the runtime does not fall back to runc.
 
 Cleanup after the startup-policy test removed workspace
 `01a087be-5b8d-7021-bbb8-17d8c506c1cd` through the API (HTTP 202). Its
