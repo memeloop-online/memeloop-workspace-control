@@ -358,11 +358,11 @@ mod tests {
                 .unwrap();
         assert_eq!(
             dns_json_addresses(ipv4.answers, 1),
-            vec!["192.0.2.9".parse().unwrap()]
+            vec!["192.0.2.9".parse::<IpAddr>().unwrap()]
         );
         assert_eq!(
             dns_json_addresses(ipv6.answers, 28),
-            vec!["2001:db8::9".parse().unwrap()]
+            vec!["2001:db8::9".parse::<IpAddr>().unwrap()]
         );
     }
 }
