@@ -8,7 +8,8 @@ ln -s server.crt "${tmp_dir}/tls.crt"
 ln -s server.key "${tmp_dir}/tls.key"
 ln -s client-ca.crt "${tmp_dir}/ca.crt"
 mkdir "${tmp_dir}/routes"
-printf '%s\n' 'localhost 3000;' > "${tmp_dir}/routes/ports.conf"
+mapping_host='p-01a08abaed7f7060980a15e381716145.k3s.onetwo.website'
+printf '%s\n' 'localhost 3000;' "\"${mapping_host}\" 3000;" > "${tmp_dir}/routes/ports.conf"
 printf '%s\n' \
     'pid /tmp/mwc-origin.pid;' \
     'events {}' \
@@ -57,6 +58,8 @@ proxy_request() {
 for address in localhost 127.0.0.1; do
     [[ "$(proxy_request "${address}" trusted localhost)" == 200 ]] \
         || fail 'trusted proxy request failed'
+    [[ "$(proxy_request "${address}" trusted "${mapping_host}")" == 200 ]] \
+        || fail 'proxy rejected a production-length mapping hostname'
     [[ "$( < "${tmp_dir}/proxy-response")" == mwc-proxy-ok ]] \
         || fail 'proxy returned unexpected upstream content'
     [[ "$(proxy_request "${address}" none localhost)" == 400 ]] \
