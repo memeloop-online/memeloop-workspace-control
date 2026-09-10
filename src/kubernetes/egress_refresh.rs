@@ -4,6 +4,7 @@ use hickory_resolver::{
     TokioResolver,
     config::{LookupIpStrategy, NameServerConfig, ResolverConfig, ResolverOpts},
     net::runtime::TokioRuntimeProvider,
+    proto::rr::{RData, RecordType},
 };
 use thiserror::Error;
 use tokio::sync::watch;
@@ -171,14 +172,32 @@ impl DynamicEgressRefresh {
     }
 
     async fn resolve(&self, hostname: &str) -> Result<Vec<IpAddr>, DynamicEgressRefreshError> {
-        let lookup = self
-            .resolver
-            .lookup_ip(format!("{hostname}."))
-            .await
-            .map_err(|error| DynamicEgressRefreshError::Dns(error.to_string()))?
-            .iter()
-            .collect();
-        Ok(lookup)
+        let hostname = format!("{hostname}.");
+        let (ipv4, ipv6) = tokio::join!(
+            self.resolver.lookup(hostname.clone(), RecordType::A),
+            self.resolver.lookup(hostname, RecordType::AAAA)
+        );
+        let addresses = [ipv4.ok(), ipv6.ok()]
+            .into_iter()
+            .flatten()
+            .flat_map(|lookup| {
+                lookup
+                    .answers()
+                    .iter()
+                    .filter_map(|record| match record.data() {
+                        RData::A(address) => Some(IpAddr::V4(address.0)),
+                        RData::AAAA(address) => Some(IpAddr::V6(address.0)),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        if addresses.is_empty() {
+            return Err(DynamicEgressRefreshError::Dns(
+                "hostname has no A or AAAA records".to_owned(),
+            ));
+        }
+        Ok(addresses)
     }
 }
 
