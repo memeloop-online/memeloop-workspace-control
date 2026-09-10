@@ -38,6 +38,27 @@ write_fake_commands() {
   printf '%s\n' \
     '#!/usr/bin/env bash' \
     'set -euo pipefail' \
+    'log=${GVISOR_FAKE_LOG:?}' \
+    'unit=${1:-}' \
+    'action=${2:-}' \
+    'if [[ $action == status ]]; then' \
+    '  [[ $unit == k3s && ${GVISOR_FAKE_K3S_ACTIVE:-true} == true ]] && exit 0' \
+    '  [[ $unit == k3s-agent && ${GVISOR_FAKE_K3S_AGENT_ACTIVE:-false} == true ]] && exit 0' \
+    '  exit 3' \
+    'fi' \
+    'if [[ $action == restart ]]; then' \
+    '  printf "restart %s\\n" "$unit" >> "$log"' \
+    '  if [[ ${GVISOR_FAKE_RESTART_FAIL:-false} == true ]]; then exit 1; fi' \
+    '  cp -- "${GVISOR_FAKE_TEMPLATE:?}" "${GVISOR_FAKE_RENDERED:?}"' \
+    '  exit 0' \
+    'fi' \
+    'printf "unexpected rc-service invocation: %q\\n" "$*" >&2' \
+    'exit 2' > "$fake_bin/rc-service"
+  chmod 0755 "$fake_bin/rc-service"
+
+  printf '%s\n' \
+    '#!/usr/bin/env bash' \
+    'set -euo pipefail' \
     'if [[ ${1:-} == ctr && ${2:-} == version ]]; then' \
     '  printf "Client:\\n  Version: v2.3.2-k3s2\\n"' \
     '  # Continue writing after the matching line so an early-exit awk gets SIGPIPE.' \
@@ -97,7 +118,8 @@ run_install() {
   GVISOR_NODE_TEST_KERNEL=5.15.0-test \
   GVISOR_NODE_TEST_CGROUP_FS=cgroup2fs \
   GVISOR_NODE_TEST_SYSTEMD_VERSION=252 \
-  GVISOR_NODE_TEST_SERVICE=k3s \
+  GVISOR_NODE_TEST_INIT="${GVISOR_NODE_TEST_INIT:-systemd}" \
+  GVISOR_NODE_TEST_SERVICE="${GVISOR_NODE_TEST_SERVICE:-k3s}" \
   bash "$installer" --node "$host_name" --archive "$fixture/incoming.tar" --sha256 "$checksum" --apply --restart-k3s "$@"
 }
 
@@ -110,7 +132,8 @@ run_preflight() {
   GVISOR_NODE_TEST_KERNEL=5.15.0-test \
   GVISOR_NODE_TEST_CGROUP_FS="${GVISOR_NODE_TEST_CGROUP_FS:-cgroup2fs}" \
   GVISOR_NODE_TEST_SYSTEMD_VERSION=252 \
-  GVISOR_NODE_TEST_SERVICE=k3s \
+  GVISOR_NODE_TEST_INIT="${GVISOR_NODE_TEST_INIT:-systemd}" \
+  GVISOR_NODE_TEST_SERVICE="${GVISOR_NODE_TEST_SERVICE:-k3s}" \
   bash "$preflight"
 }
 
@@ -208,6 +231,20 @@ make_fixture
 make_archive
 run_install --rootfs-memory-mib 128 >/dev/null
 grep -Fqx '  overlay2 = "root:memory,size=128m"' "$fixture/usr/local/lib/gvisor/$checksum/runsc.toml"
+
+make_fixture
+make_archive
+GVISOR_NODE_TEST_INIT=openrc \
+GVISOR_NODE_TEST_SERVICE=k3s-agent \
+GVISOR_FAKE_K3S_ACTIVE=false \
+GVISOR_FAKE_K3S_AGENT_ACTIVE=true \
+  run_install --rootfs-memory-mib 128 >/dev/null
+if grep -Fq 'systemd-cgroup' "$fixture/usr/local/lib/gvisor/$checksum/runsc.toml"; then
+  printf 'OpenRC installation enabled systemd cgroups\n' >&2
+  exit 1
+fi
+grep -Fqx '  overlay2 = "root:memory,size=128m"' "$fixture/usr/local/lib/gvisor/$checksum/runsc.toml"
+grep -Fqx 'restart k3s-agent' "$fixture/systemctl.log"
 
 make_fixture
 make_archive

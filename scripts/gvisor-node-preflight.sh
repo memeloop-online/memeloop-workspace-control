@@ -34,10 +34,27 @@ require_command() {
   command -v "$1" >/dev/null 2>&1 || fail "$1 is not on PATH"
 }
 
-for command_name in awk command dirname mountpoint stat systemctl uname; do
+for command_name in awk command dirname mountpoint stat uname; do
   require_command "$command_name"
 done
 require_command k3s
+
+if [[ $test_mode == 1 && -n ${GVISOR_NODE_TEST_INIT:-} ]]; then
+  init_manager=$GVISOR_NODE_TEST_INIT
+else
+  if command -v systemctl >/dev/null 2>&1; then
+    init_manager=systemd
+  elif command -v rc-service >/dev/null 2>&1; then
+    init_manager=openrc
+  else
+    fail 'neither systemctl nor rc-service is available'
+  fi
+fi
+case "$init_manager" in
+  systemd) require_command systemctl ;;
+  openrc) require_command rc-service ;;
+  *) fail "unsupported init manager: $init_manager" ;;
+esac
 
 if command -v runsc >/dev/null 2>&1; then
   runsc_state=installed
@@ -75,13 +92,23 @@ if [[ $test_mode == 1 && -n ${GVISOR_NODE_TEST_SERVICE:-} ]]; then
   service=$GVISOR_NODE_TEST_SERVICE
   [[ $service == k3s || $service == k3s-agent ]] || fail "invalid test service: $service"
 else
-  if systemctl is-active --quiet k3s 2>/dev/null; then
-    service=k3s
-  elif systemctl is-active --quiet k3s-agent 2>/dev/null; then
-    service=k3s-agent
-  else
-    fail 'neither k3s nor k3s-agent is active'
-  fi
+  case "$init_manager" in
+    systemd)
+      if systemctl is-active --quiet k3s 2>/dev/null; then
+        service=k3s
+      elif systemctl is-active --quiet k3s-agent 2>/dev/null; then
+        service=k3s-agent
+      fi
+      ;;
+    openrc)
+      if rc-service k3s status >/dev/null 2>&1; then
+        service=k3s
+      elif rc-service k3s-agent status >/dev/null 2>&1; then
+        service=k3s-agent
+      fi
+      ;;
+  esac
+  [[ -n $service ]] || fail 'neither k3s nor k3s-agent is active'
 fi
 
 if [[ $test_mode == 1 && -n ${GVISOR_NODE_TEST_CONTAINERD_VERSION:-} ]]; then
@@ -172,11 +199,11 @@ esac
 systemd_version=
 if [[ $test_mode == 1 && -n ${GVISOR_NODE_TEST_SYSTEMD_VERSION:-} ]]; then
   systemd_version=$GVISOR_NODE_TEST_SYSTEMD_VERSION
-elif [[ $cgroup_mode == v2 ]]; then
+elif [[ $cgroup_mode == v2 && $init_manager == systemd ]]; then
   systemd_version=$(systemctl --version 2>/dev/null \
     | awk 'NR == 1 { print $2 }')
 fi
-if [[ $cgroup_mode == v2 ]]; then
+if [[ $cgroup_mode == v2 && $init_manager == systemd ]]; then
   [[ $systemd_version =~ ^[0-9]+$ ]] \
     || fail 'could not determine systemd version required for gVisor systemd cgroups'
   (( systemd_version >= 244 )) \
@@ -203,7 +230,7 @@ if [[ -n $userns_clone && $userns_clone != 1 ]]; then
   warn 'unprivileged user namespaces are disabled; record this result in canary evidence'
 fi
 
-printf 'PASS: service=%s arch=%s containerd=%s template=%s rendered=%s cgroup=%s runsc-cgroup=%s kernel=%s runsc=%s\n' \
-  "$service" "$arch" "$containerd_version" "$template_logical" "$rendered_logical" \
+printf 'PASS: init=%s service=%s arch=%s containerd=%s template=%s rendered=%s cgroup=%s runsc-cgroup=%s kernel=%s runsc=%s\n' \
+  "$init_manager" "$service" "$arch" "$containerd_version" "$template_logical" "$rendered_logical" \
   "$cgroup_mode" "$runsc_cgroup" "$kernel" "$runsc_state"
 printf 'NEXT: independently verify the host-to-Kubernetes-node mapping, labels/taints and capacity; this read-only check does not call the Kubernetes API or start a workload.\n'

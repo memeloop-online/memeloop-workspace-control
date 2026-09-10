@@ -52,8 +52,24 @@ require_command() {
 for command_name in awk cat chmod cp date dirname find grep hostname install ln mktemp mv readlink rm sha256sum stat tar; do
   require_command "$command_name"
 done
-require_command systemctl
 require_command k3s
+
+if [[ $test_mode == 1 && -n ${GVISOR_NODE_TEST_INIT:-} ]]; then
+  init_manager=$GVISOR_NODE_TEST_INIT
+else
+  if command -v systemctl >/dev/null 2>&1; then
+    init_manager=systemd
+  elif command -v rc-service >/dev/null 2>&1; then
+    init_manager=openrc
+  else
+    fail 'neither systemctl nor rc-service is available'
+  fi
+fi
+case "$init_manager" in
+  systemd) require_command systemctl ;;
+  openrc) require_command rc-service ;;
+  *) fail "unsupported init manager: $init_manager" ;;
+esac
 
 node='' archive='' checksum='' apply=false restart=false rootfs_memory_mib=''
 while [[ $# -gt 0 ]]; do
@@ -467,7 +483,7 @@ grouping = true
 
 [runsc_config]
 EOF
-if [[ $cgroup_mode == v2 ]]; then
+if [[ $cgroup_mode == v2 && $init_manager == systemd ]]; then
   cat >> "$stage_dir/runsc.toml" <<'EOF'
 
   systemd-cgroup = "true"
@@ -558,19 +574,41 @@ mv -T -- "$template_stage" "$template" \
 template_stage=
 template_swapped=true
 
-if systemctl is-active --quiet k3s; then
-  service=k3s
-elif systemctl is-active --quiet k3s-agent; then
-  service=k3s-agent
-else
-  fail 'neither k3s nor k3s-agent is active after preflight'
-fi
+service=
+case "$init_manager" in
+  systemd)
+    if systemctl is-active --quiet k3s; then
+      service=k3s
+    elif systemctl is-active --quiet k3s-agent; then
+      service=k3s-agent
+    fi
+    ;;
+  openrc)
+    if rc-service k3s status >/dev/null 2>&1; then
+      service=k3s
+    elif rc-service k3s-agent status >/dev/null 2>&1; then
+      service=k3s-agent
+    fi
+    ;;
+esac
+[[ -n $service ]] || fail 'neither k3s nor k3s-agent is active after preflight'
 printf 'Registered runsc in %s. Restarting %s once because --restart-k3s was explicitly requested.\n' \
   "$template_logical" "$service"
 restart_attempted=true
-systemctl restart "$service" || fail "$service restart failed; the template will be restored without an automatic second restart"
-systemctl is-active --quiet "$service" \
-  || fail "$service did not return active after the requested restart"
+case "$init_manager" in
+  systemd)
+    systemctl restart "$service" \
+      || fail "$service restart failed; the template will be restored without an automatic second restart"
+    systemctl is-active --quiet "$service" \
+      || fail "$service did not return active after the requested restart"
+    ;;
+  openrc)
+    rc-service "$service" restart \
+      || fail "$service restart failed; the template will be restored without an automatic second restart"
+    rc-service "$service" status >/dev/null 2>&1 \
+      || fail "$service did not return active after the requested restart"
+    ;;
+esac
 
 secure_file "$rendered" 'rendered containerd config after restart'
 assert_default_runc "$rendered" 'rendered config after restart'

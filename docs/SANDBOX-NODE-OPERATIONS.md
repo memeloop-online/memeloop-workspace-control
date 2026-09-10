@@ -47,8 +47,15 @@ driver only when systemd is >=244; do not switch kubelet/runc to cgroupfs as a w
    ```
 
    It must report the target's active K3s service, Linux kernel >=5.6, containerd 2.x with the
-   K3s v3 template, cgroup v2 with systemd >=244, and `runc` still as the default. Resolve a
-   failed check before installing anything.
+   K3s v3 template, and `runc` still as the default. Systemd nodes using cgroup v2 require
+   systemd >=244. Alpine/OpenRC agent nodes use the cgroupfs path and do not enable gVisor's
+   systemd cgroup driver. Resolve a failed check before installing anything.
+   On Alpine, install Bash and GNU core utilities first because the reviewed installer relies
+   on their archive and atomic-file semantics:
+
+   ```sh
+   apk add bash coreutils findutils grep tar
+   ```
 2. Download a current pinned official gVisor release and verify its published SHA-256 at the
    time of installation. The archive must contain `runsc`, `containerd-shim-runsc-v1` and the
    adjacent `gvisor-bin/` sidecars. Do not copy a historical digest into this document.
@@ -62,9 +69,10 @@ driver only when systemd is >=244; do not switch kubelet/runc to cgroupfs as a w
 
    The installer stores versioned binaries, extends
    `/var/lib/rancher/k3s/agent/etc/containerd/config-v3.toml.tmpl`, and leaves `runc` as the
-   default. On cgroup v2 it configures runsc with `systemd-cgroup = "true"`; it also keeps a
+   default. On systemd with cgroup v2 it configures runsc with
+   `systemd-cgroup = "true"`; OpenRC uses the default cgroupfs driver. It also keeps a
    timestamped template copy for handler rollback. The restart affects Pods and image
-   operations on this node, so keep the node in its OS maintenance state during the restart.
+   operations on this node, so keep the node in its maintenance state during the restart.
 
 ## RuntimeClass and canary
 
