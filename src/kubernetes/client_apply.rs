@@ -18,6 +18,8 @@ use super::{
 
 #[path = "client_apply/envoy_filter.rs"]
 mod envoy_filter;
+#[path = "client_apply/http_proxy.rs"]
+mod http_proxy;
 #[path = "client_apply/port_mappings.rs"]
 mod port_mappings;
 

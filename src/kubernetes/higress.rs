@@ -9,42 +9,47 @@ use k8s_openapi::api::networking::v1::{
 use super::{TtydMtlsConfig, namespaced_metadata};
 use crate::workspace_runtime::WorkspaceRuntimeNames;
 
+pub(super) fn upstream_tls_annotations(
+    runtime: &WorkspaceRuntimeNames,
+    mtls: &TtydMtlsConfig,
+) -> BTreeMap<String, String> {
+    BTreeMap::from([
+        (
+            "nginx.ingress.kubernetes.io/backend-protocol".to_owned(),
+            "HTTPS".to_owned(),
+        ),
+        (
+            "nginx.ingress.kubernetes.io/proxy-ssl-secret".to_owned(),
+            format!(
+                "{}/{}",
+                mtls.higress_client_secret_namespace, mtls.higress_client_secret_name
+            ),
+        ),
+        (
+            "nginx.ingress.kubernetes.io/proxy-ssl-name".to_owned(),
+            format!(
+                "{}.{}.svc.cluster.local",
+                runtime.resources.service, runtime.namespace
+            ),
+        ),
+        (
+            "nginx.ingress.kubernetes.io/proxy-ssl-server-name".to_owned(),
+            "on".to_owned(),
+        ),
+        (
+            "nginx.ingress.kubernetes.io/proxy-ssl-verify".to_owned(),
+            "on".to_owned(),
+        ),
+    ])
+}
+
 pub(super) fn web_shell_ingress(
     runtime: &WorkspaceRuntimeNames,
     labels: &BTreeMap<String, String>,
     domain: &str,
     ttyd_mtls: Option<&TtydMtlsConfig>,
 ) -> Ingress {
-    let annotations = ttyd_mtls.map(|mtls| {
-        BTreeMap::from([
-            (
-                "nginx.ingress.kubernetes.io/backend-protocol".to_owned(),
-                "HTTPS".to_owned(),
-            ),
-            (
-                "nginx.ingress.kubernetes.io/proxy-ssl-secret".to_owned(),
-                format!(
-                    "{}/{}",
-                    mtls.higress_client_secret_namespace, mtls.higress_client_secret_name
-                ),
-            ),
-            (
-                "nginx.ingress.kubernetes.io/proxy-ssl-name".to_owned(),
-                format!(
-                    "{}.{}.svc.cluster.local",
-                    runtime.resources.service, runtime.namespace
-                ),
-            ),
-            (
-                "nginx.ingress.kubernetes.io/proxy-ssl-server-name".to_owned(),
-                "on".to_owned(),
-            ),
-            (
-                "nginx.ingress.kubernetes.io/proxy-ssl-verify".to_owned(),
-                "on".to_owned(),
-            ),
-        ])
-    });
+    let annotations = ttyd_mtls.map(|mtls| upstream_tls_annotations(runtime, mtls));
     Ingress {
         metadata: ObjectMeta {
             annotations,

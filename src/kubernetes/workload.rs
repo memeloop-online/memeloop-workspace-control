@@ -4,7 +4,7 @@ use k8s_openapi::{
     api::{
         apps::v1::{StatefulSet, StatefulSetSpec},
         core::v1::{
-            ConfigMapVolumeSource, Container, ContainerPort, EmptyDirVolumeSource, KeyToPath,
+            ConfigMapVolumeSource, Container, EmptyDirVolumeSource, KeyToPath,
             PersistentVolumeClaim, PersistentVolumeClaimSpec, PodSpec, PodTemplateSpec,
             ProjectedVolumeSource, ResourceRequirements, SecretProjection, SecretVolumeSource,
             Volume, VolumeProjection, VolumeResourceRequirements,
@@ -23,10 +23,11 @@ use crate::{
 };
 
 use super::{
-    ResourceBuilder, namespaced_metadata,
-    resource_helpers::{mount, pod_labels},
-    workspace_pod::WorkspacePod,
+    ResourceBuilder, namespaced_metadata, resource_helpers::pod_labels, workspace_pod::WorkspacePod,
 };
+
+#[path = "workload_ttyd.rs"]
+mod ttyd;
 
 pub(super) fn stateful_set(
     builder: &ResourceBuilder,
@@ -87,7 +88,7 @@ fn containers(
     if let Some(buildkit) = pod.buildkit_container() {
         containers.push(buildkit);
     }
-    containers.push(ttyd_container(builder, pod, route_key));
+    containers.push(ttyd::container(builder, pod, route_key));
     containers
 }
 
@@ -121,6 +122,7 @@ fn pod_spec(
             &workspace.template.storage_policy,
             names,
             builder.ttyd_mtls.as_ref(),
+            builder.http_proxy_enabled(),
         )),
         ..PodSpec::default()
     }
@@ -141,78 +143,11 @@ fn workspace_resources(pod: WorkspacePod<'_>, workspace: &Workspace) -> Resource
     }
 }
 
-fn ttyd_container(builder: &ResourceBuilder, pod: WorkspacePod<'_>, route_key: &str) -> Container {
-    let mut args = vec![
-        "--port".to_owned(),
-        "7681".to_owned(),
-        "--writable".to_owned(),
-        "--base-path".to_owned(),
-        format!("/shell/{route_key}"),
-    ];
-    if builder.ttyd_mtls.is_some() {
-        args.extend([
-            "--ssl".to_owned(),
-            "--ssl-cert".to_owned(),
-            "/etc/mwc-ttyd-tls/tls.crt".to_owned(),
-            "--ssl-key".to_owned(),
-            "/etc/mwc-ttyd-tls/tls.key".to_owned(),
-            "--ssl-ca".to_owned(),
-            "/etc/mwc-ttyd-tls/ca.crt".to_owned(),
-        ]);
-    }
-    args.extend([
-        "/usr/bin/ssh".to_owned(),
-        "-p".to_owned(),
-        "2222".to_owned(),
-        "-o".to_owned(),
-        "StrictHostKeyChecking=yes".to_owned(),
-        "-o".to_owned(),
-        "UserKnownHostsFile=/etc/ssh/platform/known_hosts".to_owned(),
-        "-o".to_owned(),
-        "BatchMode=yes".to_owned(),
-        "-i".to_owned(),
-        "/etc/ssh/platform/ttyd_client_key".to_owned(),
-        format!("{}@127.0.0.1", pod.login_user),
-    ]);
-    let mut volume_mounts = vec![
-        mount("runtime-ssh", "/etc/ssh/platform", true),
-        mount("ttyd-tmp", "/tmp", false),
-        mount("ttyd-tmp", "/var/tmp", false),
-    ];
-    if builder.ttyd_mtls.is_some() {
-        volume_mounts.push(mount("ttyd-tls", "/etc/mwc-ttyd-tls", true));
-    }
-    Container {
-        name: "ttyd".to_owned(),
-        image: Some(builder.ttyd_image.clone()),
-        command: Some(vec!["/usr/bin/ttyd".to_owned()]),
-        args: Some(args),
-        ports: Some(vec![ContainerPort {
-            container_port: 7681,
-            name: Some("web-shell".to_owned()),
-            protocol: Some("TCP".to_owned()),
-            ..ContainerPort::default()
-        }]),
-        volume_mounts: Some(volume_mounts),
-        resources: Some(ResourceRequirements {
-            requests: Some(BTreeMap::from([
-                ("cpu".to_owned(), Quantity("10m".to_owned())),
-                ("memory".to_owned(), Quantity("16Mi".to_owned())),
-            ])),
-            limits: Some(BTreeMap::from([
-                ("cpu".to_owned(), Quantity("100m".to_owned())),
-                ("memory".to_owned(), Quantity("128Mi".to_owned())),
-            ])),
-            ..ResourceRequirements::default()
-        }),
-        ..Container::default()
-    }
-}
-
 fn workspace_volumes(
     policy: &WorkspaceStoragePolicy,
     names: &WorkspaceResourceNames,
     ttyd_mtls: Option<&super::TtydMtlsConfig>,
+    http_proxy_enabled: bool,
 ) -> Vec<Volume> {
     let mut volumes = vec![
         Volume {
@@ -294,6 +229,17 @@ fn workspace_volumes(
     ];
     if let Some(mtls) = ttyd_mtls {
         volumes.push(ttyd_tls_volume(mtls));
+    }
+    if http_proxy_enabled {
+        volumes.push(Volume {
+            name: "http-proxy-routes".to_owned(),
+            config_map: Some(ConfigMapVolumeSource {
+                name: names.http_proxy_config.clone(),
+                optional: Some(true),
+                ..ConfigMapVolumeSource::default()
+            }),
+            ..Volume::default()
+        });
     }
     volumes
 }

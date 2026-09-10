@@ -11,6 +11,8 @@ use serde_json::{Value, json};
 use tower::service_fn;
 
 use super::*;
+#[path = "http_proxy_tests.rs"]
+mod http_proxy;
 use crate::{
     kubernetes::{InternetEgressConfig, ResourceBuilder},
     quota::Resources,

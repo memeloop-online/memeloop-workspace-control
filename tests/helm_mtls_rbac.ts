@@ -32,7 +32,7 @@ assert.equal(role.metadata.namespace, "higress-system");
 assert.deepEqual(role.rules, [{
   apiGroups: ["networking.istio.io"],
   resources: ["envoyfilters"],
-  verbs: ["get", "create", "patch", "delete"],
+  verbs: ["get", "list", "create", "patch", "delete"],
 }]);
 const bindings = enabled.filter((document) => document.kind === "RoleBinding"
   && document.roleRef?.name === role.metadata.name);

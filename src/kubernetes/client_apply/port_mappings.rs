@@ -26,6 +26,8 @@ impl KubernetesCoordinator {
         let policies = Api::<NetworkPolicy>::namespaced(self.client.clone(), namespace);
         let apply = PatchParams::apply(FIELD_MANAGER);
         let mut desired = std::collections::BTreeSet::new();
+        let mut desired_filters = std::collections::BTreeSet::new();
+        self.apply_http_proxy_routes(workspace, mappings).await?;
         for mapping in mappings {
             let Some((service, ingress, policy)) =
                 self.builder.port_mapping_resources(workspace, mapping)?
@@ -34,6 +36,9 @@ impl KubernetesCoordinator {
             };
             let name = resource_port_mappings::name(mapping);
             let policy_name = format!("{name}-ingress");
+            if let Some(filter) = self.apply_mapping_tls_filter(workspace, mapping).await? {
+                desired_filters.insert(filter);
+            }
             verify_existing(&services, &name, &self.builder, workspace.id).await?;
             verify_existing(&ingresses, &name, &self.builder, workspace.id).await?;
             verify_existing(&policies, &policy_name, &self.builder, workspace.id).await?;
@@ -84,6 +89,10 @@ impl KubernetesCoordinator {
                     .verify_delete_ownership(&policy.metadata, workspace.id)?;
                 policies.delete(name, &DeleteParams::default()).await?;
             }
+        }
+        if self.builder.http_proxy_enabled() {
+            self.prune_mapping_tls_filters(workspace, &desired_filters)
+                .await?;
         }
         Ok(())
     }

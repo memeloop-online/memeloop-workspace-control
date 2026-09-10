@@ -28,6 +28,7 @@ mod client;
 mod client_tests;
 mod envoy_filter;
 mod higress;
+mod http_proxy;
 mod materialization;
 mod network_policy;
 mod network_refresh;
@@ -450,9 +451,9 @@ impl ResourceBuilder {
         let names = self.runtime_names(workspace)?;
         let labels = self.workspace_labels(workspace);
         let selector_labels = pod_labels(&self.labels(workspace.id));
-        let (service, ingress) =
+        let (mut service, mut ingress) =
             port_mappings::resources(&names, &labels, &selector_labels, domain, mapping);
-        let network_policy = port_mappings::network_policy(
+        let mut network_policy = port_mappings::network_policy(
             &names,
             &labels,
             &selector_labels,
@@ -461,6 +462,15 @@ impl ResourceBuilder {
             &self.higress_source_cidrs,
             mapping,
         );
+        if let Some(mtls) = &self.ttyd_mtls {
+            http_proxy::secure_mapping(
+                &mut service,
+                &mut ingress,
+                &mut network_policy,
+                &names,
+                mtls,
+            );
+        }
         Ok(Some((service, ingress, network_policy)))
     }
 

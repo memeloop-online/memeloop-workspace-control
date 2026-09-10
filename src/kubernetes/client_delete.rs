@@ -151,6 +151,17 @@ impl KubernetesCoordinator {
             &super::super::envoy_filter::api_resource(),
         );
         let Some(existing) = filters.get_opt(&names.web_shell_envoy_filter).await? else {
+            if self.builder.port_mapping_domain.is_some() {
+                let selector = ListParams::default().labels(&format!(
+                    "{}={},{}={},{}",
+                    super::super::OWNER_INSTALLATION_LABEL,
+                    self.builder.installation_id,
+                    super::super::WORKSPACE_ID_LABEL,
+                    workspace_id,
+                    super::super::port_mappings::PORT_MAPPING_ID_LABEL,
+                ));
+                return delete_first_owned(&filters, &selector, &self.builder, workspace_id).await;
+            }
             return Ok(false);
         };
         self.builder
@@ -221,6 +232,7 @@ impl KubernetesCoordinator {
         let config_maps = Api::<ConfigMap>::namespaced(self.client.clone(), namespace);
         for name in [
             &names.workspace_config,
+            &names.http_proxy_config,
             &names.environment_config_map,
             &names.files_config_map,
         ] {
