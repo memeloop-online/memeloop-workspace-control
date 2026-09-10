@@ -141,7 +141,7 @@ pub(super) fn dynamic_egress_refresh(
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
     DynamicEgressRefresh::new(config, egress)
         .map(Some)
-        .map_err(|error| io::Error::other(error))
+        .map_err(io::Error::other)
 }
 
 fn ttyd_mtls_config(gateway_namespace: &str) -> Result<Option<TtydMtlsConfig>, io::Error> {
