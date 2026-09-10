@@ -1,7 +1,8 @@
 # gVisor workspace acceptance
 
-The formal-RuntimeClass API workspace is still under network test; this is not
-external-tenant production acceptance.
+The formal-RuntimeClass API workspace has passed the single-node application
+and network checks below. External-tenant production acceptance still requires
+a dedicated non-control-plane gVisor worker and cross-node rescheduling tests.
 
 ## Test resources
 
@@ -56,8 +57,15 @@ ticket rejection, and fresh-ticket recovery on the original workspace.
 
 From an SSH session, DNS resolved `example.com` and TCP `1.1.1.1:443` connected.
 Connections to `100.64.0.1:6443`, `100.64.0.10:10250`, `10.43.0.1:443`,
-and `169.254.169.254:80` did not connect within 2.5 seconds. These finite probes
-do not prove all network paths or dynamic public-address isolation.
+and `169.254.169.254:80` did not connect within 2.5 seconds.
+
+The control plane now resolves configured public hostnames through TCP DNS,
+because UDP DNS on the control node is intercepted. Startup resolved all four
+configured hostnames, including an AAAA-only hostname, with zero failed
+queries. The resulting IPv6 address appeared in the formal workspace
+NetworkPolicy without a static CIDR entry. Resolver failure remains
+fail-closed: the control plane does not become ready when every configured
+public query fails.
 
 Application mapping acceptance used the formal workspace after its ttyd sidecar
 was upgraded to the authenticated port proxy. The original application port
