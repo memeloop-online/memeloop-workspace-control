@@ -1,7 +1,11 @@
 use std::{collections::BTreeSet, net::IpAddr, time::Duration};
 
-use reqwest::{Client, redirect::Policy};
-use serde::Deserialize;
+use hickory_resolver::{
+    TokioResolver,
+    config::{LookupIpStrategy, NameServerConfig, ResolverConfig, ResolverOpts},
+    net::runtime::TokioRuntimeProvider,
+    proto::rr::{RData, RecordType},
+};
 use thiserror::Error;
 use tokio::sync::watch;
 use tracing::{info, warn};
@@ -46,7 +50,7 @@ impl DynamicEgressRefreshConfig {
 
 #[derive(Clone)]
 pub struct DynamicEgressRefresh {
-    client: Client,
+    resolver: TokioResolver,
     config: DynamicEgressRefreshConfig,
     egress: InternetEgressConfig,
 }
@@ -56,13 +60,25 @@ impl DynamicEgressRefresh {
         config: DynamicEgressRefreshConfig,
         egress: InternetEgressConfig,
     ) -> Result<Self, DynamicEgressRefreshError> {
-        let client = Client::builder()
-            .timeout(Duration::from_secs(5))
-            .redirect(Policy::none())
-            .build()
-            .map_err(|error| DynamicEgressRefreshError::Dns(error.to_string()))?;
+        let name_servers = config
+            .public_dns_servers
+            .iter()
+            .copied()
+            .map(NameServerConfig::tcp)
+            .collect();
+        let mut options = ResolverOpts::default();
+        options.timeout = Duration::from_secs(5);
+        options.attempts = 2;
+        options.ip_strategy = LookupIpStrategy::Ipv4AndIpv6;
+        let resolver = TokioResolver::builder_with_config(
+            ResolverConfig::from_name_servers(name_servers),
+            TokioRuntimeProvider::default(),
+        )
+        .with_options(options)
+        .build()
+        .map_err(|error| DynamicEgressRefreshError::Dns(error.to_string()))?;
         Ok(Self {
-            client,
+            resolver,
             config,
             egress,
         })
@@ -156,14 +172,25 @@ impl DynamicEgressRefresh {
     }
 
     async fn resolve(&self, hostname: &str) -> Result<Vec<IpAddr>, DynamicEgressRefreshError> {
+        let hostname = format!("{hostname}.");
         let (ipv4, ipv6) = tokio::join!(
-            self.resolve_record_type(hostname, 1),
-            self.resolve_record_type(hostname, 28)
+            self.resolver.lookup(hostname.clone(), RecordType::A),
+            self.resolver.lookup(hostname, RecordType::AAAA)
         );
-        let addresses = [ipv4, ipv6]
+        let addresses = [ipv4.ok(), ipv6.ok()]
             .into_iter()
-            .filter_map(Result::ok)
             .flatten()
+            .flat_map(|lookup| {
+                lookup
+                    .answers()
+                    .iter()
+                    .filter_map(|record| match &record.data {
+                        RData::A(address) => Some(IpAddr::V4(address.0)),
+                        RData::AAAA(address) => Some(IpAddr::V6(address.0)),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+            })
             .collect::<Vec<_>>();
         if addresses.is_empty() {
             return Err(DynamicEgressRefreshError::Dns(
@@ -172,78 +199,6 @@ impl DynamicEgressRefresh {
         }
         Ok(addresses)
     }
-
-    async fn resolve_record_type(
-        &self,
-        hostname: &str,
-        record_type: u16,
-    ) -> Result<Vec<IpAddr>, DynamicEgressRefreshError> {
-        let mut last_error = None;
-        for server in &self.config.public_dns_servers {
-            match self.query_server(*server, hostname, record_type).await {
-                Ok(addresses) => return Ok(addresses),
-                Err(error) => last_error = Some(error),
-            }
-        }
-        Err(last_error.unwrap_or_else(|| {
-            DynamicEgressRefreshError::Dns("no public DNS server is configured".to_owned())
-        }))
-    }
-
-    async fn query_server(
-        &self,
-        server: IpAddr,
-        hostname: &str,
-        record_type: u16,
-    ) -> Result<Vec<IpAddr>, DynamicEgressRefreshError> {
-        let endpoint = match server {
-            IpAddr::V4(address) => format!("https://{address}/dns-query"),
-            IpAddr::V6(address) => format!("https://[{address}]/dns-query"),
-        };
-        let record_type_query = record_type.to_string();
-        let response = self
-            .client
-            .get(endpoint)
-            .header("accept", "application/dns-json")
-            .query(&[("name", hostname), ("type", record_type_query.as_str())])
-            .send()
-            .await
-            .and_then(reqwest::Response::error_for_status)
-            .map_err(|error| DynamicEgressRefreshError::Dns(error.to_string()))?
-            .json::<DnsJsonResponse>()
-            .await
-            .map_err(|error| DynamicEgressRefreshError::Dns(error.to_string()))?;
-        if response.status != 0 {
-            return Err(DynamicEgressRefreshError::Dns(format!(
-                "resolver returned DNS status {}",
-                response.status
-            )));
-        }
-        Ok(dns_json_addresses(response.answers, record_type))
-    }
-}
-
-#[derive(Debug, Deserialize)]
-struct DnsJsonResponse {
-    #[serde(rename = "Status")]
-    status: u16,
-    #[serde(rename = "Answer", default)]
-    answers: Vec<DnsJsonAnswer>,
-}
-
-#[derive(Debug, Deserialize)]
-struct DnsJsonAnswer {
-    #[serde(rename = "type")]
-    record_type: u16,
-    data: String,
-}
-
-fn dns_json_addresses(answers: Vec<DnsJsonAnswer>, record_type: u16) -> Vec<IpAddr> {
-    answers
-        .into_iter()
-        .filter(|answer| answer.record_type == record_type)
-        .filter_map(|answer| answer.data.parse().ok())
-        .collect()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -346,23 +301,5 @@ mod tests {
             0
         );
         assert_eq!(clone.blocked_cidrs().len(), 2);
-    }
-
-    #[test]
-    fn dns_json_keeps_ipv4_and_ipv6_answers() {
-        let ipv4: DnsJsonResponse =
-            serde_json::from_str(r#"{"Status":0,"Answer":[{"type":1,"data":"192.0.2.9"}]}"#)
-                .unwrap();
-        let ipv6: DnsJsonResponse =
-            serde_json::from_str(r#"{"Status":0,"Answer":[{"type":28,"data":"2001:db8::9"}]}"#)
-                .unwrap();
-        assert_eq!(
-            dns_json_addresses(ipv4.answers, 1),
-            vec!["192.0.2.9".parse::<IpAddr>().unwrap()]
-        );
-        assert_eq!(
-            dns_json_addresses(ipv6.answers, 28),
-            vec!["2001:db8::9".parse::<IpAddr>().unwrap()]
-        );
     }
 }
