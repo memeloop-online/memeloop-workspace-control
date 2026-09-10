@@ -66,6 +66,15 @@ updates remain required before treating rotating residential public addresses
 as continuously protected. Updating a values file is also insufficient unless
 existing workspace policies receive the new exclusions.
 
+Public DNS queries also found current NAT IPv4 addresses for VT, the shared
+Haixia/Sansheng uplink and NAS. These were added through GitOps and appeared in
+the running formal gVisor workspace's policy. A UID-1000 TCP probe did not connect
+to those three addresses on 443, while its public `1.1.1.1:443` control connected.
+This is a finite connectivity sample, not proof of automatic address rotation.
+The existing DDNS source names are recorded in the installation's GitOps
+`apps/memeloop-workspace-control/NETWORK.md`; retain assigned IPv6 coverage in
+addition to the DDNS preferred-address answers.
+
 The control plane refreshes existing, database-backed workspace NetworkPolicies
 at startup. It pages through installation-owned policies, skips deleting
 workspaces, and patches only the policy specification. A concurrent deletion
