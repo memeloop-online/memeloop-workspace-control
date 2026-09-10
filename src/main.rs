@@ -183,6 +183,13 @@ async fn kubernetes_runtime(
     let dynamic_egress = kubernetes_config::dynamic_egress_refresh(&builder)?;
     if let Some(refresh) = &dynamic_egress {
         let result = refresh.refresh_addresses().await?;
+        if result.failed_queries > 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::ConnectionRefused,
+                "not every configured public DNS name could be resolved",
+            )
+            .into());
+        }
         info!(
             resolved_addresses = result.resolved_addresses,
             added_addresses = result.added_addresses,

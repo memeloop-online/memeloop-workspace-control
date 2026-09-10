@@ -3,7 +3,7 @@ use std::{collections::BTreeSet, net::IpAddr, time::Duration};
 use hickory_resolver::{
     TokioResolver,
     config::{LookupIpStrategy, NameServerConfig, ResolverConfig, ResolverOpts},
-    name_server::TokioConnectionProvider,
+    net::runtime::TokioRuntimeProvider,
 };
 use thiserror::Error;
 use tokio::sync::watch;
@@ -71,7 +71,7 @@ impl DynamicEgressRefresh {
         options.ip_strategy = LookupIpStrategy::Ipv4AndIpv6;
         let resolver = TokioResolver::builder_with_config(
             ResolverConfig::from_name_servers(name_servers),
-            TokioConnectionProvider::default(),
+            TokioRuntimeProvider::default(),
         )
         .with_options(options)
         .build()
