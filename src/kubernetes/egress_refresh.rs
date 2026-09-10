@@ -137,13 +137,19 @@ impl DynamicEgressRefresh {
         database: &Database,
         coordinator: &KubernetesCoordinator,
     ) {
-        let result = match self.refresh_addresses().await {
-            Ok(result) => result,
+        match self.refresh_addresses().await {
+            Ok(result) => Self::apply_refresh_result(result, database, coordinator).await,
             Err(error) => {
                 warn!(error = %error, "dynamic workspace egress resolution failed");
-                return;
             }
-        };
+        }
+    }
+
+    async fn apply_refresh_result(
+        result: RefreshResult,
+        database: &Database,
+        coordinator: &KubernetesCoordinator,
+    ) {
         if result.added_addresses == 0 {
             info!(
                 resolved_addresses = result.resolved_addresses,
@@ -152,7 +158,8 @@ impl DynamicEgressRefresh {
             );
             return;
         }
-        match coordinator.refresh_network_policies(database).await {
+        let refreshed = coordinator.refresh_network_policies(database).await;
+        match refreshed {
             Ok(updated) => info!(
                 added_addresses = result.added_addresses,
                 resolved_addresses = result.resolved_addresses,
