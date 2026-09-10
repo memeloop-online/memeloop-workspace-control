@@ -99,17 +99,21 @@ the ttyd sidecar. Two CPU workers were terminated after five seconds; host
 The command completed normally. This verifies actual CPU throttling on this Pod,
 not per-process quotas or all resource exhaustion scenarios.
 
-A bounded guest-process test spawned 1100 short-lived `/bin/sleep` children
-from an unprivileged Node.js process. All 1100 spawned, no spawn errors were
-reported, and the runner reaped its children and returned normally. Both workspace
-containers remained Ready without restarts. The host Pod cgroup reported no
-PID-limit hits and no OOM events during the test.
+A later bounded test requested 1800 guest `/bin/sleep` children. The host Pod
+cgroup recorded five `pids.max` hits, the exec session ended with a runsc
+`WaitPID` EOF, and the workspace recovered Ready without a new container
+restart. Host `pids.current` returned to its baseline after the test and no OOM
+event was recorded. This proves that the parent Pod cgroup protects host task
+capacity, while also showing that a process-exhaustion workload can interrupt
+connections inside the attacked sandbox.
 
-Therefore the host `pids.max=1024` must not be described as a 1024-process limit
-inside the guest. gVisor multiplexes guest execution onto host tasks; these are
-different accounting boundaries. This bounded check demonstrates recovery, not
-protection against every process-exhaustion workload. CPU and memory limits at
-the host sandbox boundary remain necessary. See the upstream
+The host `pids.max=1024` must not be described as a 1024-process limit inside
+the guest. gVisor multiplexes guest execution onto host tasks; these are
+different accounting boundaries. CPU and memory limits at the host sandbox
+boundary remain necessary. The tested gVisor node is also a K3s control-plane
+and etcd node, and K3s logged elevated etcd request latency during the pressure
+window. External tenant sandboxes therefore require dedicated non-control-plane
+gVisor workers before production exposure. See the upstream
 [resource model](https://gvisor.dev/docs/architecture_guide/resources/) and
 [compatibility guidance](https://gvisor.dev/docs/user_guide/compatibility/).
 
