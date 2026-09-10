@@ -161,6 +161,16 @@ until the upstream identity boundary is implemented. Keep the existing
 MASQUERADE configuration: the cluster networking runbook records it as required
 for cross-node routing. The test listener and mapping were removed afterward.
 
+The implementation in progress uses standard Nginx in the existing ttyd image,
+listening on the already-reserved port 8443 and reusing its mounted server
+certificate and gateway client CA. A projected ConfigMap allowlists mapping
+hostnames to loopback application ports. Higress must authenticate and validate
+this upstream, and mapping NetworkPolicies must open only 8443, not the original
+application port. Route edits must reload the proxy without replacing the
+workspace Pod. The image component alone does not close the bypass: resource
+coordination, gateway configuration, rollout and live negative tests are required
+before declaring this boundary complete.
+
 These observations do not establish every eligible node, IPv6, host or
 metadata behavior, an actual external-tenant workspace lifecycle, or full
 external-sandbox acceptance.  The production internal workspaces must not be
