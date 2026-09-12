@@ -284,10 +284,7 @@ impl<'a> WorkspacePod<'a> {
                     self.home, self.home, self.home,
                 ),
             );
-            environment.push(env(
-                "BUILDKIT_HOST",
-                buildkit::ENDPOINT,
-            ));
+            environment.push(env("BUILDKIT_HOST", buildkit::ENDPOINT));
         }
         environment
     }

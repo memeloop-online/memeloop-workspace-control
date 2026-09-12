@@ -72,10 +72,7 @@ pub(super) fn container(enabled: bool, cache_limit_gib: u64) -> Option<Container
         env: Some(vec![
             env("TMPDIR", "/var/lib/mwc-buildkit/tmp"),
             env("XDG_RUNTIME_DIR", "/var/lib/mwc-buildkit/runtime"),
-            env(
-                "BUILDKIT_HOST",
-                ENDPOINT,
-            ),
+            env("BUILDKIT_HOST", ENDPOINT),
         ]),
         readiness_probe: Some(probe.clone()),
         liveness_probe: Some(Probe {

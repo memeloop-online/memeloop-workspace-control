@@ -64,10 +64,7 @@ fn sshd_set_env_quotes_spaces_and_quotation_marks() {
     assert!(config.contains("\"HOME=/home/node-dev\""));
     assert!(config.contains("\"RUSTUP_HOME=/usr/local/rustup\""));
     assert!(config.contains("\"KUBECONFIG=/run/mwc-ssh/kubeconfig\""));
-    assert!(
-        config
-            .contains("\"BUILDKIT_HOST=tcp://127.0.0.1:1234\"")
-    );
+    assert!(config.contains("\"BUILDKIT_HOST=tcp://127.0.0.1:1234\""));
     assert!(config.contains(
         "\"PATH=/run/mwc-buildkit/bin:/home/node-dev/.local/bin:/home/node-dev/.local/share/pnpm:/home/node-dev/.cargo/bin:/usr/local/cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\""
     ));
