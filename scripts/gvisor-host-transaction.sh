@@ -33,7 +33,8 @@ fi
 [[ $expected_host =~ ^[a-z0-9][a-z0-9.-]{0,62}$ ]] || fail 'invalid host name'
 [[ $transaction_id =~ ^[a-z0-9][a-z0-9-]{0,62}$ ]] || fail 'invalid transaction ID'
 [[ $checksum =~ ^[a-f0-9]{64}$ ]] || fail 'invalid archive checksum'
-[[ $(hostname) == "$expected_host" ]] || fail 'host name does not match the approved node mapping'
+IFS= read -r host_name </proc/sys/kernel/hostname
+[[ $host_name == "$expected_host" ]] || fail 'host name does not match the approved node mapping'
 [[ -d $transaction_root && ! -L $transaction_root ]] || fail 'transaction directory is unsafe'
 
 result_file="$transaction_root/result-$result_mode"

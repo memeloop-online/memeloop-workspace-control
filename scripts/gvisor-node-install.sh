@@ -49,7 +49,7 @@ require_command() {
   command -v "$1" >/dev/null 2>&1 || fail "$1 is not on PATH"
 }
 
-for command_name in awk cat chmod cp date dirname find grep hostname install ln mktemp mv readlink rm sha256sum stat tar; do
+for command_name in awk cat chmod cp date dirname find grep install ln mktemp mv readlink rm sha256sum stat tar tr; do
   require_command "$command_name"
 done
 require_command k3s
@@ -125,7 +125,12 @@ done
 if [[ $test_mode == 1 && -n ${GVISOR_NODE_TEST_HOSTNAME:-} ]]; then
   local_hostname=$GVISOR_NODE_TEST_HOSTNAME
 else
-  local_hostname=$(hostname)
+  if command -v hostname >/dev/null 2>&1; then
+    local_hostname=$(hostname)
+  else
+    [[ -r /proc/sys/kernel/hostname ]] || fail 'could not read the host name'
+    local_hostname=$(tr -d ' \t\r\n' </proc/sys/kernel/hostname)
+  fi
 fi
 [[ -n $local_hostname ]] || fail 'could not determine this host name'
 [[ $node == "$local_hostname" ]] \

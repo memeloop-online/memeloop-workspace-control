@@ -18,7 +18,8 @@ shim_link=/usr/local/bin/containerd-shim-runsc-v1
 [[ $expected_host =~ ^[a-z0-9][a-z0-9.-]{0,62}$ ]] || fail 'invalid host name'
 [[ $transaction_id =~ ^[a-z0-9][a-z0-9-]{0,62}$ ]] || fail 'invalid transaction ID'
 [[ $checksum =~ ^[a-f0-9]{64}$ ]] || fail 'invalid checksum'
-[[ $(hostname) == "$expected_host" ]] || fail 'host name does not match the approved node mapping'
+IFS= read -r host_name </proc/sys/kernel/hostname
+[[ $host_name == "$expected_host" ]] || fail 'host name does not match the approved node mapping'
 [[ -d $transaction_root && ! -L $transaction_root ]] || fail 'transaction directory is unsafe'
 
 runtime_classes=$(k3s kubectl get runtimeclass -o go-template='{{range .items}}{{if eq .handler "runsc"}}{{.metadata.name}}{{"\n"}}{{end}}{{end}}')
