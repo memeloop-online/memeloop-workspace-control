@@ -12,25 +12,28 @@ if [[ $mode == recover ]]; then
   transaction_root="$base/$transaction_id"
   [[ -f $transaction_root/metadata && ! -L $transaction_root/metadata ]] || fail 'recovery metadata is unavailable'
   mapfile -t metadata <"$transaction_root/metadata"
-  [[ ${#metadata[@]} == 3 ]] || fail 'recovery metadata is invalid'
+  [[ ${#metadata[@]} == 4 ]] || fail 'recovery metadata is invalid'
   expected_node=${metadata[0]}
-  release=${metadata[1]}
-  checksum=${metadata[2]}
+  expected_host=${metadata[1]}
+  release=${metadata[2]}
+  checksum=${metadata[3]}
   result_mode=install
 else
   expected_node=${2:-}
   transaction_id=${3:-}
   release=${4:-}
   checksum=${5:-}
+  expected_host=${6:-$expected_node}
   transaction_root="$base/$transaction_id"
   result_mode=$mode
 fi
 
 [[ $mode == install || $mode == rollback || $mode == recover ]] || fail 'invalid transaction mode'
 [[ $expected_node =~ ^[a-z0-9][a-z0-9.-]{0,62}$ ]] || fail 'invalid node name'
+[[ $expected_host =~ ^[a-z0-9][a-z0-9.-]{0,62}$ ]] || fail 'invalid host name'
 [[ $transaction_id =~ ^[a-z0-9][a-z0-9-]{0,62}$ ]] || fail 'invalid transaction ID'
 [[ $checksum =~ ^[a-f0-9]{64}$ ]] || fail 'invalid archive checksum'
-[[ $(hostname) == "$expected_node" ]] || fail 'Kubernetes target and host name differ'
+[[ $(hostname) == "$expected_host" ]] || fail 'host name does not match the approved node mapping'
 [[ -d $transaction_root && ! -L $transaction_root ]] || fail 'transaction directory is unsafe'
 
 result_file="$transaction_root/result-$result_mode"
@@ -211,7 +214,7 @@ timeout 20 k3s kubectl cordon "$expected_node" >/dev/null
 if [[ $mode == rollback ]]; then
   phase=APPLYING
   state APPLYING
-  if "$transaction_root/gvisor-node-rollback.sh" "$expected_node" "$transaction_id" "$checksum" \
+  if "$transaction_root/gvisor-node-rollback.sh" "$expected_node" "$transaction_id" "$checksum" "$expected_host" \
     && wait_host_health && restore_scheduling; then
     rm -f -- "$transaction_root/result-install"
     finish SUCCEEDED
@@ -241,7 +244,7 @@ phase=APPLYING
 state APPLYING
 set +e
 timeout 360 "$transaction_root/gvisor-node-install.sh" \
-  --node "$expected_node" \
+  --node "$expected_host" \
   --archive "$transaction_root/gvisor-x86_64.tar.bz2" \
   --sha256 "$checksum" \
   --rootfs-memory-mib 128 --apply --restart-k3s

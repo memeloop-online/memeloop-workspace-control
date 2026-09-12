@@ -7,6 +7,7 @@ fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
 expected_node=${1:-}
 transaction_id=${2:-}
 checksum=${3:-}
+expected_host=${4:-$expected_node}
 transaction_root="/var/lib/memeloop-workspace-control/node-maintenance/$transaction_id"
 template=/var/lib/rancher/k3s/agent/etc/containerd/config-v3.toml.tmpl
 version_dir="/usr/local/lib/gvisor/$checksum"
@@ -14,9 +15,10 @@ runsc_link=/usr/local/bin/runsc
 shim_link=/usr/local/bin/containerd-shim-runsc-v1
 
 [[ $expected_node =~ ^[a-z0-9][a-z0-9.-]{0,62}$ ]] || fail 'invalid node name'
+[[ $expected_host =~ ^[a-z0-9][a-z0-9.-]{0,62}$ ]] || fail 'invalid host name'
 [[ $transaction_id =~ ^[a-z0-9][a-z0-9-]{0,62}$ ]] || fail 'invalid transaction ID'
 [[ $checksum =~ ^[a-f0-9]{64}$ ]] || fail 'invalid checksum'
-[[ $(hostname) == "$expected_node" ]] || fail 'target node and host name differ'
+[[ $(hostname) == "$expected_host" ]] || fail 'host name does not match the approved node mapping'
 [[ -d $transaction_root && ! -L $transaction_root ]] || fail 'transaction directory is unsafe'
 
 runtime_classes=$(k3s kubectl get runtimeclass -o go-template='{{range .items}}{{if eq .handler "runsc"}}{{.metadata.name}}{{"\n"}}{{end}}{{end}}')

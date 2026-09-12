@@ -5,6 +5,7 @@ set -euo pipefail
 fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
 
 expected_node=${EXPECTED_NODE:-}
+expected_host=${EXPECTED_HOSTNAME:-$expected_node}
 transaction_id=${TRANSACTION_ID:-}
 mode=${MODE:-install}
 host_root=/host
@@ -13,13 +14,14 @@ release='release-20260831.0'
 checksum=014b3871a5c698c802fd7a03758e0dbf4c1683f9e3f8c743979ea66bbf6553a4
 
 [[ $expected_node =~ ^[a-z0-9][a-z0-9.-]{0,62}$ ]] || fail 'EXPECTED_NODE is invalid'
+[[ $expected_host =~ ^[a-z0-9][a-z0-9.-]{0,62}$ ]] || fail 'EXPECTED_HOSTNAME is invalid'
 [[ $transaction_id =~ ^[a-z0-9][a-z0-9-]{0,62}$ ]] || fail 'TRANSACTION_ID is invalid'
 [[ $mode == install || $mode == rollback ]] || fail 'MODE must be install or rollback'
 [[ -d $host_root && ! -L $host_root ]] || fail '/host is not a safe host-root mount'
 [[ -r $host_root/etc/hostname ]] || fail 'host identity is unavailable'
 host_name=$(tr -d ' \t\r\n' < "$host_root/etc/hostname")
-[[ $host_name == "$expected_node" ]] \
-  || fail "host name $host_name does not match EXPECTED_NODE $expected_node"
+[[ $host_name == "$expected_host" ]] \
+  || fail "host name $host_name does not match EXPECTED_HOSTNAME $expected_host"
 
 transaction_root="$host_root/var/lib/memeloop-workspace-control/node-maintenance/$transaction_id"
 payload_manifest="$transaction_root/payload.sha256"
@@ -36,7 +38,7 @@ else
     install -m 0755 "$payload_root/$script" "$staging/$script"
   done
   install -m 0644 "$payload_root/gvisor-x86_64.tar.bz2" "$staging/gvisor-x86_64.tar.bz2"
-  printf '%s\n%s\n%s\n' "$expected_node" "$release" "$checksum" >"$staging/metadata"
+  printf '%s\n%s\n%s\n%s\n' "$expected_node" "$expected_host" "$release" "$checksum" >"$staging/metadata"
   chmod 0600 "$staging/metadata"
   (cd "$staging" && sha256sum gvisor-host-transaction.sh gvisor-node-install.sh \
     gvisor-node-preflight.sh gvisor-node-rollback.sh gvisor-x86_64.tar.bz2 metadata \
@@ -82,7 +84,7 @@ if [[ $unit_state != loaded ]]; then
     systemd-run --unit "$unit" --property=Type=oneshot --property=TimeoutStartSec=12min \
       --property="OnFailure=mwc-gvisor-recovery@${transaction_id}.service" \
       /bin/bash "$host_transaction_root/gvisor-host-transaction.sh" \
-      "$mode" "$expected_node" "$transaction_id" "$release" "$checksum"
+      "$mode" "$expected_node" "$transaction_id" "$release" "$checksum" "$expected_host"
 else
   unit_active=$(nsenter --target 1 --mount --uts --ipc --net --pid \
     --root=/proc/1/root --wd=/ -- \
