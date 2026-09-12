@@ -1373,10 +1373,7 @@ fn node_template_reuses_the_existing_image_with_platform_bootstrap() {
         "\"PATH=/run/mwc-buildkit/bin:/home/node-dev/.local/bin:/home/node-dev/.local/share/pnpm:/home/node-dev/.cargo/bin:/usr/local/cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\""
     ));
     assert!(sshd_config.contains("\"RUSTUP_HOME=/usr/local/rustup\""));
-    assert!(
-        sshd_config
-            .contains("\"BUILDKIT_HOST=unix:///run/mwc-buildkit/runtime/buildkit/buildkitd.sock\"")
-    );
+    assert!(sshd_config.contains("\"BUILDKIT_HOST=tcp://127.0.0.1:1234\""));
     assert!(
         resources.workspace_config.data.as_ref().unwrap()["mwc-workspace-bootstrap"]
             .contains("workspace image contract requires sshd and jq")
@@ -1504,8 +1501,7 @@ fn regenerable_data_uses_bounded_pod_lifetime_storage() {
     }));
     assert!(environment.iter().any(|variable| {
         variable.name == "BUILDKIT_HOST"
-            && variable.value.as_deref()
-                == Some("unix:///run/mwc-buildkit/runtime/buildkit/buildkitd.sock")
+            && variable.value.as_deref() == Some("tcp://127.0.0.1:1234")
     }));
     assert!(environment.iter().any(|variable| {
         variable.name == "MWC_HOME_RESERVE_MIB" && variable.value.as_deref() == Some("1024")
