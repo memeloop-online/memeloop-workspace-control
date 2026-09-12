@@ -11,6 +11,7 @@ use k8s_openapi::{
 use super::resource_helpers::mount;
 
 pub(super) const IMAGE: &str = "harbor.k3s.onetwo.website/docker-io/moby/buildkit:v0.33.0-rootless@sha256:80b15f0735e87bab7bf59ec4d695dfb4a7cfb25521cf56dc75d6f256285b63ef";
+pub(super) const ENDPOINT: &str = "tcp://127.0.0.1:1234";
 
 pub(super) fn bootstrap_container(enabled: bool) -> Option<Container> {
     enabled.then(|| Container {
@@ -73,7 +74,7 @@ pub(super) fn container(enabled: bool, cache_limit_gib: u64) -> Option<Container
             env("XDG_RUNTIME_DIR", "/var/lib/mwc-buildkit/runtime"),
             env(
                 "BUILDKIT_HOST",
-                "unix:///var/lib/mwc-buildkit/runtime/buildkit/buildkitd.sock",
+                ENDPOINT,
             ),
         ]),
         readiness_probe: Some(probe.clone()),
@@ -155,7 +156,7 @@ chmod 0555 /var/lib/mwc-buildkit/bin/buildctl
 cat > /var/lib/mwc-buildkit/config/buildkitd.toml <<'CONFIG'
 root = "/var/lib/mwc-buildkit/state"
 [grpc]
-  address = ["unix:///var/lib/mwc-buildkit/runtime/buildkit/buildkitd.sock"]
+  address = ["tcp://127.0.0.1:1234"]
 [cdi]
   disabled = true
 [worker.oci]

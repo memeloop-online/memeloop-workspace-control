@@ -118,7 +118,7 @@ wait_host_health() {
 assert_default_runc() {
   local path=$1 assignment
   [[ -f $path && ! -L $path ]] || return 1
-  assignment=$(awk -F= '/^[[:space:]]*default_runtime_name[[:space:]]*=/{gsub(/[[:space:]\"]/, "", $2); print $2}' "$path")
+  assignment=$(awk -F= '/^[[:space:]]*default_runtime_name[[:space:]]*=/{gsub(/[[:space:]"]/ , "", $2); print $2}' "$path")
   [[ -z $assignment || $assignment == runc ]] || return 1
   ! grep -Fq 'runtime_type = "io.containerd.runsc.v1"' "$path" || return 1
 }
@@ -132,7 +132,7 @@ verify_expected_installation() {
   grep -Fqx "  ConfigPath = \"$runsc_config\"" "$template" || return 1
   grep -Fqx "  ConfigPath = \"$runsc_config\"" "$rendered" || return 1
   grep -Fqx '  runtime_type = "io.containerd.runsc.v1"' "$rendered" || return 1
-  assignment=$(awk -F= '/^[[:space:]]*default_runtime_name[[:space:]]*=/{gsub(/[[:space:]\"]/, "", $2); print $2}' "$rendered")
+  assignment=$(awk -F= '/^[[:space:]]*default_runtime_name[[:space:]]*=/{gsub(/[[:space:]"]/ , "", $2); print $2}' "$rendered")
   [[ -z $assignment || $assignment == runc ]] || return 1
   timeout 10 "$version_dir/runsc" --version >/dev/null || return 1
 }

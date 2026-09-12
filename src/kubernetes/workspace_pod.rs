@@ -25,7 +25,6 @@ const BOOTSTRAP: &str = "/etc/workspace-platform/mwc-workspace-bootstrap";
 const BUILD_SCRATCH: &str = "/var/lib/mwc/build-scratch";
 const CODEX_SCRATCH: &str = "/var/lib/mwc/codex-scratch";
 const BUILDKIT_VOLUME_MOUNT: &str = "/run/mwc-buildkit";
-const BUILDKIT_RUNTIME: &str = "/run/mwc-buildkit/runtime";
 const INTERNAL_PLATFORM_ENVIRONMENT: [&str; 6] = [
     "MWC_WORKSPACE_USER",
     "MWC_WORKSPACE_HOME",
@@ -287,7 +286,7 @@ impl<'a> WorkspacePod<'a> {
             );
             environment.push(env(
                 "BUILDKIT_HOST",
-                &format!("unix://{BUILDKIT_RUNTIME}/buildkit/buildkitd.sock"),
+                buildkit::ENDPOINT,
             ));
         }
         environment
