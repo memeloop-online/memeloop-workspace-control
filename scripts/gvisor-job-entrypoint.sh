@@ -79,12 +79,14 @@ unit_state=$(nsenter --target 1 --mount --uts --ipc --net --pid \
   --root=/proc/1/root --wd=/ -- \
   systemctl show "$unit" --property=LoadState --value 2>/dev/null || true)
 if [[ $unit_state != loaded ]]; then
-  nsenter --target 1 --mount --uts --ipc --net --pid \
+  if ! nsenter --target 1 --mount --uts --ipc --net --pid \
     --root=/proc/1/root --wd=/ -- \
     systemd-run --unit "$unit" --property=Type=oneshot --property=TimeoutStartSec=12min \
       --property="OnFailure=mwc-gvisor-recovery@${transaction_id}.service" \
       /bin/bash "$host_transaction_root/gvisor-host-transaction.sh" \
-      "$mode" "$expected_node" "$transaction_id" "$release" "$checksum" "$expected_host"
+      "$mode" "$expected_node" "$transaction_id" "$release" "$checksum" "$expected_host"; then
+    printf 'Host transaction start returned a failure; waiting for its durable recovery result.\n' >&2
+  fi
 else
   unit_active=$(nsenter --target 1 --mount --uts --ipc --net --pid \
     --root=/proc/1/root --wd=/ -- \
