@@ -46,7 +46,7 @@ jobs:
             changed=true
           elif git diff --quiet "${BEFORE_SHA}" "${CURRENT_SHA}" -- \
             .dockerignore Cargo.toml Cargo.lock Dockerfile src web images \
-            tests/workspace_bootstrap_enospc.sh .github/workflows/ci.yml; then
+            scripts/gvisor-*.sh tests/workspace_bootstrap_enospc.sh .github/workflows/ci.yml; then
             changed=false
           else
             changed=true
@@ -426,6 +426,11 @@ jobs:
             tests/k3s_preflight.sh \
             tests/k3s_verify_installation.sh \
             tests/k3s_verify_workspace_cleanup.sh
+          bash -n scripts/gvisor-job-entrypoint.sh \
+            scripts/gvisor-host-transaction.sh \
+            scripts/gvisor-node-install.sh \
+            scripts/gvisor-node-preflight.sh \
+            scripts/gvisor-node-rollback.sh
           bash tests/k3s_preflight.sh
           bash tests/k3s_verify_installation.sh
           bash tests/k3s_verify_workspace_cleanup.sh
@@ -463,6 +468,10 @@ jobs:
             context: images/ttyd-ssh
             dockerfile: images/ttyd-ssh/Dockerfile
             description: Stock ttyd with the standard OpenSSH client
+          - suffix: -gvisor-installer
+            context: .
+            dockerfile: images/gvisor-node-installer/Dockerfile
+            description: Transactional gVisor node installer
     env:
       IMAGE_NAME: ghcr.io/${{ github.repository }}${{ matrix.suffix }}
     steps:
@@ -530,6 +539,19 @@ jobs:
               /usr/bin/ssh -V
             '
           bash tests/ttyd_mtls.sh "${IMAGE_NAME}@${PUBLISHED_DIGEST}"
+      - name: Verify published gVisor node installer payload
+        if: matrix.suffix == '-gvisor-installer'
+        env:
+          PUBLISHED_DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          docker run --rm --entrypoint /bin/bash \
+            "${IMAGE_NAME}@${PUBLISHED_DIGEST}" -ec '
+              bash -n /opt/mwc/*.sh
+              test -s /opt/mwc/mwc-gvisor-recovery@.service
+              printf "%s  %s\n" \
+                014b3871a5c698c802fd7a03758e0dbf4c1683f9e3f8c743979ea66bbf6553a4 \
+                /opt/mwc/gvisor-x86_64.tar.bz2 | sha256sum --check --strict
+            '
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-name: ${{ env.IMAGE_NAME }}

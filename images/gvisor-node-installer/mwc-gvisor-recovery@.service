@@ -1,0 +1,7 @@
+[Unit]
+Description=Recover an interrupted Memeloop gVisor node transaction %i
+
+[Service]
+Type=oneshot
+TimeoutStartSec=5min
+ExecStart=/bin/bash /var/lib/memeloop-workspace-control/node-maintenance/%i/gvisor-host-transaction.sh recover %i
