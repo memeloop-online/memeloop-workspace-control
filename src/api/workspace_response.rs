@@ -91,18 +91,19 @@ pub(super) async fn workspace_response(
             .iter()
             .find(|mapping| mapping.internal_port == endpoint.internal_port)
         {
+            let status = if workspace_desktop_is_connectable(workspace.state) {
+                super::port_mappings::mapping_status(state, &workspace, mapping).await
+            } else {
+                workspace.state.as_str()
+            };
             Some(WorkspaceDesktopConnection {
                 mapping_id: mapping.id,
                 display_name: mapping
                     .display_name
                     .clone()
                     .unwrap_or_else(|| "Browser desktop".to_owned()),
-                status: if workspace_desktop_is_connectable(workspace.state) {
-                    super::port_mappings::mapping_status(state, &workspace, mapping).await
-                } else {
-                    workspace.state.as_str()
-                },
-                https_url: if connectable {
+                status,
+                https_url: if desktop_mapping_is_connectable(connectable, status) {
                     Some(super::port_mappings::mapping_https_url(state, mapping)?)
                 } else {
                     None
@@ -132,6 +133,10 @@ pub(super) async fn workspace_response(
         jump_host_key,
         desktop,
     })
+}
+
+fn desktop_mapping_is_connectable(workspace_connectable: bool, mapping_status: &str) -> bool {
+    workspace_connectable && mapping_status == "ready"
 }
 
 fn workspace_desktop_is_connectable(state: WorkspaceState) -> bool {
@@ -314,5 +319,13 @@ mod tests {
         ] {
             assert!(!workspace_desktop_is_connectable(state), "{state:?}");
         }
+    }
+
+    #[test]
+    fn a_desktop_url_requires_both_workspace_and_mapping_readiness() {
+        assert!(desktop_mapping_is_connectable(true, "ready"));
+        assert!(!desktop_mapping_is_connectable(true, "provisioning"));
+        assert!(!desktop_mapping_is_connectable(true, "failed"));
+        assert!(!desktop_mapping_is_connectable(false, "ready"));
     }
 }
