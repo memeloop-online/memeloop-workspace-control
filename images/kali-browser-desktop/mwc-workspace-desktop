@@ -5,7 +5,7 @@ desktop_port=${MWC_DESKTOP_PORT:-6080}
 workspace_home=${MWC_WORKSPACE_HOME:-/workspace}
 display=:1
 vnc_port=5901
-vnc_dir="$workspace_home/.vnc"
+vnc_dir="$workspace_home/.config/tigervnc"
 xstartup=/etc/mwc-desktop/xstartup
 vnc_host=$(hostname)
 
