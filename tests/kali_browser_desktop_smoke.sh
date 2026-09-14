@@ -62,6 +62,21 @@ for port in ("17C0", "170D"):  # 6080 and 5901 in hexadecimal
     assert f"00000000000000000000000000000000:{port}" not in listeners, listeners
 '
 docker exec "$container" /bin/sh -ec '
+  test "$(stat -c %a /tmp/.X11-unix)" = 1777
+  test -s /run/mwc-ssh/desktop.pid
+  kill -0 "$(cat /run/mwc-ssh/desktop.pid)"
+'
+
+# TigerVNC waits for the desktop session during startup. A missing X11 socket
+# directory used to look healthy briefly and then exit at the 30-second mark.
+sleep 35
+docker exec "$container" python3 -c '
+import socket
+connection = socket.create_connection(("127.0.0.1", 6080), timeout=2)
+connection.sendall(b"GET / HTTP/1.0\r\nHost: localhost\r\n\r\n")
+assert b" 200 " in connection.recv(200)
+'
+docker exec "$container" /bin/sh -ec '
   test -s /run/mwc-ssh/desktop.pid
   kill -0 "$(cat /run/mwc-ssh/desktop.pid)"
 '
