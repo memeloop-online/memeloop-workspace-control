@@ -65,25 +65,7 @@ pub(super) fn resource_builder(config: &AppConfig) -> Result<ResourceBuilder, io
         )]),
         Err(error) => return Err(io::Error::new(io::ErrorKind::InvalidInput, error)),
     };
-    let higress_source_cidrs = match std::env::var("MWC_HIGRESS_SOURCE_CIDRS_JSON") {
-        Ok(value) => {
-            let cidrs: Vec<String> = serde_json::from_str(&value).map_err(|error| {
-                io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    format!("MWC_HIGRESS_SOURCE_CIDRS_JSON must be a JSON string array: {error}"),
-                )
-            })?;
-            if cidrs.iter().any(|cidr| cidr.trim().is_empty()) {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    "MWC_HIGRESS_SOURCE_CIDRS_JSON must not contain empty CIDRs",
-                ));
-            }
-            cidrs
-        }
-        Err(std::env::VarError::NotPresent) => Vec::new(),
-        Err(error) => return Err(io::Error::new(io::ErrorKind::InvalidInput, error)),
-    };
+    let higress_source_cidrs = higress_source_cidrs()?;
     let internet_egress = internet_egress_config()?;
     let ttyd_mtls = authenticated_proxy_config(
         &higress_namespace,
@@ -111,6 +93,19 @@ pub(super) fn resource_builder(config: &AppConfig) -> Result<ResourceBuilder, io
             .unwrap_or_else(|_| "https".to_owned()),
         internal_ssh_node_port_enabled: config.internal_ssh_host.is_some(),
     })
+}
+
+fn higress_source_cidrs() -> Result<Vec<String>, io::Error> {
+    let Some(cidrs) = optional_json_strings("MWC_HIGRESS_SOURCE_CIDRS_JSON")? else {
+        return Ok(Vec::new());
+    };
+    if cidrs.iter().any(|cidr| cidr.trim().is_empty()) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "MWC_HIGRESS_SOURCE_CIDRS_JSON must not contain empty CIDRs",
+        ));
+    }
+    Ok(cidrs)
 }
 
 fn authenticated_proxy_config(
