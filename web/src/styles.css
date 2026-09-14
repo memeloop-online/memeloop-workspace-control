@@ -503,6 +503,9 @@ textarea { resize: vertical; font-family: "DM Mono", monospace; line-height: 1.5
 .connection-copy pre { max-height: 220px; margin: 0; overflow: auto; white-space: pre; }
 .connection-copy pre code { color: #b6c2d3; font-size: .67rem; }
 .connection-copy button { color: #83dcb9; background: #12261f; border: 0; border-radius: 6px; padding: 6px 9px; cursor: pointer; font-size: .63rem; }
+.host-identity-section, .client-key-section { display: grid; gap: 8px; }
+.host-identity { display: grid; gap: 7px; padding: 10px; border: 1px solid var(--line); border-radius: 10px; }
+.host-identity > strong { color: var(--text); font-size: .72rem; }
 :root[data-theme="light"] .connection-dialog { background: var(--surface); }
 :root[data-theme="light"] .port-mappings-dialog { background: var(--surface); }
 :root[data-theme="light"] .port-mapping-row { background: #f7f9fc; }
