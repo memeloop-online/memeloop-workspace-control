@@ -85,13 +85,10 @@ pub(super) fn resource_builder(config: &AppConfig) -> Result<ResourceBuilder, io
         Err(error) => return Err(io::Error::new(io::ErrorKind::InvalidInput, error)),
     };
     let internet_egress = internet_egress_config()?;
-    let ttyd_mtls = ttyd_mtls_config(&higress_namespace)?;
-    if config.port_mapping_public_domain.is_some() && ttyd_mtls.is_none() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "authenticated port mappings require the workspace mTLS proxy configuration",
-        ));
-    }
+    let ttyd_mtls = authenticated_proxy_config(
+        &higress_namespace,
+        config.port_mapping_public_domain.as_deref(),
+    )?;
     Ok(ResourceBuilder {
         installation_id: config.installation_id.clone(),
         ttyd_image,
@@ -114,6 +111,20 @@ pub(super) fn resource_builder(config: &AppConfig) -> Result<ResourceBuilder, io
             .unwrap_or_else(|_| "https".to_owned()),
         internal_ssh_node_port_enabled: config.internal_ssh_host.is_some(),
     })
+}
+
+fn authenticated_proxy_config(
+    higress_namespace: &str,
+    port_mapping_domain: Option<&str>,
+) -> Result<Option<TtydMtlsConfig>, io::Error> {
+    let config = ttyd_mtls_config(higress_namespace)?;
+    if port_mapping_domain.is_some() && config.is_none() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "authenticated port mappings require the workspace mTLS proxy configuration",
+        ));
+    }
+    Ok(config)
 }
 
 pub(super) fn dynamic_egress_refresh(
