@@ -13,7 +13,8 @@ use super::{
     ApiError, AppState,
     idempotency::json_response,
     workspaces::{
-        SshPortStrategy, WorkspaceAppSshConnection, WorkspaceResponse, WorkspaceSshConnection,
+        SshPortStrategy, WorkspaceAppSshConnection, WorkspaceDesktopConnection, WorkspaceResponse,
+        WorkspaceSshConnection,
     },
 };
 
@@ -84,6 +85,35 @@ pub(super) async fn workspace_response(
         ssh_config.as_ref(),
         connectable,
     );
+    let desktop = if let Some(endpoint) = workspace.template.desktop.as_ref() {
+        let mappings = state.database.list_port_mappings(workspace.id).await?;
+        if let Some(mapping) = mappings
+            .iter()
+            .find(|mapping| mapping.internal_port == endpoint.internal_port)
+        {
+            Some(WorkspaceDesktopConnection {
+                mapping_id: mapping.id,
+                display_name: mapping
+                    .display_name
+                    .clone()
+                    .unwrap_or_else(|| "Browser desktop".to_owned()),
+                status: if workspace_desktop_is_connectable(workspace.state) {
+                    super::port_mappings::mapping_status(state, &workspace, mapping).await
+                } else {
+                    workspace.state.as_str()
+                },
+                https_url: if connectable {
+                    Some(super::port_mappings::mapping_https_url(state, mapping)?)
+                } else {
+                    None
+                },
+            })
+        } else {
+            None
+        }
+    } else {
+        None
+    };
     Ok(WorkspaceResponse {
         workspace,
         namespace,
@@ -100,7 +130,12 @@ pub(super) async fn workspace_response(
         injection_sources,
         workspace_host_key,
         jump_host_key,
+        desktop,
     })
+}
+
+fn workspace_desktop_is_connectable(state: WorkspaceState) -> bool {
+    state == WorkspaceState::Ready
 }
 
 async fn ssh_endpoint(
@@ -258,4 +293,26 @@ async fn injection_sources(
     .into_iter()
     .map(|item| item.summary())
     .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_stopped_workspace_never_advertises_its_desktop_as_connectable() {
+        assert!(workspace_desktop_is_connectable(WorkspaceState::Ready));
+        for state in [
+            WorkspaceState::Provisioning,
+            WorkspaceState::Stopping,
+            WorkspaceState::Stopped,
+            WorkspaceState::Starting,
+            WorkspaceState::Restarting,
+            WorkspaceState::Deleting,
+            WorkspaceState::Deleted,
+            WorkspaceState::Failed,
+        ] {
+            assert!(!workspace_desktop_is_connectable(state), "{state:?}");
+        }
+    }
 }

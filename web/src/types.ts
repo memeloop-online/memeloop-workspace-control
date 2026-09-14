@@ -168,8 +168,15 @@ export interface WorkspaceTemplate {
   required_node_names: string[];
   preferred_node_names: string[];
   node_selector: Record<string, string>;
+  desktop?: WorkspaceDesktopTemplate | null;
   yaml: string;
   enabled: boolean;
+}
+
+/** Optional browser desktop endpoint provisioned with a workspace template. */
+export interface WorkspaceDesktopTemplate {
+  internal_port: number;
+  display_name?: string;
 }
 
 export interface WorkspaceStoragePolicy {
@@ -269,6 +276,15 @@ export interface WorkspaceResponse {
   injection_sources: ResolvedInjection[];
   workspace_host_key: { algorithm: string; public_key: string; fingerprint: string } | null;
   jump_host_key: { algorithm: string; public_key: string; fingerprint: string } | null;
+  desktop?: WorkspaceDesktopConnection | null;
+}
+
+/** A browser desktop endpoint returned with a workspace response. */
+export interface WorkspaceDesktopConnection {
+  mapping_id: string;
+  display_name: string;
+  status: "provisioning" | "ready" | "failed" | "deleting" | string;
+  https_url: string | null;
 }
 
 export interface WorkspaceSshConnection {

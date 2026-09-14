@@ -30,6 +30,7 @@ export const TEMPLATE_NUMBER_POLICIES = {
   buildkitCache: { min: 1, step: 1, max: 256 },
   codexScratch: { min: 1, step: 1, max: 32 },
   homeReserve: { min: 64, step: 64, max: 4_096 },
+  desktopPort: { min: 1_024, step: 1, max: 65_535 },
 } as const satisfies Record<string, NumericPolicy>;
 
 export interface TemplateStoragePolicyDraft {
@@ -63,6 +64,9 @@ export interface TemplateDraft {
   requiredNodes: string;
   preferredNodes: string;
   nodeSelector: string;
+  desktopEnabled: boolean;
+  desktopPort: string;
+  desktopDisplayName: string;
 }
 
 type TemplateFieldSchema = { readonly [field: string]: TemplateFieldSchema | null };
@@ -103,6 +107,10 @@ const TEMPLATE_FIELD_SCHEMA: TemplateFieldSchema = {
     required_node_names: null,
     preferred_node_names: null,
     node_selector: null,
+    desktop: {
+      internal_port: null,
+      display_name: null,
+    },
   },
 };
 
@@ -143,6 +151,9 @@ export function emptyTemplateDraft(): TemplateDraft {
     requiredNodes: "",
     preferredNodes: "",
     nodeSelector: "",
+    desktopEnabled: false,
+    desktopPort: "6080",
+    desktopDisplayName: "",
   };
 }
 
@@ -155,6 +166,7 @@ export function templateDraftToYaml(draft: TemplateDraft): string {
   const requestMemory = parseRequiredNumber(draft.requestMemory, TEMPLATE_NUMBER_POLICIES.requestMemory);
   const requestEphemeral = parseOptionalNumber(draft.requestEphemeral, TEMPLATE_NUMBER_POLICIES.ephemeral);
   const limitEphemeral = parseOptionalNumber(draft.limitEphemeral, TEMPLATE_NUMBER_POLICIES.ephemeral);
+  const desktopPort = draft.desktopEnabled ? parseDesktopPort(draft.desktopPort) : null;
   const storagePolicy: WorkspaceStoragePolicy = {
     runtime_tmp_memory_mib: parseRequiredNumber(draft.storagePolicy.runtime_tmp_memory_mib, TEMPLATE_NUMBER_POLICIES.runtimeTmpMemory),
     build_scratch_gib: parseRequiredNumber(draft.storagePolicy.build_scratch_gib, TEMPLATE_NUMBER_POLICIES.buildScratch),
@@ -189,6 +201,12 @@ export function templateDraftToYaml(draft: TemplateDraft): string {
   if (draft.runtimeClassName.trim()) spec.runtime_class_name = draft.runtimeClassName.trim();
   if (requestEphemeral !== null) (spec.pod_requests as Record<string, unknown>).ephemeral_storage_mib = requestEphemeral;
   if (limitEphemeral !== null) spec.ephemeral_storage_limit_mib = limitEphemeral;
+  if (desktopPort !== null) {
+    spec.desktop = {
+      internal_port: desktopPort,
+      ...(draft.desktopDisplayName.trim() ? { display_name: draft.desktopDisplayName.trim() } : {}),
+    };
+  }
   const required = csv(draft.requiredNodes); if (required.length) spec.required_node_names = required;
   const preferred = csv(draft.preferredNodes); if (preferred.length) spec.preferred_node_names = preferred;
   const selector = pairs(draft.nodeSelector); if (Object.keys(selector).length) spec.node_selector = selector;
@@ -204,6 +222,7 @@ export function templateDraftFromYaml(yaml: string): TemplateDraft {
   const storagePolicy = spec.storage_policy === undefined
     ? DEFAULT_STORAGE_POLICY
     : parseStoragePolicy(spec.storage_policy);
+  const desktop = spec.desktop === undefined ? null : parseDesktop(spec.desktop);
   if (!metadata.name) throw new Error("Invalid WorkspaceTemplate YAML");
   return {
     name: String(metadata.name),
@@ -227,7 +246,37 @@ export function templateDraftFromYaml(yaml: string): TemplateDraft {
     requiredNodes: listText(spec.required_node_names),
     preferredNodes: listText(spec.preferred_node_names),
     nodeSelector: formatPairs(spec.node_selector),
+    desktopEnabled: desktop !== null,
+    desktopPort: desktop === null ? "6080" : String(desktop.internal_port),
+    desktopDisplayName: desktop?.display_name ?? "",
   };
+}
+
+function parseDesktop(value: unknown): { internal_port: number; display_name?: string } {
+  const desktop = requiredRecord(value);
+  const port = desktop.internal_port;
+  if (typeof port !== "number" || !Number.isSafeInteger(port) || !isDesktopPort(port)) {
+    throw new Error("Invalid WorkspaceTemplate YAML: desktop.internal_port is unavailable for browser desktop access");
+  }
+  if (desktop.display_name !== undefined && typeof desktop.display_name !== "string") {
+    throw new Error("Invalid WorkspaceTemplate YAML: desktop.display_name must be a string");
+  }
+  return {
+    internal_port: port,
+    ...(typeof desktop.display_name === "string" && desktop.display_name ? { display_name: desktop.display_name } : {}),
+  };
+}
+
+function parseDesktopPort(value: string): number {
+  const port = parseRequiredNumber(value, TEMPLATE_NUMBER_POLICIES.desktopPort);
+  if (!isDesktopPort(port)) throw new TemplateDraftError("invalid_template_number");
+  return port;
+}
+
+function isDesktopPort(port: number): boolean {
+  return port >= TEMPLATE_NUMBER_POLICIES.desktopPort.min
+    && port <= TEMPLATE_NUMBER_POLICIES.desktopPort.max
+    && ![22, 2222, 7681, 8080, 8081, 8443, 3389].includes(port);
 }
 
 function parseStoragePolicy(value: unknown): WorkspaceStoragePolicy {

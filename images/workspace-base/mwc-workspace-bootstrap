@@ -317,7 +317,7 @@ prepare_runtime_sshd_config() {
         object=$(printf '%s' "$entry" | jq -r '.object')
         data_key=$(printf '%s' "$entry" | jq -r '.data_key')
         case "$name" in
-            PATH|HOME|RUSTUP_HOME|CARGO_HOME|TMPDIR|TMP|TEMP|XDG_CACHE_HOME|CARGO_TARGET_DIR|MWC_WORKSPACE_USER|MWC_WORKSPACE_HOME|MWC_IN_CLUSTER_KUBECONFIG|MWC_BUILDKIT_ENABLED|MWC_BUILD_SCRATCH|MWC_HOME_RESERVE_MIB)
+            PATH|HOME|RUSTUP_HOME|CARGO_HOME|TMPDIR|TMP|TEMP|XDG_CACHE_HOME|CARGO_TARGET_DIR|MWC_WORKSPACE_USER|MWC_WORKSPACE_HOME|MWC_IN_CLUSTER_KUBECONFIG|MWC_BUILDKIT_ENABLED|MWC_BUILD_SCRATCH|MWC_HOME_RESERVE_MIB|MWC_DESKTOP_ENABLED|MWC_DESKTOP_PORT)
                 continue
                 ;;
             KUBECONFIG)
@@ -346,6 +346,33 @@ verify_runtime_dependencies() {
     mkdir -p /run/sshd
 }
 
+start_browser_desktop() {
+    if [ "${MWC_DESKTOP_ENABLED:-false}" != true ]; then
+        return
+    fi
+
+    if [ ! -x /usr/local/bin/mwc-workspace-desktop ]; then
+        echo "desktop requested but image does not provide mwc-workspace-desktop" >&2
+        return
+    fi
+    if ! command -v runuser >/dev/null 2>&1; then
+        echo "desktop requested but image does not provide runuser" >&2
+        return
+    fi
+
+    rm -f "$runtime_dir/desktop.pid"
+    runuser --user "$workspace_user" --preserve-environment -- \
+        /usr/local/bin/mwc-workspace-desktop &
+    desktop_pid=$!
+    printf '%s\n' "$desktop_pid" > "$runtime_dir/desktop.pid"
+    sleep 1
+    if ! kill -0 "$desktop_pid" 2>/dev/null; then
+        rm -f "$runtime_dir/desktop.pid"
+        echo "desktop launcher exited during startup" >&2
+        return
+    fi
+}
+
 case "${1:-serve}" in
     prepare-layout) prepare_layout ;;
     prepare) prepare ;;
@@ -353,6 +380,7 @@ case "${1:-serve}" in
         verify_runtime_dependencies
         prepare
         storage_pressure_monitor &
+        start_browser_desktop
         exec /usr/sbin/sshd -D -e -f "$runtime_sshd_config"
         ;;
     *) echo "usage: mwc-workspace-bootstrap prepare-layout|prepare|serve" >&2; exit 64 ;;

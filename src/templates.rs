@@ -59,6 +59,48 @@ pub struct WorkspaceTemplateSpec {
     pub preferred_node_names: Vec<String>,
     #[serde(default)]
     pub node_selector: BTreeMap<String, String>,
+    /// Optional browser-accessible desktop endpoint exposed through the
+    /// authenticated workspace HTTP gateway. This is a container port, never
+    /// a host port, NodePort, or direct RDP endpoint.
+    #[serde(default)]
+    pub desktop: Option<DesktopEndpoint>,
+}
+
+/// The HTTP endpoint served by an image-provided browser desktop (for example,
+/// a noVNC or KasmVNC gateway). The workspace controller owns the matching
+/// port mapping for the lifetime of the workspace snapshot.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DesktopEndpoint {
+    pub internal_port: u16,
+    #[serde(default)]
+    pub display_name: Option<String>,
+}
+
+impl DesktopEndpoint {
+    fn validate(&self) -> Result<(), TemplateError> {
+        if !(1024..=65535).contains(&self.internal_port)
+            || is_platform_reserved_port(self.internal_port)
+        {
+            return Err(TemplateError::Desktop);
+        }
+        if self.display_name.as_deref().is_some_and(|value| {
+            let trimmed = value.trim();
+            trimmed.is_empty()
+                || trimmed != value
+                || trimmed.len() > 80
+                || trimmed.chars().any(char::is_control)
+        }) {
+            return Err(TemplateError::Desktop);
+        }
+        Ok(())
+    }
+}
+
+/// Ports reserved for platform listeners. They must not be published as a
+/// workspace application endpoint, including a template-owned desktop.
+pub fn is_platform_reserved_port(port: u16) -> bool {
+    matches!(port, 22 | 2222 | 7681 | 8080 | 8081 | 8443 | 3389)
 }
 
 /// The egress boundary applied to a workspace Pod by its NetworkPolicy.
@@ -231,6 +273,9 @@ impl WorkspaceTemplateSpec {
         {
             return Err(TemplateError::Scheduling);
         }
+        if let Some(desktop) = &self.desktop {
+            desktop.validate()?;
+        }
         self.storage_policy.validate(self.resources.disk_gib)?;
         Ok(())
     }
@@ -260,6 +305,7 @@ impl WorkspaceTemplateSpec {
             required_node_names: Vec::new(),
             preferred_node_names: Vec::new(),
             node_selector: BTreeMap::new(),
+            desktop: None,
         }
     }
 }
@@ -333,6 +379,8 @@ pub enum TemplateError {
     Scheduling,
     #[error("template storage policy is invalid")]
     StoragePolicy,
+    #[error("template browser desktop endpoint is invalid")]
+    Desktop,
 }
 
 #[cfg(test)]

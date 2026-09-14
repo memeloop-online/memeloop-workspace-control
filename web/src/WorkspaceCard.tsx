@@ -5,6 +5,8 @@ import type { WorkspaceResponse, WorkspaceRuntime } from "./types";
 import { WorkspaceConnectionDialog } from "./WorkspaceConnectionDialog";
 import { WorkspacePortMappings } from "./WorkspacePortMappings";
 import type { ApiClient } from "./api";
+import { safeBootstrapUrl } from "./portMappings";
+import { reserveWebShellWindow } from "./workspaceShell";
 import {
   aggregateRuntimeUsage,
   formatCpuMillis,
@@ -34,6 +36,7 @@ interface Props {
 export function WorkspaceCard({ api, item, runtime, onAction, onOpenShell, onRequestRuntime, onError, canConnect, canChangeState, canDelete }: Props) {
   const { locale, t } = useI18n();
   const [detailView, setDetailView] = useState<DetailView | null>(null);
+  const [openingDesktop, setOpeningDesktop] = useState(false);
   const workspace = item.workspace;
   const toggleDetail = (view: DetailView) => {
     setDetailView((current) => current === view ? null : view);
@@ -61,6 +64,7 @@ export function WorkspaceCard({ api, item, runtime, onAction, onOpenShell, onReq
       <div className="workspace-toolbar">
         <div className="primary-actions">
           {canConnect && workspace.state === "ready" && <button className="terminal-action" onClick={() => void onOpenShell(workspace.id)}>{t("webShell")}</button>}
+          {canConnect && workspace.state === "ready" && item.desktop?.status === "ready" && item.desktop.https_url && <button className="desktop-action" disabled={openingDesktop} onClick={() => void openDesktop(api, workspace.id, item.desktop!.mapping_id, setOpeningDesktop, onError, t)}>{openingDesktop ? t("desktopOpening") : t("openDesktop")}</button>}
           {canConnect && workspace.state === "ready" && <WorkspacePortMappings api={api} workspaceId={workspace.id} workspaceReady onError={onError} />}
           {canChangeState && workspace.state === "ready" && <button onClick={() => onAction(item, "stop")}>{t("stop")}</button>}
           {canChangeState && workspace.state === "ready" && <button onClick={() => onAction(item, "restart")}>{t("restart")}</button>}
@@ -77,6 +81,23 @@ export function WorkspaceCard({ api, item, runtime, onAction, onOpenShell, onReq
       {runtime && detailView === "events" && <EventLog id={`events-${workspace.short_id}`} runtime={runtime} locale={locale} />}
     </article>
   );
+}
+
+async function openDesktop(api: ApiClient, workspaceId: string, mappingId: string, setOpening: (value: boolean) => void, onError: (message: string) => void, t: ReturnType<typeof useI18n>["t"]) {
+  const target = reserveWebShellWindow();
+  setOpening(true);
+  try {
+    const bootstrap = await api.bootstrapPortMapping(workspaceId, mappingId);
+    const destination = safeBootstrapUrl(bootstrap.bootstrap_url);
+    if (!destination) throw new Error(t("desktopUnsafeBootstrapUrl"));
+    if (target) target.location.replace(destination);
+    else window.location.assign(destination);
+  } catch (error) {
+    target?.close();
+    onError(error instanceof Error ? error.message : t("desktopOpenFailed"));
+  } finally {
+    setOpening(false);
+  }
 }
 
 function ResourceOverview({ item, runtime }: { item: WorkspaceResponse; runtime?: WorkspaceRuntime }) {

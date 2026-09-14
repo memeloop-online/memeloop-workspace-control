@@ -169,6 +169,7 @@ textarea { resize: vertical; font-family: "DM Mono", monospace; line-height: 1.5
 .workspace-toolbar button { min-height: 36px; color: #9da9bb; background: transparent; border: 1px solid #293241; border-radius: 7px; padding: 7px 10px; font-size: .75rem; cursor: pointer; }
 .workspace-toolbar button:hover, .workspace-toolbar button.active { color: var(--text); background: #1a212d; }
 .workspace-toolbar button.terminal-action { color: #07110d; background: var(--accent); border-color: var(--accent); font-weight: 700; }
+.workspace-toolbar button.desktop-action { color: #07110d; background: #8ed7ff; border-color: #8ed7ff; font-weight: 700; }
 .workspace-toolbar button.danger { color: #d9828d; }
 .runtime-panel { margin-top: 10px; padding: 12px; border: 1px solid #202938; border-radius: 10px; background: #0a1018; font-size: .8rem; }
 .runtime-panel h4 { margin: 0 0 9px; font-size: .8rem; }
@@ -228,6 +229,9 @@ textarea { resize: vertical; font-family: "DM Mono", monospace; line-height: 1.5
 .template-form label { color: var(--text-secondary); font-size: .7rem; font-weight: 600; display: grid; gap: 7px; }
 .template-form .wide { grid-column: span 2; }
 .template-form .full { grid-column: 1 / -1; }
+.desktop-fields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 13px; align-items: end; margin: 0; padding: 13px; border: 1px solid #294036; border-radius: 9px; }
+.desktop-fields legend { padding: 0 5px; }
+.desktop-fields .check-field { align-self: center; }
 .template-list { margin-top: 14px; }
 .template-system-card { padding: 0; overflow: hidden; }
 .template-manager-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 17px; border-bottom: 1px solid var(--line); }
@@ -613,6 +617,7 @@ textarea { resize: vertical; font-family: "DM Mono", monospace; line-height: 1.5
 :root[data-theme="light"] .workspace-toolbar { border-color: var(--line); }
 :root[data-theme="light"] .workspace-toolbar button { color: #536176; border-color: #bac5d3; }
 :root[data-theme="light"] .workspace-toolbar button.terminal-action { color: #fff; background: #06674d; border-color: #06674d; }
+:root[data-theme="light"] .workspace-toolbar button.desktop-action { color: #082234; background: #7ac6f2; border-color: #7ac6f2; }
 :root[data-theme="light"] .workspace-toolbar button:hover,
 :root[data-theme="light"] .workspace-toolbar button.active { background: var(--surface-2); }
 :root[data-theme="light"] .workspace-toolbar button.terminal-action:hover { color: #fff; background: #05583f; }
@@ -649,6 +654,7 @@ textarea { resize: vertical; font-family: "DM Mono", monospace; line-height: 1.5
 }
 
 @media (max-width: 650px) {
+  .desktop-fields { grid-template-columns: 1fr; }
   .workspace-resource-fields { grid-template-columns: 1fr; }
   .content { min-height: 100dvh; padding-bottom: calc(64px + env(safe-area-inset-bottom, 0px)); }
   .sidebar { height: calc(64px + env(safe-area-inset-bottom, 0px)); padding: 5px 4px calc(5px + env(safe-area-inset-bottom, 0px)); }

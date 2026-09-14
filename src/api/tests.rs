@@ -334,4 +334,19 @@ async fn openapi_document_contains_versioned_api() {
             .get("environment")
             .is_none()
     );
+    assert!(
+        body["components"]["schemas"]["WorkspaceTemplateSpec"]["properties"]
+            .get("desktop")
+            .is_some()
+    );
+    assert!(
+        body["components"]["schemas"]["PortMappingResponse"]["properties"]
+            .get("managed")
+            .is_some()
+    );
+    assert!(
+        body["components"]["schemas"]["WorkspaceResponse"]["properties"]
+            .get("desktop")
+            .is_some()
+    );
 }

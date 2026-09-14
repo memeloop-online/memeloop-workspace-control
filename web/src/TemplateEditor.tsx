@@ -198,6 +198,14 @@ export function TemplateEditor({ api, organizationId, templates, canGrantCluster
             </fieldset>
             <Check label="BuildKit" help={t("buildkitHelp")} checked={draft.buildkit} update={(buildkit) => setDraft({ ...draft, buildkit })} />
             <Check label={t("maintenanceAccess")} help={t("maintenanceAccessHelp")} checked={draft.clusterAccess} disabled={!canGrantClusterAccess} update={(clusterAccess) => setDraft({ ...draft, clusterAccess })} />
+            <fieldset className="desktop-fields full">
+              <legend><Field label={t("browserDesktop")} help={t("browserDesktopHelp")} /></legend>
+              <Check label={t("enableBrowserDesktop")} help={t("enableBrowserDesktopHelp")} checked={draft.desktopEnabled} update={(desktopEnabled) => setDraft({ ...draft, desktopEnabled })} />
+              {draft.desktopEnabled && <>
+                <NumberField label={t("desktopInternalPort")} help={t("desktopInternalPortHelp")} value={draft.desktopPort} policy={TEMPLATE_NUMBER_POLICIES.desktopPort} update={(desktopPort) => setDraft({ ...draft, desktopPort })} />
+                <label><Field label={t("desktopDisplayName")} help={t("desktopDisplayNameHelp")} /><input value={draft.desktopDisplayName} maxLength={80} onChange={(event) => setDraft({ ...draft, desktopDisplayName: event.target.value })} placeholder={t("desktopDisplayNamePlaceholder")} /></label>
+              </>}
+            </fieldset>
             <label><Field label={t("egressPolicy")} help={t("egressPolicyHelp")} /><select value={draft.egressPolicy} onChange={(event) => setDraft({ ...draft, egressPolicy: event.target.value as EgressPolicy })}><option value="unrestricted">{t("egressUnrestricted")}</option><option value="internet_only">{t("egressInternetOnly")}</option></select></label>
             <label className="wide"><Field label={t("runtimeClassName")} help={t("runtimeClassNameHelp")} /><input value={draft.runtimeClassName} onChange={(event) => setDraft({ ...draft, runtimeClassName: event.target.value })} placeholder="gvisor-sandbox" /></label>
             <label className="wide"><Field label={t("requiredNodes")} help={t("nodeListHelp")} /><input value={draft.requiredNodes} onChange={(event) => setDraft({ ...draft, requiredNodes: event.target.value })} placeholder="westlake, haixia" /></label>

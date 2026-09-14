@@ -101,3 +101,50 @@ fn workspace_init_container_reuses_workspace_resource_requirements() {
         Some(&Quantity("14592Mi".to_owned()))
     );
 }
+
+#[test]
+fn desktop_template_injects_immutable_desktop_contract_and_declares_its_port() {
+    let mut template = template();
+    template.desktop = Some(crate::templates::DesktopEndpoint {
+        internal_port: 6080,
+        display_name: Some("Kali browser desktop".to_owned()),
+    });
+    let pod = WorkspacePod::from_template(&template);
+    let mut container = pod.workspace_container(
+        &template.image,
+        ResourceRequirements::default(),
+        &resource_names(),
+    );
+    apply_injected_environment_overrides(
+        &template,
+        &mut container,
+        &BTreeSet::from([
+            "MWC_DESKTOP_ENABLED".to_owned(),
+            "MWC_DESKTOP_PORT".to_owned(),
+        ]),
+    );
+
+    let environment = container.env.expect("workspace environment");
+    assert!(environment.iter().any(|item| {
+        item.name == "MWC_DESKTOP_ENABLED" && item.value.as_deref() == Some("true")
+    }));
+    assert!(
+        environment.iter().any(|item| {
+            item.name == "MWC_DESKTOP_PORT" && item.value.as_deref() == Some("6080")
+        })
+    );
+    let ports = container.ports.expect("workspace ports");
+    assert!(
+        ports
+            .iter()
+            .any(|port| { port.name.as_deref() == Some("desktop") && port.container_port == 6080 })
+    );
+    let readiness = container
+        .readiness_probe
+        .and_then(|probe| probe.exec)
+        .and_then(|action| action.command)
+        .expect("desktop readiness command")
+        .join(" ");
+    assert!(readiness.contains("/run/mwc-ssh/sshd.pid"));
+    assert!(readiness.contains("/run/mwc-ssh/desktop.pid"));
+}

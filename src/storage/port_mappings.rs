@@ -14,6 +14,7 @@ use utoipa::ToSchema;
 use uuid::Uuid;
 
 use super::{Database, StorageError};
+use crate::{templates::is_platform_reserved_port, workspaces::Workspace};
 
 /// HTTP ports which a workspace is allowed to publish through the authenticated
 /// gateway.  Port 80 is deliberately allowed: it is a *container* port behind
@@ -22,7 +23,7 @@ pub fn validate_http_port(port: u16) -> Result<(), StorageError> {
     let allowed = port == 80 || port == 443 || (1024..=65535).contains(&port);
     // These are control-plane / workspace platform listeners, not application
     // ports.  Keeping the deny-list here makes every caller enforce it.
-    let reserved = matches!(port, 22 | 2222 | 7681 | 8080 | 8081 | 8443);
+    let reserved = is_platform_reserved_port(port);
     if !allowed || reserved {
         return Err(StorageError::InvalidPortMappingPort);
     }
@@ -56,6 +57,32 @@ impl fmt::Debug for IssuedPortMappingTicket {
 }
 
 impl Database {
+    /// Ensures the template-snapshot desktop endpoint has exactly one mapping.
+    ///
+    /// The row intentionally shares the ordinary mapping table so it follows
+    /// the same authenticated HTTPS, service, ingress, policy, and ticket
+    /// lifecycle. Its controller ownership is derived from the immutable
+    /// workspace template snapshot, rather than mutable user-supplied state.
+    pub async fn ensure_desktop_port_mapping(
+        &self,
+        workspace: &Workspace,
+        now: i64,
+    ) -> Result<Option<PortMapping>, StorageError> {
+        let Some(desktop) = workspace.template.desktop.as_ref() else {
+            return Ok(None);
+        };
+        self.create_port_mapping(
+            workspace.organization_id,
+            workspace.id,
+            desktop.internal_port,
+            desktop.display_name.as_deref(),
+            workspace.owner_id,
+            now,
+        )
+        .await
+        .map(Some)
+    }
+
     /// Inserts a mapping exactly once per workspace/port.  Concurrent requests
     /// (including requests reaching different control-plane replicas) converge
     /// on the same row rather than allocating duplicate public resources.
@@ -260,8 +287,26 @@ impl Database {
         now: i64,
     ) -> Result<bool, StorageError> {
         let found: Option<i64> = match self {
-            Self::Sqlite { pool, installation_id } => sqlx::query_scalar("SELECT 1 FROM workspace_port_mapping_sessions WHERE installation_id = ?1 AND mapping_id = ?2 AND session_hash = ?3 AND revoked_at IS NULL AND expires_at >= ?4").bind(installation_id.as_str()).bind(mapping_id.to_string()).bind(session_hash).bind(now).fetch_optional(pool).await?,
-            Self::Postgres { pool, installation_id } => sqlx::query_scalar("SELECT 1 FROM workspace_port_mapping_sessions WHERE installation_id = $1 AND mapping_id = $2 AND session_hash = $3 AND revoked_at IS NULL AND expires_at >= $4").bind(installation_id.as_str()).bind(mapping_id.to_string()).bind(session_hash).bind(now).fetch_optional(pool).await?,
+            Self::Sqlite { pool, installation_id } => sqlx::query_scalar(
+                "SELECT 1 FROM workspace_port_mapping_sessions session \
+                 JOIN workspace_port_mappings mapping ON mapping.installation_id = session.installation_id AND mapping.id = session.mapping_id \
+                 JOIN users user_account ON user_account.installation_id = session.installation_id AND user_account.id = session.user_id \
+                 WHERE session.installation_id = ?1 AND session.mapping_id = ?2 AND session.session_hash = ?3 \
+                 AND session.revoked_at IS NULL AND session.expires_at >= ?4 AND user_account.disabled = 0 \
+                 AND (user_account.system_admin <> 0 OR EXISTS (SELECT 1 FROM organization_memberships membership \
+                      WHERE membership.installation_id = session.installation_id \
+                      AND membership.organization_id = mapping.organization_id AND membership.user_id = user_account.id))",
+            ).bind(installation_id.as_str()).bind(mapping_id.to_string()).bind(session_hash).bind(now).fetch_optional(pool).await?,
+            Self::Postgres { pool, installation_id } => sqlx::query_scalar(
+                "SELECT 1::BIGINT FROM workspace_port_mapping_sessions session \
+                 JOIN workspace_port_mappings mapping ON mapping.installation_id = session.installation_id AND mapping.id = session.mapping_id \
+                 JOIN users user_account ON user_account.installation_id = session.installation_id AND user_account.id = session.user_id \
+                 WHERE session.installation_id = $1 AND session.mapping_id = $2 AND session.session_hash = $3 \
+                 AND session.revoked_at IS NULL AND session.expires_at >= $4 AND user_account.disabled = 0 \
+                 AND (user_account.system_admin <> 0 OR EXISTS (SELECT 1 FROM organization_memberships membership \
+                      WHERE membership.installation_id = session.installation_id \
+                      AND membership.organization_id = mapping.organization_id AND membership.user_id = user_account.id))",
+            ).bind(installation_id.as_str()).bind(mapping_id.to_string()).bind(session_hash).bind(now).fetch_optional(pool).await?,
         };
         Ok(found.is_some())
     }
@@ -321,6 +366,7 @@ mod tests {
         assert!(validate_http_port(2222).is_err());
         assert!(validate_http_port(7681).is_err());
         assert!(validate_http_port(8080).is_err());
+        assert!(validate_http_port(3389).is_err());
     }
 
     #[test]

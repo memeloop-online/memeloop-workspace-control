@@ -72,6 +72,32 @@ test("internet-only egress policy round-trips through template YAML", () => {
   assert.equal(templateDraftFromYaml(templateDraftToYaml(draft)).egressPolicy, "internet_only");
 });
 
+test("browser desktop settings round-trip through template YAML and remain optional", () => {
+  const draft = {
+    ...emptyTemplateDraft(),
+    name: "desktop",
+    desktopEnabled: true,
+    desktopPort: "6080",
+    desktopDisplayName: "Security desktop",
+  };
+  const yaml = templateDraftToYaml(draft);
+  assert.match(yaml, /desktop:\n    internal_port: 6080\n    display_name: Security desktop/u);
+  assert.deepEqual(templateDraftFromYaml(yaml), draft);
+  assert.doesNotMatch(templateDraftToYaml({ ...draft, desktopEnabled: false }), /desktop:/u);
+});
+
+test("browser desktop YAML rejects unavailable port values", () => {
+  const yaml = templateDraftToYaml({ ...emptyTemplateDraft(), name: "desktop" }).replace(
+    "  egress_policy: unrestricted\n",
+    "  desktop:\n    internal_port: 0\n  egress_policy: unrestricted\n",
+  );
+  assert.throws(() => templateDraftFromYaml(yaml), /desktop\.internal_port/u);
+  assert.throws(
+    () => templateDraftToYaml({ ...emptyTemplateDraft(), desktopEnabled: true, desktopPort: "8080" }),
+    TemplateDraftError,
+  );
+});
+
 test("an optional RuntimeClass name round-trips through the template YAML", () => {
   const draft = { ...emptyTemplateDraft(), name: "sandbox", runtimeClassName: "gvisor-sandbox" };
   const yaml = templateDraftToYaml(draft);

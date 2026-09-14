@@ -66,6 +66,35 @@ spec:
 }
 
 #[test]
+fn desktop_endpoint_is_optional_and_validated_as_a_browser_http_port() {
+    let mut spec = WorkspaceTemplateSpec::standard(
+        "registry.example/dev:latest",
+        AccessMode::Internal,
+        Resources {
+            cpu_millis: 1_000,
+            memory_mib: 1_024,
+            gpu_count: 0,
+            disk_gib: 20,
+        },
+    );
+    assert_eq!(spec.desktop, None);
+    spec.desktop = Some(DesktopEndpoint {
+        internal_port: 6901,
+        display_name: Some("Browser desktop".to_owned()),
+    });
+    let document = WorkspaceTemplateDocument::new("desktop", spec.clone());
+    assert_eq!(
+        WorkspaceTemplateDocument::parse(&document.to_yaml().unwrap()).unwrap(),
+        document
+    );
+
+    for port in [80, 443, 1023, 22, 2222, 7681, 8080, 8081, 8443, 3389] {
+        spec.desktop.as_mut().unwrap().internal_port = port;
+        assert_eq!(spec.validate(), Err(TemplateError::Desktop), "port {port}");
+    }
+}
+
+#[test]
 fn scratch_medium_round_trips_and_rejects_unknown_values() {
     let policy = WorkspaceStoragePolicy {
         scratch_medium: ScratchMedium::Memory,

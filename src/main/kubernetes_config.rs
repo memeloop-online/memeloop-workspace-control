@@ -85,10 +85,17 @@ pub(super) fn resource_builder(config: &AppConfig) -> Result<ResourceBuilder, io
         Err(error) => return Err(io::Error::new(io::ErrorKind::InvalidInput, error)),
     };
     let internet_egress = internet_egress_config()?;
+    let ttyd_mtls = ttyd_mtls_config(&higress_namespace)?;
+    if config.port_mapping_public_domain.is_some() && ttyd_mtls.is_none() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "authenticated port mappings require the workspace mTLS proxy configuration",
+        ));
+    }
     Ok(ResourceBuilder {
         installation_id: config.installation_id.clone(),
         ttyd_image,
-        ttyd_mtls: ttyd_mtls_config(&higress_namespace)?,
+        ttyd_mtls,
         higress_namespace,
         higress_pod_labels,
         higress_source_cidrs,

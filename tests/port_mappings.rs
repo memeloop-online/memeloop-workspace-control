@@ -1,4 +1,5 @@
 use memeloop_workspace_control::{
+    auth::{ApiKeyScope, Role},
     quota::Resources,
     storage::{
         CreateOrganization, CreateWorkspace, CreateWorkspaceTemplate, Database, StorageError,
@@ -134,6 +135,36 @@ async fn create_and_list_port_mappings_converge_duplicate_ports() {
 }
 
 #[tokio::test]
+async fn desktop_mapping_ensure_is_idempotent() {
+    let (database, _organization_id, workspace_id, _user_id) = seeded_database().await;
+    let mut workspace = database.get_workspace(workspace_id).await.unwrap();
+    workspace.template.desktop = Some(memeloop_workspace_control::templates::DesktopEndpoint {
+        internal_port: 6080,
+        display_name: Some("Kali desktop".to_owned()),
+    });
+
+    let first = database
+        .ensure_desktop_port_mapping(&workspace, 110)
+        .await
+        .unwrap()
+        .unwrap();
+    let second = database
+        .ensure_desktop_port_mapping(&workspace, 111)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(first.id, second.id);
+    assert_eq!(
+        database
+            .list_port_mappings(workspace_id)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[tokio::test]
 async fn port_mapping_ticket_exchange_is_one_time_and_mapping_scoped() {
     let (database, organization_id, workspace_id, user_id) = seeded_database().await;
     let mapping = database
@@ -224,6 +255,61 @@ async fn port_mapping_sessions_are_valid_only_until_expiry() {
     assert!(
         !database
             .port_mapping_session_valid(mapping.id, &session_hash, 181)
+            .await
+            .unwrap()
+    );
+}
+
+#[tokio::test]
+async fn port_mapping_sessions_stop_when_workspace_access_is_revoked() {
+    let (database, organization_id, workspace_id, user_id) = seeded_database().await;
+    let mapping = database
+        .create_port_mapping(organization_id, workspace_id, 3000, None, user_id, 110)
+        .await
+        .unwrap();
+    let issued = database
+        .issue_port_mapping_ticket(&mapping, user_id, 120)
+        .await
+        .unwrap();
+    let session_hash = hash_secret("revoked-session-cookie");
+    database
+        .exchange_port_mapping_ticket(mapping.id, &issued.ticket, &session_hash, 121, 180)
+        .await
+        .unwrap()
+        .expect("ticket should create a session");
+
+    let replacement = database
+        .create_user_with_initial_key(
+            "Replacement administrator",
+            "replacement-admin-token-00000000000000000000",
+            true,
+            ApiKeyScope::initial_key_defaults(true),
+            31_536_000,
+            122,
+        )
+        .await
+        .unwrap();
+    database
+        .upsert_membership(
+            organization_id,
+            replacement.user_id,
+            Role::OrganizationAdmin,
+            123,
+        )
+        .await
+        .unwrap();
+    database
+        .update_user(user_id, None, Some(false), None)
+        .await
+        .unwrap();
+    database
+        .remove_membership(organization_id, user_id)
+        .await
+        .unwrap();
+
+    assert!(
+        !database
+            .port_mapping_session_valid(mapping.id, &session_hash, 124)
             .await
             .unwrap()
     );

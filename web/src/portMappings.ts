@@ -10,6 +10,9 @@ export interface PortMapping {
   display_name: string | null;
   status: "provisioning" | "ready" | "failed" | "deleting" | string;
   https_url: string | null;
+  /** Managed mappings are created by a workspace capability and cannot be removed manually. */
+  managed: boolean;
+  purpose: "user" | "desktop";
   created_at?: number;
 }
 
@@ -39,4 +42,14 @@ export function parseInternalPort(value: string): number | null {
 
 export function mappingUrl(mapping: PortMapping): string | null {
   return mapping.https_url ?? null;
+}
+
+/** Reject unsafe or credentialed destinations supplied by a bootstrap response. */
+export function safeBootstrapUrl(value: string): string | null {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && !url.username && !url.password ? url.href : null;
+  } catch {
+    return null;
+  }
 }

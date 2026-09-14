@@ -60,6 +60,20 @@ pub(super) struct WorkspaceResponse {
     pub injection_sources: Vec<ResolvedInjectionSummary>,
     pub workspace_host_key: Option<crate::storage::WorkspaceSshPublicIdentity>,
     pub jump_host_key: Option<crate::storage::WorkspaceSshPublicIdentity>,
+    /// The template-owned browser desktop mapping, when this workspace
+    /// snapshot configures one. Opening it uses the existing mapping ticket
+    /// endpoint; no direct RDP connection is exposed.
+    pub desktop: Option<WorkspaceDesktopConnection>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub(super) struct WorkspaceDesktopConnection {
+    pub mapping_id: Uuid,
+    pub display_name: String,
+    pub status: &'static str,
+    /// Stable HTTPS address, never an authorization credential. It is hidden
+    /// while the workspace cannot accept a desktop session.
+    pub https_url: Option<String>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -140,6 +154,9 @@ pub(super) async fn create(
     let command = request.workspace.clone();
     let actor = principal(&state, &headers).await?;
     let template = authorize_creation(&state, &actor, &command).await?;
+    if template.template.desktop.is_some() && state.config.port_mapping_public_domain.is_none() {
+        return Err(ApiError::KubernetesUnavailable);
+    }
     let key = idempotency_key(&headers)?;
     let request_hash = hash(&serde_json::json!({
         "request": &request,

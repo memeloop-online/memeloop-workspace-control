@@ -7,6 +7,7 @@ import { reserveWebShellWindow } from "./workspaceShell";
 import {
   mappingUrl,
   parseInternalPort,
+  safeBootstrapUrl,
   type PortMapping,
   type PortMappingsApi,
 } from "./portMappings";
@@ -146,8 +147,10 @@ function PortMappingRow({ api, workspaceId, workspaceReady, item, deleting, onDe
     setOpening(true);
     try {
       const bootstrap = await api.bootstrapPortMapping(workspaceId, item.id);
-      if (target) target.location.href = bootstrap.bootstrap_url;
-      else window.location.href = bootstrap.bootstrap_url;
+      const destination = safeBootstrapUrl(bootstrap.bootstrap_url);
+      if (!destination) throw new Error(t("portMappingUnsafeBootstrapUrl"));
+      if (target) target.location.replace(destination);
+      else window.location.assign(destination);
     } catch (errorValue) { target?.close(); onError(errorValue); }
     finally { setOpening(false); }
   }
@@ -155,7 +158,7 @@ function PortMappingRow({ api, workspaceId, workspaceReady, item, deleting, onDe
     <div><strong>{item.display_name || `${t("portLabel")} ${item.internal_port}`}</strong><span>{t("internalPort")} <code>{item.internal_port}</code></span></div>
     <span className={`port-mapping-status ${item.status}`}>{statusLabel(item.status, t)}</span>
     {url ? <code className="port-mapping-url" tabIndex={0}>{url}</code> : <span className="port-mapping-unavailable">{t("portMappingAddressPending")}</span>}
-    <div className="port-mapping-actions"><button type="button" disabled={!workspaceReady || !url || opening || item.status !== "ready"} onClick={() => void open()}>{opening ? t("portMappingOpening") : t("open")}</button><button type="button" disabled={!url} onClick={() => void copy()}>{copied ? t("copied") : t("copyLink")}</button><button type="button" className="danger" disabled={deleting} onClick={onDelete}>{deleting ? t("deleting") : t("delete")}</button></div>
+    <div className="port-mapping-actions"><button type="button" disabled={!workspaceReady || !url || opening || item.status !== "ready"} onClick={() => void open()}>{opening ? t("portMappingOpening") : t("open")}</button><button type="button" disabled={!url} onClick={() => void copy()}>{copied ? t("copied") : t("copyLink")}</button>{!item.managed && <button type="button" className="danger" disabled={deleting} onClick={onDelete}>{deleting ? t("deleting") : t("delete")}</button>}</div>
   </article>;
 }
 

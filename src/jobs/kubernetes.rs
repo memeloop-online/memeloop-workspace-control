@@ -68,11 +68,24 @@ impl WorkspaceReconcileHandler {
             .reconcile_with_injections(workspace, materialization, ssh_identity)
             .await
             .map_err(job_error)?;
-        let port_mappings = self
-            .database
-            .list_port_mappings(workspace.id)
+        self.database
+            .ensure_desktop_port_mapping(workspace, unix_timestamp()?)
             .await
             .map_err(job_error)?;
+        let port_mappings = if matches!(
+            workspace.state,
+            WorkspaceState::Provisioning
+                | WorkspaceState::Starting
+                | WorkspaceState::Restarting
+                | WorkspaceState::Ready
+        ) {
+            self.database
+                .list_port_mappings(workspace.id)
+                .await
+                .map_err(job_error)?
+        } else {
+            Vec::new()
+        };
         self.coordinator
             .reconcile_port_mappings(workspace, &port_mappings)
             .await

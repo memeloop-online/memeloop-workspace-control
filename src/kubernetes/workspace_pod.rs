@@ -25,13 +25,15 @@ const BOOTSTRAP: &str = "/etc/workspace-platform/mwc-workspace-bootstrap";
 const BUILD_SCRATCH: &str = "/var/lib/mwc/build-scratch";
 const CODEX_SCRATCH: &str = "/var/lib/mwc/codex-scratch";
 const BUILDKIT_VOLUME_MOUNT: &str = "/run/mwc-buildkit";
-const INTERNAL_PLATFORM_ENVIRONMENT: [&str; 6] = [
+const INTERNAL_PLATFORM_ENVIRONMENT: [&str; 8] = [
     "MWC_WORKSPACE_USER",
     "MWC_WORKSPACE_HOME",
     "MWC_IN_CLUSTER_KUBECONFIG",
     "MWC_BUILDKIT_ENABLED",
     "MWC_BUILD_SCRATCH",
     "MWC_HOME_RESERVE_MIB",
+    "MWC_DESKTOP_ENABLED",
+    "MWC_DESKTOP_PORT",
 ];
 #[derive(Clone, Copy)]
 pub(super) struct WorkspacePod<'a> {
@@ -129,24 +131,32 @@ impl<'a> WorkspacePod<'a> {
         names: &WorkspaceResourceNames,
     ) -> Container {
         let env = self.platform_env();
+        let mut ports = vec![ContainerPort {
+            container_port: 2222,
+            name: Some("ssh".to_owned()),
+            protocol: Some("TCP".to_owned()),
+            ..ContainerPort::default()
+        }];
+        if let Some(desktop) = &self.template.desktop {
+            ports.push(ContainerPort {
+                container_port: i32::from(desktop.internal_port),
+                name: Some("desktop".to_owned()),
+                protocol: Some("TCP".to_owned()),
+                ..ContainerPort::default()
+            });
+        }
         Container {
             name: "workspace".to_owned(),
             image: Some(image.to_owned()),
             command: Some(vec![BOOTSTRAP.to_owned()]),
             args: Some(vec!["serve".to_owned()]),
-            ports: Some(vec![ContainerPort {
-                container_port: 2222,
-                name: Some("ssh".to_owned()),
-                protocol: Some("TCP".to_owned()),
-                ..ContainerPort::default()
-            }]),
+            ports: Some(ports),
             readiness_probe: Some(Probe {
                 exec: Some(ExecAction {
                     command: Some(vec![
                         "sh".to_owned(),
                         "-c".to_owned(),
-                        "test -s /run/mwc-ssh/sshd.pid && kill -0 \"$(cat /run/mwc-ssh/sshd.pid)\""
-                            .to_owned(),
+                        self.readiness_check(),
                     ]),
                 }),
                 initial_delay_seconds: Some(1),
@@ -222,6 +232,17 @@ impl<'a> WorkspacePod<'a> {
         None
     }
 
+    fn readiness_check(&self) -> String {
+        let sshd = "test -s /run/mwc-ssh/sshd.pid && kill -0 \"$(cat /run/mwc-ssh/sshd.pid)\"";
+        if self.template.desktop.is_some() {
+            format!(
+                "{sshd} && test -s /run/mwc-ssh/desktop.pid && kill -0 \"$(cat /run/mwc-ssh/desktop.pid)\""
+            )
+        } else {
+            sshd.to_owned()
+        }
+    }
+
     fn platform_env(&self) -> Vec<EnvVar> {
         let mut environment = vec![
             env("MWC_WORKSPACE_USER", self.login_user),
@@ -253,6 +274,12 @@ impl<'a> WorkspacePod<'a> {
             ),
         ];
         environment.extend(self.session_platform_env());
+        if let Some(desktop) = &self.template.desktop {
+            environment.extend([
+                env("MWC_DESKTOP_ENABLED", "true"),
+                env("MWC_DESKTOP_PORT", &desktop.internal_port.to_string()),
+            ]);
+        }
         environment
     }
 

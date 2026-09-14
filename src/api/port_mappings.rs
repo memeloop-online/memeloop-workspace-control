@@ -42,9 +42,21 @@ pub(super) struct PortMappingResponse {
     pub internal_port: u16,
     pub display_name: Option<String>,
     pub status: &'static str,
+    /// Whether this mapping is owned by the workspace controller rather than
+    /// the user. Controller-owned mappings cannot be created or deleted by the
+    /// port-mapping API.
+    pub managed: bool,
+    pub purpose: PortMappingPurpose,
     /// Stable HTTPS address, never an authorization credential.
     pub https_url: String,
     pub created_at: i64,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum PortMappingPurpose {
+    User,
+    Desktop,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -79,6 +91,7 @@ pub(super) async fn list(
             &state,
             mapping,
             mapping_status(&state, &workspace, mapping).await,
+            purpose_for(&workspace, mapping),
         )?);
     }
     Ok(Json(responses))
@@ -108,6 +121,16 @@ pub(super) async fn create(
     }
     if workspace.state != crate::workspaces::WorkspaceState::Ready {
         return Err(ApiError::WorkspaceNotConnectable);
+    }
+    if workspace
+        .template
+        .desktop
+        .as_ref()
+        .is_some_and(|desktop| desktop.internal_port == request.internal_port)
+    {
+        return Err(ApiError::BadRequest(
+            "the template-owned desktop port mapping cannot be created by users",
+        ));
     }
     mapping_domain(&state)?;
     let now = unix_timestamp()?;
@@ -154,7 +177,12 @@ pub(super) async fn create(
                 now,
             )
             .await?;
-        response(&state, &mapping, "provisioning")
+        response(
+            &state,
+            &mapping,
+            "provisioning",
+            PortMappingPurpose::User,
+        )
     }
     .await;
     let response = match result {
@@ -240,6 +268,12 @@ pub(super) async fn delete(
     {
         return Err(ApiError::Forbidden);
     }
+    let mapping = state.database.get_port_mapping(mapping_id).await?;
+    if is_desktop_mapping(&workspace, &mapping) {
+        return Err(ApiError::BadRequest(
+            "the template-owned desktop port mapping cannot be deleted by users",
+        ));
+    }
     // FK cascade revokes all tickets and sessions immediately. The reconciler
     // deletes owned Kubernetes objects; an in-flight cookie can no longer pass
     // external-auth even before that reconciliation completes.
@@ -271,6 +305,13 @@ fn mapping_origin(state: &AppState, mapping: &PortMapping) -> Result<String, Api
     Ok(format!("https://p-{}.{}", mapping.id.simple(), domain))
 }
 
+pub(super) fn mapping_https_url(
+    state: &AppState,
+    mapping: &PortMapping,
+) -> Result<String, ApiError> {
+    mapping_origin(state, mapping)
+}
+
 fn mapping_domain(state: &AppState) -> Result<&str, ApiError> {
     state
         .config
@@ -300,29 +341,59 @@ async fn enqueue_reconcile(
     Ok(())
 }
 
-fn response(
+pub(super) fn response(
     state: &AppState,
     mapping: &PortMapping,
     status: &'static str,
+    purpose: PortMappingPurpose,
 ) -> Result<PortMappingResponse, ApiError> {
     Ok(PortMappingResponse {
         id: mapping.id,
         internal_port: mapping.internal_port,
         display_name: mapping.display_name.clone(),
         status,
+        managed: matches!(purpose, PortMappingPurpose::Desktop),
+        purpose,
         https_url: mapping_origin(state, mapping)?,
         created_at: mapping.created_at,
     })
 }
 
-async fn mapping_status(
+pub(super) async fn mapping_status(
     state: &AppState,
     workspace: &crate::workspaces::Workspace,
     mapping: &PortMapping,
 ) -> &'static str {
+    if workspace.state != crate::workspaces::WorkspaceState::Ready {
+        return workspace.state.as_str();
+    }
     let Some(client) = state.kubernetes_client.clone() else {
         return "provisioning";
     };
+    if is_desktop_mapping(workspace, mapping) {
+        let Ok(runtime) = crate::workspace_runtime::WorkspaceRuntimeNames::for_workspace(
+            &state.config.installation_id,
+            &workspace.runtime,
+            &workspace.short_id,
+        ) else {
+            return "failed";
+        };
+        let stateful_sets = kube::Api::<k8s_openapi::api::apps::v1::StatefulSet>::namespaced(
+            client.clone(),
+            workspace.runtime.namespace(),
+        );
+        let desktop_ready = stateful_sets
+            .get_opt(&runtime.resources.stateful_set)
+            .await
+            .ok()
+            .flatten()
+            .and_then(|stateful_set| stateful_set.status)
+            .and_then(|status| status.ready_replicas)
+            == Some(1);
+        if !desktop_ready {
+            return "provisioning";
+        }
+    }
     let ingresses = kube::Api::<k8s_openapi::api::networking::v1::Ingress>::namespaced(
         client,
         workspace.runtime.namespace(),
@@ -348,9 +419,61 @@ async fn mapping_status(
     }
 }
 
+pub(super) fn purpose_for(
+    workspace: &crate::workspaces::Workspace,
+    mapping: &PortMapping,
+) -> PortMappingPurpose {
+    if is_desktop_mapping(workspace, mapping) {
+        PortMappingPurpose::Desktop
+    } else {
+        PortMappingPurpose::User
+    }
+}
+
+fn is_desktop_mapping(workspace: &crate::workspaces::Workspace, mapping: &PortMapping) -> bool {
+    mapping.workspace_id == workspace.id
+        && workspace
+            .template
+            .desktop
+            .as_ref()
+            .is_some_and(|desktop| desktop.internal_port == mapping.internal_port)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn desktop_workspace() -> crate::workspaces::Workspace {
+        let id = Uuid::now_v7();
+        let mut template = crate::templates::WorkspaceTemplateSpec::standard(
+            "registry.example/dev:latest",
+            crate::workspaces::AccessMode::Internal,
+            crate::quota::Resources {
+                cpu_millis: 1_000,
+                memory_mib: 1_024,
+                gpu_count: 0,
+                disk_gib: 20,
+            },
+        );
+        template.desktop = Some(crate::templates::DesktopEndpoint {
+            internal_port: 6901,
+            display_name: Some("Browser desktop".to_owned()),
+        });
+        crate::workspaces::Workspace {
+            id,
+            short_id: crate::workspace_runtime::workspace_short_id_for(id),
+            organization_id: Uuid::now_v7(),
+            owner_id: Uuid::now_v7(),
+            name: "desktop".to_owned(),
+            template_id: None,
+            runtime: crate::workspace_runtime::WorkspaceRuntimeIdentity,
+            template,
+            state: crate::workspaces::WorkspaceState::Ready,
+            generation: 1,
+            created_at: 1,
+            updated_at: 1,
+        }
+    }
 
     #[test]
     fn create_contract_uses_internal_port_and_optional_display_name() {
@@ -359,5 +482,31 @@ mod tests {
         assert_eq!(request.internal_port, 3000);
         assert_eq!(request.display_name.as_deref(), Some("frontend"));
         assert!(serde_json::from_str::<CreatePortMappingRequest>(r#"{"port":3000}"#).is_err());
+    }
+
+    #[test]
+    fn desktop_mappings_are_managed_from_the_workspace_snapshot() {
+        let workspace = desktop_workspace();
+        let desktop = PortMapping {
+            id: Uuid::now_v7(),
+            organization_id: workspace.organization_id,
+            workspace_id: workspace.id,
+            internal_port: 6901,
+            display_name: Some("Browser desktop".to_owned()),
+            created_by: workspace.owner_id,
+            created_at: 1,
+        };
+        let application = PortMapping {
+            internal_port: 3000,
+            ..desktop.clone()
+        };
+        assert!(matches!(
+            purpose_for(&workspace, &desktop),
+            PortMappingPurpose::Desktop
+        ));
+        assert!(matches!(
+            purpose_for(&workspace, &application),
+            PortMappingPurpose::User
+        ));
     }
 }

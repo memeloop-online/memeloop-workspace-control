@@ -103,6 +103,25 @@ jobs:
             --tmpfs /var/lib/mwc/codex-scratch:size=4m,mode=0770 \
             -v "$PWD/tests/workspace_bootstrap_enospc.sh:/test-enospc:ro" \
             mwc-workspace-enospc /test-enospc
+      - name: Verify Kali browser desktop Image Contract and loopback-only runtime
+        timeout-minutes: 20
+        run: |
+          shellcheck images/workspace-base/mwc-workspace-bootstrap \
+            images/kali-browser-desktop/mwc-workspace-desktop \
+            images/kali-browser-desktop/xstartup \
+            tests/kali_browser_desktop_smoke.sh
+          docker build --tag mwc-kali-browser-desktop-ci \
+            --file images/kali-browser-desktop/Dockerfile .
+          docker run --rm --entrypoint /bin/sh mwc-kali-browser-desktop-ci -ec '
+            test -x /usr/local/bin/mwc-workspace-bootstrap
+            test -x /usr/local/bin/mwc-workspace-desktop
+            test -x /etc/mwc-desktop/xstartup
+            command -v sshd
+            command -v tigervncserver
+            command -v websockify
+            test "$(id -u workspace)" -gt 0
+          '
+          bash tests/kali_browser_desktop_smoke.sh mwc-kali-browser-desktop-ci
       - name: Verify Helm chart
         run: |
           curl -fsSL https://get.helm.sh/helm-v4.2.4-linux-amd64.tar.gz -o helm.tgz
@@ -460,6 +479,10 @@ jobs:
             context: images/workspace-base
             dockerfile: images/workspace-base/Dockerfile
             description: Image Contract v1 OpenSSH workspace base
+          - suffix: -kali-browser-desktop
+            context: .
+            dockerfile: images/kali-browser-desktop/Dockerfile
+            description: Kali rolling XFCE browser desktop workspace
           - suffix: -ssh-jump
             context: images/ssh-jump
             dockerfile: images/ssh-jump/Dockerfile
@@ -539,6 +562,12 @@ jobs:
               /usr/bin/ssh -V
             '
           bash tests/ttyd_mtls.sh "${IMAGE_NAME}@${PUBLISHED_DIGEST}"
+      - name: Verify published Kali browser desktop runtime
+        if: matrix.suffix == '-kali-browser-desktop'
+        env:
+          PUBLISHED_DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          bash tests/kali_browser_desktop_smoke.sh "${IMAGE_NAME}@${PUBLISHED_DIGEST}"
       - name: Verify published gVisor node installer payload
         if: matrix.suffix == '-gvisor-installer'
         env:
