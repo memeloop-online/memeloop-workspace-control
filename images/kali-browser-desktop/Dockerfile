@@ -1,6 +1,6 @@
 FROM kalilinux/kali-rolling@sha256:49d174981a2a211e76acdde22a2e4978ea19bc0433487292cd9ad865da24ee42
 
-ARG KALI_APT_MIRROR=https://mirrors.ustc.edu.cn/kali
+ARG KALI_APT_MIRROR=http://mirrors.ustc.edu.cn/kali
 LABEL org.opencontainers.image.title="MWC Kali browser desktop" \
       org.opencontainers.image.description="Kali rolling XFCE workspace with loopback-only TigerVNC and noVNC" \
       org.opencontainers.image.base.name="kalilinux/kali-rolling@sha256:49d174981a2a211e76acdde22a2e4978ea19bc0433487292cd9ad865da24ee42"
