@@ -363,7 +363,7 @@ start_browser_desktop() {
     # The workspace tmpfs starts empty. X servers run as the workspace user,
     # so prepare the standard socket directory while the bootstrap still has
     # root privileges.
-    install -d -o root -g root -m 1777 /tmp/.X11-unix
+    install -d -o root -g root -m 1777 /tmp/.X11-unix /tmp/.ICE-unix
 
     rm -f "$runtime_dir/desktop.pid"
     runuser --user "$workspace_user" --preserve-environment -- \

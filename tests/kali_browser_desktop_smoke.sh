@@ -63,6 +63,7 @@ for port in ("17C0", "170D"):  # 6080 and 5901 in hexadecimal
 '
 docker exec "$container" /bin/sh -ec '
   test "$(stat -c %a /tmp/.X11-unix)" = 1777
+  test "$(stat -c %a /tmp/.ICE-unix)" = 1777
   test -s /run/mwc-ssh/desktop.pid
   kill -0 "$(cat /run/mwc-ssh/desktop.pid)"
 '

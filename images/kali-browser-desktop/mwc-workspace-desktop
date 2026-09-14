@@ -6,8 +6,6 @@ workspace_home=${MWC_WORKSPACE_HOME:-/workspace}
 display=:1
 vnc_port=5901
 vnc_dir="$workspace_home/.config/tigervnc"
-xstartup=/etc/mwc-desktop/xstartup
-vnc_host=$(hostname)
 
 case "$desktop_port" in
     *[!0-9]*|'')
@@ -22,7 +20,6 @@ fi
 
 mkdir -p "$vnc_dir"
 chmod 0700 "$vnc_dir"
-rm -f "$vnc_dir/$vnc_host:1.pid" "$vnc_dir/$vnc_host:1.log"
 export HOME="$workspace_home"
 export USER="${MWC_WORKSPACE_USER:-workspace}"
 export DISPLAY="$display"
@@ -35,28 +32,40 @@ cleanup() {
     if [ -n "${websockify_pid:-}" ]; then
         kill "$websockify_pid" >/dev/null 2>&1 || true
     fi
-    tigervncserver -kill "$display" >/dev/null 2>&1 || true
+    if [ -n "${session_pid:-}" ]; then
+        kill "$session_pid" >/dev/null 2>&1 || true
+    fi
+    if [ -n "${vnc_pid:-}" ]; then
+        kill "$vnc_pid" >/dev/null 2>&1 || true
+    fi
 }
 trap 'cleanup; exit 0' EXIT INT TERM HUP
 
 # No VNC password is configured because this listener is strictly loopback-only
 # inside the workspace Pod. Authentication is enforced by the outer HTTPS
 # ticket before the controller forwards a browser request to noVNC.
-tigervncserver "$display" \
+Xtigervnc "$display" \
     -localhost yes \
     -rfbport "$vnc_port" \
     -SecurityTypes None \
-    -autokill yes \
     -geometry "${MWC_DESKTOP_GEOMETRY:-1440x900}" \
     -depth "${MWC_DESKTOP_DEPTH:-24}" \
-    -xstartup "$xstartup"
-vnc_pid=$(cat "$vnc_dir/$vnc_host:1.pid")
+    >"$vnc_dir/Xtigervnc.log" 2>&1 &
+vnc_pid=$!
+sleep 1
+kill -0 "$vnc_pid"
+
+dbus-launch --exit-with-session startxfce4 \
+    >"$vnc_dir/xfce-session.log" 2>&1 &
+session_pid=$!
 
 websockify --web /usr/share/novnc \
     "127.0.0.1:${desktop_port}" "127.0.0.1:${vnc_port}" &
 websockify_pid=$!
 
-while kill -0 "$vnc_pid" 2>/dev/null && kill -0 "$websockify_pid" 2>/dev/null; do
+while kill -0 "$vnc_pid" 2>/dev/null \
+    && kill -0 "$session_pid" 2>/dev/null \
+    && kill -0 "$websockify_pid" 2>/dev/null; do
     sleep 2
 done
 exit 70

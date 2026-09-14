@@ -21,10 +21,9 @@ RUN rm -f /etc/apt/sources.list.d/* \
 
 COPY images/workspace-base/mwc-workspace-bootstrap /usr/local/bin/mwc-workspace-bootstrap
 COPY images/kali-browser-desktop/mwc-workspace-desktop /usr/local/bin/mwc-workspace-desktop
-COPY images/kali-browser-desktop/xstartup /etc/mwc-desktop/xstartup
 COPY images/kali-browser-desktop/index.html /usr/share/novnc/index.html
 RUN chmod 0755 /usr/local/bin/mwc-workspace-bootstrap \
-        /usr/local/bin/mwc-workspace-desktop /etc/mwc-desktop/xstartup
+        /usr/local/bin/mwc-workspace-desktop
 
 EXPOSE 2222 6080
 ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/mwc-workspace-bootstrap"]

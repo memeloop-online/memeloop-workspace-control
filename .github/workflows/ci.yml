@@ -108,16 +108,15 @@ jobs:
         run: |
           shellcheck images/workspace-base/mwc-workspace-bootstrap \
             images/kali-browser-desktop/mwc-workspace-desktop \
-            images/kali-browser-desktop/xstartup \
             tests/kali_browser_desktop_smoke.sh
           docker build --tag mwc-kali-browser-desktop-ci \
             --file images/kali-browser-desktop/Dockerfile .
           docker run --rm --entrypoint /bin/sh mwc-kali-browser-desktop-ci -ec '
             test -x /usr/local/bin/mwc-workspace-bootstrap
             test -x /usr/local/bin/mwc-workspace-desktop
-            test -x /etc/mwc-desktop/xstartup
             command -v sshd
-            command -v tigervncserver
+            command -v Xtigervnc
+            command -v startxfce4
             command -v websockify
             test "$(id -u workspace)" -gt 0
           '
