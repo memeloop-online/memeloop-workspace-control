@@ -1,0 +1,7 @@
+#!/bin/sh
+set -eu
+
+# Glycin 2.1 recognizes this bubblewrap failure as evidence that it already
+# runs inside a sandbox and safely falls back to its unsandboxed loader mode.
+echo "bwrap: setting up uid map: Permission denied" >&2
+exit 1

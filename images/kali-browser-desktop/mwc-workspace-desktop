@@ -27,6 +27,15 @@ export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp/mwc-xdg-${USER}}"
 mkdir -p "$XDG_RUNTIME_DIR"
 chmod 0700 "$XDG_RUNTIME_DIR"
 
+# Glycin normally adds a bubblewrap sandbox around image decoders. Inside
+# runsc, bubblewrap cannot create its nested loopback namespace and reports an
+# error Glycin does not recognize as an already-sandboxed environment. Use the
+# compatibility shim only under gVisor so Glycin falls back inside the outer
+# workspace sandbox; ordinary runtimes keep the nested bubblewrap boundary.
+case "$(uname -r)" in
+    *gvisor*) PATH="/usr/local/lib/mwc-gvisor-compat:$PATH"; export PATH ;;
+esac
+
 # shellcheck disable=SC2317
 cleanup() {
     if [ -n "${websockify_pid:-}" ]; then

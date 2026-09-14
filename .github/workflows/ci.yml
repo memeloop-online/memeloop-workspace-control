@@ -108,12 +108,14 @@ jobs:
         run: |
           shellcheck images/workspace-base/mwc-workspace-bootstrap \
             images/kali-browser-desktop/mwc-workspace-desktop \
+            images/kali-browser-desktop/bwrap-gvisor-compat \
             tests/kali_browser_desktop_smoke.sh
           docker build --tag mwc-kali-browser-desktop-ci \
             --file images/kali-browser-desktop/Dockerfile .
           docker run --rm --entrypoint /bin/sh mwc-kali-browser-desktop-ci -ec '
             test -x /usr/local/bin/mwc-workspace-bootstrap
             test -x /usr/local/bin/mwc-workspace-desktop
+            test -x /usr/local/lib/mwc-gvisor-compat/bwrap
             command -v sshd
             command -v Xtigervnc
             command -v startxfce4

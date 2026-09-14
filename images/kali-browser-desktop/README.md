@@ -21,6 +21,10 @@ assessment tools required by each team in a derived image. Tools that use raw
 sockets, kernel modules, host networking or elevated Linux capabilities need a
 template and runtime designed for those capabilities.
 
+On gVisor, the launcher keeps image decoding inside the workspace's runsc
+sandbox instead of asking Glycin to create an unsupported nested bubblewrap
+network namespace. On ordinary runtimes, Glycin continues to use bubblewrap.
+
 Build from the repository root, because the Image Contract bootstrap is shared
 with the standard workspace image:
 
