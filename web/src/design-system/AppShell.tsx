@@ -19,6 +19,8 @@ import {
   MenuList,
   MenuPopover,
   MenuTrigger,
+  MessageBar,
+  MessageBarBody,
   Option,
   Spinner,
   Subtitle1,
@@ -131,6 +133,7 @@ const useStyles = makeStyles({
     backgroundColor: tokens.colorNeutralBackground2,
   },
   loginCard: { width: "min(440px, 100%)" },
+  loginError: { width: "100%" },
   loginHeader: { display: "grid", gap: tokens.spacingVerticalM },
   loginBrand: { display: "flex", alignItems: "center", gap: tokens.spacingHorizontalM },
   loginControls: { display: "flex", justifyContent: "flex-end", gap: tokens.spacingHorizontalS },
@@ -244,7 +247,7 @@ export function LoginScreen(props: LoginScreenProps) {
           </Field>
           <Button type="submit" appearance="primary" size="large" disabled={props.loading}>{props.loading ? props.t("signingIn") : props.t("signIn")}</Button>
         </form>
-        {props.fatal && <CardFooter><Body1>{props.fatal}</Body1></CardFooter>}
+        {props.fatal && <CardFooter><MessageBar className={classes.loginError} intent="error"><MessageBarBody>{props.fatal}</MessageBarBody></MessageBar></CardFooter>}
       </Card>
     </main>
   );
@@ -287,7 +290,7 @@ export function AppShell(props: AppShellProps) {
 
   const canShowPlugins = props.canManageGlobalState || props.canManageOrganizationState;
   const nav = (
-    <nav className={classes.nav} aria-label={props.t("workspaces")}>
+    <nav className={classes.nav} aria-label={props.t("primaryNavigation")}>
       <NavItem view="workspaces" current={props.view} onSelect={props.onViewChange} t={props.t} />
       <NavItem view="injections" current={props.view} onSelect={props.onViewChange} t={props.t} />
       {canShowPlugins && <NavItem view="plugins" current={props.view} onSelect={props.onViewChange} t={props.t} />}
@@ -306,7 +309,7 @@ export function AppShell(props: AppShellProps) {
       </aside>
       <div className={classes.content}>
         <header className={classes.topbar}>
-          <Tooltip content={props.t("workspaces")} relationship="label"><Button className={classes.mobileMenu} appearance="subtle" icon={<PanelLeftRegular />} aria-label={props.t("workspaces")} onClick={() => setMobileOpen(true)} /></Tooltip>
+          <Tooltip content={props.t("menu")} relationship="label"><Button className={classes.mobileMenu} appearance="subtle" icon={<PanelLeftRegular />} aria-label={props.t("menu")} onClick={() => setMobileOpen(true)} /></Tooltip>
           <div className={classes.org}><span className={classes.orgLabel}>{props.t("currentOrganization")}</span><Body1Strong className={classes.orgName}>{props.currentOrganization?.name ?? props.t("notEnabled")}</Body1Strong></div>
           <div className={classes.topbarActions}>
             <div className={classes.desktopOnly}><LanguagePicker locale={props.locale} setLocale={props.setLocale} t={props.t} compact /></div>
@@ -317,7 +320,7 @@ export function AppShell(props: AppShellProps) {
         <main className={classes.main}>{props.children}</main>
       </div>
       <Drawer type="overlay" separator open={mobileOpen} onOpenChange={(_, data) => setMobileOpen(data.open)} position="start">
-        <DrawerHeader><DrawerHeaderTitle action={<Button appearance="subtle" icon={<DismissRegular />} aria-label={props.t("collapse")} onClick={() => setMobileOpen(false)} />}>Memeloop</DrawerHeaderTitle></DrawerHeader>
+        <DrawerHeader><DrawerHeaderTitle action={<Button appearance="subtle" icon={<DismissRegular />} aria-label={props.t("close")} onClick={() => setMobileOpen(false)} />}>Memeloop</DrawerHeaderTitle></DrawerHeader>
         <DrawerBody><div className={classes.drawerNav}>{nav}</div></DrawerBody>
       </Drawer>
       <Toaster toasterId={toasterId} position="top-end" />

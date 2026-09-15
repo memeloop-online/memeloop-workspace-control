@@ -2,30 +2,6 @@ import { makeStyles, tokens } from "@fluentui/react-components";
 
 /** Shared Fluent 2 layout tokens for the workspace surface. */
 export const useWorkspaceStyles = makeStyles({
-  page: {
-    display: "grid",
-    gap: tokens.spacingVerticalXXL,
-    padding: `${tokens.spacingVerticalXL} ${tokens.spacingHorizontalXXL} ${tokens.spacingVerticalXXXL}`,
-    maxWidth: "1440px",
-    margin: "0 auto",
-    width: "100%",
-    boxSizing: "border-box",
-    "@media (max-width: 760px)": {
-      padding: `${tokens.spacingVerticalL} ${tokens.spacingHorizontalM} ${tokens.spacingVerticalXXL}`,
-      gap: tokens.spacingVerticalXL,
-    },
-  },
-  header: {
-    display: "flex",
-    alignItems: "flex-end",
-    justifyContent: "space-between",
-    gap: tokens.spacingHorizontalL,
-    flexWrap: "wrap",
-  },
-  headerText: { display: "grid", gap: tokens.spacingVerticalXS, minWidth: 0 },
-  eyebrow: { color: tokens.colorBrandForeground1, fontWeight: tokens.fontWeightSemibold, letterSpacing: "0.08em", textTransform: "uppercase" },
-  heading: { margin: 0 },
-  headerActions: { display: "flex", gap: tokens.spacingHorizontalS, flexWrap: "wrap" },
   filters: {
     display: "grid",
     gridTemplateColumns: "minmax(220px, 1fr) auto",

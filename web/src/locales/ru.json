@@ -8,6 +8,8 @@
   "workspaces": "Рабочие пространства",
   "credentials": "Учётные данные и файлы",
   "operations": "Управление и аудит",
+  "menu": "Меню",
+  "primaryNavigation": "Основная навигация",
   "apiOnline": "Сервис доступен",
   "organization": "Организация",
   "systemAdmin": "Системный администратор",

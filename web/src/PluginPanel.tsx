@@ -23,6 +23,7 @@ import {
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useI18n } from "./i18n";
 import { ConfirmDialog } from "./components/ConfirmDialog";
+import { Page } from "./design-system/Page";
 import { PluginApi } from "./plugins/api";
 import { PluginAuthorizationDialog } from "./plugins/PluginAuthorizationDialog";
 import { PluginInstaller } from "./plugins/PluginInstaller";
@@ -33,9 +34,6 @@ import { pluginCatalogState, pluginErrorMessageKey, pluginSourceSummary } from "
 import type { PluginConfiguration, PluginConfigurationScope, PluginInspection, PluginManifest } from "./plugins/types";
 
 const useStyles = makeStyles({
-  page: { display: "grid", gap: tokens.spacingVerticalL, minWidth: 0 },
-  heading: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: tokens.spacingHorizontalM, flexWrap: "wrap" },
-  title: { margin: 0, fontSize: tokens.fontSizeBase600, fontWeight: tokens.fontWeightSemibold },
   grid: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: tokens.spacingHorizontalL },
   card: { display: "grid", gap: tokens.spacingVerticalM, minWidth: 0, height: "100%", padding: tokens.spacingVerticalL },
   cardHeader: { display: "flex", alignItems: "start", justifyContent: "space-between", gap: tokens.spacingHorizontalM },
@@ -122,11 +120,7 @@ export function PluginPanel({ token, organizationId, systemAdmin, onOpenCredenti
     setInstallerTarget(undefined);
   }
 
-  return <section className={styles.page} aria-labelledby="plugin-page-title">
-      <div className={styles.heading}>
-        <h2 id="plugin-page-title" className={styles.title}>{t("pluginsTitle")}</h2>
-        {systemAdmin && <Button appearance="primary" onClick={() => setInstallerTarget(null)}>{t("pluginInstall")}</Button>}
-      </div>
+  return <Page title={t("pluginsTitle")} actions={systemAdmin ? <Button appearance="primary" onClick={() => setInstallerTarget(null)}>{t("pluginInstall")}</Button> : undefined}>
       {catalogState === "error" && <MessageBar intent="error"><MessageBarBody>{error}<Button appearance="subtle" onClick={() => void load()}>{t("pluginRetry")}</Button></MessageBarBody></MessageBar>}
       {catalogState === "loading" && <Card><div className={styles.empty} role="status"><Spinner size="small" label={t("pluginsLoading")} /></div></Card>}
       {catalogState === "empty" && <Card><div className={styles.empty}><Text weight="semibold">{t("pluginsEmpty")}</Text><Text>{systemAdmin ? t("pluginsEmptyHint") : t("pluginsEmptyMemberHint")}</Text></div></Card>}
@@ -136,7 +130,7 @@ export function PluginPanel({ token, organizationId, systemAdmin, onOpenCredenti
       {installerTarget !== undefined && <PluginInstaller api={api} updateTarget={installerTarget} onClose={() => setInstallerTarget(undefined)} onInspected={(value) => { setInstallerTarget(undefined); setInspection(value); }} />}
       {inspection && <PluginAuthorizationDialog api={api} inspection={inspection} onClose={() => setInspection(null)} onInstalled={installed} />}
       <ConfirmDialog open={pendingUninstall !== null} title={t("pluginUninstall")} description={t("pluginUninstallConfirm")} confirmLabel={t("pluginUninstall")} cancelLabel={t("cancel")} danger details={pendingUninstall && <strong>{pendingUninstall.name || pendingUninstall.id}</strong>} onClose={() => setPendingUninstall(null)} onConfirm={() => pendingUninstall && void uninstall(pendingUninstall)} />
-    </section>;
+    </Page>;
 }
 
 function PluginCard({ plugin, systemAdmin, onConfigure, onUpdate, onToggle, onUninstall }: { plugin: PluginManifest; systemAdmin: boolean; onConfigure: () => void; onUpdate: () => void; onToggle: () => void; onUninstall: () => void }) {

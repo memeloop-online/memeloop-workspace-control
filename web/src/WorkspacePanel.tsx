@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
-import { Button, Caption1, Field, Input, MessageBar, MessageBarBody, Spinner, Text, Title2 } from "@fluentui/react-components";
+import { Button, Field, Input, MessageBar, MessageBarBody, Spinner, Text } from "@fluentui/react-components";
 import { AddRegular, ChevronLeftRegular, ChevronRightRegular, SearchRegular } from "@fluentui/react-icons";
 import type { ApiClient } from "./api";
 import { useI18n } from "./i18n";
@@ -14,6 +14,7 @@ import { aggregateRuntimeUsage } from "./workspaceMetrics";
 import { WorkspaceCreationForm } from "./workspaces/WorkspaceCreationForm";
 import { WorkspaceStats } from "./workspaces/WorkspaceStats";
 import { useWorkspaceStyles } from "./workspaces/workspaceStyles";
+import { Page } from "./design-system/Page";
 import type { AvailableNodePool, CreateWorkspace, OrganizationUsageSummary, Principal, QuotaResources, Resources, StoredInjection, WorkspaceResponse, WorkspaceRuntime, WorkspaceSummary, WorkspaceTemplate } from "./types";
 
 const PAGE_SIZE = 50;
@@ -324,21 +325,20 @@ export function WorkspacePanel(props: Props) {
         ? t("restartWorkspaceConfirm")
         : "";
   const styles = useWorkspaceStyles();
-  return <section className={styles.page}>
-    <header className={styles.header}><div className={styles.headerText}><Caption1 className={styles.eyebrow}>{t("workspaces")}</Caption1><Title2 className={styles.heading}>{t("workspaces")}</Title2></div>{canCreate && <Button appearance="primary" icon={<AddRegular />} onClick={() => setShowCreate((current) => !current)}>{showCreate ? t("collapse") : t("newWorkspace")}</Button>}</header>
+  return <Page title={t("workspaces")} wide actions={canCreate ? <Button appearance="primary" icon={<AddRegular />} aria-expanded={showCreate} onClick={() => setShowCreate((current) => !current)}>{t("newWorkspace")}</Button> : undefined}>
     <WorkspaceStats summary={usageSummaryOrganization === props.organizationId ? usageSummary : null} quota={quota} stale={usageSummaryStale} />
     {canCreate && showCreate && <WorkspaceCreationForm name={name} templateId={templateId} templates={templates} nodePools={nodePools} nodePool={nodePool} resourceDraft={resourceDraft} explicitInjectionRefs={explicitInjectionRefs} organizationInjections={organizationInjections} userInjections={userInjections} organizationRefs={organizationRefs} userRefs={userRefs} submitting={submitting} onNameChange={setName} onTemplateChange={chooseTemplate} onNodePoolChange={setNodePool} onResourceChange={updateResource} onReferenceModeChange={setReferenceMode} onOrganizationRefsChange={setOrganizationRefs} onUserRefsChange={setUserRefs} onSubmit={create} />}
     <div className={styles.filters}><Field className={styles.searchField} label={t("searchWorkspaces")}><Input type="search" contentBefore={<SearchRegular />} value={search} onChange={(_, data) => setSearch(data.value)} placeholder={t("searchWorkspacesHint")} /></Field><div className={styles.pagination} role="group" aria-label={t("workspacePagination")}><Button icon={<ChevronLeftRegular />} aria-label={t("previousPage")} disabled={page <= 1 || loading} onClick={() => void previousPage()}>{t("previousPage")}</Button><Text className={styles.paginationStatus} role="status">{t("workspacePageStatus")} {page}</Text><Button icon={<ChevronRightRegular />} iconPosition="after" aria-label={t("nextPage")} disabled={!nextCursor || loading} onClick={() => void nextPage()}>{t("nextPage")}</Button></div></div>
     {runtimeFailed && workspaces.length > 0 && <MessageBar intent="warning"><MessageBarBody>{t("runtimeDataUnavailable")}</MessageBarBody><Button appearance="subtle" onClick={() => setRuntimeRetry((value) => value + 1)}>{t("retryRuntime")}</Button></MessageBar>}
     <div ref={listAnchorRef} className={styles.list} aria-busy={props.busy || loading}>
       {workspaces.length === 0 && loading && <div className={styles.empty} role="status"><Spinner label={t("loadingWorkspaces")} /></div>}
-      {workspaces.length === 0 && !loading && scopeIsCurrent && <div className={styles.empty}>{t("noWorkspaces")}</div>}
+      {workspaces.length === 0 && !loading && scopeIsCurrent && <div className={styles.empty}>{debouncedSearch.trim() ? t("noMatchingWorkspaces") : t("noWorkspaces")}</div>}
       {workspaces.map((item) => <WorkspaceCard key={item.workspace.id} api={props.api} item={item} runtime={runtime[item.workspace.id]} nodePools={nodePools} onAction={requestAction} onOpenShell={openShell} onRequestRuntime={refreshRuntime} onError={props.onError} canConnect={canConnect} canChangeState={canChangeState} canDelete={canDelete} canChangePlacement={canChangePlacement} onChangePlacement={setPlacementTarget} />)}
     </div>
     <WorkspacePlacementDialog item={placementTarget} nodePools={nodePools} busy={placementBusy} onClose={() => !placementBusy && setPlacementTarget(null)} onConfirm={(nextNodePool) => placementTarget && void submitPlacement(placementTarget, nextNodePool)} />
     <ConfirmDialog open={pendingAction !== null} title={pendingAction ? t(pendingAction.action) : ""} description={actionDescription} details={pendingAction?.item.workspace.name} confirmLabel={pendingAction ? t(pendingAction.action) : ""} cancelLabel={t("cancel")} busy={actionBusy} danger={pendingAction?.action === "delete"} onClose={() => !actionBusy && setPendingAction(null)} onConfirm={() => pendingAction && void executeAction(pendingAction.item, pendingAction.action)} />
     <ConfirmDialog open={pendingCreate !== null} title={t("submitCreate")} description={t("workspaceHighRiskConfirm")} details={pendingCreate?.name} confirmLabel={t("submitCreate")} cancelLabel={t("cancel")} busy={submitting} danger onClose={() => !submitting && setPendingCreate(null)} onConfirm={() => pendingCreate && void submitCreate(pendingCreate)} />
-  </section>;
+  </Page>;
 }
 
 

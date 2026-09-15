@@ -12,12 +12,12 @@ import {
   MessageBarBody,
   Option,
   Subtitle1,
-  Title2,
   makeStyles,
   tokens,
 } from "@fluentui/react-components";
 
 import type { ApiClient } from "./api";
+import { Page } from "./design-system/Page";
 import { useI18n } from "./i18n";
 import { ApiKeySection } from "./settings/ApiKeySection";
 import type { Organization, Principal, UserProfile } from "./types";
@@ -34,26 +34,6 @@ interface Props {
 }
 
 const useStyles = makeStyles({
-  root: {
-    display: "grid",
-    gap: tokens.spacingVerticalXXL,
-    width: "100%",
-    maxWidth: "1180px",
-    margin: "0 auto",
-    padding: `${tokens.spacingVerticalXL} ${tokens.spacingHorizontalXL}`,
-    boxSizing: "border-box",
-    "@media (max-width: 640px)": {
-      padding: `${tokens.spacingVerticalL} ${tokens.spacingHorizontalM}`,
-    },
-  },
-  heading: {
-    display: "grid",
-    gap: tokens.spacingVerticalXS,
-  },
-  headingDescription: {
-    color: tokens.colorNeutralForeground2,
-    maxWidth: "70ch",
-  },
   cards: {
     display: "grid",
     gridTemplateColumns: "repeat(12, minmax(0, 1fr))",
@@ -170,11 +150,7 @@ export function SettingsPanel({
     }
   }
 
-  return <main className={classes.root} aria-labelledby="settings-title">
-      <header className={classes.heading}>
-        <Title2 id="settings-title">{t("settingsTitle")}</Title2>
-        <Body1 className={classes.headingDescription}>{t("organizationSwitchHelp")}</Body1>
-      </header>
+  return <Page title={t("settingsTitle")}>
       <div className={classes.cards}>
         <ProfileCard
           className={classes.halfCard}
@@ -206,7 +182,7 @@ export function SettingsPanel({
           <ApiKeySection api={api} organizationId={organizationId} principal={principal} onError={onError} />
         </section>
       </div>
-    </main>;
+    </Page>;
 }
 
 interface ProfileCardProps {

@@ -149,7 +149,7 @@ export function InjectionList({
               appearance="transparent"
               size="small"
               icon={<DismissRegular aria-hidden="true" />}
-              aria-label={t("clearSelectedReferences")}
+              aria-label={t("clearSearch")}
               onClick={() => onSearchChange("")}
             />
           ) : undefined}

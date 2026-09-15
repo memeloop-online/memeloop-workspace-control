@@ -13,19 +13,6 @@ import {
 import type { ButtonProps } from "@fluentui/react-components";
 
 export const useAdminStyles = makeStyles({
-  page: {
-    display: "grid",
-    rowGap: tokens.spacingVerticalL,
-    minWidth: 0,
-  },
-  pageHeader: {
-    display: "flex",
-    alignItems: "flex-start",
-    justifyContent: "space-between",
-    columnGap: tokens.spacingHorizontalM,
-    rowGap: tokens.spacingVerticalS,
-    flexWrap: "wrap",
-  },
   sectionGrid: {
     display: "grid",
     gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 320px), 1fr))",

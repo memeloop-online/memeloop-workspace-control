@@ -8,6 +8,8 @@
   "workspaces": "工作区",
   "credentials": "凭据与文件",
   "operations": "管理与审计",
+  "menu": "菜单",
+  "primaryNavigation": "主导航",
   "apiOnline": "服务在线",
   "organization": "组织",
   "systemAdmin": "系统管理员",

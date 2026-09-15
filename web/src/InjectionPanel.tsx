@@ -15,6 +15,7 @@ import { EyeRegular } from "@fluentui/react-icons";
 
 import type { ApiClient } from "./api";
 import { ConfirmDialog } from "./components/ConfirmDialog";
+import { Page } from "./design-system/Page";
 import { WorkspaceCombobox } from "./forms/WorkspaceCombobox";
 import { useI18n } from "./i18n";
 import { canManageOrganization as mayManageOrganization } from "./permissions";
@@ -39,21 +40,10 @@ interface Props {
 }
 
 const useStyles = makeStyles({
-  root: {
+  controls: {
     display: "grid",
-    gap: tokens.spacingVerticalL,
-    minWidth: 0,
-  },
-  heading: {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: tokens.spacingHorizontalM,
-    flexWrap: "wrap",
-  },
-  headingCopy: {
-    display: "grid",
-    gap: tokens.spacingVerticalXXS,
+    gap: tokens.spacingVerticalS,
+    justifyItems: "start",
   },
   scope: {
     width: "fit-content",
@@ -266,21 +256,14 @@ export function InjectionPanel(props: Props) {
     }
   }
 
-  const scopeLabel = scope === "organization" ? t("scopeOrganization") : scope === "user" ? t("scopeUser") : t("scopeWorkspace");
-
   return (
-    <section className={styles.root}>
-      <div className={styles.heading}>
-        <div className={styles.headingCopy}>
-          <Text as="h2" size={600} weight="semibold">{t("credentialsTitle")}</Text>
-          <Text size={300}>{scopeLabel}</Text>
-        </div>
-        <Button type="button" appearance="secondary" icon={<EyeRegular aria-hidden="true" />} onClick={() => void runPreview()}>{t("credentialsPreview")}</Button>
+    <Page title={t("credentialsTitle")} actions={<Button type="button" appearance="secondary" icon={<EyeRegular aria-hidden="true" />} onClick={() => void runPreview()}>{t("credentialsPreview")}</Button>}>
+      <div className={styles.controls}>
+        <TabList className={styles.scope} selectedValue={scope} onTabSelect={(_, data) => changeScope(data.value as InjectionScope)} aria-label={t("credentials")}>
+          {scopeValues.map((value) => <Tab key={value} value={value}>{value === "organization" ? t("scopeOrganization") : value === "user" ? t("scopeUser") : t("scopeWorkspace")}</Tab>)}
+        </TabList>
+        {scope === "workspace" && <div className={styles.workspace}><WorkspaceCombobox key={props.organizationId} items={workspaceItems} loadItems={searchWorkspaces} selectedId={workspaceId} onChange={(id) => { workspaceSelectionTouchedRef.current = id === ""; setWorkspaceId(id); }} /></div>}
       </div>
-      <TabList className={styles.scope} selectedValue={scope} onTabSelect={(_, data) => changeScope(data.value as InjectionScope)} aria-label={t("credentials")}>
-        {scopeValues.map((value) => <Tab key={value} value={value}>{value === "organization" ? t("scopeOrganization") : value === "user" ? t("scopeUser") : t("scopeWorkspace")}</Tab>)}
-      </TabList>
-      {scope === "workspace" && <div className={styles.workspace}><WorkspaceCombobox key={props.organizationId} items={workspaceItems} loadItems={searchWorkspaces} selectedId={workspaceId} onChange={(id) => { workspaceSelectionTouchedRef.current = id === ""; setWorkspaceId(id); }} /></div>}
       <TabList className={styles.mobileTabs} selectedValue={mobilePane} onTabSelect={(_, data) => data.value === "editor" ? (selectedKey ? setMobilePane("editor") : startNew()) : setMobilePane("list")} aria-label={t("credentials")}>
         <Tab value="list">{t("savedCredentials")}</Tab>
         <Tab value="editor">{selectedKey ? t("editingCredential") : t("newCredential")}</Tab>
@@ -303,7 +286,7 @@ export function InjectionPanel(props: Props) {
         </Card>
       )}
       <ConfirmDialog open={confirmDelete} title={t("delete")} description={t("deleteCredentialConfirm")} confirmLabel={t("delete")} cancelLabel={t("cancel")} busy={saving} danger details={selectedKey && <code>{selectedKey}</code>} onClose={() => setConfirmDelete(false)} onConfirm={() => void remove()} />
-    </section>
+    </Page>
   );
 }
 

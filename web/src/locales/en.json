@@ -8,6 +8,8 @@
   "workspaces": "Workspaces",
   "credentials": "Credentials & Files",
   "operations": "Administration & Audit",
+  "menu": "Menu",
+  "primaryNavigation": "Primary navigation",
   "apiOnline": "Service online",
   "organization": "Organization",
   "systemAdmin": "System administrator",

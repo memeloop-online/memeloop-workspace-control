@@ -29,6 +29,7 @@ import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
 import type { ApiClient } from "./api";
 import { AuditRow } from "./audit/AuditRow";
+import { Page } from "./design-system/Page";
 import { useI18n } from "./i18n";
 import type { AuditRecord } from "./types";
 
@@ -42,9 +43,6 @@ interface AuditFilters {
 const EMPTY_FILTERS: AuditFilters = { action: "", actor: "", workspace: "", q: "" };
 
 const useStyles = makeStyles({
-  page: { display: "grid", gap: tokens.spacingVerticalL, minWidth: 0 },
-  heading: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: tokens.spacingHorizontalM, flexWrap: "wrap" },
-  title: { margin: 0, fontSize: tokens.fontSizeBase600, fontWeight: tokens.fontWeightSemibold },
   filters: {
     display: "grid",
     gridTemplateColumns: "minmax(220px, 2fr) repeat(3, minmax(150px, 1fr))",
@@ -146,8 +144,7 @@ export function AuditPanel({ api, organizationId, systemAdmin, onError }: { api:
     (record) => <AuditRow.Time record={record} locale={locale} onDetails={() => setDetails(record)} />,
   ], [locale]);
 
-  return <section className={styles.page} aria-labelledby="audit-page-title">
-      <div className={styles.heading}><h2 id="audit-page-title" className={styles.title}>{t("auditTitle")}</h2></div>
+  return <Page title={t("auditTitle")}>
       <form className={styles.filters} onSubmit={applyFilters}>
         <Field label={t("auditSearch")}>
           <Input type="search" value={draft.q} onChange={(_, data) => setDraft({ ...draft, q: data.value })} placeholder={t("auditSearchHint")} />
@@ -196,7 +193,7 @@ export function AuditPanel({ api, organizationId, systemAdmin, onError }: { api:
         </div>
       </div>}
       <AuditDetailsDialog record={details} locale={locale} onClose={() => setDetails(null)} />
-    </section>;
+    </Page>;
 }
 
 function AuditDetailsDialog({ record, locale, onClose }: { record: AuditRecord | null; locale: string; onClose: () => void }) {

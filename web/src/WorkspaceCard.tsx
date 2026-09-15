@@ -54,7 +54,7 @@ export function WorkspaceCard({ api, item, runtime, nodePools, onAction, onOpenS
     <div className={styles.metadata}><Text>{workspace.workspace_user}</Text><Text>{workspace.access_mode === "public" ? t("public") : t("internal")}</Text><Text className={styles.metadataCode}>{item.namespace}</Text><Text>{t("nodePool")}: {nodePoolDisplayName(nodePools, workspace.node_pool)}</Text>{workspace.resources.gpu_count > 0 && <Text>{workspace.resources.gpu_count} GPU</Text>}</div>
     <ResourceOverview item={item} runtime={runtime} locale={locale} />
     {canChangePlacement && running && <Caption1 className={styles.meterHint}>{t("locationChangeAfterStop")}</Caption1>}
-    <div className={styles.toolbar} role="toolbar" aria-label={t("workspaces")}>
+    <div className={styles.toolbar} role="group" aria-label={t("workspaces")}>
       <div className={styles.toolbarGroup}>
         {canConnect && running && item.ssh_connection && <WorkspaceConnectionDialog api={api} workspaceId={workspace.id} connection={item.ssh_connection} />}
         {canConnect && running && <Tooltip content={t("webShellClipboardHelp")} relationship="description"><Button appearance="primary" icon={<WindowConsoleRegular />} onClick={() => void onOpenShell(workspace.id)}>{t("webShell")}</Button></Tooltip>}
