@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Badge, Button, Caption1, Card, Divider, ProgressBar, Text, Tooltip, Title3 } from "@fluentui/react-components";
+import { Badge, Button, Caption1, Card, Divider, ProgressBar, Spinner, Text, Tooltip, Title3 } from "@fluentui/react-components";
 import { ArrowClockwiseRegular, ChevronDownRegular, ChevronUpRegular, DeleteRegular, DesktopRegular, LocationRegular, PlayRegular, StopRegular, WindowConsoleRegular } from "@fluentui/react-icons";
 import { useI18n } from "./i18n";
 import type { Locale, MessageKey } from "./i18n";
@@ -23,6 +23,7 @@ interface Props {
   runtime?: WorkspaceRuntime;
   nodePools: AvailableNodePool[];
   onAction: (item: WorkspaceResponse, action: WorkspaceAction) => void;
+  busyAction: WorkspaceAction | null;
   onOpenShell: (id: string) => Promise<void>;
   onRequestRuntime: (id: string) => Promise<void>;
   onChangePlacement: (item: WorkspaceResponse) => void;
@@ -33,46 +34,52 @@ interface Props {
   canChangePlacement: boolean;
 }
 
-export function WorkspaceCard({ api, item, runtime, nodePools, onAction, onOpenShell, onRequestRuntime, onChangePlacement, onError, canConnect, canChangeState, canDelete, canChangePlacement }: Props) {
+export function WorkspaceCard({ api, item, runtime, nodePools, busyAction, onAction, onOpenShell, onRequestRuntime, onChangePlacement, onError, canConnect, canChangeState, canDelete, canChangePlacement }: Props) {
   const { locale, t } = useI18n();
   const styles = useWorkspaceStyles();
   const [detailView, setDetailView] = useState<DetailView | null>(null);
   const [openingDesktop, setOpeningDesktop] = useState(false);
   const workspace = item.workspace;
+  const titleId = `workspace-${workspace.id}-title`;
+  const statusId = `workspace-${workspace.id}-runtime-status`;
+  const eventsId = `workspace-${workspace.id}-event-log`;
   const toggleDetail = (view: DetailView) => {
     setDetailView((current) => current === view ? null : view);
     if (view === "events" && detailView !== "events") void onRequestRuntime(workspace.id);
   };
   const running = workspace.state === "ready";
   const stopped = workspace.state === "stopped";
+  const transition = busyAction ? { action: busyAction, label: actionProgressLabel(busyAction) } : workspaceTransition(workspace.state);
 
   return <Card className={styles.card} appearance="filled-alternative">
     <div className={styles.cardHeader}>
-      <div className={styles.cardTitle}><Title3 className={styles.titleText}>{workspace.name}</Title3><Caption1 className={styles.idText}>{workspace.short_id}</Caption1></div>
+      <div className={styles.cardTitle}><Title3 id={titleId} className={styles.titleText}>{workspace.name}</Title3><Caption1 className={styles.idText}>{workspace.short_id}</Caption1></div>
       <StateBadge state={workspace.state} />
     </div>
     <div className={styles.metadata}><Text>{workspace.workspace_user}</Text><Text>{workspace.access_mode === "public" ? t("public") : t("internal")}</Text><Text className={styles.metadataCode}>{item.namespace}</Text><Text>{t("nodePool")}: {nodePoolDisplayName(nodePools, workspace.node_pool)}</Text>{workspace.resources.gpu_count > 0 && <Text>{workspace.resources.gpu_count} GPU</Text>}</div>
     <ResourceOverview item={item} runtime={runtime} locale={locale} />
     {canChangePlacement && running && <Caption1 className={styles.meterHint}>{t("locationChangeAfterStop")}</Caption1>}
-    <div className={styles.toolbar} role="group" aria-label={t("workspaces")}>
+    <div className={styles.toolbar} role="group" aria-labelledby={titleId} aria-busy={transition ? "true" : "false"}>
       <div className={styles.toolbarGroup}>
-        {canConnect && running && item.ssh_connection && <WorkspaceConnectionDialog api={api} workspaceId={workspace.id} connection={item.ssh_connection} />}
-        {canConnect && running && <Tooltip content={t("webShellClipboardHelp")} relationship="description"><Button appearance="primary" icon={<WindowConsoleRegular />} onClick={() => void onOpenShell(workspace.id)}>{t("webShell")}</Button></Tooltip>}
-        {canConnect && running && item.desktop?.status === "ready" && item.desktop.https_url && <Button appearance="outline" icon={<DesktopRegular />} disabled={openingDesktop} onClick={() => void openDesktop(api, workspace.id, item.desktop!.mapping_id, setOpeningDesktop, onError, t)}>{openingDesktop ? t("desktopOpening") : t("openDesktop")}</Button>}
-        {canConnect && running && <WorkspacePortMappings api={api} workspaceId={workspace.id} workspaceReady onError={onError} />}
-        {canChangeState && running && <Button appearance="subtle" icon={<StopRegular />} onClick={() => onAction(item, "stop")}>{t("stop")}</Button>}
-        {canChangeState && running && <Button appearance="subtle" icon={<ArrowClockwiseRegular />} onClick={() => onAction(item, "restart")}>{t("restart")}</Button>}
-        {canChangeState && (workspace.state === "stopped" || workspace.state === "failed") && <Button appearance="primary" icon={<PlayRegular />} onClick={() => onAction(item, "start")}>{t("start")}</Button>}
-        {canChangePlacement && stopped && <Button appearance="subtle" icon={<LocationRegular />} onClick={() => onChangePlacement(item)}>{t("changeLocation")}</Button>}
+        {transition ? <Button appearance="subtle" disabled icon={<Spinner size="tiny" />} aria-busy="true">{t(transition.label)}</Button> : <>
+          {canConnect && running && item.ssh_connection && <WorkspaceConnectionDialog api={api} workspaceId={workspace.id} connection={item.ssh_connection} />}
+          {canConnect && running && <Tooltip content={t("webShellClipboardHelp")} relationship="description"><Button appearance="primary" icon={<WindowConsoleRegular />} onClick={() => void onOpenShell(workspace.id)}>{t("webShell")}</Button></Tooltip>}
+          {canConnect && running && item.desktop?.status === "ready" && item.desktop.https_url && <Button appearance="outline" icon={<DesktopRegular />} disabled={openingDesktop} onClick={() => void openDesktop(api, workspace.id, item.desktop!.mapping_id, setOpeningDesktop, onError, t)}>{openingDesktop ? t("desktopOpening") : t("openDesktop")}</Button>}
+          {canConnect && running && <WorkspacePortMappings api={api} workspaceId={workspace.id} workspaceReady onError={onError} />}
+          {canChangeState && running && <Button appearance="subtle" icon={<StopRegular />} onClick={() => onAction(item, "stop")}>{t("stop")}</Button>}
+          {canChangeState && running && <Button appearance="subtle" icon={<ArrowClockwiseRegular />} onClick={() => onAction(item, "restart")}>{t("restart")}</Button>}
+          {canChangeState && (workspace.state === "stopped" || workspace.state === "failed") && <Button appearance="primary" icon={<PlayRegular />} onClick={() => onAction(item, "start")}>{t("start")}</Button>}
+          {canChangePlacement && stopped && <Button appearance="subtle" icon={<LocationRegular />} onClick={() => onChangePlacement(item)}>{t("changeLocation")}</Button>}
+        </>}
       </div>
       <div className={styles.toolbarGroupEnd}>
-        {runtime && workspace.state !== "stopped" && <Button appearance={detailView === "status" ? "secondary" : "subtle"} icon={detailView === "status" ? <ChevronUpRegular /> : <ChevronDownRegular />} aria-expanded={detailView === "status"} onClick={() => toggleDetail("status")}>{t("runtimeStatus")}</Button>}
-        {runtime && <Button appearance={detailView === "events" ? "secondary" : "subtle"} icon={detailView === "events" ? <ChevronUpRegular /> : <ChevronDownRegular />} aria-expanded={detailView === "events"} onClick={() => toggleDetail("events")}>{t("eventLog")}</Button>}
+        {runtime && workspace.state !== "stopped" && <Button appearance={detailView === "status" ? "secondary" : "subtle"} icon={detailView === "status" ? <ChevronUpRegular /> : <ChevronDownRegular />} aria-expanded={detailView === "status"} aria-controls={statusId} onClick={() => toggleDetail("status")}>{t("runtimeStatus")}</Button>}
+        {runtime && <Button appearance={detailView === "events" ? "secondary" : "subtle"} icon={detailView === "events" ? <ChevronUpRegular /> : <ChevronDownRegular />} aria-expanded={detailView === "events"} aria-controls={eventsId} onClick={() => toggleDetail("events")}>{t("eventLog")}</Button>}
         {canDelete && !(workspace.state === "deleting" || workspace.state === "deleted") && <Button appearance="subtle" className={styles.dangerButton} icon={<DeleteRegular />} onClick={() => onAction(item, "delete")}>{t("delete")}</Button>}
       </div>
     </div>
-    {runtime && workspace.state !== "stopped" && detailView === "status" && <RuntimeStatus runtime={runtime} />}
-    {runtime && detailView === "events" && <EventLog runtime={runtime} locale={locale} />}
+    {runtime && workspace.state !== "stopped" && detailView === "status" && <RuntimeStatus id={statusId} runtime={runtime} />}
+    {runtime && detailView === "events" && <EventLog id={eventsId} runtime={runtime} locale={locale} />}
   </Card>;
 }
 
@@ -112,16 +119,16 @@ function ResourceMeter({ label, actual, requested, percent }: { label: string; a
   return <Tooltip content={valueText} relationship="description"><div className={styles.meter}><div className={styles.meterHeader}><Text>{label}</Text><Text className={styles.meterValue}>{actual} <Caption1>/ {requested}</Caption1></Text></div><ProgressBar value={percent === null ? undefined : percent / 100} aria-label={`${label} ${t("usageOfLimit")}`} /><Caption1 className={styles.meterHint}>{t("usageOfLimit")} · {formatPercent(percent)}</Caption1></div></Tooltip>;
 }
 
-function RuntimeStatus({ runtime }: { runtime: WorkspaceRuntime }) {
+function RuntimeStatus({ id, runtime }: { id: string; runtime: WorkspaceRuntime }) {
   const { t } = useI18n();
   const styles = useWorkspaceStyles();
-  return <section className={styles.statusPanel} aria-label={t("runtimeStatus")}><div className={styles.panelHeading}><Title3>{t("containers")}</Title3><Caption1>{runtime.metrics_available ? t("usageAvailable") : t("metricsUnavailable")}</Caption1></div>{runtime.pods.length === 0 && runtime.metrics.length === 0 && <Text>{t("noRuntimeData")}</Text>}<div className={styles.podGrid}>{runtime.pods.map((pod) => <div className={styles.podRow} key={pod.name}><Text className={styles.code}>{pod.name}</Text><Text>{pod.phase ?? "unknown"}</Text><Badge appearance="tint" color={pod.ready ? "success" : "danger"}>{pod.ready ? t("ready") : t("notReady")}</Badge><Caption1>{pod.restarts} {t("restarts")}</Caption1></div>)}</div>{runtime.metrics.length > 0 && <Divider />}{runtime.metrics.length > 0 && <div className={styles.podGrid}>{runtime.metrics.map((metric) => <div className={styles.podRow} key={`${metric.pod}-${metric.container}`}><Text className={styles.code}>{metric.container}</Text><Text>CPU {formatCpuMillis(parseCpuMillis(metric.cpu))}</Text><Text>{t("memory")} {formatMemoryMiB(parseMemoryMiB(metric.memory))}</Text></div>)}</div>}</section>;
+  return <section id={id} className={styles.statusPanel} aria-label={t("runtimeStatus")}><div className={styles.panelHeading}><Title3>{t("containers")}</Title3><Caption1>{runtime.metrics_available ? t("usageAvailable") : t("metricsUnavailable")}</Caption1></div>{runtime.pods.length === 0 && runtime.metrics.length === 0 && <Text>{t("noRuntimeData")}</Text>}<div className={styles.podGrid}>{runtime.pods.map((pod) => <div className={styles.podRow} key={pod.name}><Text className={styles.code}>{pod.name}</Text><Text>{pod.phase ?? "unknown"}</Text><Badge appearance="tint" color={pod.ready ? "success" : "danger"}>{pod.ready ? t("ready") : t("notReady")}</Badge><Caption1>{pod.restarts} {t("restarts")}</Caption1></div>)}</div>{runtime.metrics.length > 0 && <Divider />}{runtime.metrics.length > 0 && <div className={styles.podGrid}>{runtime.metrics.map((metric) => <div className={styles.podRow} key={`${metric.pod}-${metric.container}`}><Text className={styles.code}>{metric.container}</Text><Text>CPU {formatCpuMillis(parseCpuMillis(metric.cpu))}</Text><Text>{t("memory")} {formatMemoryMiB(parseMemoryMiB(metric.memory))}</Text></div>)}</div>}</section>;
 }
 
-function EventLog({ runtime, locale }: { runtime: WorkspaceRuntime; locale: Locale }) {
+function EventLog({ id, runtime, locale }: { id: string; runtime: WorkspaceRuntime; locale: Locale }) {
   const { t } = useI18n();
   const styles = useWorkspaceStyles();
-  return <section className={styles.statusPanel} aria-label={t("eventLog")}><Title3>{t("eventLog")}</Title3>{runtime.events.length === 0 && <Text>{t("noEvents")}</Text>}<div className={styles.eventList}>{runtime.events.slice(0, 12).map((event, index) => <article className={styles.event} key={`${event.observed_at}-${event.category}-${index}`}><Text weight="semibold">{t(eventCategoryKeys[event.category].label)}</Text><Text>{t(eventCategoryKeys[event.category].description)}</Text><Caption1 className={styles.eventMeta}>{t("observedAt")} {formatTimestamp(event.observed_at, locale)} · {t("eventCount")} {event.count ?? 1}</Caption1></article>)}</div></section>;
+  return <section id={id} className={styles.statusPanel} aria-label={t("eventLog")}><Title3>{t("eventLog")}</Title3>{runtime.events.length === 0 && <Text>{t("noEvents")}</Text>}<div className={styles.eventList}>{runtime.events.slice(0, 12).map((event, index) => <article className={styles.event} key={`${event.observed_at}-${event.category}-${index}`}><Text weight="semibold">{t(eventCategoryKeys[event.category].label)}</Text><Text>{t(eventCategoryKeys[event.category].description)}</Text><Caption1 className={styles.eventMeta}>{t("observedAt")} {formatTimestamp(event.observed_at, locale)} · {t("eventCount")} {event.count ?? 1}</Caption1></article>)}</div></section>;
 }
 
 const eventCategoryKeys: Record<WorkspaceRuntimeEvent["category"], { label: MessageKey; description: MessageKey }> = {
@@ -132,6 +139,27 @@ const eventCategoryKeys: Record<WorkspaceRuntimeEvent["category"], { label: Mess
   volume_unavailable: { label: "eventCategoryVolumeUnavailable", description: "eventCategoryVolumeUnavailableDescription" },
   other: { label: "eventCategoryOther", description: "eventCategoryOtherDescription" },
 };
+
+function workspaceTransition(state: string): { action: WorkspaceAction; label: MessageKey } | null {
+  const transitions: Record<string, { action: WorkspaceAction; label: MessageKey }> = {
+    provisioning: { action: "start", label: "stateProvisioning" },
+    starting: { action: "start", label: actionProgressLabel("start") },
+    stopping: { action: "stop", label: actionProgressLabel("stop") },
+    restarting: { action: "restart", label: actionProgressLabel("restart") },
+    deleting: { action: "delete", label: actionProgressLabel("delete") },
+  };
+  return transitions[state] ?? null;
+}
+
+function actionProgressLabel(action: WorkspaceAction): MessageKey {
+  const labels: Record<WorkspaceAction, MessageKey> = {
+    start: "stateStarting",
+    stop: "stateStopping",
+    restart: "stateRestarting",
+    delete: "stateDeleting",
+  };
+  return labels[action];
+}
 
 function StateBadge({ state }: { state: string }) {
   const { t } = useI18n();

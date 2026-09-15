@@ -4,12 +4,6 @@ import {
   Button,
   Card,
   CardHeader,
-  Dialog,
-  DialogActions,
-  DialogBody,
-  DialogContent,
-  DialogSurface,
-  DialogTitle,
   Input,
   MessageBar,
   MessageBarBody,
@@ -21,6 +15,7 @@ import {
 
 import type { ApiClient } from "../api";
 import { API_KEY_SCOPES } from "../apiKeyScopes";
+import { ConfirmDialog } from "../components/ConfirmDialog";
 import { useI18n } from "../i18n";
 import type { ApiKeyScope, ApiKeySummary, CreatedApiKey, Principal, WorkspaceTemplate } from "../types";
 import { ApiKeyCreateForm } from "./ApiKeyCreateForm";
@@ -220,35 +215,44 @@ export function ApiKeySection({ api, organizationId, principal, onError }: Props
           />
           <ApiKeyList keys={keys} locale={locale} translate={t} onRevoke={setRevoking} />
         </>}
-    <Dialog open={Boolean(revoking)} onOpenChange={(_, data) => { if (!data.open && !revokeBusy) setRevoking(null); }}>
-      <DialogSurface>
-        <DialogBody>
-          <DialogTitle>{t("revokeApiKey")}</DialogTitle>
-          <DialogContent>
-            {t("revokeApiKeyConfirm")}
-            {revoking && <div className={classes.dialogDetails}><strong>{revoking.name}</strong><br /><code>{revoking.prefix}</code></div>}
-          </DialogContent>
-          <DialogActions>
-            <Button appearance="secondary" disabled={revokeBusy} onClick={() => setRevoking(null)}>{t("cancel")}</Button>
-            <Button appearance="primary" disabled={revokeBusy} onClick={() => void confirmRevoke()}>
-              {revokeBusy ? <Spinner size="tiny" /> : t("revokeApiKey")}
-            </Button>
-          </DialogActions>
-        </DialogBody>
-      </DialogSurface>
-    </Dialog>
+    <ConfirmDialog
+      open={revoking !== null}
+      title={t("revokeApiKey")}
+      description={t("revokeApiKeyConfirm")}
+      confirmLabel={t("revokeApiKey")}
+      cancelLabel={t("cancel")}
+      busy={revokeBusy}
+      danger
+      details={revoking && <div className={classes.dialogDetails}><strong>{revoking.name}</strong><br /><code>{revoking.prefix}</code></div>}
+      onClose={() => setRevoking(null)}
+      onConfirm={() => void confirmRevoke()}
+    />
   </Card>;
 }
 
 function CreatedApiKeyNotice({ value, onHide, classes }: { value: CreatedApiKey; onHide: () => void; classes: ReturnType<typeof useStyles> }) {
   const { t } = useI18n();
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => setCopied(false), [value.token]);
+
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(value.token);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1_500);
+    } catch {
+      // Keep the token selectable if clipboard permission is unavailable.
+    }
+  }
+
   return <MessageBar className={classes.created} intent="success">
     <MessageBarBody>
       <strong>{t("apiKeyCreated")}</strong>
       <p>{t("apiKeyCreatedHelp")}</p>
       <div className={classes.createdValue}>
         <Input className={classes.createdInput} value={value.token} readOnly type="password" />
-        <Button appearance="secondary" onClick={() => void navigator.clipboard.writeText(value.token)}>{t("copy")}</Button>
+        <Button appearance="secondary" onClick={() => void copy()}>{copied ? t("copied") : t("copy")}</Button>
       </div>
       <Button appearance="subtle" onClick={onHide}>{t("hideApiKey")}</Button>
     </MessageBarBody>

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { Dispatch, FormEvent, SetStateAction } from "react";
 import {
   Button,
@@ -281,7 +281,9 @@ const SELECTOR_KEYS: readonly { key: string; label: MessageKey }[] = [
 function TemplateSelectorAutocomplete({ draft, update, templates }: { draft: InjectionEditorDraft; update: Dispatch<SetStateAction<InjectionEditorDraft>>; templates: WorkspaceTemplate[] }) {
   const { t } = useI18n();
   const selected = templates.find((template) => template.id === draft.template_selector);
-  const selectedLabel = selected ? templateLabel(selected) : draft.template_selector ?? "";
+  const selectedLabel = selected ? templateLabel(selected) : "";
+  const selectedRef = useRef<WorkspaceTemplate | null>(selected ?? null);
+  const editingRef = useRef(false);
   const [query, setQuery] = useState(selectedLabel);
   const matches = useMemo(() => {
     const normalized = query.trim().toLocaleLowerCase();
@@ -289,7 +291,37 @@ function TemplateSelectorAutocomplete({ draft, update, templates }: { draft: Inj
   }, [query, templates]);
   const styles = useStyles();
 
-  useEffect(() => setQuery(selectedLabel), [selectedLabel]);
+  useEffect(() => {
+    if (editingRef.current) return;
+    setQuery(selectedLabel);
+    selectedRef.current = selected ?? null;
+    if (templates.length > 0 && draft.template_selector && !selected) {
+      update((current) => current.template_selector === draft.template_selector ? { ...current, template_selector: null } : current);
+    }
+  }, [draft.template_selector, selected, selectedLabel, templates.length, update]);
+
+  function findExact(value: string) {
+    const normalized = value.trim().toLocaleLowerCase();
+    if (!normalized) return undefined;
+    return templates.find((template) => template.id === value.trim() || templateLabel(template).toLocaleLowerCase() === normalized);
+  }
+
+  function choose(template: WorkspaceTemplate | null) {
+    editingRef.current = false;
+    selectedRef.current = template;
+    setQuery(template ? templateLabel(template) : "");
+    update((current) => ({ ...current, template_selector: template?.id ?? null }));
+  }
+
+  function settle() {
+    if (!editingRef.current) return;
+    const match = findExact(query);
+    if (match) {
+      choose(match);
+      return;
+    }
+    choose(selectedRef.current);
+  }
 
   return (
     <Field className={styles.wide} label={<FieldLabel label={t("templateSelector")} help={t("templateSelectorHelp")} />}>
@@ -300,15 +332,23 @@ function TemplateSelectorAutocomplete({ draft, update, templates }: { draft: Inj
         placeholder={t("allTemplates")}
         onChange={(event) => {
           const value = event.currentTarget.value;
+          if (!editingRef.current) selectedRef.current = selected;
+          editingRef.current = true;
           setQuery(value);
-          const match = templates.find((template) => templateLabel(template) === value || template.id === value);
-          update((current) => ({ ...current, template_selector: match?.id ?? null }));
+          const match = findExact(value);
+          if (!value.trim()) {
+            choose(null);
+          } else if (match) {
+            selectedRef.current = match;
+            update((current) => ({ ...current, template_selector: match.id }));
+          }
         }}
         onOptionSelect={(_, data) => {
           const match = templates.find((template) => template.id === data.optionValue);
-          setQuery(match ? templateLabel(match) : "");
-          update((current) => ({ ...current, template_selector: match?.id ?? null }));
+          choose(match ?? null);
         }}
+        onBlur={settle}
+        onOpenChange={(_, data) => { if (!data.open) settle(); }}
         aria-label={t("templateSelector")}
       >
         {matches.map((template) => <Option key={template.id} value={template.id} text={templateLabel(template)}>{template.name}</Option>)}

@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from "react";
-import type { FormEvent } from "react";
 import {
   Button,
   Checkbox,
@@ -35,6 +34,7 @@ import {
 } from "./adminApiKeyView";
 import type { ApiClient } from "./api";
 import { applyLocalRevocations, getApiKeyStatus } from "./apiKeyStatus";
+import { ConfirmDialog } from "./components/ConfirmDialog";
 import { useI18n } from "./i18n";
 import { hasApiKeyScope } from "./permissions";
 import type { ApiKeyPage, ApiKeySummary, MembershipSummary, Principal, Role, UserSummary } from "./types";
@@ -255,8 +255,7 @@ function AdminUserApiKeysDialog({ api, userId, userDisplayName, onClose, onError
     }
   }
 
-  async function revoke(event: FormEvent, key: ApiKeySummary) {
-    event.preventDefault();
+  async function revoke(key: ApiKeySummary) {
     if (!reason.trim()) return;
     setRevoking(true);
     try {
@@ -273,10 +272,27 @@ function AdminUserApiKeysDialog({ api, userId, userDisplayName, onClose, onError
     }
   }
 
-  return <Dialog open onOpenChange={(_, data) => { if (!data.open && !revoking) onClose(); }}><DialogSurface><DialogBody><DialogTitle>{t("manageUserApiKeys")} · {userDisplayName}</DialogTitle><DialogContent className={styles.dialogBody}>
+  const revokingKey = revokingKeyId ? items.find((item) => item.id === revokingKeyId) ?? null : null;
+
+  return <>
+  <Dialog open onOpenChange={(_, data) => { if (!data.open && !revoking) onClose(); }}><DialogSurface><DialogBody><DialogTitle>{t("manageUserApiKeys")} · {userDisplayName}</DialogTitle><DialogContent className={styles.dialogBody}>
     <AdminToolbar action={<div className={styles.actions}><Button icon={<ArrowLeftRegular />} disabled={pageNumber <= 1 || loading || revoking} onClick={() => void loadPage(cursorHistory[pageNumber - 2] ?? null, "previous")}>{t("previousPage")}</Button><Button icon={<ArrowRightRegular />} iconPosition="after" disabled={!nextCursor || loading || revoking} onClick={() => void loadPage(nextCursor, "next")}>{t("nextPage")}</Button></div>}><Text size={300}>{formatApiKeyPageStatus(locale, pageNumber, items.length, t)}</Text></AdminToolbar>
-    {loading && items.length === 0 ? <Spinner label={t("loading")} /> : items.length === 0 ? <Text className={styles.empty}>{t("noApiKeys")}</Text> : <DataGrid items={items} columns={apiKeyColumns({ t, locale, styles, revokingKeyId, revoking, loading, reason, setRevokingKeyId, setReason, revoke })}><DataGridHeader><DataGridRow<ApiKeySummary>>{(column) => <DataGridHeaderCell>{column.renderHeaderCell()}</DataGridHeaderCell>}</DataGridRow></DataGridHeader><DataGridBody<ApiKeySummary>>{({ item }) => <DataGridRow<ApiKeySummary>>{(column) => <DataGridCell>{column.renderCell(item)}</DataGridCell>}</DataGridRow>}</DataGridBody></DataGrid>}
-  </DialogContent><DialogActions><Button appearance="secondary" disabled={revoking} onClick={onClose}>{t("close")}</Button></DialogActions></DialogBody></DialogSurface></Dialog>;
+    {loading && items.length === 0 ? <Spinner label={t("loading")} /> : items.length === 0 ? <Text className={styles.empty}>{t("noApiKeys")}</Text> : <DataGrid items={items} columns={apiKeyColumns({ t, locale, styles, revokingKeyId, revoking, loading, setRevokingKeyId, setReason })}><DataGridHeader><DataGridRow<ApiKeySummary>>{(column) => <DataGridHeaderCell>{column.renderHeaderCell()}</DataGridHeaderCell>}</DataGridRow></DataGridHeader><DataGridBody<ApiKeySummary>>{({ item }) => <DataGridRow<ApiKeySummary>>{(column) => <DataGridCell>{column.renderCell(item)}</DataGridCell>}</DataGridRow>}</DataGridBody></DataGrid>}
+  </DialogContent><DialogActions><Button appearance="secondary" disabled={revoking} onClick={onClose}>{t("close")}</Button></DialogActions></DialogBody></DialogSurface></Dialog>
+  <ConfirmDialog
+    open={revokingKey !== null}
+    title={t("revokeApiKey")}
+    description={t("revokeApiKeyConfirm")}
+    confirmLabel={t("revokeApiKey")}
+    cancelLabel={t("cancel")}
+    busy={revoking}
+    confirmDisabled={!reason.trim()}
+    danger
+    details={revokingKey && <div className={styles.stack}><strong>{revokingKey.name}</strong><Text size={200}>{revokingKey.prefix}</Text><Field label={t("apiKeyRevocationReason")} required><Textarea value={reason} onChange={(event) => setReason(event.target.value)} placeholder={t("apiKeyRevocationReasonPlaceholder")} /></Field></div>}
+    onClose={() => { if (!revoking) { setRevokingKeyId(null); setReason(""); } }}
+    onConfirm={() => { if (revokingKey) void revoke(revokingKey); }}
+  />
+  </>;
 }
 
 function userColumns({ t, styles, canManageUsers, canEditQuota, principal, setSelectedUser, setApiKeyUser, onEditQuota }: { t: ReturnType<typeof useI18n>["t"]; styles: ReturnType<typeof useAdminStyles>; canManageUsers: boolean; canEditQuota: boolean; principal: Principal; setSelectedUser: (user: DirectoryItem) => void; setApiKeyUser: (user: DirectoryItem) => void; onEditQuota: (userId: string) => void }): TableColumnDefinition<DirectoryItem>[] {
@@ -284,16 +300,16 @@ function userColumns({ t, styles, canManageUsers, canEditQuota, principal, setSe
     { columnId: "user", compare: (a, b) => a.display_name.localeCompare(b.display_name), renderHeaderCell: () => t("user"), renderCell: (item) => <div className={styles.stack}><Text weight="semibold">{item.display_name}</Text><Text size={200}>{item.id}</Text></div> },
     { columnId: "role", compare: (a, b) => String(a.membershipRole).localeCompare(String(b.membershipRole)), renderHeaderCell: () => t("role"), renderCell: (item) => item.membershipRole === "organization_admin" ? t("roleOrganizationAdmin") : item.membershipRole === "member" ? t("roleMember") : t("notEnabled") },
     { columnId: "status", compare: (a, b) => Number(a.disabled) - Number(b.disabled), renderHeaderCell: () => t("workspaceState"), renderCell: (item) => item.disabled ? t("userStatusDisabled") : t("userStatusActive") },
-    { columnId: "actions", compare: () => 0, renderHeaderCell: () => t("manageUserApiKeys"), renderCell: (item) => <div className={styles.actions}>{(canManageUsers || item.membershipRole !== null) && <Button icon={<EditRegular />} onClick={() => setSelectedUser(item)}>{t("saveChanges")}</Button>}{canEditQuota && <Button onClick={() => onEditQuota(item.id)}>{t("editUserQuota")}</Button>}{principal.system_admin && item.id !== principal.user_id && hasApiKeyScope(principal, "manage_system") && hasApiKeyScope(principal, "manage_api_keys") && <Button icon={<KeyRegular />} onClick={() => setApiKeyUser(item)}>{t("manageUserApiKeys")}</Button>}</div> },
+    { columnId: "actions", compare: () => 0, renderHeaderCell: () => t("actions"), renderCell: (item) => <div className={styles.actions}>{(canManageUsers || item.membershipRole !== null) && <Button icon={<EditRegular />} onClick={() => setSelectedUser(item)}>{t("editUser")}</Button>}{canEditQuota && <Button onClick={() => onEditQuota(item.id)}>{t("editUserQuota")}</Button>}{principal.system_admin && item.id !== principal.user_id && hasApiKeyScope(principal, "manage_system") && hasApiKeyScope(principal, "manage_api_keys") && <Button icon={<KeyRegular />} onClick={() => setApiKeyUser(item)}>{t("manageUserApiKeys")}</Button>}</div> },
   ];
 }
 
-function apiKeyColumns({ t, locale, styles, revokingKeyId, revoking, loading, reason, setRevokingKeyId, setReason, revoke }: { t: ReturnType<typeof useI18n>["t"]; locale: string; styles: ReturnType<typeof useAdminStyles>; revokingKeyId: string | null; revoking: boolean; loading: boolean; reason: string; setRevokingKeyId: (id: string | null) => void; setReason: (reason: string) => void; revoke: (event: FormEvent, key: ApiKeySummary) => Promise<void> }): TableColumnDefinition<ApiKeySummary>[] {
+function apiKeyColumns({ t, locale, styles, revokingKeyId, revoking, loading, setRevokingKeyId, setReason }: { t: ReturnType<typeof useI18n>["t"]; locale: string; styles: ReturnType<typeof useAdminStyles>; revokingKeyId: string | null; revoking: boolean; loading: boolean; setRevokingKeyId: (id: string | null) => void; setReason: (reason: string) => void }): TableColumnDefinition<ApiKeySummary>[] {
   return [
     { columnId: "key", compare: (a, b) => a.name.localeCompare(b.name), renderHeaderCell: () => t("manageUserApiKeys"), renderCell: (item) => <div className={styles.stack}><Text weight="semibold">{item.name}</Text><Text size={200}>{item.prefix}</Text><Text size={200}>{formatApiKeyScopes(item, t)}</Text></div> },
     { columnId: "status", compare: (a, b) => getApiKeyStatus(a).localeCompare(getApiKeyStatus(b)), renderHeaderCell: () => t("apiKeyStatus"), renderCell: (item) => formatApiKeyStatus(item, t) },
     { columnId: "expires", compare: (a, b) => (a.expires_at ?? 0) - (b.expires_at ?? 0), renderHeaderCell: () => t("apiKeyExpires"), renderCell: (item) => formatApiKeyExpiry(item.expires_at, locale, t) },
-    { columnId: "actions", compare: () => 0, renderHeaderCell: () => t("apiKeyStatus"), renderCell: (item) => getApiKeyStatus(item) === "active" && (revokingKeyId === item.id ? <form className={styles.stack} onSubmit={(event) => void revoke(event, item)}><Field label={t("apiKeyRevocationReason")} required><Textarea value={reason} onChange={(event) => setReason(event.target.value)} placeholder={t("apiKeyRevocationReasonPlaceholder")} /></Field><div className={styles.actions}><Button type="button" disabled={revoking} onClick={() => setRevokingKeyId(null)}>{t("cancel")}</Button><SaveButton type="submit" disabled={revoking || !reason.trim()}>{revoking ? t("saving") : t("revokeApiKey")}</SaveButton></div></form> : <Button disabled={revoking || loading} onClick={() => { setRevokingKeyId(item.id); setReason(""); }}>{t("revokeApiKey")}</Button>) },
+    { columnId: "actions", compare: () => 0, renderHeaderCell: () => t("actions"), renderCell: (item) => getApiKeyStatus(item) === "active" && <Button disabled={revoking || loading || revokingKeyId !== null} onClick={() => { setRevokingKeyId(item.id); setReason(""); }}>{t("revokeApiKey")}</Button> },
   ];
 }
 

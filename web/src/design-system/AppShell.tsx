@@ -47,7 +47,7 @@ import {
   SettingsRegular,
   WeatherSunnyRegular,
 } from "@fluentui/react-icons";
-import { useEffect, useRef, useState, type FormEvent, type ReactElement, type ReactNode } from "react";
+import { useEffect, useState, type FormEvent, type ReactElement, type ReactNode } from "react";
 import type { Locale, MessageKey } from "../i18n";
 import { BrandIcon } from "../BrandIcon";
 import { UserAvatar } from "../UserAvatar";
@@ -90,21 +90,6 @@ const useStyles = makeStyles({
   brandCaption: { color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200 },
   nav: { display: "grid", gap: tokens.spacingVerticalXS },
   navButton: { justifyContent: "flex-start", width: "100%", minHeight: "42px" },
-  sidebarFooter: {
-    display: "flex",
-    alignItems: "center",
-    gap: tokens.spacingHorizontalS,
-    marginTop: "auto",
-    color: tokens.colorNeutralForeground3,
-    fontSize: tokens.fontSizeBase200,
-  },
-  statusDot: {
-    width: "8px",
-    height: "8px",
-    flex: "0 0 auto",
-    borderRadius: tokens.borderRadiusCircular,
-    backgroundColor: tokens.colorPaletteGreenBackground3,
-  },
   content: { minWidth: 0 },
   topbar: {
     display: "flex",
@@ -159,6 +144,14 @@ const useStyles = makeStyles({
   },
   emptyText: { maxWidth: "440px", color: tokens.colorNeutralForeground2 },
   drawerNav: { display: "grid", gap: tokens.spacingVerticalXS },
+  drawerTools: {
+    display: "grid",
+    gap: tokens.spacingVerticalM,
+    marginTop: tokens.spacingVerticalXL,
+    paddingTop: tokens.spacingVerticalL,
+    borderTop: tokens.strokeWidthThin + " solid " + tokens.colorNeutralStroke2,
+  },
+  drawerLanguage: { width: "100%" },
   mobileMenu: { display: "none" },
   desktopOnly: { display: "inline-flex" },
   "@media (max-width: 900px)": {
@@ -195,11 +188,13 @@ interface LanguagePickerProps {
   setLocale: (locale: Locale) => void;
   t: Translation;
   compact?: boolean;
+  className?: string;
 }
 
-function LanguagePicker({ locale, setLocale, t, compact = false }: LanguagePickerProps) {
+function LanguagePicker({ locale, setLocale, t, compact = false, className }: LanguagePickerProps) {
   return (
     <Dropdown
+      className={className}
       aria-label={t("language")}
       value={locale === "zh-CN" ? t("languageChinese") : locale === "ru" ? t("languageRussian") : t("languageEnglish")}
       selectedOptions={[locale]}
@@ -212,6 +207,14 @@ function LanguagePicker({ locale, setLocale, t, compact = false }: LanguagePicke
       <Option value="ru">{t("languageRussian")}</Option>
     </Dropdown>
   );
+}
+
+export type NoticeIntent = "info" | "success" | "warning" | "error";
+
+export interface AppNotice {
+  id: number;
+  message: string;
+  intent: NoticeIntent;
 }
 
 interface LoginScreenProps {
@@ -268,25 +271,24 @@ interface AppShellProps {
   canManageGlobalState: boolean;
   canManageOrganizationState: boolean;
   onLogout: () => void;
-  notice: string;
+  notice: AppNotice | null;
   t: Translation;
 }
 
 export function AppShell(props: AppShellProps) {
   const classes = useStyles();
   const toasterId = useId("mwc-toaster");
-  const { dispatchToast } = useToastController(toasterId);
+  const { dispatchToast, dismissToast } = useToastController(toasterId);
   const [mobileOpen, setMobileOpen] = useState(false);
-  const lastNotice = useRef("");
 
   useEffect(() => {
-    if (props.notice && props.notice !== lastNotice.current) {
-      dispatchToast(<Toast><ToastTitle>{props.notice}</ToastTitle></Toast>, { intent: "info", timeout: 5000 });
-      lastNotice.current = props.notice;
-    } else if (!props.notice) {
-      lastNotice.current = "";
-    }
-  }, [dispatchToast, props.notice]);
+    if (!props.notice) return;
+    const toastId = `mwc-notice-${props.notice.id}`;
+    dispatchToast(
+      <Toast><ToastTitle action={<Button appearance="subtle" size="small" icon={<DismissRegular />} aria-label={props.t("close")} onClick={() => dismissToast(toastId)} />}>{props.notice.message}</ToastTitle></Toast>,
+      { toastId, intent: props.notice.intent, timeout: props.notice.intent === "error" ? -1 : 5000 },
+    );
+  }, [dispatchToast, dismissToast, props.notice, props.t]);
 
   const canShowPlugins = props.canManageGlobalState || props.canManageOrganizationState;
   const nav = (
@@ -305,7 +307,6 @@ export function AppShell(props: AppShellProps) {
       <aside className={classes.sidebar} aria-label="Memeloop Workspace Control">
         <Brand classes={classes} />
         {nav}
-        <div className={classes.sidebarFooter}><span className={classes.statusDot} aria-hidden="true" />{props.t("apiOnline")}</div>
       </aside>
       <div className={classes.content}>
         <header className={classes.topbar}>
@@ -321,7 +322,12 @@ export function AppShell(props: AppShellProps) {
       </div>
       <Drawer type="overlay" separator open={mobileOpen} onOpenChange={(_, data) => setMobileOpen(data.open)} position="start">
         <DrawerHeader><DrawerHeaderTitle action={<Button appearance="subtle" icon={<DismissRegular />} aria-label={props.t("close")} onClick={() => setMobileOpen(false)} />}>Memeloop</DrawerHeaderTitle></DrawerHeader>
-        <DrawerBody><div className={classes.drawerNav}>{nav}</div></DrawerBody>
+        <DrawerBody>
+          <div className={classes.drawerNav}>{nav}</div>
+          <div className={classes.drawerTools}>
+            <LanguagePicker locale={props.locale} setLocale={props.setLocale} t={props.t} className={classes.drawerLanguage} />
+          </div>
+        </DrawerBody>
       </Drawer>
       <Toaster toasterId={toasterId} position="top-end" />
     </div>

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { Button, Field, Input, MessageBar, MessageBarBody, Spinner, Text } from "@fluentui/react-components";
-import { AddRegular, ChevronLeftRegular, ChevronRightRegular, SearchRegular } from "@fluentui/react-icons";
+import { AddRegular, ChevronLeftRegular, ChevronRightRegular, DismissRegular, SearchRegular } from "@fluentui/react-icons";
 import type { ApiClient } from "./api";
 import { useI18n } from "./i18n";
 import { canManageSystem, hasApiKeyScope } from "./permissions";
@@ -21,6 +21,7 @@ const PAGE_SIZE = 50;
 const EMPTY_WORKSPACES: WorkspaceResponse[] = [];
 type Action = "start" | "stop" | "restart" | "delete";
 type PendingAction = { item: WorkspaceResponse; action: Action } | null;
+type ActiveAction = { workspaceId: string; action: Action } | null;
 type WorkspacePageResult = { items: WorkspaceResponse[]; next_cursor: string | null; summary?: WorkspaceSummary };
 
 interface Props {
@@ -65,6 +66,7 @@ export function WorkspacePanel(props: Props) {
   const [runtimeFailed, setRuntimeFailed] = useState(false);
   const [runtimeRetry, setRuntimeRetry] = useState(0);
   const [pendingAction, setPendingAction] = useState<PendingAction>(null);
+  const [activeAction, setActiveAction] = useState<ActiveAction>(null);
   const [pendingCreate, setPendingCreate] = useState<CreateWorkspace | null>(null);
   const [placementTarget, setPlacementTarget] = useState<WorkspaceResponse | null>(null);
   const [placementBusy, setPlacementBusy] = useState(false);
@@ -78,6 +80,7 @@ export function WorkspacePanel(props: Props) {
   const runtimeGeneration = useRef(0);
   const usageGeneration = useRef(0);
   const usageRequestActive = useRef(false);
+  const actionBusyRef = useRef(false);
   const scope = `${props.organizationId}\u0000${debouncedSearch.trim()}`;
   const scopeRef = useRef(scope);
   scopeRef.current = scope;
@@ -269,19 +272,27 @@ export function WorkspacePanel(props: Props) {
   }
 
   function requestAction(item: WorkspaceResponse, action: Action) {
-    if (action === "start" || ((action === "stop" || action === "restart") && currentCpu(runtime[item.workspace.id]) === 0)) return void executeAction(item, action);
+    if (actionBusyRef.current || pendingAction) return;
+    if (!actionNeedsConfirmation(action, runtime[item.workspace.id])) return void executeAction(item, action);
     setPendingAction({ item, action });
   }
 
   async function executeAction(item: WorkspaceResponse, action: Action) {
+    if (actionBusyRef.current) return;
+    actionBusyRef.current = true;
     setActionBusy(true);
+    setActiveAction({ workspaceId: item.workspace.id, action });
     try {
       await props.api.workspaceAction(item.workspace.id, action);
       await props.onRefresh();
       await loadPage(cursorRef.current, scopeRef.current);
       setPendingAction(null);
     } catch (error) { props.onError(errorMessage(error, t("operationFailed"))); }
-    finally { setActionBusy(false); }
+    finally {
+      actionBusyRef.current = false;
+      setActionBusy(false);
+      setActiveAction(null);
+    }
   }
 
   async function openShell(workspaceId: string) {
@@ -328,12 +339,12 @@ export function WorkspacePanel(props: Props) {
   return <Page title={t("workspaces")} wide actions={canCreate ? <Button appearance="primary" icon={<AddRegular />} aria-expanded={showCreate} onClick={() => setShowCreate((current) => !current)}>{t("newWorkspace")}</Button> : undefined}>
     <WorkspaceStats summary={usageSummaryOrganization === props.organizationId ? usageSummary : null} quota={quota} stale={usageSummaryStale} />
     {canCreate && showCreate && <WorkspaceCreationForm name={name} templateId={templateId} templates={templates} nodePools={nodePools} nodePool={nodePool} resourceDraft={resourceDraft} explicitInjectionRefs={explicitInjectionRefs} organizationInjections={organizationInjections} userInjections={userInjections} organizationRefs={organizationRefs} userRefs={userRefs} submitting={submitting} onNameChange={setName} onTemplateChange={chooseTemplate} onNodePoolChange={setNodePool} onResourceChange={updateResource} onReferenceModeChange={setReferenceMode} onOrganizationRefsChange={setOrganizationRefs} onUserRefsChange={setUserRefs} onSubmit={create} />}
-    <div className={styles.filters}><Field className={styles.searchField} label={t("searchWorkspaces")}><Input type="search" contentBefore={<SearchRegular />} value={search} onChange={(_, data) => setSearch(data.value)} placeholder={t("searchWorkspacesHint")} /></Field><div className={styles.pagination} role="group" aria-label={t("workspacePagination")}><Button icon={<ChevronLeftRegular />} aria-label={t("previousPage")} disabled={page <= 1 || loading} onClick={() => void previousPage()}>{t("previousPage")}</Button><Text className={styles.paginationStatus} role="status">{t("workspacePageStatus")} {page}</Text><Button icon={<ChevronRightRegular />} iconPosition="after" aria-label={t("nextPage")} disabled={!nextCursor || loading} onClick={() => void nextPage()}>{t("nextPage")}</Button></div></div>
+    <div className={styles.filters}><Field className={styles.searchField} label={t("searchWorkspaces")}><Input type="search" contentBefore={<SearchRegular aria-hidden="true" />} contentAfter={search ? <Button appearance="transparent" size="small" icon={<DismissRegular aria-hidden="true" />} aria-label={t("clearSearch")} onClick={() => setSearch("")} /> : undefined} value={search} onChange={(_, data) => setSearch(data.value)} placeholder={t("searchWorkspacesHint")} /></Field><div className={styles.pagination} role="group" aria-label={t("workspacePagination")}><Button icon={<ChevronLeftRegular />} aria-label={t("previousPage")} disabled={page <= 1 || loading} onClick={() => void previousPage()}>{t("previousPage")}</Button><Text className={styles.paginationStatus} role="status">{t("workspacePageStatus")} {page}</Text><Button icon={<ChevronRightRegular />} iconPosition="after" aria-label={t("nextPage")} disabled={!nextCursor || loading} onClick={() => void nextPage()}>{t("nextPage")}</Button></div></div>
     {runtimeFailed && workspaces.length > 0 && <MessageBar intent="warning"><MessageBarBody>{t("runtimeDataUnavailable")}</MessageBarBody><Button appearance="subtle" onClick={() => setRuntimeRetry((value) => value + 1)}>{t("retryRuntime")}</Button></MessageBar>}
     <div ref={listAnchorRef} className={styles.list} aria-busy={props.busy || loading}>
       {workspaces.length === 0 && loading && <div className={styles.empty} role="status"><Spinner label={t("loadingWorkspaces")} /></div>}
       {workspaces.length === 0 && !loading && scopeIsCurrent && <div className={styles.empty}>{debouncedSearch.trim() ? t("noMatchingWorkspaces") : t("noWorkspaces")}</div>}
-      {workspaces.map((item) => <WorkspaceCard key={item.workspace.id} api={props.api} item={item} runtime={runtime[item.workspace.id]} nodePools={nodePools} onAction={requestAction} onOpenShell={openShell} onRequestRuntime={refreshRuntime} onError={props.onError} canConnect={canConnect} canChangeState={canChangeState} canDelete={canDelete} canChangePlacement={canChangePlacement} onChangePlacement={setPlacementTarget} />)}
+      {workspaces.map((item) => <WorkspaceCard key={item.workspace.id} api={props.api} item={item} runtime={runtime[item.workspace.id]} nodePools={nodePools} busyAction={activeAction?.workspaceId === item.workspace.id ? activeAction.action : null} onAction={requestAction} onOpenShell={openShell} onRequestRuntime={refreshRuntime} onError={props.onError} canConnect={canConnect} canChangeState={canChangeState} canDelete={canDelete} canChangePlacement={canChangePlacement} onChangePlacement={setPlacementTarget} />)}
     </div>
     <WorkspacePlacementDialog item={placementTarget} nodePools={nodePools} busy={placementBusy} onClose={() => !placementBusy && setPlacementTarget(null)} onConfirm={(nextNodePool) => placementTarget && void submitPlacement(placementTarget, nextNodePool)} />
     <ConfirmDialog open={pendingAction !== null} title={pendingAction ? t(pendingAction.action) : ""} description={actionDescription} details={pendingAction?.item.workspace.name} confirmLabel={pendingAction ? t(pendingAction.action) : ""} cancelLabel={t("cancel")} busy={actionBusy} danger={pendingAction?.action === "delete"} onClose={() => !actionBusy && setPendingAction(null)} onConfirm={() => pendingAction && void executeAction(pendingAction.item, pendingAction.action)} />
@@ -344,6 +355,11 @@ export function WorkspacePanel(props: Props) {
 
 
 function currentCpu(runtime: WorkspaceRuntime | undefined) { return runtime ? aggregateRuntimeUsage(runtime).cpuMillis : null; }
+function actionNeedsConfirmation(action: Action, runtime: WorkspaceRuntime | undefined) {
+  if (action === "start") return false;
+  if (action === "stop" || action === "restart") return currentCpu(runtime) !== 0;
+  return true;
+}
 function workspaceIdBatches(ids: string[]) { return Array.from({ length: Math.ceil(ids.length / 100) }, (_, index) => ids.slice(index * 100, index * 100 + 100)); }
 function sameResources(left: Resources, right: Resources) { return left.cpu_millis === right.cpu_millis && left.memory_mib === right.memory_mib && left.disk_gib === right.disk_gib && left.gpu_count === right.gpu_count; }
 function errorMessage(error: unknown, fallback: string) { return error instanceof Error ? error.message : fallback; }

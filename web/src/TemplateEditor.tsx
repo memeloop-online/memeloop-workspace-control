@@ -171,12 +171,11 @@ export function TemplateEditor({ api, organizationId, templates, canGrantCluster
       </div>
     </AdminToolbar>
     <div className={styles.formGrid}>
-      <Card appearance="outline" className={styles.list} role="listbox" aria-label={t("templates")}>
+      <Card appearance="outline" className={styles.list}>
         {templates.map((template) => <Button
           key={template.id}
-          role="option"
-          aria-selected={selectedId === template.id}
           appearance={selectedId === template.id ? "primary" : "subtle"}
+          aria-pressed={selectedId === template.id}
           className={styles.listButton}
           onClick={() => selectTemplate(template)}
         >

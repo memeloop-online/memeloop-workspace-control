@@ -2,7 +2,7 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } fro
 import type { FormEvent } from "react";
 import { FluentProvider } from "@fluentui/react-components";
 import { ApiClient } from "./api";
-import { AppShell, EmptyOrganization, LoadingView, LoginScreen, type AppView } from "./design-system/AppShell";
+import { AppShell, EmptyOrganization, LoadingView, LoginScreen, type AppNotice, type AppView } from "./design-system/AppShell";
 import { darkTheme, lightTheme } from "./design-system/theme";
 import { WorkspacePanel } from "./WorkspacePanel";
 import { useI18n } from "./i18n";
@@ -38,7 +38,8 @@ export default function App() {
   const workspaceRequestGeneration = useRef(0);
   const [view, setView] = useState<AppView>("workspaces");
   const [loading, setLoading] = useState(Boolean(token));
-  const [notice, setNotice] = useState("");
+  const [notice, setNoticeState] = useState<AppNotice | null>(null);
+  const noticeSequence = useRef(0);
   const [fatal, setFatal] = useState("");
   const api = useMemo(() => new ApiClient(token), [token]);
   const organizationRole = principal?.memberships.find((membership) => membership.organization_id === organizationId)?.role;
@@ -63,6 +64,12 @@ export default function App() {
     setWorkspaces([]);
   }, [api, organizationId]);
 
+  const reportError = useCallback((errorMessage: string) => {
+    const value = errorMessage.trim();
+    if (!value) return;
+    setNoticeState({ id: ++noticeSequence.current, message: value, intent: "error" });
+  }, []);
+
   const refresh = useCallback(async () => {
     const requestedOrganizationId = organizationId;
     const requestGeneration = ++workspaceRequestGeneration.current;
@@ -78,11 +85,11 @@ export default function App() {
       setWorkspaces(page.items);
       setWorkspaceScope({ api, organizationId: requestedOrganizationId });
     } catch (error) {
-      if (requestGeneration === workspaceRequestGeneration.current) setNotice(message(error, t("requestFailed")));
+      if (requestGeneration === workspaceRequestGeneration.current) reportError(message(error, t("requestFailed")));
     } finally {
       if (requestGeneration === workspaceRequestGeneration.current) setLoading(false);
     }
-  }, [api, organizationId]);
+  }, [api, organizationId, reportError, t]);
 
   const refreshOrganizations = useCallback(async (preferredOrganizationId?: string) => {
     const [nextPrincipal, organizationPage] = await Promise.all([
@@ -140,12 +147,6 @@ export default function App() {
   }, [refresh]);
 
   useEffect(() => {
-    if (!notice) return;
-    const timer = window.setTimeout(() => setNotice(""), 5000);
-    return () => window.clearTimeout(timer);
-  }, [notice]);
-
-  useEffect(() => {
     const allowed = view === "administration" ? canOpenAdministration : canManageGlobalState || canManageOrganizationState;
     if ((view === "administration" || view === "audit" || view === "plugins") && !allowed) {
       setView("workspaces");
@@ -158,6 +159,7 @@ export default function App() {
     ApiClient.rememberToken(value);
     setToken(value);
     setFatal("");
+    setNoticeState(null);
   }
 
   function logout() {
@@ -170,6 +172,7 @@ export default function App() {
     setOrganizationId("");
     setWorkspaceScope(null);
     setWorkspaces([]);
+    setNoticeState(null);
   }
 
   const scopedWorkspaces = workspaceScope?.api === api && workspaceScope.organizationId === organizationId
@@ -200,17 +203,17 @@ export default function App() {
       <AppShell view={view} onViewChange={setView} locale={locale} setLocale={setLocale} themeMode={theme} onToggleTheme={() => setTheme(theme === "dark" ? "light" : "dark")} principal={principal} currentOrganization={currentOrganization} organizationRole={organizationRole} canOpenAdministration={canOpenAdministration} canManageGlobalState={canManageGlobalState} canManageOrganizationState={canManageOrganizationState} onLogout={logout} notice={notice} t={t}>
         <Suspense fallback={<LoadingView label={t("loading")} />}>
           {view === "settings" ? (
-            <SettingsPanel api={api} principal={principal} organizations={organizations} organizationId={organizationId} onOrganizationChange={selectOrganization} onProfileChanged={(profile) => setPrincipal((current) => current ? { ...current, ...profile } : current)} onError={setNotice} />
+            <SettingsPanel api={api} principal={principal} organizations={organizations} organizationId={organizationId} onOrganizationChange={selectOrganization} onProfileChanged={(profile) => setPrincipal((current) => current ? { ...current, ...profile } : current)} onError={reportError} />
           ) : view === "audit" ? (
-            <AuditPanel api={api} organizationId={organizationId} systemAdmin={canManageGlobalState} onError={setNotice} />
+            <AuditPanel api={api} organizationId={organizationId} systemAdmin={canManageGlobalState} onError={reportError} />
           ) : !organizationId ? <EmptyOrganization systemAdmin={canManageGlobalState} t={t} /> : view === "workspaces" ? (
-            <WorkspacePanel api={api} principal={principal} organizationId={organizationId} workspaces={scopedWorkspaces} busy={loading} onRefresh={refresh} onError={setNotice} />
+            <WorkspacePanel api={api} principal={principal} organizationId={organizationId} workspaces={scopedWorkspaces} busy={loading} onRefresh={refresh} onError={reportError} />
           ) : view === "injections" ? (
-            <InjectionPanel api={api} principal={principal} organizationId={organizationId} workspaces={scopedWorkspaces} onError={setNotice} />
+            <InjectionPanel api={api} principal={principal} organizationId={organizationId} workspaces={scopedWorkspaces} onError={reportError} />
           ) : view === "plugins" ? (
             <PluginPanel token={token} organizationId={organizationId} systemAdmin={canManageGlobalState} onOpenCredentials={() => setView("injections")} />
           ) : (
-            <AdminPanel api={api} principal={principal} organizationId={organizationId} onError={setNotice} onOrganizationsChanged={refreshOrganizations} />
+            <AdminPanel api={api} principal={principal} organizationId={organizationId} onError={reportError} onOrganizationsChanged={refreshOrganizations} />
           )}
         </Suspense>
       </AppShell>

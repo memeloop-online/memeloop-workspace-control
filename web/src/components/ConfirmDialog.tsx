@@ -21,6 +21,7 @@ interface ConfirmDialogProps {
   confirmLabel: string;
   cancelLabel: string;
   busy?: boolean;
+  confirmDisabled?: boolean;
   danger?: boolean;
   details?: ReactNode;
   onConfirm: () => void;
@@ -34,6 +35,7 @@ export function ConfirmDialog({
   confirmLabel,
   cancelLabel,
   busy = false,
+  confirmDisabled = false,
   danger = false,
   details,
   onConfirm,
@@ -51,7 +53,7 @@ export function ConfirmDialog({
           </DialogContent>
           <DialogActions>
             <Button appearance="secondary" disabled={busy} onClick={onClose}>{cancelLabel}</Button>
-            <Button appearance="primary" className={danger ? styles.danger : undefined} disabled={busy} onClick={onConfirm}>{confirmLabel}</Button>
+            <Button appearance="primary" className={danger ? styles.danger : undefined} disabled={busy || confirmDisabled} onClick={onConfirm}>{confirmLabel}</Button>
           </DialogActions>
         </DialogBody>
       </DialogSurface>

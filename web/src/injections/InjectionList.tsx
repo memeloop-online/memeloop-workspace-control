@@ -155,7 +155,7 @@ export function InjectionList({
           ) : undefined}
         />
       </div>
-      <div className={styles.results} role="listbox" aria-label={title} aria-busy={loading}>
+      <div className={styles.results} aria-busy={loading}>
         {loading && <Text className={styles.empty}>{t("loading")}</Text>}
         {!loading && filteredItems.length === 0 && <Text className={styles.empty}>{emptyLabel}</Text>}
         {!loading && filteredItems.map((item) => {
@@ -165,8 +165,7 @@ export function InjectionList({
               key={item.key}
               type="button"
               appearance="subtle"
-              role="option"
-              aria-selected={selected}
+              aria-pressed={selected}
               className={`${styles.row} ${selected ? styles.selected : ""}`}
               onClick={() => onSelect(item)}
             >
