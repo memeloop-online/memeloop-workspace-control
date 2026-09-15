@@ -14,7 +14,7 @@ use uuid::Uuid;
 use crate::{
     auth::Permission,
     injections::{InjectionItem, ResolvedInjectionSummary},
-    quota::{QuotaResources, Resources},
+    quota::QuotaResources,
     storage::{CreateWorkspace, IdempotencyDecision},
     workspaces::{Workspace, WorkspaceAction},
 };

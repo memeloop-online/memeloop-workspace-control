@@ -16,7 +16,7 @@ use super::super::{
 };
 
 #[utoipa::path(get, path = "/api/v1/admin/node-pools", responses((status = 200, body = [NodePool]), (status = 403, body = super::ErrorEnvelope)))]
-pub(super) async fn list(
+pub(crate) async fn list(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> Result<Json<Vec<NodePool>>, ApiError> {
@@ -28,7 +28,7 @@ pub(super) async fn list(
 }
 
 #[utoipa::path(put, path = "/api/v1/admin/node-pools/{name}", request_body = PutNodePool, params(("name" = String, Path), ("Idempotency-Key" = String, Header)), responses((status = 200, body = NodePool), (status = 403, body = super::ErrorEnvelope), (status = 409, body = super::ErrorEnvelope)))]
-pub(super) async fn put(
+pub(crate) async fn put(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Path(name): Path<String>,
@@ -85,7 +85,7 @@ pub(super) async fn put(
 }
 
 #[utoipa::path(delete, path = "/api/v1/admin/node-pools/{name}", params(("name" = String, Path)), responses((status = 204), (status = 403, body = super::ErrorEnvelope), (status = 409, body = super::ErrorEnvelope)))]
-pub(super) async fn delete(
+pub(crate) async fn delete(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Path(name): Path<String>,
