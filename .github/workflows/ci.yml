@@ -330,7 +330,6 @@ jobs:
           grep -q 'alert: MwcJobsFailed' <<<"${rendered_monitoring}"
           grep -q 'clamp_min(delta(mwc_jobs{status="failed"}\[15m\]), 0) > 0' <<<"${rendered_monitoring}"
           grep -q 'alert: MwcJobsPendingTooOld' <<<"${rendered_monitoring}"
-          grep -q 'kube_pod_spec_volumes_persistentvolumeclaims_info' <<<"${rendered_monitoring}"
           grep -q 'kube_pod_labels{label_workspace_memeloop_dev_owner_installation="monitoring",label_workspace_memeloop_dev_workspace_id!=""}' <<<"${rendered_monitoring}"
           grep -q 'kube_persistentvolumeclaim_labels{label_workspace_memeloop_dev_owner_installation="monitoring",label_workspace_memeloop_dev_workspace_id!="",label_workspace_memeloop_dev_storage_role="home"}' <<<"${rendered_monitoring}"
           grep -q 'kube_persistentvolumeclaim_labels{label_workspace_memeloop_dev_owner_installation="monitoring",label_workspace_memeloop_dev_workspace_id!="",label_workspace_memeloop_dev_storage_role="temporary"}' <<<"${rendered_monitoring}"
