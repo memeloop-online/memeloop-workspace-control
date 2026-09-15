@@ -332,7 +332,7 @@ function TemplateSelectorAutocomplete({ draft, update, templates }: { draft: Inj
         placeholder={t("allTemplates")}
         onChange={(event) => {
           const value = event.currentTarget.value;
-          if (!editingRef.current) selectedRef.current = selected;
+          if (!editingRef.current) selectedRef.current = selected ?? null;
           editingRef.current = true;
           setQuery(value);
           const match = findExact(value);
