@@ -68,7 +68,6 @@ export function AllowedNodePoolsPicker({ pools, selected, onChange, disabled = f
       id={id}
       className={styles.combobox}
       multiselect
-      editable
       disabled={disabled}
       placeholder={t("selectNodePools")}
       value={query || displayValue}
@@ -116,7 +115,6 @@ export function NodePoolSelect({ pools, allowed, value, onChange, disabled = fal
     <Combobox
       id={id}
       className={styles.combobox}
-      editable
       disabled={disabled}
       placeholder={placeholder ?? t("selectNodePool")}
       value={query || (value ? nodePoolDisplayName(pools, value) : "")}
