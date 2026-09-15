@@ -264,6 +264,11 @@ async fn public_listener_hides_metrics_but_internal_listener_serves_openmetrics(
     assert!(text.contains("mwc_jobs_max_active_attempts"));
     assert!(text.contains("# TYPE mwc_workspaces gauge"));
     assert!(text.contains("mwc_resource_requested{resource=\"cpu\",unit=\"millicores\"} 0"));
+    assert!(
+        text.contains(
+            "mwc_resource_requested{resource=\"temporary_storage\",unit=\"gibibytes\"} 0"
+        )
+    );
     assert!(text.ends_with("# EOF\n"));
 }
 

@@ -33,7 +33,7 @@ A generated test public key was added through the workspace injection API
 temporary directory, never in Git or Kubernetes, and was deleted after testing.
 
 The test template was subsequently updated through `PUT /api/v1/templates/{id}`
-to `scratch_medium: memory` (HTTP 200), and a separate list request returned the
+to `temporary_storage_gib: 22` (HTTP 200), and a separate list request returned the
 saved value. The existing workspace retains its original disk-backed template
 snapshot; restarting it alone does not apply template edits. The subsequent
 replacement test workspace captured the updated memory-backed template.

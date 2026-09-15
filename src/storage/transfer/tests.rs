@@ -12,6 +12,7 @@ fn workspace_short_identity_is_validated_before_import() {
         "organization_id": id, "owner_id": id, "name": "test", "template_id": id,
         "image": "example/dev:1", "access_mode": "internal", "state": "stopped",
         "cpu_millis": 1000, "memory_mib": 1024, "gpu_count": 0, "disk_gib": 10,
+        "temporary_storage_gib": 22, "node_pool": "default",
         "generation": 1, "created_at": 1, "updated_at": 1, "deleted_at": null,
         "template_snapshot_yaml": ""
     })];

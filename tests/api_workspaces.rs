@@ -16,7 +16,7 @@ use memeloop_workspace_control::{
     config::AppConfig,
     crypto::EnvelopeCipher,
     injections::InjectionScope,
-    quota::Resources,
+    quota::{QuotaResources, Resources},
     storage::{CreateWorkspaceTemplate, Database, InjectionScopeRef},
     templates::{WorkspaceTemplateDocument, WorkspaceTemplateSpec},
     workspaces::{AccessMode, WorkspaceObservation},
@@ -166,11 +166,12 @@ async fn authenticated_workspace_api_enforces_rbac_and_exact_idempotent_replay()
     database
         .set_organization_quota(
             organization_id,
-            Resources {
+            QuotaResources {
                 cpu_millis: 2_000,
                 memory_mib: 4_096,
                 gpu_count: 0,
                 disk_gib: 50,
+                temporary_storage_gib: 100,
             },
             2,
         )
@@ -484,11 +485,12 @@ async fn template_restricted_key_enforces_http_create_action_image_override_and_
     database
         .set_organization_quota(
             organization.id,
-            Resources {
+            QuotaResources {
                 cpu_millis: 4_000,
                 memory_mib: 8_192,
                 gpu_count: 0,
                 disk_gib: 100,
+                temporary_storage_gib: 100,
             },
             2,
         )

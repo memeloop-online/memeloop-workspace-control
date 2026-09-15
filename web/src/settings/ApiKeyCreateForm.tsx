@@ -1,4 +1,12 @@
 import type { FormEvent } from "react";
+import {
+  Button,
+  Field,
+  Input,
+  Subtitle2,
+  makeStyles,
+  tokens,
+} from "@fluentui/react-components";
 
 import type { ApiKeyScope, WorkspaceTemplate } from "../types";
 import type { MessageKey } from "../i18n";
@@ -24,6 +32,29 @@ interface Props {
   translate: (key: MessageKey) => string;
 }
 
+const useStyles = makeStyles({
+  root: {
+    display: "grid",
+    gap: tokens.spacingVerticalL,
+    padding: tokens.spacingHorizontalL,
+    border: `${tokens.strokeWidthThin} solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusMedium,
+    backgroundColor: tokens.colorNeutralBackground2,
+  },
+  fields: {
+    display: "grid",
+    gridTemplateColumns: "minmax(0, 1fr) minmax(220px, .7fr)",
+    gap: tokens.spacingHorizontalL,
+    "@media (max-width: 640px)": {
+      gridTemplateColumns: "1fr",
+    },
+  },
+  actions: {
+    display: "flex",
+    justifyContent: "flex-end",
+  },
+});
+
 export function ApiKeyCreateForm({
   name,
   scopes,
@@ -42,26 +73,21 @@ export function ApiKeyCreateForm({
   onSubmit,
   translate,
 }: Props) {
-  return <form className="api-key-create-form" onSubmit={onSubmit}>
-    <div className="api-key-create-heading">
-      <div>
-        <h4>{translate("createApiKey")}</h4>
-      </div>
-    </div>
-    <div className="api-key-create-fields">
-      <label>
-        <span>{translate("apiKeyName")}</span>
-        <input
+  const classes = useStyles();
+  return <form className={classes.root} onSubmit={onSubmit}>
+    <Subtitle2>{translate("createApiKey")}</Subtitle2>
+    <div className={classes.fields}>
+      <Field label={translate("apiKeyName")} required>
+        <Input
           maxLength={80}
           placeholder={translate("apiKeyNamePlaceholder")}
           required
           value={name}
           onChange={(event) => onNameChange(event.target.value)}
         />
-      </label>
-      <label>
-        <span>{translate("apiKeyExpires")}</span>
-        <input
+      </Field>
+      <Field label={translate("apiKeyExpires")} required>
+        <Input
           required
           type="datetime-local"
           min={localDateTime(new Date())}
@@ -69,7 +95,7 @@ export function ApiKeyCreateForm({
           value={expiresAt}
           onChange={(event) => onExpiresAtChange(event.target.value)}
         />
-      </label>
+      </Field>
     </div>
     <ApiKeyScopePicker
       legend={`${translate("apiKeyPermissions")} · ${translate("apiKeyPermissionsHelp")}`}
@@ -88,10 +114,10 @@ export function ApiKeyCreateForm({
       onRestrictedChange={onTemplateRestrictionChange}
       onSelectedChange={onAllowedTemplateIdsChange}
     />
-    <div className="api-key-create-actions">
-      <button className="button primary" disabled={creating || !name.trim() || !expiresAt || scopes.length === 0}>
+    <div className={classes.actions}>
+      <Button appearance="primary" type="submit" disabled={creating || !name.trim() || !expiresAt || scopes.length === 0}>
         {creating ? translate("saving") : translate("createApiKey")}
-      </button>
+      </Button>
     </div>
   </form>;
 }

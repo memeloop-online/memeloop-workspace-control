@@ -6,9 +6,10 @@ use axum::{
 };
 
 use super::{
-    AppState, admin, auth, catalog, diagnostics, events, health, injections, metrics, openapi,
-    organization_usage, organizations, plugins, port_mappings, ready, runtime, ssh, system_info,
-    ui, user_quota, web_shell, webhooks, workspace_image_update, workspaces,
+    AppState, admin, auth, catalog, diagnostics, events, health, injections, metrics, node_pools,
+    openapi, organization_usage, organizations, plugins, port_mappings, ready, runtime, ssh,
+    system_info, ui, user_quota, web_shell, webhooks, workspace_client_key, workspace_image_update,
+    workspace_placement, workspaces,
 };
 
 pub(super) fn router(state: Arc<AppState>) -> Router {
@@ -114,6 +115,11 @@ fn organization_routes(router: ApiRouter) -> ApiRouter {
         )
         .route("/api/v1/audit", get(admin::audit))
         .route("/api/v1/admin/scaling", get(admin::scaling))
+        .route("/api/v1/admin/node-pools", get(admin::list_node_pools))
+        .route(
+            "/api/v1/admin/node-pools/{name}",
+            axum::routing::put(admin::put_node_pool).delete(admin::delete_node_pool),
+        )
 }
 
 fn plugin_routes(router: ApiRouter) -> ApiRouter {
@@ -194,10 +200,19 @@ fn workspace_routes(router: ApiRouter) -> ApiRouter {
             "/api/v1/workspaces",
             get(workspaces::list).post(workspaces::create),
         )
+        .route("/api/v1/node-pools", get(node_pools::list_available))
         .route("/api/v1/workspaces/{workspace_id}", get(workspaces::get))
+        .route(
+            "/api/v1/workspaces/{workspace_id}/ssh-client-public-key",
+            get(workspace_client_key::get),
+        )
         .route(
             "/api/v1/workspaces/{workspace_id}/image",
             axum::routing::put(workspace_image_update::update),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/placement",
+            axum::routing::put(workspace_placement::update),
         )
         .route("/api/v1/workspace-runtimes", get(runtime::list))
         .route(

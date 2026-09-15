@@ -133,6 +133,10 @@ spec:
             - name: MWC_STORAGE_CLASS_NAME
               value: {{ .Values.workspace.storageClassName | quote }}
             {{- end }}
+            {{- if .Values.workspace.scratchStorageClassName }}
+            - name: MWC_SCRATCH_STORAGE_CLASS_NAME
+              value: {{ .Values.workspace.scratchStorageClassName | quote }}
+            {{- end }}
             - name: MWC_ENCRYPTION_KEY
               valueFrom:
                 secretKeyRef:

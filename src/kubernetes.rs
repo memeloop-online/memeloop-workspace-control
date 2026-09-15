@@ -58,10 +58,13 @@ use resource_helpers::{
 };
 use workspace_pod::WorkspacePod;
 
+pub use crate::workspaces::ResolvedPlacement;
+
 pub const OWNER_INSTALLATION_LABEL: &str = "workspace.memeloop.dev/owner-installation";
 pub const WORKSPACE_ID_LABEL: &str = "workspace.memeloop.dev/workspace-id";
 pub const ORGANIZATION_ID_LABEL: &str = "workspace.memeloop.dev/organization-id";
 pub const OWNER_USER_ID_LABEL: &str = "workspace.memeloop.dev/owner-user-id";
+pub const STORAGE_ROLE_LABEL: &str = "workspace.memeloop.dev/storage-role";
 /// Carries the immutable template identity into Prometheus' `kube_pod_labels`
 /// series so a template-restricted API key can never obtain an organization-wide
 /// aggregate and filter it after the fact.
@@ -80,7 +83,10 @@ pub struct ResourceBuilder {
     pub internet_egress: Option<InternetEgressConfig>,
     pub jump_host_namespace: String,
     pub jump_host_pod_labels: BTreeMap<String, String>,
+    /// StorageClass for the durable workspace Home PVC.
     pub storage_class_name: Option<String>,
+    /// Optional local CSI class for Pod-owned generic ephemeral scratch PVCs.
+    pub scratch_storage_class_name: Option<String>,
     pub web_shell_domain: Option<String>,
     pub port_mapping_domain: Option<String>,
     pub higress_gateway_name: String,
@@ -292,6 +298,14 @@ impl ResourceBuilder {
     }
 
     pub fn build(&self, workspace: &Workspace) -> Result<DesiredResources, BuildError> {
+        self.build_with_placement(workspace, &ResolvedPlacement::default())
+    }
+
+    pub fn build_with_placement(
+        &self,
+        workspace: &Workspace,
+        placement: &ResolvedPlacement,
+    ) -> Result<DesiredResources, BuildError> {
         if matches!(
             workspace.state,
             WorkspaceState::Deleting | WorkspaceState::Deleted
@@ -358,7 +372,14 @@ impl ResourceBuilder {
                 &labels,
                 cluster_access,
             ),
-            stateful_set: self.stateful_set(&names, &labels, &pod_labels, workspace, replicas),
+            stateful_set: self.stateful_set(
+                &names,
+                &labels,
+                &pod_labels,
+                workspace,
+                placement,
+                replicas,
+            ),
             network_policy: network_policy::build(
                 &names,
                 &labels,
@@ -551,9 +572,18 @@ impl ResourceBuilder {
         labels: &BTreeMap<String, String>,
         template_labels: &BTreeMap<String, String>,
         workspace: &Workspace,
+        placement: &ResolvedPlacement,
         replicas: i32,
     ) -> StatefulSet {
-        workload::stateful_set(self, runtime, labels, template_labels, workspace, replicas)
+        workload::stateful_set(
+            self,
+            runtime,
+            labels,
+            template_labels,
+            workspace,
+            placement,
+            replicas,
+        )
     }
 }
 

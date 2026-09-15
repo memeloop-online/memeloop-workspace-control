@@ -38,6 +38,11 @@ pub(super) fn operational_response(error: ApiError) -> ErrorResponse {
             "workspace_not_connectable",
             "new Web Shell and SSH authorization requires a ready workspace",
         ),
+        ApiError::WorkspaceClientKeyUnavailable => response(
+            StatusCode::NOT_FOUND,
+            "workspace_client_key_unavailable",
+            "the workspace client public key is unavailable",
+        ),
         ApiError::ProductNamespaceConflict => response(
             StatusCode::CONFLICT,
             "product_namespace_conflict",
@@ -186,6 +191,36 @@ fn workspace_storage_response(error: &StorageError) -> Option<ErrorResponse> {
             StatusCode::CONFLICT,
             "workspace_image_update_conflict",
             "workspace must be stopped and at the expected generation before its image can change",
+        ),
+        StorageError::InvalidNodePool => response(
+            StatusCode::BAD_REQUEST,
+            "invalid_node_pool",
+            "node pool name, display name, or private placement is invalid",
+        ),
+        StorageError::NodePoolNotFound => response(
+            StatusCode::NOT_FOUND,
+            "node_pool_not_found",
+            "node pool was not found",
+        ),
+        StorageError::NodePoolUnavailable => response(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "node_pool_unavailable",
+            "node pool is disabled or unavailable",
+        ),
+        StorageError::NodePoolNotAllowed => response(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "node_pool_not_allowed",
+            "node pool is not allowed by the workspace template",
+        ),
+        StorageError::NodePoolInUse => response(
+            StatusCode::CONFLICT,
+            "node_pool_in_use",
+            "disable the node pool and remove all template and workspace references before deleting it",
+        ),
+        StorageError::WorkspacePlacementUpdateConflict => response(
+            StatusCode::CONFLICT,
+            "workspace_placement_update_conflict",
+            "workspace must be stopped and at the expected generation before placement can change",
         ),
         StorageError::TemplateNotFound => response(
             StatusCode::UNPROCESSABLE_ENTITY,

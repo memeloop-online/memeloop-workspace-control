@@ -60,6 +60,7 @@ pub(super) async fn create_admitted_workspace(
         .database
         .create_workspace_with_admitted_template(AdmittedWorkspaceCreation {
             command: command.clone(),
+            node_pool: request.node_pool.as_deref(),
             inline_injections: inline,
             admitted_template_yaml: &template.yaml,
             allow_cluster_access: actor.may_manage_system(),
@@ -270,6 +271,7 @@ mod tests {
                 organization_injection_refs: None,
                 user_injection_refs: None,
             },
+            node_pool: None,
             inline_workspace_injections: Vec::new(),
         };
         let mut state = AppState::new(

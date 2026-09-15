@@ -1,9 +1,11 @@
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
-import { ConfirmDialog } from "./components/ConfirmDialog";
+import { Badge, Button, Caption1, Dialog, DialogBody, DialogContent, DialogSurface, DialogTitle, Field, Input, Text } from "@fluentui/react-components";
+import { AddRegular, ArrowSyncRegular, CopyRegular, DeleteRegular, DismissRegular, OpenRegular } from "@fluentui/react-icons";
 import { useI18n } from "./i18n";
 import type { MessageKey } from "./i18n";
 import { reserveWebShellWindow } from "./workspaceShell";
+import { useWorkspaceStyles } from "./workspaces/workspaceStyles";
 import {
   mappingUrl,
   parseInternalPort,
@@ -22,8 +24,7 @@ interface Props {
 /** Port forwarding controls rendered only for an active workspace. */
 export function WorkspacePortMappings({ api, workspaceId, workspaceReady, onError }: Props) {
   const { t } = useI18n();
-  const dialog = useRef<HTMLDialogElement>(null);
-  const titleId = useId();
+  const styles = useWorkspaceStyles();
   const loadingRef = useRef(false);
   const [items, setItems] = useState<PortMapping[]>([]);
   const [loading, setLoading] = useState(false);
@@ -57,8 +58,7 @@ export function WorkspacePortMappings({ api, workspaceId, workspaceReady, onErro
   }, [api, report, workspaceId]);
 
   function openDialog() {
-    if (dialog.current?.open) return;
-    dialog.current?.showModal();
+    if (dialogOpen) return;
     setDialogOpen(true);
     void load();
   }
@@ -105,34 +105,45 @@ export function WorkspacePortMappings({ api, workspaceId, workspaceReady, onErro
   }, [dialogOpen, items, load]);
 
   return <>
-    <button type="button" className="port-mappings-trigger" onClick={openDialog}>{t("portMappings")}</button>
-    <dialog ref={dialog} className="port-mappings-dialog" aria-labelledby={titleId} onClose={() => setDialogOpen(false)} onClick={(event) => {
-      if (event.target === dialog.current) dialog.current?.close();
-    }}>
-      <div className="port-mappings-dialog-content">
-        <header><h3 id={titleId}>{t("portMappings")}</h3><div className="port-mappings-header-actions"><button type="button" className="port-mappings-refresh" disabled={loading} onClick={() => void load()}>{loading ? t("portMappingRefreshing") : t("portMappingRefresh")}</button><button type="button" className="port-mappings-close" aria-label={t("close")} onClick={() => dialog.current?.close()}>×</button></div></header>
-        <p className="port-mappings-intro">{t("portMappingIntro")}</p>
-        <form className="port-mappings-form" onSubmit={(event) => void add(event)}>
-          <label>{t("internalPort")}<input disabled={!workspaceReady || saving} type="number" min={1} max={65535} step={1} required value={port} onChange={(event) => setPort(event.target.value)} placeholder={t("portMappingPortPlaceholder")} /></label>
-          <label>{t("displayNameOptional")}<input disabled={!workspaceReady || saving} value={displayName} maxLength={80} onChange={(event) => setDisplayName(event.target.value)} placeholder={t("portMappingNamePlaceholder")} /></label>
-          <small>{t("portMappingPortHelp")}</small>
-          {!workspaceReady && <small className="port-mappings-not-ready" role="status">{t("portMappingWorkspaceNotReady")}</small>}
-          <button type="submit" className="button primary" disabled={!workspaceReady || saving}>{saving ? t("portMappingAdding") : t("addMapping")}</button>
-        </form>
-        {error && <p className="port-mappings-error" role="alert">{error}</p>}
-        <section className="port-mappings-list" aria-live="polite">
-          {loading && <p>{t("portMappingsLoading")}</p>}
-          {!loading && !error && items.length === 0 && <p>{t("noPortMappings")}</p>}
-          {!loading && items.map((item) => <PortMappingRow key={item.id} api={api} workspaceId={workspaceId} workspaceReady={workspaceReady} item={item} deleting={deleting === item.id} onDelete={() => setPendingDelete(item)} onError={report} />)}
-        </section>
-      </div>
-    </dialog>
-    <ConfirmDialog open={pendingDelete !== null} title={t("delete")} description={t("portMappingDeleteConfirm")} confirmLabel={t("delete")} cancelLabel={t("cancel")} busy={deleting !== null} danger details={pendingDelete && <code>{pendingDelete.display_name || pendingDelete.internal_port}</code>} onClose={() => deleting === null && setPendingDelete(null)} onConfirm={() => void remove()} />
+    <Button type="button" appearance="outline" icon={<AddRegular />} onClick={openDialog}>{t("portMappings")}</Button>
+    <Dialog open={dialogOpen} onOpenChange={(_, data) => setDialogOpen(data.open)}>
+      <DialogSurface className={styles.dialogSurface}>
+        <DialogBody className={styles.dialogBody}>
+          <DialogTitle action={<div className={styles.toolbarGroup}><Button appearance="subtle" icon={<ArrowSyncRegular />} disabled={loading} onClick={() => void load()}>{loading ? t("portMappingRefreshing") : t("portMappingRefresh")}</Button><Button appearance="subtle" icon={<DismissRegular />} aria-label={t("close")} onClick={() => setDialogOpen(false)} /></div>}>{t("portMappings")}</DialogTitle>
+          <DialogContent className={styles.dialogBody}>
+            <Text>{t("portMappingIntro")}</Text>
+            <form className={styles.formGrid} onSubmit={(event) => void add(event)}>
+              <Field label={t("internalPort")} required><Input disabled={!workspaceReady || saving} type="number" min={1} max={65535} step={1} required value={port} onChange={(_, data) => setPort(data.value)} placeholder={t("portMappingPortPlaceholder")} /></Field>
+              <Field label={t("displayNameOptional")}><Input disabled={!workspaceReady || saving} value={displayName} maxLength={80} onChange={(_, data) => setDisplayName(data.value)} placeholder={t("portMappingNamePlaceholder")} /></Field>
+              <Caption1 className={styles.formWide}>{t("portMappingPortHelp")}</Caption1>
+              {!workspaceReady && <Caption1 className={styles.formWide} role="status">{t("portMappingWorkspaceNotReady")}</Caption1>}
+              <div className={`${styles.formActions} ${styles.formWide}`}><Button type="submit" appearance="primary" icon={<AddRegular />} disabled={!workspaceReady || saving}>{saving ? t("portMappingAdding") : t("addMapping")}</Button></div>
+            </form>
+            {error && <Text role="alert">{error}</Text>}
+            <section className={styles.portList} aria-live="polite">
+              {loading && <Text>{t("portMappingsLoading")}</Text>}
+              {!loading && !error && items.length === 0 && <Text>{t("noPortMappings")}</Text>}
+              {!loading && items.map((item) => <PortMappingRow key={item.id} api={api} workspaceId={workspaceId} workspaceReady={workspaceReady} item={item} deleting={deleting === item.id} onDelete={() => setPendingDelete(item)} onError={report} />)}
+            </section>
+          </DialogContent>
+        </DialogBody>
+      </DialogSurface>
+    </Dialog>
+    <Dialog open={pendingDelete !== null} onOpenChange={(_, data) => !deleting && !data.open && setPendingDelete(null)}>
+      <DialogSurface>
+        <DialogBody className={styles.dialogBody}>
+          <DialogTitle>{t("delete")}</DialogTitle>
+          <DialogContent className={styles.dialogBody}><Text>{t("portMappingDeleteConfirm")}</Text>{pendingDelete && <Text className={styles.code}>{pendingDelete.display_name || String(pendingDelete.internal_port)}</Text>}</DialogContent>
+          <div className={styles.dialogActions}><Button appearance="secondary" disabled={deleting !== null} onClick={() => setPendingDelete(null)}>{t("cancel")}</Button><Button appearance="primary" className={styles.dangerButton} disabled={deleting !== null} onClick={() => void remove()}>{deleting !== null ? t("deleting") : t("delete")}</Button></div>
+        </DialogBody>
+      </DialogSurface>
+    </Dialog>
   </>;
 }
 
 function PortMappingRow({ api, workspaceId, workspaceReady, item, deleting, onDelete, onError }: { api: PortMappingsApi; workspaceId: string; workspaceReady: boolean; item: PortMapping; deleting: boolean; onDelete: () => void; onError: (error: unknown) => void }) {
   const { t } = useI18n();
+  const styles = useWorkspaceStyles();
   const [copied, setCopied] = useState(false);
   const [opening, setOpening] = useState(false);
   const url = mappingUrl(item);
@@ -154,11 +165,9 @@ function PortMappingRow({ api, workspaceId, workspaceReady, item, deleting, onDe
     } catch (errorValue) { target?.close(); onError(errorValue); }
     finally { setOpening(false); }
   }
-  return <article className="port-mapping-row">
-    <div><strong>{item.display_name || `${t("portLabel")} ${item.internal_port}`}</strong><span>{t("internalPort")} <code>{item.internal_port}</code></span></div>
-    <span className={`port-mapping-status ${item.status}`}>{statusLabel(item.status, t)}</span>
-    {url ? <code className="port-mapping-url" tabIndex={0}>{url}</code> : <span className="port-mapping-unavailable">{t("portMappingAddressPending")}</span>}
-    <div className="port-mapping-actions"><button type="button" disabled={!workspaceReady || !url || opening || item.status !== "ready"} onClick={() => void open()}>{opening ? t("portMappingOpening") : t("open")}</button><button type="button" disabled={!url} onClick={() => void copy()}>{copied ? t("copied") : t("copyLink")}</button>{!item.managed && <button type="button" className="danger" disabled={deleting} onClick={onDelete}>{deleting ? t("deleting") : t("delete")}</button>}</div>
+  return <article className={styles.portRow}>
+    <div className={styles.portMain}><Text weight="semibold">{item.display_name || `${t("portLabel")} ${item.internal_port}`}</Text><Caption1>{t("internalPort")} <span className={styles.code}>{item.internal_port}</span></Caption1>{url ? <Text className={styles.code}>{url}</Text> : <Caption1>{t("portMappingAddressPending")}</Caption1>}</div>
+    <div className={styles.portActions}><Badge appearance="tint" color={item.status === "ready" ? "success" : item.status === "failed" ? "danger" : "informative"}>{statusLabel(item.status, t)}</Badge><Button type="button" appearance="secondary" icon={<OpenRegular />} disabled={!workspaceReady || !url || opening || item.status !== "ready"} onClick={() => void open()}>{opening ? t("portMappingOpening") : t("open")}</Button><Button type="button" appearance="subtle" icon={<CopyRegular />} disabled={!url} onClick={() => void copy()}>{copied ? t("copied") : t("copyLink")}</Button>{!item.managed && <Button type="button" appearance="subtle" icon={<DeleteRegular />} className={styles.dangerButton} disabled={deleting} onClick={onDelete}>{deleting ? t("deleting") : t("delete")}</Button>}</div>
   </article>;
 }
 

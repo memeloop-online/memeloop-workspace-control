@@ -39,31 +39,54 @@ fn query_enumerates_exact_namespace_and_pvc_pairs() {
 }
 
 #[test]
-fn telemetry_reports_available_stale_and_missing_states() {
+fn telemetry_reports_exact_stale_and_unavailable_coverage() {
     let sample = Sample {
         value: 100,
         observed_at: 1_000,
     };
     let values = StorageMetricBatch {
-        status: StorageTelemetryStatus::Available,
+        status: StorageTelemetryCoverage::Exact,
         used: BTreeMap::from([(("shared".to_owned(), "pvc-a".to_owned()), sample)]),
         capacity: BTreeMap::from([(("shared".to_owned(), "pvc-a".to_owned()), sample)]),
         available: BTreeMap::from([(("shared".to_owned(), "pvc-a".to_owned()), sample)]),
     };
     assert!(matches!(
-        values.telemetry("shared", "pvc-a", 1_100).status,
-        StorageTelemetryStatus::Available
+        values
+            .telemetry(
+                Some(&("shared".to_owned(), "pvc-a".to_owned())),
+                200,
+                StorageBacking::PersistentVolume,
+                1_100,
+            )
+            .coverage,
+        StorageTelemetryCoverage::Exact
     ));
     assert!(matches!(
-        values.telemetry("shared", "pvc-a", 2_000).status,
-        StorageTelemetryStatus::Stale
+        values
+            .telemetry(
+                Some(&("shared".to_owned(), "pvc-a".to_owned())),
+                200,
+                StorageBacking::PersistentVolume,
+                2_000,
+            )
+            .coverage,
+        StorageTelemetryCoverage::Stale
     ));
     assert!(matches!(
-        values.telemetry("shared", "pvc-b", 1_100).status,
-        StorageTelemetryStatus::Unavailable
+        values
+            .telemetry(None, 200, StorageBacking::NodeLocal, 1_100)
+            .coverage,
+        StorageTelemetryCoverage::Unavailable
     ));
     assert!(matches!(
-        values.telemetry("shared", "pvc-a", 1_100).pressure,
+        values
+            .telemetry(
+                Some(&("shared".to_owned(), "pvc-a".to_owned())),
+                200,
+                StorageBacking::PersistentVolume,
+                1_100,
+            )
+            .pressure,
         Some(StoragePressure::Critical)
     ));
 }

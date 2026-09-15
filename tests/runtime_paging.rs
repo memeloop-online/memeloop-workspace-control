@@ -15,7 +15,7 @@ use memeloop_workspace_control::{
     auth::Role,
     config::{AppConfig, InstallationId},
     crypto::EnvelopeCipher,
-    quota::Resources,
+    quota::{QuotaResources, Resources},
     storage::{CreateOrganization, CreateWorkspace, CreateWorkspaceTemplate, Database},
     templates::{WorkspaceTemplateDocument, WorkspaceTemplateSpec},
     workspaces::{AccessMode, WorkspaceAction, WorkspaceObservation},
@@ -129,11 +129,12 @@ async fn seeded_organization(
     database
         .set_organization_quota(
             organization.id,
-            Resources {
+            QuotaResources {
                 cpu_millis: 100_000,
                 memory_mib: 100_000,
                 gpu_count: 100,
                 disk_gib: 100_000,
+                temporary_storage_gib: 100_000,
             },
             now,
         )
@@ -497,6 +498,7 @@ async fn workspace_page_summary_covers_every_matching_workspace_not_only_the_cur
             "memory_mib": 6_144,
             "gpu_count": 0,
             "disk_gib": 60,
+            "temporary_storage_gib": 66,
         })
     );
     assert_eq!(first_page["summary"]["state_counts"]["provisioning"], 3);
@@ -538,6 +540,10 @@ async fn workspace_page_summary_covers_every_matching_workspace_not_only_the_cur
     assert_eq!(filtered["items"].as_array().unwrap().len(), 1);
     assert_eq!(filtered["summary"]["total_count"], 2);
     assert_eq!(filtered["summary"]["requested"]["cpu_millis"], 2_000);
+    assert_eq!(
+        filtered["summary"]["requested"]["temporary_storage_gib"],
+        44
+    );
     assert_eq!(filtered["summary"]["state_counts"]["provisioning"], 2);
 
     let empty = app
@@ -561,6 +567,7 @@ async fn workspace_page_summary_covers_every_matching_workspace_not_only_the_cur
             "memory_mib": 0,
             "gpu_count": 0,
             "disk_gib": 0,
+            "temporary_storage_gib": 0,
         })
     );
     assert_eq!(empty["summary"]["state_counts"], json!({}));
@@ -675,11 +682,12 @@ async fn workspace_usage_summary_aggregates_in_sql_and_honors_template_scope() {
     assert_eq!(summary.active_count, 2);
     assert_eq!(
         summary.requested,
-        Resources {
+        QuotaResources {
             cpu_millis: 2_500,
             memory_mib: 4_648,
             gpu_count: 3,
             disk_gib: 46,
+            temporary_storage_gib: 66,
         }
     );
     assert_eq!(summary.state_counts.get("stopped"), Some(&1));
@@ -693,6 +701,7 @@ async fn workspace_usage_summary_aggregates_in_sql_and_honors_template_scope() {
     assert_eq!(restricted.total_count, 2);
     assert_eq!(restricted.active_count, 1);
     assert_eq!(restricted.requested.cpu_millis, 2_200);
+    assert_eq!(restricted.requested.temporary_storage_gib, 44);
     assert_eq!(restricted.state_counts.len(), 2);
     assert_eq!(restricted.state_counts.get("stopped"), Some(&1));
     assert_eq!(restricted.state_counts.get("deleting"), Some(&1));
@@ -825,7 +834,7 @@ async fn organization_usage_summary_is_organization_wide_and_template_scoped() {
     assert_eq!(unrestricted["total_count"], 2);
     assert_eq!(
         unrestricted["requested"],
-        json!({"cpu_millis": 1300, "memory_mib": 2448, "gpu_count": 2, "disk_gib": 25})
+        json!({"cpu_millis": 1300, "memory_mib": 2448, "gpu_count": 2, "disk_gib": 25, "temporary_storage_gib": 44})
     );
     assert_eq!(unrestricted["state_counts"], json!({"provisioning": 2}));
     assert_eq!(
@@ -871,7 +880,7 @@ async fn organization_usage_summary_is_organization_wide_and_template_scoped() {
     assert_eq!(restricted["total_count"], 1);
     assert_eq!(
         restricted["requested"],
-        json!({"cpu_millis": 1000, "memory_mib": 2048, "gpu_count": 0, "disk_gib": 20})
+        json!({"cpu_millis": 1000, "memory_mib": 2048, "gpu_count": 0, "disk_gib": 20, "temporary_storage_gib": 22})
     );
     assert_eq!(restricted["state_counts"], json!({"provisioning": 1}));
     assert_eq!(
@@ -1008,11 +1017,12 @@ async fn postgres_workspace_page_summary_matches_the_filtered_collection() {
     assert_eq!(page.total_count, 2);
     assert_eq!(
         page.requested,
-        Resources {
+        QuotaResources {
             cpu_millis: 2_000,
             memory_mib: 4_096,
             gpu_count: 0,
             disk_gib: 40,
+            temporary_storage_gib: 44,
         }
     );
     assert_eq!(page.state_counts.get("provisioning"), Some(&2));
@@ -1025,11 +1035,12 @@ async fn postgres_workspace_page_summary_matches_the_filtered_collection() {
     assert_eq!(summary.active_count, 3);
     assert_eq!(
         summary.requested,
-        Resources {
+        QuotaResources {
             cpu_millis: 3_000,
             memory_mib: 6_144,
             gpu_count: 0,
             disk_gib: 60,
+            temporary_storage_gib: 66,
         }
     );
     assert_eq!(summary.state_counts.get("provisioning"), Some(&3));

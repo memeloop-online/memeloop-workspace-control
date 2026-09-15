@@ -16,6 +16,8 @@ sqlite:
 
 workspace:
   storageClassName: managed-delete
+  # Topology-aware local CSI class used by the single Pod-owned temporary-storage claim.
+  scratchStorageClassName: local-nvme-scratch
   ttydImage: tsl0922/ttyd:1.7.7
 
 jumpHost:

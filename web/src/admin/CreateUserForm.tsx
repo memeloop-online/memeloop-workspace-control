@@ -1,9 +1,19 @@
 import { useMemo, useState, type FormEvent } from "react";
+import {
+  Button,
+  Checkbox,
+  Field,
+  Input,
+  Option,
+  Select,
+  Text,
+} from "@fluentui/react-components";
 
 import type { ApiClient } from "../api";
 import { API_KEY_SCOPES, DEFAULT_USER_SCOPES, SYSTEM_ADMIN_SCOPES } from "../apiKeyScopes";
 import { useI18n } from "../i18n";
 import type { ApiKeyScope, Principal, Role } from "../types";
+import { AdminToolbar, SaveButton, useAdminStyles } from "./fluentAdmin";
 
 interface Props {
   api: ApiClient;
@@ -16,6 +26,7 @@ interface Props {
 
 export function CreateUserForm({ api, principal, organizationId, onCreated, onCancel, onError }: Props) {
   const { t } = useI18n();
+  const styles = useAdminStyles();
   const grantableScopes = useMemo(
     () => API_KEY_SCOPES.filter(({ scope }) => principal.api_key_scopes.includes(scope)),
     [principal.api_key_scopes],
@@ -29,9 +40,7 @@ export function CreateUserForm({ api, principal, organizationId, onCreated, onCa
   const [saving, setSaving] = useState(false);
 
   function toggleScope(scope: ApiKeyScope) {
-    setScopes((current) => current.includes(scope)
-      ? current.filter((item) => item !== scope)
-      : [...current, scope]);
+    setScopes((current) => current.includes(scope) ? current.filter((item) => item !== scope) : [...current, scope]);
   }
 
   function setAdministrator(value: boolean) {
@@ -64,16 +73,37 @@ export function CreateUserForm({ api, principal, organizationId, onCreated, onCa
     }
   }
 
-  return <form className="create-card create-user-form" onSubmit={(event) => void submit(event)}>
-    <label>{t("displayName")}<input required maxLength={120} value={displayName} onChange={(event) => setDisplayName(event.target.value)} /></label>
-    <label>{t("initialTokenPrompt")}<input required type="password" minLength={32} maxLength={512} autoComplete="new-password" value={token} onChange={(event) => setToken(event.target.value)} /></label>
-    <label>{t("apiKeyExpires")}<input required type="datetime-local" min={localDateTime(new Date())} max={localDateTime(new Date(Date.now() + 365 * 86_400_000))} value={expiresAt} onChange={(event) => setExpiresAt(event.target.value)} /></label>
-    <label className="check-row"><input type="checkbox" checked={systemAdmin} onChange={(event) => setAdministrator(event.target.checked)} />{t("systemAdmin")}</label>
-    <label>{t("role")}<select value={organizationRole} onChange={(event) => setOrganizationRole(event.target.value as Role)}><option value="member">{t("roleMember")}</option><option value="organization_admin">{t("roleOrganizationAdmin")}</option></select></label>
-    <fieldset className="wide"><legend>{t("apiKeyPermissions")}</legend><div className="create-user-scope-grid">
-      {grantableScopes.map(({ scope, label }) => <label key={scope}><input type="checkbox" checked={scopes.includes(scope)} onChange={() => toggleScope(scope)} />{t(label)}</label>)}
-    </div></fieldset>
-    <div className="form-actions wide"><button className="button" type="button" disabled={saving} onClick={onCancel}>{t("cancel")}</button><button className="button primary" disabled={saving || !displayName.trim() || token.length < 32 || !expiresAt || scopes.length === 0}>{saving ? t("saving") : t("createUser")}</button></div>
+  return <form className={styles.stack} onSubmit={(event) => void submit(event)}>
+    <div className={styles.formGrid}>
+      <Field label={t("displayName")} required>
+        <Input value={displayName} onChange={(event) => setDisplayName(event.target.value)} />
+      </Field>
+      <Field label={t("initialTokenPrompt")} required>
+        <Input type="password" minLength={32} maxLength={512} autoComplete="new-password" value={token} onChange={(event) => setToken(event.target.value)} />
+      </Field>
+      <Field label={t("apiKeyExpires")} required>
+        <Input type="datetime-local" min={localDateTime(new Date())} max={localDateTime(new Date(Date.now() + 365 * 86_400_000))} value={expiresAt} onChange={(event) => setExpiresAt(event.target.value)} />
+      </Field>
+      <Field label={t("role")}>
+        <Select value={organizationRole} onChange={(event) => setOrganizationRole(event.target.value as Role)}>
+          <Option value="member">{t("roleMember")}</Option>
+          <Option value="organization_admin">{t("roleOrganizationAdmin")}</Option>
+        </Select>
+      </Field>
+    </div>
+    <Checkbox checked={systemAdmin} onChange={(_, data) => setAdministrator(Boolean(data.checked))} label={t("systemAdmin")} />
+    <div className={styles.stack}>
+      <Text weight="semibold">{t("apiKeyPermissions")}</Text>
+      <div className={styles.formGrid}>
+        {grantableScopes.map(({ scope, label }) => <Checkbox key={scope} checked={scopes.includes(scope)} onChange={() => toggleScope(scope)} label={t(label)} />)}
+      </div>
+    </div>
+    <AdminToolbar action={<div className={styles.actions}>
+      <Button type="button" appearance="secondary" disabled={saving} onClick={onCancel}>{t("cancel")}</Button>
+      <SaveButton type="submit" disabled={saving || !displayName.trim() || token.length < 32 || !expiresAt || scopes.length === 0}>{saving ? t("saving") : t("createUser")}</SaveButton>
+    </div>}>
+      <Text size={300}>{t("apiKeyExpires")}: {expiresAt}</Text>
+    </AdminToolbar>
   </form>;
 }
 

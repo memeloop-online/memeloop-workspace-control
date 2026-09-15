@@ -1,19 +1,43 @@
 import { useEffect, useState } from "react";
+import {
+  Button,
+  DataGrid,
+  DataGridBody,
+  DataGridCell,
+  DataGridHeader,
+  DataGridHeaderCell,
+  DataGridRow,
+  Dialog,
+  DialogActions,
+  DialogBody,
+  DialogContent,
+  DialogSurface,
+  DialogTitle,
+  Field,
+  Input,
+  Option,
+  Select,
+  Spinner,
+  Text,
+} from "@fluentui/react-components";
+import type { TableColumnDefinition } from "@fluentui/react-components";
+import { AddRegular, OpenRegular, SaveRegular } from "@fluentui/react-icons";
+
 import { CreateUserForm } from "./admin/CreateUserForm";
 import { workspaceStateCounts } from "./admin/workspaceSummary";
+import { AdminCard, AdminToolbar, SaveButton, useAdminStyles } from "./admin/fluentAdmin";
 import type { ApiClient } from "./api";
-import { OrganizationManager } from "./OrganizationManager";
 import { ConfirmDialog } from "./components/ConfirmDialog";
-import { FormDialog } from "./components/FormDialog";
 import { canManageOrganization, canManageSystem } from "./permissions";
 import { UsersDirectory } from "./UsersDirectory";
 import { useI18n } from "./i18n";
+import { OrganizationManager } from "./OrganizationManager";
 import { TemplateEditor } from "./TemplateEditor";
 import type {
   ImagePolicy,
   Organization,
   Principal,
-  Resources,
+  QuotaResources,
   ScalingStatus,
   WebhookSubscription,
   WorkspaceSummary,
@@ -25,9 +49,10 @@ interface ResourceDraft {
   memory_mib: string;
   gpu_count: string;
   disk_gib: string;
+  temporary_storage_gib: string;
 }
 
-const DEFAULT_QUOTA: Resources = { cpu_millis: 4000, memory_mib: 8192, gpu_count: 0, disk_gib: 100 };
+const DEFAULT_QUOTA: QuotaResources = { cpu_millis: 4000, memory_mib: 8192, gpu_count: 0, disk_gib: 100, temporary_storage_gib: 200 };
 
 interface AdminPanelProps {
   api: ApiClient;
@@ -39,15 +64,16 @@ interface AdminPanelProps {
 
 export function AdminPanel({ api, principal, organizationId, onError, onOrganizationsChanged }: AdminPanelProps) {
   const { t } = useI18n();
+  const styles = useAdminStyles();
   const [organizations, setOrganizations] = useState<Organization[]>([]);
   const [images, setImages] = useState<ImagePolicy[]>([]);
   const [templates, setTemplates] = useState<WorkspaceTemplate[]>([]);
   const [webhooks, setWebhooks] = useState<WebhookSubscription[]>([]);
   const [scaling, setScaling] = useState<ScalingStatus | null>(null);
-  const [quota, setQuota] = useState<Resources | null>(null);
+  const [quota, setQuota] = useState<QuotaResources | null>(null);
   const [image, setImage] = useState("");
   const [organizationName, setOrganizationName] = useState("");
-  const [currentOrganizationName, setCurrentOrganizationName] = useState("");
+  const [newOrganizationName, setNewOrganizationName] = useState("");
   const [editingQuota, setEditingQuota] = useState(false);
   const [quotaDraft, setQuotaDraft] = useState<ResourceDraft>(() => resourceDraft(DEFAULT_QUOTA));
   const [directoryVersion, setDirectoryVersion] = useState(0);
@@ -60,6 +86,7 @@ export function AdminPanel({ api, principal, organizationId, onError, onOrganiza
   const [webhookUrl, setWebhookUrl] = useState("");
   const [webhookSecret, setWebhookSecret] = useState("");
   const [dialogBusy, setDialogBusy] = useState(false);
+  const [loading, setLoading] = useState(true);
   const canManageQuota = canManageOrganization(principal, organizationId, "manage_organization");
   const canManageMembers = canManageOrganization(principal, organizationId, "manage_members");
   const canManageGlobalState = canManageSystem(principal);
@@ -67,11 +94,12 @@ export function AdminPanel({ api, principal, organizationId, onError, onOrganiza
   const states = workspaceStateCounts(workspaceSummary);
 
   async function refresh() {
+    setLoading(true);
     try {
       const [managedResources, organizationPage, workspacePage] = await Promise.all([
         canManageQuota
           ? Promise.all([api.quota(organizationId), api.templates(organizationId), api.webhooks(organizationId)])
-          : Promise.resolve([null, [], []] as [Resources | null, WorkspaceTemplate[], WebhookSubscription[]]),
+          : Promise.resolve([null, [], []] as [QuotaResources | null, WorkspaceTemplate[], WebhookSubscription[]]),
         api.organizationsPage({ limit: 200 }),
         api.workspacesPage(organizationId, { limit: 1 }),
       ]);
@@ -89,13 +117,15 @@ export function AdminPanel({ api, principal, organizationId, onError, onOrganiza
       }
     } catch (error) {
       onError(message(error, t("requestFailed")));
+    } finally {
+      setLoading(false);
     }
   }
 
   useEffect(() => { void refresh(); }, [api, organizationId, canManageGlobalState, canManageQuota]);
 
   useEffect(() => {
-    setCurrentOrganizationName(currentOrganization?.name ?? "");
+    setOrganizationName(currentOrganization?.name ?? "");
   }, [currentOrganization?.id, currentOrganization?.name]);
 
   async function allowImage() {
@@ -110,8 +140,8 @@ export function AdminPanel({ api, principal, organizationId, onError, onOrganiza
 
   async function createOrganization() {
     try {
-      const organization = await api.createOrganization(organizationName.trim());
-      setOrganizationName("");
+      const organization = await api.createOrganization(newOrganizationName.trim());
+      setNewOrganizationName("");
       await onOrganizationsChanged(organization.id);
     } catch (error) {
       onError(message(error, t("requestFailed")));
@@ -119,7 +149,7 @@ export function AdminPanel({ api, principal, organizationId, onError, onOrganiza
   }
 
   async function saveOrganization() {
-    const nextName = currentOrganizationName.trim();
+    const nextName = organizationName.trim();
     if (!nextName || nextName === currentOrganization?.name) return;
     try {
       await api.updateOrganization(organizationId, nextName);
@@ -191,128 +221,74 @@ export function AdminPanel({ api, principal, organizationId, onError, onOrganiza
     }
   }
 
-  return <section className="panel-stack">
-    <div className="section-heading">
-      <h2>{t("administrationTitle")}</h2>
-      <a className="button" href="/api/v1/openapi.json" target="_blank" rel="noreferrer">{t("openApi")}</a>
+  return <div className={styles.page}>
+    <AdminToolbar action={<Button as="a" href="/api/v1/openapi.json" target="_blank" rel="noreferrer" icon={<OpenRegular />}>{t("openApi")}</Button>}>
+      <div className={styles.stack}><Text size={600} weight="semibold">{t("administrationTitle")}</Text><Text className={styles.muted}>{currentOrganization?.name ?? t("organizationUnavailable")}</Text></div>
+      {loading && <Spinner size="tiny" label={t("loading")} />}
+    </AdminToolbar>
+
+    <div className={styles.sectionGrid}>
+      <IdentityQuotaCard quota={quota} principal={principal} canManageQuota={canManageQuota} editingQuota={editingQuota} quotaDraft={quotaDraft} onEdit={() => setEditingQuota(true)} onCancel={() => setEditingQuota(false)} onSave={() => void saveQuota()} onDraftChange={setQuotaDraft} />
+      <AdminCard title={t("workspaceState")}>
+        <DataGrid items={Object.entries(states) as [string, number][]} columns={stateColumns(t)}>
+          <DataGridHeader><DataGridRow<[string, number]>>{(column) => <DataGridHeaderCell>{column.renderHeaderCell()}</DataGridHeaderCell>}</DataGridRow></DataGridHeader>
+          <DataGridBody<[string, number]>>{({ item }) => <DataGridRow<[string, number]>>{(column) => <DataGridCell>{column.renderCell(item)}</DataGridCell>}</DataGridRow>}</DataGridBody>
+        </DataGrid>
+      </AdminCard>
+      {scaling && <AdminCard title={t("scaling")}><dl className={styles.stack}><div><Text weight="semibold">{t("database")}</Text><Text>{scaling.database_mode}</Text></div><div><Text weight="semibold">{t("replicas")}</Text><Text>{scaling.configured_replicas}</Text></div><div><Text weight="semibold">{t("jobs")}</Text><Text>{scaling.jobs.pending} {t("pendingJobs")} · {scaling.jobs.running} {t("runningJobs")}</Text></div><div><Text weight="semibold">{t("schema")}</Text><Text>v{scaling.schema_version}</Text></div></dl></AdminCard>}
+      <OrganizationManager organization={currentOrganization} organizationName={organizationName} newOrganizationName={newOrganizationName} canCreate={canManageGlobalState} canEdit={canManageQuota} canDelete={canManageGlobalState} onOrganizationNameChange={setOrganizationName} onNewOrganizationNameChange={setNewOrganizationName} onSave={() => void saveOrganization()} onDelete={() => setConfirmOrganizationDelete(true)} onCreate={() => void createOrganization()} />
+
+      {canManageMembers && <div className={styles.wide}><AdminCard title={t("usersRoles")} action={canManageGlobalState ? <Button icon={<AddRegular />} onClick={() => setShowCreateUser((visible) => !visible)}>{showCreateUser ? t("collapse") : t("createUser")}</Button> : undefined}>{canManageGlobalState && showCreateUser && <CreateUserForm api={api} principal={principal} organizationId={organizationId} onCancel={() => setShowCreateUser(false)} onError={onError} onCreated={async () => { setShowCreateUser(false); setDirectoryVersion((value) => value + 1); await refresh(); }} />}<UsersDirectory api={api} organizationId={organizationId} principal={principal} canManageUsers={canManageGlobalState} canEditQuota={canManageGlobalState} refreshVersion={directoryVersion} onError={onError} onEditQuota={(userId) => void editUserQuota(userId)} /></AdminCard></div>}
+      {canManageGlobalState && <div className={styles.wide}><ImageAllowlist images={images} image={image} onImageChange={setImage} onAllow={() => void allowImage()} /></div>}
+      {canManageQuota && <div className={styles.wide}><AdminCard title={t("templates")}><TemplateEditor api={api} organizationId={organizationId} templates={templates} canGrantClusterAccess={canManageGlobalState} onRefresh={refresh} onError={onError} /></AdminCard></div>}
+      {canManageQuota && <div className={styles.wide}><AdminCard title={t("webhook")} action={<Button icon={<AddRegular />} onClick={() => setShowWebhookForm(true)}>{t("addWebhook")}</Button>}><DataGrid items={webhooks} columns={webhookColumns(t)}><DataGridHeader><DataGridRow<WebhookSubscription>>{(column) => <DataGridHeaderCell>{column.renderHeaderCell()}</DataGridHeaderCell>}</DataGridRow></DataGridHeader><DataGridBody<WebhookSubscription>>{({ item }) => <DataGridRow<WebhookSubscription>>{(column) => <DataGridCell>{column.renderCell(item)}</DataGridCell>}</DataGridRow>}</DataGridBody></DataGrid>{webhooks.length === 0 && <Text>{t("noWebhooks")}</Text>}</AdminCard></div>}
     </div>
 
-    <div className="system-grid">
-      <IdentityQuotaCard
-        principal={principal}
-        quota={quota}
-        canManageQuota={canManageQuota}
-        editingQuota={editingQuota}
-        quotaDraft={quotaDraft}
-        onEdit={() => setEditingQuota(true)}
-        onCancel={() => setEditingQuota(false)}
-        onSave={() => void saveQuota()}
-        onDraftChange={setQuotaDraft}
-      />
-      <div className="system-card">
-        <h3>{t("workspaceState")}</h3>
-        <div className="state-bars">{Object.entries(states).map(([state, count]) => <div key={state}><span>{workspaceStateLabel(state, t)}</span><strong>{count}</strong></div>)}</div>
-      </div>
-      {scaling && <div className="system-card"><h3>{t("scaling")}</h3><dl><dt>{t("database")}</dt><dd>{scaling.database_mode}</dd><dt>{t("replicas")}</dt><dd>{scaling.configured_replicas}</dd><dt>{t("jobs")}</dt><dd>{scaling.jobs.pending} {t("pendingJobs")} · {scaling.jobs.running} {t("runningJobs")}</dd><dt>{t("schema")}</dt><dd>v{scaling.schema_version}</dd></dl></div>}
-
-      <OrganizationManager
-        organization={currentOrganization}
-        organizationName={currentOrganizationName}
-        newOrganizationName={organizationName}
-        canCreate={canManageGlobalState}
-        canEdit={canManageQuota}
-        canDelete={canManageGlobalState}
-        onOrganizationNameChange={setCurrentOrganizationName}
-        onNewOrganizationNameChange={setOrganizationName}
-        onSave={() => void saveOrganization()}
-        onDelete={() => setConfirmOrganizationDelete(true)}
-        onCreate={() => void createOrganization()}
-      />
-
-      {canManageMembers && <>
-        <div className="system-card wide">
-          <div className="card-heading"><h3>{t("usersRoles")}</h3>{canManageGlobalState && <button className="button" onClick={() => setShowCreateUser((visible) => !visible)}>{showCreateUser ? t("collapse") : t("createUser")}</button>}</div>
-          {canManageGlobalState && showCreateUser && <CreateUserForm api={api} principal={principal} organizationId={organizationId} onCancel={() => setShowCreateUser(false)} onError={onError} onCreated={async () => { setShowCreateUser(false); setDirectoryVersion((value) => value + 1); await refresh(); }} />}
-          <UsersDirectory api={api} organizationId={organizationId} principal={principal} canManageUsers={canManageGlobalState} canEditQuota={canManageGlobalState} refreshVersion={directoryVersion} onError={onError} onEditQuota={(userId) => void editUserQuota(userId)} />
-        </div>
-      </>}
-      {canManageGlobalState && <ImageAllowlist images={images} image={image} onImageChange={setImage} onAllow={() => void allowImage()} />}
-
-      {canManageQuota && <div className="system-card wide template-system-card"><TemplateEditor api={api} organizationId={organizationId} templates={templates} canGrantClusterAccess={canManageGlobalState} onRefresh={refresh} onError={onError} /></div>}
-      {canManageQuota && <div className="system-card wide"><h3>{t("webhook")}</h3><button className="button" onClick={() => setShowWebhookForm(true)}>{t("addWebhook")}</button>{webhooks.length ? <div className="state-bars">{webhooks.map((hook) => <div key={hook.id}><span>{hook.event_prefix}</span><code>{hook.url}</code></div>)}</div> : <p>{t("noWebhooks")}</p>}</div>}
-    </div>
     <ConfirmDialog open={confirmOrganizationDelete} title={t("deleteOrganization")} description={t("deleteOrganizationConfirm")} confirmLabel={t("deleteOrganization")} cancelLabel={t("cancel")} busy={dialogBusy} danger details={currentOrganization && <strong>{currentOrganization.name}</strong>} onClose={() => setConfirmOrganizationDelete(false)} onConfirm={() => void deleteOrganization()} />
-    <FormDialog open={userQuotaTarget !== null} title={t("editUserQuota")} submitLabel={t("saveQuota")} cancelLabel={t("cancel")} busy={dialogBusy} onClose={() => setUserQuotaTarget(null)} onSubmit={() => void saveUserQuota()}>
-      <div className="form-dialog-grid">
-        <ResourceInput label={t("userCpuQuotaPrompt")} value={userQuotaDraft.cpu_millis} min={100} step={100} onChange={(cpu_millis) => setUserQuotaDraft({ ...userQuotaDraft, cpu_millis })} />
-        <ResourceInput label={t("userMemoryQuotaPrompt")} value={userQuotaDraft.memory_mib} min={128} step={128} onChange={(memory_mib) => setUserQuotaDraft({ ...userQuotaDraft, memory_mib })} />
-        <ResourceInput label={t("userGpuQuotaPrompt")} value={userQuotaDraft.gpu_count} min={0} step={1} onChange={(gpu_count) => setUserQuotaDraft({ ...userQuotaDraft, gpu_count })} />
-        <ResourceInput label={t("userDiskQuotaPrompt")} value={userQuotaDraft.disk_gib} min={1} step={1} onChange={(disk_gib) => setUserQuotaDraft({ ...userQuotaDraft, disk_gib })} />
-      </div>
-    </FormDialog>
-    <FormDialog open={showWebhookForm} title={t("addWebhook")} submitLabel={t("addWebhook")} cancelLabel={t("cancel")} busy={dialogBusy} onClose={() => setShowWebhookForm(false)} onSubmit={() => void newWebhook()}>
-      <label>{t("webhookUrlPrompt")}<input type="url" required value={webhookUrl} onChange={(event) => setWebhookUrl(event.target.value)} placeholder="https://example.com/hooks/workspace" /></label>
-      <label>{t("webhookSecretPrompt")}<input type="password" required minLength={32} autoComplete="new-password" value={webhookSecret} onChange={(event) => setWebhookSecret(event.target.value)} /></label>
-    </FormDialog>
-  </section>;
+    <Dialog open={userQuotaTarget !== null} onOpenChange={(_, data) => { if (!data.open && !dialogBusy) setUserQuotaTarget(null); }}><DialogSurface><DialogBody><DialogTitle>{t("editUserQuota")}</DialogTitle><DialogContent className={styles.dialogBody}><div className={styles.formGrid}><ResourceInput label={t("userCpuQuotaPrompt")} value={userQuotaDraft.cpu_millis} min={100} step={100} onChange={(cpu_millis) => setUserQuotaDraft({ ...userQuotaDraft, cpu_millis })} /><ResourceInput label={t("userMemoryQuotaPrompt")} value={userQuotaDraft.memory_mib} min={128} step={128} onChange={(memory_mib) => setUserQuotaDraft({ ...userQuotaDraft, memory_mib })} /><ResourceInput label={t("userGpuQuotaPrompt")} value={userQuotaDraft.gpu_count} min={0} step={1} onChange={(gpu_count) => setUserQuotaDraft({ ...userQuotaDraft, gpu_count })} /><ResourceInput label={t("userDiskQuotaPrompt")} value={userQuotaDraft.disk_gib} min={1} step={1} onChange={(disk_gib) => setUserQuotaDraft({ ...userQuotaDraft, disk_gib })} /><ResourceInput label={t("userTemporaryStorageQuotaPrompt")} value={userQuotaDraft.temporary_storage_gib} min={0} step={1} onChange={(temporary_storage_gib) => setUserQuotaDraft({ ...userQuotaDraft, temporary_storage_gib })} /></div></DialogContent><DialogActions><Button appearance="secondary" disabled={dialogBusy} onClick={() => setUserQuotaTarget(null)}>{t("cancel")}</Button><SaveButton disabled={dialogBusy} onClick={() => void saveUserQuota()}>{dialogBusy ? t("saving") : t("saveQuota")}</SaveButton></DialogActions></DialogBody></DialogSurface></Dialog>
+    <Dialog open={showWebhookForm} onOpenChange={(_, data) => setShowWebhookForm(data.open)}><DialogSurface><DialogBody><DialogTitle>{t("addWebhook")}</DialogTitle><DialogContent className={styles.dialogBody}><Field label={t("webhookUrlPrompt")} required><Input type="url" value={webhookUrl} onChange={(event) => setWebhookUrl(event.target.value)} placeholder="https://example.com/hooks/workspace" /></Field><Field label={t("webhookSecretPrompt")} required><Input type="password" minLength={32} autoComplete="new-password" value={webhookSecret} onChange={(event) => setWebhookSecret(event.target.value)} /></Field></DialogContent><DialogActions><Button appearance="secondary" disabled={dialogBusy} onClick={() => setShowWebhookForm(false)}>{t("cancel")}</Button><SaveButton icon={<SaveRegular />} disabled={dialogBusy || !webhookUrl.trim() || webhookSecret.length < 32} onClick={() => void newWebhook()}>{dialogBusy ? t("saving") : t("addWebhook")}</SaveButton></DialogActions></DialogBody></DialogSurface></Dialog>
+  </div>;
+}
+
+function IdentityQuotaCard({ principal, quota, canManageQuota, editingQuota, quotaDraft, onEdit, onCancel, onSave, onDraftChange }: { principal: Principal; quota: QuotaResources | null; canManageQuota: boolean; editingQuota: boolean; quotaDraft: ResourceDraft; onEdit: () => void; onCancel: () => void; onSave: () => void; onDraftChange: (draft: ResourceDraft) => void }) {
+  const { t } = useI18n();
+  const styles = useAdminStyles();
+  return <AdminCard title={t("identityQuota")}><dl className={styles.stack}><div><Text weight="semibold">{t("user")}</Text><Text>{principal.display_name}</Text></div><div><Text weight="semibold">{t("systemAdmin")}</Text><Text>{principal.system_admin ? t("enabled") : t("disabled")}</Text></div><div><Text weight="semibold">{t("orgQuota")}</Text><Text>{quota ? `${quota.cpu_millis}m / ${quota.memory_mib}Mi / ${quota.disk_gib}Gi / ${quota.gpu_count} ${t("gpu")} / ${quota.temporary_storage_gib}Gi ${t("temporaryStorage")}` : t("notEnabled")}</Text></div></dl>{editingQuota ? <div className={styles.stack}><div className={styles.formGrid}><ResourceInput label={`${t("cpu")} (m)`} value={quotaDraft.cpu_millis} min={100} step={100} onChange={(cpu_millis) => onDraftChange({ ...quotaDraft, cpu_millis })} /><ResourceInput label={`${t("memory")} (MiB)`} value={quotaDraft.memory_mib} min={128} step={128} onChange={(memory_mib) => onDraftChange({ ...quotaDraft, memory_mib })} /><ResourceInput label={t("gpu")} value={quotaDraft.gpu_count} min={0} step={1} onChange={(gpu_count) => onDraftChange({ ...quotaDraft, gpu_count })} /><ResourceInput label={`${t("disk")} (GiB)`} value={quotaDraft.disk_gib} min={1} step={1} onChange={(disk_gib) => onDraftChange({ ...quotaDraft, disk_gib })} /><ResourceInput label={`${t("temporaryStorage")} (GiB)`} value={quotaDraft.temporary_storage_gib} min={0} step={1} onChange={(temporary_storage_gib) => onDraftChange({ ...quotaDraft, temporary_storage_gib })} /></div><div className={styles.actions}><SaveButton onClick={onSave}>{t("saveQuota")}</SaveButton><Button appearance="secondary" onClick={onCancel}>{t("cancel")}</Button></div></div> : <Button disabled={!canManageQuota} title={canManageQuota ? undefined : t("noQuotaPermission")} onClick={onEdit}>{t("editQuota")}</Button>}</AdminCard>;
 }
 
 function ResourceInput({ label, value, min, step, onChange }: { label: string; value: string; min: number; step: number; onChange: (value: string) => void }) {
-  return <label>{label}<input type="number" inputMode="numeric" required min={min} step={step} value={value} onChange={(event) => onChange(event.target.value)} /></label>;
-}
-
-function IdentityQuotaCard({
-  principal,
-  quota,
-  canManageQuota,
-  editingQuota,
-  quotaDraft,
-  onEdit,
-  onCancel,
-  onSave,
-  onDraftChange,
-}: {
-  principal: Principal;
-  quota: Resources | null;
-  canManageQuota: boolean;
-  editingQuota: boolean;
-  quotaDraft: ResourceDraft;
-  onEdit: () => void;
-  onCancel: () => void;
-  onSave: () => void;
-  onDraftChange: (draft: ResourceDraft) => void;
-}) {
-  const { t } = useI18n();
-  return <div className="system-card">
-    <h3>{t("identityQuota")}</h3>
-    <dl><dt>{t("user")}</dt><dd>{principal.display_name}</dd><dt>{t("systemAdmin")}</dt><dd>{principal.system_admin ? t("enabled") : t("disabled")}</dd><dt>{t("orgQuota")}</dt><dd>{quota ? `${quota.cpu_millis}m / ${quota.memory_mib}Mi / ${quota.disk_gib}Gi / ${quota.gpu_count} ${t("gpu")}` : t("notEnabled")}</dd></dl>
-    {editingQuota ? <div className="quota-editor">
-      <label>{t("cpu")} (m)<input type="number" inputMode="numeric" min="100" step="100" value={quotaDraft.cpu_millis} onChange={(event) => onDraftChange({ ...quotaDraft, cpu_millis: event.target.value })} /></label>
-      <label>{t("memory")} (MiB)<input type="number" inputMode="numeric" min="128" step="128" value={quotaDraft.memory_mib} onChange={(event) => onDraftChange({ ...quotaDraft, memory_mib: event.target.value })} /></label>
-      <label>{t("gpu")}<input type="number" inputMode="numeric" min="0" step="1" value={quotaDraft.gpu_count} onChange={(event) => onDraftChange({ ...quotaDraft, gpu_count: event.target.value })} /></label>
-      <label>{t("disk")} (GiB)<input type="number" inputMode="numeric" min="1" step="1" value={quotaDraft.disk_gib} onChange={(event) => onDraftChange({ ...quotaDraft, disk_gib: event.target.value })} /></label>
-      <div className="quota-actions"><button className="button primary" onClick={onSave}>{t("saveQuota")}</button><button className="button" onClick={onCancel}>{t("cancel")}</button></div>
-    </div> : <><button className="button" disabled={!canManageQuota} title={canManageQuota ? undefined : t("noQuotaPermission")} onClick={onEdit}>{t("editQuota")}</button>{!canManageQuota && <p className="security-note">{t("noQuotaPermission")}</p>}</>}
-  </div>;
+  return <Field label={label} required><Input type="number" inputMode="numeric" min={min} step={step} value={value} onChange={(event) => onChange(event.target.value)} /></Field>;
 }
 
 function ImageAllowlist({ images, image, onImageChange, onAllow }: { images: ImagePolicy[]; image: string; onImageChange: (value: string) => void; onAllow: () => void }) {
   const { t } = useI18n();
-  return <div className="system-card"><h3>{t("imageAllowlist")}</h3><label>{t("ociImage")}<input value={image} onChange={(event) => onImageChange(event.target.value)} placeholder={t("imagePlaceholder")} /></label><button className="button" disabled={!image.trim()} onClick={onAllow}>{t("allowImage")}</button><div className="state-bars">{images.map((item) => <div key={item.image}><code>{item.image}</code><strong>{item.enabled ? t("enabled") : t("disabled")}</strong></div>)}</div></div>;
+  const styles = useAdminStyles();
+  return <AdminCard title={t("imageAllowlist")} action={<SaveButton icon={<SaveRegular />} disabled={!image.trim()} onClick={onAllow}>{t("allowImage")}</SaveButton>}><Field label={t("ociImage")}><Input value={image} onChange={(event) => onImageChange(event.target.value)} placeholder={t("imagePlaceholder")} /></Field><div className={styles.table}><DataGrid items={images} columns={imageColumns(t)}><DataGridHeader><DataGridRow<ImagePolicy>>{(column) => <DataGridHeaderCell>{column.renderHeaderCell()}</DataGridHeaderCell>}</DataGridRow></DataGridHeader><DataGridBody<ImagePolicy>>{({ item }) => <DataGridRow<ImagePolicy>>{(column) => <DataGridCell>{column.renderCell(item)}</DataGridCell>}</DataGridRow>}</DataGridBody></DataGrid></div></AdminCard>;
+}
+
+function stateColumns(t: ReturnType<typeof useI18n>["t"]): TableColumnDefinition<[string, number]>[] {
+  return [
+    { columnId: "state", compare: (a, b) => a[0].localeCompare(b[0]), renderHeaderCell: () => t("workspaceState"), renderCell: (item) => workspaceStateLabel(item[0], t) },
+    { columnId: "count", compare: (a, b) => a[1] - b[1], renderHeaderCell: () => t("stateCount"), renderCell: (item) => item[1] },
+  ];
+}
+
+function webhookColumns(t: ReturnType<typeof useI18n>["t"]): TableColumnDefinition<WebhookSubscription>[] {
+  return [
+    { columnId: "webhook", compare: (a, b) => a.event_prefix.localeCompare(b.event_prefix), renderHeaderCell: () => t("webhook"), renderCell: (item) => item.event_prefix },
+    { columnId: "url", compare: (a, b) => a.url.localeCompare(b.url), renderHeaderCell: () => t("webhookUrlPrompt"), renderCell: (item) => item.url },
+  ];
+}
+
+function imageColumns(t: ReturnType<typeof useI18n>["t"]): TableColumnDefinition<ImagePolicy>[] {
+  return [
+    { columnId: "image", compare: (a, b) => a.image.localeCompare(b.image), renderHeaderCell: () => t("ociImage"), renderCell: (item) => item.image },
+    { columnId: "enabled", compare: (a, b) => Number(a.enabled) - Number(b.enabled), renderHeaderCell: () => t("enabled"), renderCell: (item) => item.enabled ? t("enabled") : t("disabled") },
+  ];
 }
 
 function workspaceStateLabel(state: string, t: (key: "stateProvisioning" | "stateReady" | "stateStopping" | "stateStopped" | "stateStarting" | "stateRestarting" | "stateDeleting" | "stateDeleted" | "stateFailed") => string) {
-  const labels = {
-    provisioning: "stateProvisioning",
-    ready: "stateReady",
-    stopping: "stateStopping",
-    stopped: "stateStopped",
-    starting: "stateStarting",
-    restarting: "stateRestarting",
-    deleting: "stateDeleting",
-    deleted: "stateDeleted",
-    failed: "stateFailed",
-  } as const;
+  const labels = { provisioning: "stateProvisioning", ready: "stateReady", stopping: "stateStopping", stopped: "stateStopped", starting: "stateStarting", restarting: "stateRestarting", deleting: "stateDeleting", deleted: "stateDeleted", failed: "stateFailed" } as const;
   return state in labels ? t(labels[state as keyof typeof labels]) : state;
 }
 
@@ -322,22 +298,12 @@ function message(error: unknown, fallback: string) {
 
 class InvalidResourceDraft extends Error {}
 
-function resourceDraft(resources: Resources): ResourceDraft {
-  return {
-    cpu_millis: String(resources.cpu_millis),
-    memory_mib: String(resources.memory_mib),
-    gpu_count: String(resources.gpu_count),
-    disk_gib: String(resources.disk_gib),
-  };
+function resourceDraft(resources: QuotaResources): ResourceDraft {
+  return { cpu_millis: String(resources.cpu_millis), memory_mib: String(resources.memory_mib), gpu_count: String(resources.gpu_count), disk_gib: String(resources.disk_gib), temporary_storage_gib: String(resources.temporary_storage_gib) };
 }
 
-function parseResourceDraft(draft: ResourceDraft): Resources {
-  return {
-    cpu_millis: parseResourceValue(draft.cpu_millis, 100, 100),
-    memory_mib: parseResourceValue(draft.memory_mib, 128, 128),
-    gpu_count: parseResourceValue(draft.gpu_count, 0, 1),
-    disk_gib: parseResourceValue(draft.disk_gib, 1, 1),
-  };
+function parseResourceDraft(draft: ResourceDraft): QuotaResources {
+  return { cpu_millis: parseResourceValue(draft.cpu_millis, 100, 100), memory_mib: parseResourceValue(draft.memory_mib, 128, 128), gpu_count: parseResourceValue(draft.gpu_count, 0, 1), disk_gib: parseResourceValue(draft.disk_gib, 1, 1), temporary_storage_gib: parseResourceValue(draft.temporary_storage_gib, 0, 1) };
 }
 
 function parseResourceValue(value: string, min: number, step: number) {

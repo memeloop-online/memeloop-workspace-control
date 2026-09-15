@@ -466,6 +466,7 @@ mod tests {
             owner_id: Uuid::now_v7(),
             name: "desktop".to_owned(),
             template_id: None,
+            node_pool: "default".to_owned(),
             runtime: crate::workspace_runtime::WorkspaceRuntimeIdentity,
             template,
             state: crate::workspaces::WorkspaceState::Ready,

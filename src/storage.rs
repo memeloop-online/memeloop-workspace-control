@@ -22,9 +22,11 @@ mod job_types;
 mod leases;
 mod metrics_store;
 mod migration;
+mod node_pool_store;
 mod plugin_package_store;
 mod plugin_store;
 mod port_mappings;
+mod runtime_incidents;
 mod schema;
 mod ssh_access;
 mod ssh_identity;
@@ -38,6 +40,7 @@ mod workspace_admission;
 mod workspace_events;
 mod workspace_image_update;
 mod workspace_injection_refs;
+mod workspace_placement_update;
 mod workspace_store;
 
 pub use admin_store::{
@@ -52,12 +55,16 @@ pub use image_policy_store::ImagePolicy;
 pub use injection_store::{InjectionScopeRef, StoredInjectionSummary};
 pub use job_types::{ClaimedJob, NewJob};
 pub use metrics_store::{JobCounts, UserWorkspaceMetrics, WorkspaceMetrics};
+pub use node_pool_store::{AvailableNodePool, NodePool, PutNodePool};
 pub use plugin_package_store::{
     ConfirmPluginInstall, CreatePluginUiSession, PluginAssetBlob, PluginInstallInspection,
     PluginPackageRecord, PluginUiSession, StorePluginInspection,
 };
 pub use plugin_store::{PluginConfigurationWrite, StoredPluginConfiguration};
 pub use port_mappings::{IssuedPortMappingTicket, PortMapping, hash_secret, validate_http_port};
+pub use runtime_incidents::{
+    NewWorkspaceRuntimeIncident, RuntimeEventCategory, WorkspaceRuntimeIncident,
+};
 pub use ssh_access::SshAccessCandidate;
 pub use ssh_identity::{WorkspaceSshIdentity, WorkspaceSshPublicIdentity};
 pub use template_store::{CreateWorkspaceTemplate, WorkspaceTemplate};

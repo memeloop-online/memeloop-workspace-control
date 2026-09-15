@@ -1,4 +1,22 @@
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
+import {
+  Button,
+  Dialog,
+  DialogActions,
+  DialogBody,
+  DialogContent,
+  DialogSurface,
+  DialogTitle,
+  Field,
+  Input,
+  MessageBar,
+  MessageBarBody,
+  Tab,
+  TabList,
+  makeStyles,
+  shorthands,
+  tokens,
+} from "@fluentui/react-components";
 import { useI18n } from "../i18n";
 import type { PluginApi } from "./api";
 import type { PluginInspection, PluginManifest, PluginSourceKind } from "./types";
@@ -6,14 +24,16 @@ import { isGithubRepository, isSha256 } from "./viewModel";
 
 type InstallMethod = "file" | "url" | "github_release";
 
-export function PluginInstaller({ api, updateTarget, onInspected, onClose }: {
-  api: PluginApi;
-  updateTarget: PluginManifest | null;
-  onInspected: (inspection: PluginInspection) => void;
-  onClose: () => void;
-}) {
+const useStyles = makeStyles({
+  content: { display: "grid", gap: tokens.spacingVerticalM, minWidth: 0 },
+  form: { display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: tokens.spacingVerticalM, "@media (max-width: 620px)": { gridTemplateColumns: "1fr" } },
+  wide: { gridColumn: "1 / -1", "@media (max-width: 620px)": { gridColumn: "auto" } },
+  fileInput: { boxSizing: "border-box", width: "100%", minHeight: "32px", padding: tokens.spacingVerticalXS, color: tokens.colorNeutralForeground1, backgroundColor: tokens.colorNeutralBackground1, ...shorthands.border("1px", "solid", tokens.colorNeutralStroke1), ...shorthands.borderRadius(tokens.borderRadiusMedium) },
+});
+
+export function PluginInstaller({ api, updateTarget, onInspected, onClose }: { api: PluginApi; updateTarget: PluginManifest | null; onInspected: (inspection: PluginInspection) => void; onClose: () => void }) {
+  const styles = useStyles();
   const { t } = useI18n();
-  const dialog = useRef<HTMLDialogElement>(null);
   const initialMethod = installMethod(updateTarget?.source_kind);
   const [method, setMethod] = useState<InstallMethod>(initialMethod);
   const [manifest, setManifest] = useState<File | null>(null);
@@ -26,8 +46,6 @@ export function PluginInstaller({ api, updateTarget, onInspected, onClose }: {
   const [sha256, setSha256] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-
-  useEffect(() => { dialog.current?.showModal(); return () => dialog.current?.close(); }, []);
 
   async function inspect() {
     setBusy(true); setError("");
@@ -50,48 +68,47 @@ export function PluginInstaller({ api, updateTarget, onInspected, onClose }: {
       onInspected(inspection);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : t("pluginRequestFailed"));
-    } finally {
-      setBusy(false);
-    }
+    } finally { setBusy(false); }
   }
 
-  return <dialog ref={dialog} className="plugin-dialog plugin-install-dialog" aria-labelledby="plugin-install-title" onCancel={onClose} onClose={onClose}>
-    <div className="plugin-dialog-heading"><div><p className="eyebrow">{updateTarget ? updateTarget.id : t("pluginsTitle")}</p><h2 id="plugin-install-title">{updateTarget ? t("pluginUpdateTitle") : t("pluginInstallTitle")}</h2></div><button type="button" className="dialog-close" aria-label={t("pluginCloseDialog")} onClick={onClose}>×</button></div>
-    <div className="install-method-tabs" role="tablist" aria-label={t("pluginInstallMethod")}>
-      {(["file", "url", "github_release"] as const).map((value) => <button key={value} type="button" role="tab" aria-selected={method === value} className={method === value ? "active" : ""} onClick={() => setMethod(value)}>{t(methodLabel(value))}</button>)}
-    </div>
-    {error && <div className="error-banner" role="alert">{error}</div>}
-    <form className="plugin-install-form" onSubmit={(event) => { event.preventDefault(); void inspect(); }}>
-      {method === "file" ? <>
-        <label>{t("pluginManifestFile")}<input type="file" accept="application/json,.json" required onChange={(event) => setManifest(event.target.files?.[0] ?? null)} /><small>{t("pluginManifestFileHelp")}</small></label>
-        <label>{t("pluginComponentFile")}<input type="file" onChange={(event) => setComponent(event.target.files?.[0] ?? null)} /><small>{t("pluginComponentFileHelp")}</small></label>
-        <label className="wide">{t("pluginAssetFiles")}<input type="file" multiple onChange={(event) => setAssets(Array.from(event.target.files ?? []))} /><small>{t("pluginAssetFilesHelp")}</small></label>
-      </> : method === "url" ? <>
-        <label className="wide">{t("pluginPackageUrl")}<input type="url" required value={url} onChange={(event) => setUrl(event.target.value)} placeholder="https://plugins.example.com/example.mwc-plugin" /></label>
-        <DigestField value={sha256} onChange={setSha256} />
-      </> : <>
-        <label>{t("pluginGithubRepository")}<input required value={repository} onChange={(event) => setRepository(event.target.value)} placeholder="owner/repository" /></label>
-        <label>{t("pluginGithubTag")}<input required value={tag} onChange={(event) => setTag(event.target.value)} placeholder="v1.2.0" /></label>
-        <label>{t("pluginGithubAsset")}<input required value={asset} onChange={(event) => setAsset(event.target.value)} placeholder="example.mwc-plugin" /></label>
-        <DigestField value={sha256} onChange={setSha256} />
-      </>}
-      <div className="plugin-dialog-actions wide"><button className="button primary" type="submit" disabled={busy}>{busy ? t("pluginInspecting") : t("pluginReviewInstall")}</button><button className="button" type="button" onClick={onClose}>{t("cancel")}</button></div>
-    </form>
-  </dialog>;
+  return <Dialog open onOpenChange={(_, data) => !data.open && onClose()}>
+    <DialogSurface>
+      <DialogBody>
+        <DialogTitle action={<Button appearance="subtle" aria-label={t("pluginCloseDialog")} onClick={onClose}>×</Button>}>{updateTarget ? t("pluginUpdateTitle") : t("pluginInstallTitle")}</DialogTitle>
+        <DialogContent className={styles.content}>
+          <TabList selectedValue={method} onTabSelect={(_, data) => setMethod(data.value as InstallMethod)} aria-label={t("pluginInstallMethod")}>
+            <Tab value="file">{t("pluginInstallFile")}</Tab><Tab value="url">{t("pluginInstallUrl")}</Tab><Tab value="github_release">{t("pluginInstallGithub")}</Tab>
+          </TabList>
+          {error && <MessageBar intent="error"><MessageBarBody>{error}</MessageBarBody></MessageBar>}
+          <form className={styles.form} onSubmit={(event) => { event.preventDefault(); void inspect(); }}>
+            {method === "file" ? <>
+              <Field label={t("pluginManifestFile")} hint={t("pluginManifestFileHelp")} required><input className={styles.fileInput} type="file" accept="application/json,.json" required onChange={(event) => setManifest(event.target.files?.[0] ?? null)} /></Field>
+              <Field label={t("pluginComponentFile")} hint={t("pluginComponentFileHelp")}><input className={styles.fileInput} type="file" onChange={(event) => setComponent(event.target.files?.[0] ?? null)} /></Field>
+              <Field className={styles.wide} label={t("pluginAssetFiles")} hint={t("pluginAssetFilesHelp")}><input className={styles.fileInput} type="file" multiple onChange={(event) => setAssets(Array.from(event.target.files ?? []))} /></Field>
+            </> : method === "url" ? <>
+              <Field className={styles.wide} label={t("pluginPackageUrl")} required><Input type="url" required value={url} onChange={(_, data) => setUrl(data.value)} placeholder="https://plugins.example.com/example.mwc-plugin" /></Field>
+              <DigestField value={sha256} onChange={setSha256} wide />
+            </> : <>
+              <Field label={t("pluginGithubRepository")} required><Input required value={repository} onChange={(_, data) => setRepository(data.value)} placeholder="owner/repository" /></Field>
+              <Field label={t("pluginGithubTag")} required><Input required value={tag} onChange={(_, data) => setTag(data.value)} placeholder="v1.2.0" /></Field>
+              <Field label={t("pluginGithubAsset")} required><Input required value={asset} onChange={(_, data) => setAsset(data.value)} placeholder="example.mwc-plugin" /></Field>
+              <DigestField value={sha256} onChange={setSha256} />
+            </>}
+            <DialogActions className={styles.wide}><Button appearance="primary" type="submit" disabled={busy}>{busy ? t("pluginInspecting") : t("pluginReviewInstall")}</Button><Button type="button" onClick={onClose}>{t("cancel")}</Button></DialogActions>
+          </form>
+        </DialogContent>
+      </DialogBody>
+    </DialogSurface>
+  </Dialog>;
 }
 
-function DigestField({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+function DigestField({ value, onChange, wide = false }: { value: string; onChange: (value: string) => void; wide?: boolean }) {
+  const styles = useStyles();
   const { t } = useI18n();
-  return <label>{t("pluginExpectedSha256")}<input required minLength={64} maxLength={64} pattern="[0-9a-fA-F]{64}" value={value} onChange={(event) => onChange(event.target.value)} placeholder="64-character SHA-256" /><small>{t("pluginExpectedSha256Help")}</small></label>;
+  return <Field className={wide ? styles.wide : undefined} label={t("pluginExpectedSha256")} hint={t("pluginExpectedSha256Help")} required><Input required minLength={64} maxLength={64} pattern="[0-9a-fA-F]{64}" value={value} onChange={(_, data) => onChange(data.value)} placeholder="64-character SHA-256" /></Field>;
 }
 
 function installMethod(source: PluginSourceKind | undefined): InstallMethod {
   if (source === "url" || source === "github_release") return source;
   return "file";
-}
-
-function methodLabel(method: InstallMethod): "pluginInstallFile" | "pluginInstallUrl" | "pluginInstallGithub" {
-  if (method === "url") return "pluginInstallUrl";
-  if (method === "github_release") return "pluginInstallGithub";
-  return "pluginInstallFile";
 }

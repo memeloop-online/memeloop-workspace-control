@@ -64,8 +64,13 @@ impl WorkspaceReconcileHandler {
                 &identity,
             )
             .map_err(job_error)?;
+        let placement = self
+            .database
+            .resolve_workspace_placement(&workspace.node_pool)
+            .await
+            .map_err(job_error)?;
         self.coordinator
-            .reconcile_with_injections(workspace, materialization, ssh_identity)
+            .reconcile_with_injections(workspace, &placement, materialization, ssh_identity)
             .await
             .map_err(job_error)?;
         self.database

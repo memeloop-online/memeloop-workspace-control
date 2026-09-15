@@ -22,6 +22,7 @@ mod events;
 mod idempotency;
 mod injections;
 mod metrics;
+mod node_pools;
 mod organization_usage;
 mod organizations;
 mod plugins;
@@ -33,8 +34,10 @@ mod ui;
 mod user_quota;
 mod web_shell;
 mod webhooks;
+mod workspace_client_key;
 mod workspace_creation;
 mod workspace_image_update;
+mod workspace_placement;
 mod workspace_response;
 mod workspaces;
 
@@ -241,6 +244,9 @@ async fn system_info(State(state): State<Arc<AppState>>) -> Json<SystemInfoRespo
         user_quota::set,
         admin::audit,
         admin::scaling,
+        admin::list_node_pools,
+        admin::put_node_pool,
+        admin::delete_node_pool,
         plugins::lifecycle::list_packages,
         plugins::get_configuration,
         plugins::put_configuration,
@@ -255,11 +261,14 @@ async fn system_info(State(state): State<Arc<AppState>>) -> Json<SystemInfoRespo
         workspaces::create,
         workspaces::list,
         workspaces::get,
+        node_pools::list_available,
+        workspace_client_key::get,
         runtime::list,
         runtime::get,
         organization_usage::get,
         workspaces::action,
         workspace_image_update::update,
+        workspace_placement::update,
         port_mappings::list,
         port_mappings::create,
         port_mappings::open,
@@ -288,6 +297,9 @@ async fn system_info(State(state): State<Arc<AppState>>) -> Json<SystemInfoRespo
         crate::storage::ApiKeySummary,
         crate::storage::ApiKeyPage,
         crate::storage::JobCounts,
+        crate::storage::AvailableNodePool,
+        crate::storage::NodePool,
+        crate::storage::PutNodePool,
         crate::storage::PortMapping,
         crate::storage::ImagePolicy,
         crate::storage::WorkspaceTemplate,
@@ -297,14 +309,18 @@ async fn system_info(State(state): State<Arc<AppState>>) -> Json<SystemInfoRespo
         crate::storage::CreateWorkspace,
         workspaces::CreateWorkspaceRequest,
         workspace_image_update::UpdateWorkspaceImageRequest,
+        workspace_placement::UpdateWorkspacePlacementRequest,
         crate::workspaces::Workspace,
         crate::workspaces::WorkspaceState,
         crate::workspaces::AccessMode,
+        crate::workspaces::ResolvedPlacement,
         crate::templates::WorkspaceTemplateDocument,
         crate::templates::WorkspaceTemplateSpec,
         crate::templates::WorkspaceStoragePolicy,
+        crate::templates::WorkspacePlacement,
         crate::templates::PodResourceRequest,
         crate::quota::Resources,
+        crate::quota::QuotaResources,
         crate::injections::InjectionItem,
         crate::injections::InjectionValue,
         crate::injections::InjectionKind,
@@ -321,14 +337,17 @@ async fn system_info(State(state): State<Arc<AppState>>) -> Json<SystemInfoRespo
         workspaces::WorkspaceResponse,
         workspaces::WorkspaceResponsePage,
         workspaces::WorkspaceSshConnection,
+        workspace_client_key::WorkspaceClientPublicKey,
         workspaces::WorkspaceAppSshConnection,
         workspaces::SshPortStrategy,
         runtime::WorkspaceRuntimeResponse,
         runtime::WorkspaceRuntimeEntry,
         organization_usage::OrganizationUsageSummary,
         runtime::StorageTelemetry,
-        runtime::StorageTelemetryStatus,
+        runtime::StorageTelemetryCoverage,
+        runtime::StorageBacking,
         runtime::StoragePressure,
+        runtime::RuntimeEventCategory,
         runtime::PodRuntime,
         runtime::PodMetric,
         runtime::PodEvent,

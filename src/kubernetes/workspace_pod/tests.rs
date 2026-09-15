@@ -91,15 +91,89 @@ fn workspace_init_container_reuses_workspace_resource_requirements() {
             .requests
             .as_ref()
             .and_then(|values| values.get("ephemeral-storage")),
-        Some(&Quantity("2048Mi".to_owned()))
+        Some(&Quantity("512Mi".to_owned()))
     );
     assert_eq!(
         init_resources
             .limits
             .as_ref()
             .and_then(|values| values.get("ephemeral-storage")),
-        Some(&Quantity("14592Mi".to_owned()))
+        Some(&Quantity("2048Mi".to_owned()))
     );
+}
+
+#[test]
+fn scratch_capacity_does_not_inflate_local_ephemeral_storage_limits() {
+    let mut template = template();
+    template.storage_policy.temporary_storage_gib = 256;
+
+    let limits = WorkspacePod::from_template(&template).resource_limits();
+    assert_eq!(
+        limits.get("ephemeral-storage"),
+        Some(&Quantity("2048Mi".to_owned()))
+    );
+}
+
+#[test]
+fn scratch_init_prepares_only_enabled_top_level_subpaths() {
+    let mut template = template();
+    template.buildkit = false;
+    let container =
+        WorkspacePod::from_template(&template).workspace_scratch_init_container(&template.image);
+
+    assert_eq!(container.name, "workspace-scratch-init");
+    let mount = &container.volume_mounts.as_ref().unwrap()[0];
+    assert_eq!(mount.name, "workspace-scratch");
+    assert_eq!(mount.mount_path, "/var/lib/mwc/workspace-scratch");
+    assert!(mount.sub_path.is_none());
+    let environment = container.env.as_ref().unwrap();
+    assert!(environment.iter().any(|variable| {
+        variable.name == "MWC_BUILDKIT_ENABLED" && variable.value.as_deref() == Some("false")
+    }));
+    let script = &container.args.as_ref().unwrap()[0];
+    assert!(script.contains("workspace-cache"));
+    assert!(script.contains("codex-session-scratch"));
+    assert!(script.contains("if [ \"$MWC_BUILDKIT_ENABLED\" = true ]"));
+    assert!(script.contains("prepare_directory \"$scratch_root/build-cache\" 1000 1000"));
+    assert!(!script.contains("chown -R"));
+}
+
+#[test]
+fn buildkit_disabled_omits_its_scratch_mount() {
+    let mut template = template();
+    template.buildkit = false;
+    let mounts = WorkspacePod::from_template(&template)
+        .workspace_container(
+            &template.image,
+            ResourceRequirements::default(),
+            &resource_names(),
+        )
+        .volume_mounts
+        .unwrap();
+
+    assert!(mounts.iter().any(|mount| {
+        mount.name == "workspace-scratch"
+            && mount.mount_path == "/var/lib/mwc/build-scratch"
+            && mount.sub_path.as_deref() == Some("workspace-cache")
+    }));
+    assert!(mounts.iter().any(|mount| {
+        mount.name == "workspace-scratch"
+            && mount.mount_path == "/var/lib/mwc/codex-scratch"
+            && mount.sub_path.as_deref() == Some("codex-session-scratch")
+    }));
+    assert!(!mounts.iter().any(|mount| {
+        mount.mount_path == "/run/mwc-buildkit"
+            || mount
+                .sub_path
+                .as_deref()
+                .is_some_and(|path| path.starts_with("build-cache"))
+    }));
+}
+
+#[test]
+fn home_disk_margin_uses_the_fixed_platform_algorithm() {
+    assert_eq!(fixed_home_disk_margin_mib(5), 512);
+    assert_eq!(fixed_home_disk_margin_mib(60), 1_024);
 }
 
 #[test]

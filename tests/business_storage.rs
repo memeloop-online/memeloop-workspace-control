@@ -2,7 +2,7 @@ use memeloop_workspace_control::{
     auth::Role,
     crypto::EnvelopeCipher,
     injections::{InjectionItem, InjectionKind, InjectionScope, InjectionValue},
-    quota::Resources,
+    quota::{QuotaResources, Resources},
     storage::{
         AdmittedWorkspaceCreation, CreateOrganization, CreateWorkspace, CreateWorkspaceTemplate,
         Database, IdempotencyDecision, InjectionScopeRef, StorageError,
@@ -281,6 +281,7 @@ async fn admitted_template_must_match_the_transactional_workspace_snapshot() {
                 organization_injection_refs: None,
                 user_injection_refs: None,
             },
+            node_pool: None,
             inline_injections: None,
             admitted_template_yaml: &admitted_yaml,
             allow_cluster_access: true,
@@ -353,6 +354,7 @@ async fn workspace_runtime_identity_uses_the_product_namespace() {
                 organization_injection_refs: None,
                 user_injection_refs: None,
             },
+            node_pool: None,
             inline_injections: None,
             admitted_template_yaml: &admitted_yaml,
             allow_cluster_access: true,
@@ -675,7 +677,13 @@ async fn image_allowlist_and_template_contract_are_admitted_atomically() {
     assert_eq!(metrics.states.get("provisioning"), Some(&1));
     assert_eq!(metrics.users.len(), 1);
     assert_eq!(metrics.users[0].user_id, admin.user_id);
-    assert_eq!(metrics.users[0].resources, resources);
+    assert_eq!(
+        metrics.users[0].resources,
+        QuotaResources::for_workspace(
+            resources,
+            template_spec.storage_policy.temporary_storage_gib,
+        )
+    );
     let mut changed_template_spec = template_spec.clone();
     changed_template_spec.resources.cpu_millis = 3_000;
     changed_template_spec.pod_requests.cpu_millis = 3_000;
@@ -799,11 +807,12 @@ async fn workspace_creation_enforces_quota_and_enqueues_lifecycle_actions() {
     database
         .set_organization_quota(
             organization.id,
-            Resources {
+            QuotaResources {
                 cpu_millis: 1_000,
                 memory_mib: 2_048,
                 gpu_count: 0,
                 disk_gib: 20,
+                temporary_storage_gib: 100,
             },
             102,
         )
@@ -812,11 +821,12 @@ async fn workspace_creation_enforces_quota_and_enqueues_lifecycle_actions() {
     database
         .set_user_quota(
             admin.user_id,
-            Resources {
+            QuotaResources {
                 cpu_millis: 700,
                 memory_mib: 2_048,
                 gpu_count: 0,
                 disk_gib: 20,
+                temporary_storage_gib: 22,
             },
             102,
         )
@@ -845,7 +855,7 @@ async fn workspace_creation_enforces_quota_and_enqueues_lifecycle_actions() {
         "registry.example/workspace:1",
         AccessMode::Internal,
         Resources {
-            cpu_millis: 200,
+            cpu_millis: 50,
             memory_mib: 512,
             gpu_count: 0,
             disk_gib: 5,
@@ -880,7 +890,13 @@ async fn workspace_creation_enforces_quota_and_enqueues_lifecycle_actions() {
         database
             .create_workspace(command("second", second_template), true, admin.user_id, 104)
             .await,
-        Err(StorageError::Quota(_))
+        Err(StorageError::Quota(
+            memeloop_workspace_control::quota::QuotaError::Exceeded {
+                resource: "temporary_storage_gib",
+                requested: 44,
+                limit: 22,
+            }
+        ))
     ));
     assert_eq!(
         database

@@ -1,14 +1,14 @@
 import { parse, stringify } from "yaml";
 
-import type { AccessMode, EgressPolicy, WorkspaceStoragePolicy, WorkspaceTemplate } from "../types";
+import type { AccessMode, EgressPolicy, WorkspacePlacement, WorkspaceStoragePolicy, WorkspaceTemplate } from "../types";
 
 export const DEFAULT_STORAGE_POLICY: WorkspaceStoragePolicy = {
-  runtime_tmp_memory_mib: 512,
-  build_scratch_gib: 12,
-  buildkit_cache_gib: 8,
-  codex_scratch_gib: 2,
-  scratch_medium: "disk",
-  home_reserve_mib: 1024,
+  temporary_storage_gib: 22,
+};
+
+export const DEFAULT_PLACEMENT: WorkspacePlacement = {
+  allowed_node_pools: ["default"],
+  default_node_pool: "default",
 };
 
 export interface NumericPolicy {
@@ -22,24 +22,14 @@ export const TEMPLATE_NUMBER_POLICIES = {
   memory: { min: 128, step: 128, max: 1_048_576 },
   requestCpu: { min: 100, step: 100, max: 256_000 },
   requestMemory: { min: 128, step: 128, max: 1_048_576 },
-  ephemeral: { min: 128, step: 128, max: 1_048_576 },
   gpu: { min: 0, step: 1, max: 64 },
   disk: { min: 1, step: 1, max: 16_384 },
-  runtimeTmpMemory: { min: 64, step: 64, max: 4_096 },
-  buildScratch: { min: 1, step: 1, max: 256 },
-  buildkitCache: { min: 1, step: 1, max: 256 },
-  codexScratch: { min: 1, step: 1, max: 32 },
-  homeReserve: { min: 64, step: 64, max: 4_096 },
+  temporaryStorage: { min: 1, step: 1, max: 2_048 },
   desktopPort: { min: 1_024, step: 1, max: 65_535 },
 } as const satisfies Record<string, NumericPolicy>;
 
 export interface TemplateStoragePolicyDraft {
-  runtime_tmp_memory_mib: string;
-  build_scratch_gib: string;
-  buildkit_cache_gib: string;
-  codex_scratch_gib: string;
-  scratch_medium: "disk" | "memory";
-  home_reserve_mib: string;
+  temporary_storage_gib: string;
 }
 
 export interface TemplateDraft {
@@ -52,8 +42,6 @@ export interface TemplateDraft {
   disk: string;
   requestCpu: string;
   requestMemory: string;
-  requestEphemeral: string;
-  limitEphemeral: string;
   user: string;
   home: string;
   buildkit: boolean;
@@ -61,9 +49,8 @@ export interface TemplateDraft {
   clusterAccess: boolean;
   egressPolicy: EgressPolicy;
   runtimeClassName: string;
-  requiredNodes: string;
-  preferredNodes: string;
-  nodeSelector: string;
+  allowedNodePools: string[];
+  defaultNodePool: string;
   desktopEnabled: boolean;
   desktopPort: string;
   desktopDisplayName: string;
@@ -87,26 +74,20 @@ const TEMPLATE_FIELD_SCHEMA: TemplateFieldSchema = {
     pod_requests: {
       cpu_millis: null,
       memory_mib: null,
-      ephemeral_storage_mib: null,
     },
-    ephemeral_storage_limit_mib: null,
     workspace_user: null,
     workspace_home: null,
     buildkit: null,
     storage_policy: {
-      runtime_tmp_memory_mib: null,
-      build_scratch_gib: null,
-      buildkit_cache_gib: null,
-      codex_scratch_gib: null,
-      scratch_medium: null,
-      home_reserve_mib: null,
+      temporary_storage_gib: null,
     },
     cluster_access: null,
     egress_policy: null,
     runtime_class_name: null,
-    required_node_names: null,
-    preferred_node_names: null,
-    node_selector: null,
+    placement: {
+      allowed_node_pools: null,
+      default_node_pool: null,
+    },
     desktop: {
       internal_port: null,
       display_name: null,
@@ -117,7 +98,7 @@ const TEMPLATE_FIELD_SCHEMA: TemplateFieldSchema = {
 export type TemplateDraftErrorCode =
   | "invalid_template_number"
   | "resource_request_exceeds_limit"
-  | "ephemeral_request_exceeds_limit";
+  | "invalid_node_pool_placement";
 
 export class TemplateDraftError extends Error {
   readonly code: TemplateDraftErrorCode;
@@ -139,8 +120,6 @@ export function emptyTemplateDraft(): TemplateDraft {
     disk: "50",
     requestCpu: "500",
     requestMemory: "1024",
-    requestEphemeral: "2048",
-    limitEphemeral: "14592",
     user: "workspace",
     home: "/workspace",
     buildkit: false,
@@ -148,9 +127,8 @@ export function emptyTemplateDraft(): TemplateDraft {
     clusterAccess: false,
     egressPolicy: "unrestricted",
     runtimeClassName: "",
-    requiredNodes: "",
-    preferredNodes: "",
-    nodeSelector: "",
+    allowedNodePools: [...DEFAULT_PLACEMENT.allowed_node_pools],
+    defaultNodePool: DEFAULT_PLACEMENT.default_node_pool,
     desktopEnabled: false,
     desktopPort: "6080",
     desktopDisplayName: "",
@@ -164,26 +142,14 @@ export function templateDraftToYaml(draft: TemplateDraft): string {
   const disk = parseRequiredNumber(draft.disk, TEMPLATE_NUMBER_POLICIES.disk);
   const requestCpu = parseRequiredNumber(draft.requestCpu, TEMPLATE_NUMBER_POLICIES.requestCpu);
   const requestMemory = parseRequiredNumber(draft.requestMemory, TEMPLATE_NUMBER_POLICIES.requestMemory);
-  const requestEphemeral = parseOptionalNumber(draft.requestEphemeral, TEMPLATE_NUMBER_POLICIES.ephemeral);
-  const limitEphemeral = parseOptionalNumber(draft.limitEphemeral, TEMPLATE_NUMBER_POLICIES.ephemeral);
   const desktopPort = draft.desktopEnabled ? parseDesktopPort(draft.desktopPort) : null;
   const storagePolicy: WorkspaceStoragePolicy = {
-    runtime_tmp_memory_mib: parseRequiredNumber(draft.storagePolicy.runtime_tmp_memory_mib, TEMPLATE_NUMBER_POLICIES.runtimeTmpMemory),
-    build_scratch_gib: parseRequiredNumber(draft.storagePolicy.build_scratch_gib, TEMPLATE_NUMBER_POLICIES.buildScratch),
-    buildkit_cache_gib: parseRequiredNumber(draft.storagePolicy.buildkit_cache_gib, TEMPLATE_NUMBER_POLICIES.buildkitCache),
-    codex_scratch_gib: parseRequiredNumber(draft.storagePolicy.codex_scratch_gib, TEMPLATE_NUMBER_POLICIES.codexScratch),
-    scratch_medium: draft.storagePolicy.scratch_medium,
-    home_reserve_mib: parseOptionalNumber(draft.storagePolicy.home_reserve_mib, TEMPLATE_NUMBER_POLICIES.homeReserve),
+    temporary_storage_gib: parseRequiredNumber(draft.storagePolicy.temporary_storage_gib, TEMPLATE_NUMBER_POLICIES.temporaryStorage),
   };
+  const placement = placementFromDraft(draft);
 
   if (requestCpu > cpu || requestMemory > memory) {
     throw new TemplateDraftError("resource_request_exceeds_limit");
-  }
-  if (requestEphemeral !== null && limitEphemeral !== null && requestEphemeral > limitEphemeral) {
-    throw new TemplateDraftError("ephemeral_request_exceeds_limit");
-  }
-  if (storagePolicy.home_reserve_mib !== null && (storagePolicy.home_reserve_mib >= disk * 1_024 || storagePolicy.home_reserve_mib * 10 > disk * 1_024)) {
-    throw new TemplateDraftError("invalid_template_number");
   }
 
   const spec: Record<string, unknown> = {
@@ -197,20 +163,39 @@ export function templateDraftToYaml(draft: TemplateDraft): string {
     storage_policy: storagePolicy,
     cluster_access: draft.clusterAccess,
     egress_policy: draft.egressPolicy,
+    placement: {
+      allowed_node_pools: placement.allowed_node_pools,
+      default_node_pool: placement.default_node_pool,
+    },
   };
   if (draft.runtimeClassName.trim()) spec.runtime_class_name = draft.runtimeClassName.trim();
-  if (requestEphemeral !== null) (spec.pod_requests as Record<string, unknown>).ephemeral_storage_mib = requestEphemeral;
-  if (limitEphemeral !== null) spec.ephemeral_storage_limit_mib = limitEphemeral;
   if (desktopPort !== null) {
     spec.desktop = {
       internal_port: desktopPort,
       ...(draft.desktopDisplayName.trim() ? { display_name: draft.desktopDisplayName.trim() } : {}),
     };
   }
-  const required = csv(draft.requiredNodes); if (required.length) spec.required_node_names = required;
-  const preferred = csv(draft.preferredNodes); if (preferred.length) spec.preferred_node_names = preferred;
-  const selector = pairs(draft.nodeSelector); if (Object.keys(selector).length) spec.node_selector = selector;
   return stringify({ apiVersion: "workspace.memeloop.dev/v1", kind: "WorkspaceTemplate", metadata: { name: draft.name }, spec }, { lineWidth: 0 });
+}
+
+function placementFromDraft(draft: TemplateDraft): WorkspacePlacement {
+  const allowed = [...new Set(draft.allowedNodePools.map((pool) => pool.trim()).filter(Boolean))];
+  const defaultPool = draft.defaultNodePool.trim();
+  if (
+    allowed.length === 0
+    || allowed.length > 32
+    || allowed.some((pool) => !isValidNodePoolName(pool))
+    || !isValidNodePoolName(defaultPool)
+    || !allowed.includes(defaultPool)
+  ) {
+    throw new TemplateDraftError("invalid_node_pool_placement");
+  }
+  return { allowed_node_pools: allowed, default_node_pool: defaultPool };
+}
+
+function isValidNodePoolName(value: string): boolean {
+  return value.length <= 63
+    && (/^[a-z]$/u.test(value) || /^[a-z][a-z0-9-]*[a-z0-9]$/u.test(value));
 }
 
 export function templateDraftFromYaml(yaml: string): TemplateDraft {
@@ -222,6 +207,9 @@ export function templateDraftFromYaml(yaml: string): TemplateDraft {
   const storagePolicy = spec.storage_policy === undefined
     ? DEFAULT_STORAGE_POLICY
     : parseStoragePolicy(spec.storage_policy);
+  const placement = spec.placement === undefined
+    ? DEFAULT_PLACEMENT
+    : parsePlacement(spec.placement);
   const desktop = spec.desktop === undefined ? null : parseDesktop(spec.desktop);
   if (!metadata.name) throw new Error("Invalid WorkspaceTemplate YAML");
   return {
@@ -234,8 +222,6 @@ export function templateDraftFromYaml(yaml: string): TemplateDraft {
     disk: numberText(resources.disk_gib),
     requestCpu: numberText(podRequests.cpu_millis),
     requestMemory: numberText(podRequests.memory_mib),
-    requestEphemeral: optionalNumberText(podRequests.ephemeral_storage_mib),
-    limitEphemeral: optionalNumberText(spec.ephemeral_storage_limit_mib),
     user: String(spec.workspace_user ?? ""),
     home: String(spec.workspace_home ?? ""),
     buildkit: Boolean(spec.buildkit),
@@ -243,13 +229,26 @@ export function templateDraftFromYaml(yaml: string): TemplateDraft {
     clusterAccess: Boolean(spec.cluster_access),
     egressPolicy: spec.egress_policy === "internet_only" ? "internet_only" : "unrestricted",
     runtimeClassName: String(spec.runtime_class_name ?? ""),
-    requiredNodes: listText(spec.required_node_names),
-    preferredNodes: listText(spec.preferred_node_names),
-    nodeSelector: formatPairs(spec.node_selector),
+    allowedNodePools: placement.allowed_node_pools,
+    defaultNodePool: placement.default_node_pool,
     desktopEnabled: desktop !== null,
     desktopPort: desktop === null ? "6080" : String(desktop.internal_port),
     desktopDisplayName: desktop?.display_name ?? "",
   };
+}
+
+function parsePlacement(value: unknown): WorkspacePlacement {
+  const record = requiredRecord(value);
+  const allowed = record.allowed_node_pools;
+  const defaultPool = record.default_node_pool;
+  if (
+    !Array.isArray(allowed)
+    || allowed.some((pool) => typeof pool !== "string")
+    || typeof defaultPool !== "string"
+  ) {
+    throw new Error("Invalid WorkspaceTemplate YAML: placement requires string node pool names");
+  }
+  return { allowed_node_pools: allowed as string[], default_node_pool: defaultPool };
 }
 
 function parseDesktop(value: unknown): { internal_port: number; display_name?: string } {
@@ -282,19 +281,8 @@ function isDesktopPort(port: number): boolean {
 function parseStoragePolicy(value: unknown): WorkspaceStoragePolicy {
   const policy = requiredRecord(value);
   return {
-    runtime_tmp_memory_mib: Number(policy.runtime_tmp_memory_mib ?? DEFAULT_STORAGE_POLICY.runtime_tmp_memory_mib),
-    build_scratch_gib: Number(policy.build_scratch_gib ?? DEFAULT_STORAGE_POLICY.build_scratch_gib),
-    buildkit_cache_gib: Number(policy.buildkit_cache_gib ?? DEFAULT_STORAGE_POLICY.buildkit_cache_gib),
-    codex_scratch_gib: Number(policy.codex_scratch_gib ?? DEFAULT_STORAGE_POLICY.codex_scratch_gib),
-    scratch_medium: parseScratchMedium(policy.scratch_medium),
-    home_reserve_mib: policy.home_reserve_mib == null ? null : Number(policy.home_reserve_mib),
+    temporary_storage_gib: Number(policy.temporary_storage_gib ?? DEFAULT_STORAGE_POLICY.temporary_storage_gib),
   };
-}
-
-function parseScratchMedium(value: unknown): "disk" | "memory" {
-  if (value === undefined) return "disk";
-  if (value === "disk" || value === "memory") return value;
-  throw new Error("Invalid WorkspaceTemplate YAML: scratch_medium must be disk or memory");
 }
 
 function requiredRecord(value: unknown): Record<string, unknown> {
@@ -318,12 +306,7 @@ function knownFields(value: unknown, schema: TemplateFieldSchema, path: string):
 
 function storagePolicyDraft(policy: WorkspaceStoragePolicy): TemplateStoragePolicyDraft {
   return {
-    runtime_tmp_memory_mib: String(policy.runtime_tmp_memory_mib),
-    build_scratch_gib: String(policy.build_scratch_gib),
-    buildkit_cache_gib: String(policy.buildkit_cache_gib),
-    codex_scratch_gib: String(policy.codex_scratch_gib),
-    scratch_medium: policy.scratch_medium ?? "disk",
-    home_reserve_mib: optionalNumberText(policy.home_reserve_mib),
+    temporary_storage_gib: String(policy.temporary_storage_gib),
   };
 }
 
@@ -339,36 +322,6 @@ function parseRequiredNumber(value: string, policy: NumericPolicy): number {
   return parsed;
 }
 
-function parseOptionalNumber(value: string, policy: NumericPolicy): number | null {
-  return value === "" ? null : parseRequiredNumber(value, policy);
-}
-
 function numberText(value: unknown) {
   return value === undefined || value === null ? "0" : String(value);
-}
-
-function optionalNumberText(value: unknown) {
-  return value === undefined || value === null ? "" : String(value);
-}
-
-function listText(value: unknown) {
-  return Array.isArray(value) ? value.join(", ") : "";
-}
-
-function csv(value: string) {
-  return value.split(",").map((item) => item.trim()).filter(Boolean);
-}
-
-function pairs(value: string) {
-  return Object.fromEntries(value.split("\n").map((line) => line.trim()).filter(Boolean).map((line) => {
-    const index = line.indexOf("=");
-    if (index < 1) throw new Error(`Expected KEY=value: ${line}`);
-    return [line.slice(0, index).trim(), line.slice(index + 1)];
-  }));
-}
-
-function formatPairs(value: unknown) {
-  return value && typeof value === "object"
-    ? Object.entries(value as Record<string, unknown>).map(([key, item]) => `${key}=${String(item)}`).join("\n")
-    : "";
 }

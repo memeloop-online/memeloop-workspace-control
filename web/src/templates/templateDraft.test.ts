@@ -35,41 +35,59 @@ test("template form normalization preserves the bounded storage policy", () => {
   const draft = emptyTemplateDraft();
   draft.name = "storage";
   draft.storagePolicy = {
-    runtime_tmp_memory_mib: "640",
-    build_scratch_gib: "14",
-    buildkit_cache_gib: "9",
-    codex_scratch_gib: "3",
-    scratch_medium: "memory",
-    home_reserve_mib: "768",
+    temporary_storage_gib: "48",
   };
   const parsed = templateDraftFromYaml(templateDraftToYaml(draft));
   assert.deepEqual(parsed.storagePolicy, draft.storagePolicy);
 });
 
-test("new templates emit backend-compatible storage and ephemeral defaults", () => {
+test("new templates emit backend-compatible storage defaults", () => {
   const draft = { ...emptyTemplateDraft(), name: "defaults" };
   const yaml = templateDraftToYaml(draft);
-  assert.match(yaml, /ephemeral_storage_mib: 2048/u);
-  assert.match(yaml, /ephemeral_storage_limit_mib: 14592/u);
-  assert.match(yaml, /home_reserve_mib: 1024/u);
-  assert.match(yaml, /scratch_medium: disk/u);
-  assert.doesNotMatch(yaml, /home_reserve_mib: null/u);
+  assert.match(yaml, /temporary_storage_gib: 22/u);
+  assert.match(yaml, /allowed_node_pools:\n      - default/u);
+  assert.match(yaml, /default_node_pool: default/u);
   assert.doesNotMatch(yaml, /runtime_class_name/u);
   assert.match(yaml, /egress_policy: unrestricted/u);
-});
-
-test("scratch storage medium defaults to disk for historical YAML and rejects unknown values", () => {
-  const yaml = templateDraftToYaml({ ...emptyTemplateDraft(), name: "historical" });
-  assert.equal(templateDraftFromYaml(yaml.replace("    scratch_medium: disk\n", "")).storagePolicy.scratch_medium, "disk");
-  assert.throws(
-    () => templateDraftFromYaml(yaml.replace("scratch_medium: disk", "scratch_medium: network")),
-    /scratch_medium must be disk or memory/u,
-  );
 });
 
 test("internet-only egress policy round-trips through template YAML", () => {
   const draft = { ...emptyTemplateDraft(), name: "internet", egressPolicy: "internet_only" as const };
   assert.equal(templateDraftFromYaml(templateDraftToYaml(draft)).egressPolicy, "internet_only");
+});
+
+test("node pool placement round-trips through template YAML", () => {
+  const draft = {
+    ...emptyTemplateDraft(),
+    name: "pools",
+    allowedNodePools: ["default", "gpu-pool"],
+    defaultNodePool: "gpu-pool",
+  };
+  const yaml = templateDraftToYaml(draft);
+  assert.match(yaml, /placement:\n    allowed_node_pools:\n      - default\n      - gpu-pool\n    default_node_pool: gpu-pool/u);
+  const parsed = templateDraftFromYaml(yaml);
+  assert.deepEqual(parsed.allowedNodePools, draft.allowedNodePools);
+  assert.equal(parsed.defaultNodePool, draft.defaultNodePool);
+});
+
+test("placement requires an allowed default node pool with valid names", () => {
+  assert.throws(
+    () => templateDraftToYaml({ ...emptyTemplateDraft(), allowedNodePools: [] }),
+    (error) => error instanceof TemplateDraftError && error.code === "invalid_node_pool_placement",
+  );
+  assert.throws(
+    () => templateDraftToYaml({ ...emptyTemplateDraft(), allowedNodePools: ["default"], defaultNodePool: "gpu-pool" }),
+    (error) => error instanceof TemplateDraftError && error.code === "invalid_node_pool_placement",
+  );
+  assert.throws(
+    () => templateDraftToYaml({ ...emptyTemplateDraft(), allowedNodePools: ["Invalid_Pool"], defaultNodePool: "Invalid_Pool" }),
+    (error) => error instanceof TemplateDraftError && error.code === "invalid_node_pool_placement",
+  );
+});
+
+test("duplicate node pools are normalized before writing YAML", () => {
+  const yaml = templateDraftToYaml({ ...emptyTemplateDraft(), name: "dedup", allowedNodePools: ["default", "default"] });
+  assert.deepEqual(templateDraftFromYaml(yaml).allowedNodePools, ["default"]);
 });
 
 test("browser desktop settings round-trip through template YAML and remain optional", () => {
@@ -105,44 +123,21 @@ test("an optional RuntimeClass name round-trips through the template YAML", () =
   assert.equal(templateDraftFromYaml(yaml).runtimeClassName, "gvisor-sandbox");
 });
 
-test("an automatic home reserve remains empty in the form and round-trips as null", () => {
-  const draft = { ...emptyTemplateDraft(), name: "automatic-reserve" };
-  const historicalYaml = templateDraftToYaml(draft).replace("home_reserve_mib: 1024", "home_reserve_mib: null");
-  const parsed = templateDraftFromYaml(historicalYaml);
-  assert.equal(parsed.storagePolicy.home_reserve_mib, "");
-  assert.match(templateDraftToYaml(parsed), /home_reserve_mib: null/u);
-});
-
-test("storage policy drafts reject empty required fields and reserves over ten percent", () => {
-  const emptyRuntime = emptyTemplateDraft();
-  emptyRuntime.storagePolicy.runtime_tmp_memory_mib = "";
+test("temporary storage drafts reject empty and out-of-range values", () => {
+  const emptyStorage = emptyTemplateDraft();
+  emptyStorage.storagePolicy.temporary_storage_gib = "";
   assert.throws(
-    () => templateDraftToYaml(emptyRuntime),
+    () => templateDraftToYaml(emptyStorage),
     (error) => error instanceof TemplateDraftError && error.code === "invalid_template_number",
   );
-
-  const excessiveReserve = emptyTemplateDraft();
-  excessiveReserve.disk = "5";
-  excessiveReserve.storagePolicy.home_reserve_mib = "1024";
-  assert.throws(
-    () => templateDraftToYaml(excessiveReserve),
-    (error) => error instanceof TemplateDraftError && error.code === "invalid_template_number",
-  );
-});
-
-test("explicit storage-policy boundaries match the backend contract", () => {
-  const minimum = { ...emptyTemplateDraft(), name: "minimum-storage", disk: "1" };
-  minimum.storagePolicy.runtime_tmp_memory_mib = "64";
-  minimum.storagePolicy.home_reserve_mib = "64";
-  assert.doesNotThrow(() => templateDraftToYaml(minimum));
-
-  const maximum = { ...emptyTemplateDraft(), name: "maximum-reserve", disk: "40" };
-  maximum.storagePolicy.home_reserve_mib = "4096";
-  assert.doesNotThrow(() => templateDraftToYaml(maximum));
 
   const belowMinimum = emptyTemplateDraft();
-  belowMinimum.storagePolicy.home_reserve_mib = "63";
+  belowMinimum.storagePolicy.temporary_storage_gib = "0";
   assert.throws(() => templateDraftToYaml(belowMinimum), TemplateDraftError);
+
+  const aboveMaximum = emptyTemplateDraft();
+  aboveMaximum.storagePolicy.temporary_storage_gib = "2049";
+  assert.throws(() => templateDraftToYaml(aboveMaximum), TemplateDraftError);
 });
 
 test("template form rejects unknown fields at every schema object level", () => {
@@ -153,7 +148,7 @@ test("template form rejects unknown fields at every schema object level", () => 
     yaml.replace("  image: \"\"\n", "  arbitrary_typo: true\n  image: \"\"\n"),
     yaml.replace("    cpu_millis: 2000\n", "    arbitrary_typo: true\n    cpu_millis: 2000\n"),
     yaml.replace("    cpu_millis: 500\n", "    arbitrary_typo: true\n    cpu_millis: 500\n"),
-    yaml.replace("    runtime_tmp_memory_mib: 512\n", "    arbitrary_typo: true\n    runtime_tmp_memory_mib: 512\n"),
+    yaml.replace("    temporary_storage_gib: 22\n", "    arbitrary_typo: true\n    temporary_storage_gib: 22\n"),
   ];
 
   for (const candidate of cases) {

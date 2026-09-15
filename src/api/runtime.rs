@@ -15,11 +15,13 @@ use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
+pub(super) use crate::storage::RuntimeEventCategory;
 use crate::{
     auth::Permission,
     config::InstallationId,
-    kubernetes::{OWNER_INSTALLATION_LABEL, WORKSPACE_ID_LABEL},
+    kubernetes::{OWNER_INSTALLATION_LABEL, STORAGE_ROLE_LABEL, WORKSPACE_ID_LABEL},
     quota::Resources,
+    storage::{NewWorkspaceRuntimeIncident, WorkspaceRuntimeIncident},
     workspaces::Workspace,
 };
 
@@ -30,19 +32,26 @@ pub(super) mod organization_metrics;
 mod pod_views;
 mod storage_metrics;
 
-use details::{fetch_workspace_runtime_details, storage_identity};
+use details::{
+    WorkspaceStoragePvcIdentities, fetch_workspace_runtime_details, scratch_backing_from_pods,
+};
 use pod_views::{
     active_pod_metrics, active_pod_names, has_live_runtime, is_active_pod, newest_events,
     object_workspace_id, pod_event, pod_metrics, pod_metrics_all, pod_runtime,
 };
+pub(super) use storage_metrics::{
+    StorageBacking, StoragePressure, StorageTelemetry, StorageTelemetryCoverage,
+};
 use storage_metrics::{StorageIdentity, StorageMetricBatch, fetch as fetch_storage_metrics};
-pub(super) use storage_metrics::{StoragePressure, StorageTelemetry, StorageTelemetryStatus};
+
+pub(super) const STORAGE_ROLE_HOME: &str = "home";
+pub(super) const STORAGE_ROLE_TEMPORARY: &str = "temporary";
 
 #[derive(Debug, Serialize, ToSchema)]
 pub(super) struct WorkspaceRuntimeResponse {
     allocated: Resources,
-    pvc_capacity: Option<String>,
-    storage: StorageTelemetry,
+    persistent_storage: StorageTelemetry,
+    temporary_storage: StorageTelemetry,
     metrics_available: bool,
     pods: Vec<PodRuntime>,
     metrics: Vec<PodMetric>,
@@ -78,24 +87,24 @@ pub(super) struct PodMetric {
     memory: Option<String>,
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
 pub(super) struct PodEvent {
-    reason: Option<String>,
-    message: Option<String>,
-    event_type: Option<String>,
+    category: RuntimeEventCategory,
     count: Option<i32>,
-    last_timestamp: Option<String>,
+    observed_at: Option<String>,
 }
 
 type PodRuntimeMap = BTreeMap<Uuid, Vec<PodRuntime>>;
 type ActivePodMap = BTreeMap<Uuid, BTreeSet<String>>;
-type PvcCapacityMap = BTreeMap<Uuid, String>;
 type PodMetricMap = BTreeMap<Uuid, Vec<PodMetric>>;
+type WorkspaceStoragePvcMap = BTreeMap<Uuid, WorkspaceStoragePvcIdentities>;
+type ScratchBackingMap = BTreeMap<Uuid, StorageBacking>;
 
 struct KubernetesRuntimeBatch {
     pods: PodRuntimeMap,
     active_pods: ActivePodMap,
-    pvc_capacities: PvcCapacityMap,
+    storage_pvcs: WorkspaceStoragePvcMap,
+    scratch_backings: ScratchBackingMap,
     metrics: PodMetricMap,
     metrics_available: bool,
 }
@@ -124,23 +133,32 @@ pub(super) async fn list(
         .ok_or(ApiError::KubernetesUnavailable)?;
     let selector = runtime_selector(&state.config.installation_id, &workspaces);
     let kubernetes_runtime = fetch_kubernetes_runtime(state.as_ref(), client, &selector).await?;
-    let storage_identities = workspaces
-        .iter()
-        .map(|workspace| storage_identity(&state.config.installation_id, workspace))
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|_| ApiError::BadRequest("workspace runtime identity is invalid"))?;
+    let storage_identities = kubernetes_runtime
+        .storage_pvcs
+        .values()
+        .flat_map(WorkspaceStoragePvcIdentities::identities)
+        .collect::<Vec<_>>();
     let storage_metrics = fetch_storage_metrics(
         state.config.prometheus_url.as_ref(),
         &storage_identities,
         &state.observability,
     )
     .await;
+    let observed_now = unix_timestamp();
+    let workspace_ids = workspaces
+        .iter()
+        .map(|workspace| workspace.id)
+        .collect::<Vec<_>>();
+    let incidents = state
+        .database
+        .list_workspace_runtime_incidents(&workspace_ids, observed_now, 50)
+        .await?;
     Ok(Json(build_runtime_entries(
-        &state.config.installation_id,
         workspaces,
         kubernetes_runtime,
         &storage_metrics,
-        unix_timestamp(),
+        incidents,
+        observed_now,
     )))
 }
 
@@ -178,23 +196,29 @@ async fn fetch_kubernetes_runtime(
         BTreeMap::new()
     });
     request.success();
-    let (pods, active_pods) = index_pods(&pod_list.items);
+    let (pods, active_pods, scratch_backings) = index_pods(&pod_list.items);
     Ok(KubernetesRuntimeBatch {
         pods,
         active_pods,
-        pvc_capacities: index_pvc_capacities(pvc_list.items),
+        storage_pvcs: index_storage_pvcs(pvc_list.items),
+        scratch_backings,
         metrics,
         metrics_available,
     })
 }
 
-fn index_pods(pods: &[Pod]) -> (PodRuntimeMap, ActivePodMap) {
+fn index_pods(pods: &[Pod]) -> (PodRuntimeMap, ActivePodMap, ScratchBackingMap) {
     let mut runtimes = PodRuntimeMap::new();
     let mut active_names = ActivePodMap::new();
+    let mut scratch_backings = ScratchBackingMap::new();
     for pod in pods {
-        if is_active_pod(pod)
-            && let Some(workspace_id) = object_workspace_id(&pod.metadata.labels)
-        {
+        let Some(workspace_id) = object_workspace_id(&pod.metadata.labels) else {
+            continue;
+        };
+        scratch_backings
+            .entry(workspace_id)
+            .or_insert_with(|| scratch_backing_from_pods(std::slice::from_ref(pod)));
+        if is_active_pod(pod) {
             if let Some(name) = &pod.metadata.name {
                 active_names
                     .entry(workspace_id)
@@ -207,29 +231,42 @@ fn index_pods(pods: &[Pod]) -> (PodRuntimeMap, ActivePodMap) {
                 .push(pod_runtime(pod));
         }
     }
-    (runtimes, active_names)
+    (runtimes, active_names, scratch_backings)
 }
 
-fn index_pvc_capacities(pvcs: Vec<PersistentVolumeClaim>) -> PvcCapacityMap {
-    let mut capacities = PvcCapacityMap::new();
+fn index_storage_pvcs(pvcs: Vec<PersistentVolumeClaim>) -> WorkspaceStoragePvcMap {
+    let mut identities = WorkspaceStoragePvcMap::new();
     for pvc in pvcs {
-        if let (Some(workspace_id), Some(capacity)) = (
-            object_workspace_id(&pvc.metadata.labels),
-            pvc.status
-                .and_then(|status| status.capacity)
-                .and_then(|capacity| capacity.get("storage").map(|value| value.0.clone())),
-        ) {
-            capacities.insert(workspace_id, capacity);
+        let Some(workspace_id) = object_workspace_id(&pvc.metadata.labels) else {
+            continue;
+        };
+        let Some(name) = pvc.metadata.name else {
+            continue;
+        };
+        let Some(namespace) = pvc.metadata.namespace else {
+            continue;
+        };
+        let role = pvc
+            .metadata
+            .labels
+            .as_ref()
+            .and_then(|labels| labels.get(STORAGE_ROLE_LABEL))
+            .map(String::as_str);
+        let entry = identities.entry(workspace_id).or_default();
+        match role {
+            Some(STORAGE_ROLE_HOME) => entry.persistent = Some((namespace, name)),
+            Some(STORAGE_ROLE_TEMPORARY) => entry.temporary = Some((namespace, name)),
+            _ => {}
         }
     }
-    capacities
+    identities
 }
 
 fn build_runtime_entries(
-    installation_id: &InstallationId,
     workspaces: Vec<Workspace>,
     mut kubernetes: KubernetesRuntimeBatch,
     storage_metrics: &StorageMetricBatch,
+    mut incidents: BTreeMap<Uuid, Vec<WorkspaceRuntimeIncident>>,
     observed_now: i64,
 ) -> Vec<WorkspaceRuntimeEntry> {
     workspaces
@@ -256,26 +293,45 @@ fn build_runtime_entries(
             } else {
                 (Vec::new(), Vec::new())
             };
-            let names = crate::workspace_runtime::WorkspaceRuntimeNames::for_workspace(
-                installation_id,
-                &workspace.runtime,
-                &workspace.short_id,
-            )
-            .expect("workspace runtime identity was validated before runtime observation");
+            let storage_pvcs = kubernetes
+                .storage_pvcs
+                .remove(&workspace_id)
+                .unwrap_or_default();
+            let scratch_backing = storage_pvcs
+                .temporary
+                .is_some()
+                .then_some(StorageBacking::EphemeralVolume)
+                .unwrap_or_else(|| {
+                    kubernetes
+                        .scratch_backings
+                        .remove(&workspace_id)
+                        .unwrap_or(StorageBacking::Unknown)
+                });
             WorkspaceRuntimeEntry {
                 workspace_id,
                 runtime: WorkspaceRuntimeResponse {
                     allocated: workspace.template.resources,
-                    pvc_capacity: kubernetes.pvc_capacities.remove(&workspace_id),
-                    storage: storage_metrics.telemetry(
-                        workspace.runtime.namespace(),
-                        &names.resources.data_pvc_ordinal_zero(),
+                    persistent_storage: storage_metrics.telemetry(
+                        storage_pvcs.persistent.as_ref(),
+                        gibibytes(workspace.template.resources.disk_gib),
+                        StorageBacking::PersistentVolume,
+                        observed_now,
+                    ),
+                    temporary_storage: storage_metrics.telemetry(
+                        storage_pvcs.temporary.as_ref(),
+                        gibibytes(workspace.template.storage_policy.temporary_storage_gib),
+                        scratch_backing,
                         observed_now,
                     ),
                     metrics_available: kubernetes.metrics_available,
                     pods,
                     metrics,
-                    events: Vec::new(),
+                    events: incidents
+                        .remove(&workspace_id)
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(pod_event_from_incident)
+                        .collect(),
                 },
             }
         })
@@ -325,28 +381,87 @@ pub(super) async fn get(
     )
     .await?;
     kubernetes_request.success();
-    let storage = fetch_storage_metrics(
+    let storage_metrics = fetch_storage_metrics(
         state.config.prometheus_url.as_ref(),
-        &[storage_identity(&state.config.installation_id, &workspace)
-            .map_err(|_| ApiError::BadRequest("workspace runtime identity is invalid"))?],
+        &details.storage_pvcs.identities().collect::<Vec<_>>(),
         &state.observability,
     )
-    .await
-    .telemetry(
-        namespace,
-        &names.resources.data_pvc_ordinal_zero(),
-        unix_timestamp(),
-    );
+    .await;
+    let observed_now = unix_timestamp();
+    let current_incidents = details
+        .events
+        .iter()
+        .filter_map(new_runtime_incident)
+        .collect::<Vec<_>>();
+    state
+        .database
+        .upsert_workspace_runtime_incidents(workspace_id, &current_incidents, observed_now)
+        .await?;
+    let mut incidents = state
+        .database
+        .list_workspace_runtime_incidents(&[workspace_id], observed_now, 50)
+        .await?;
     let response = WorkspaceRuntimeResponse {
         allocated: workspace.template.resources,
-        pvc_capacity: details.pvc_capacity,
-        storage,
+        persistent_storage: storage_metrics.telemetry(
+            details.storage_pvcs.persistent.as_ref(),
+            gibibytes(workspace.template.resources.disk_gib),
+            StorageBacking::PersistentVolume,
+            observed_now,
+        ),
+        temporary_storage: storage_metrics.telemetry(
+            details.storage_pvcs.temporary.as_ref(),
+            gibibytes(workspace.template.storage_policy.temporary_storage_gib),
+            details
+                .storage_pvcs
+                .temporary
+                .is_some()
+                .then_some(StorageBacking::EphemeralVolume)
+                .unwrap_or(details.scratch_backing),
+            observed_now,
+        ),
         metrics_available: details.metrics_available,
         pods: details.pods,
         metrics: details.metrics,
-        events: details.events,
+        events: incidents
+            .remove(&workspace_id)
+            .unwrap_or_default()
+            .into_iter()
+            .map(pod_event_from_incident)
+            .collect(),
     };
     Ok(Json(response))
+}
+
+fn new_runtime_incident(event: &PodEvent) -> Option<NewWorkspaceRuntimeIncident> {
+    let observed_at = event
+        .observed_at
+        .as_deref()?
+        .parse::<k8s_openapi::jiff::Timestamp>()
+        .ok()?
+        .as_second();
+    Some(NewWorkspaceRuntimeIncident {
+        category: event.category,
+        observed_at,
+        count: event
+            .count
+            .and_then(|count| u32::try_from(count).ok())
+            .unwrap_or(1),
+    })
+}
+
+fn pod_event_from_incident(incident: WorkspaceRuntimeIncident) -> PodEvent {
+    PodEvent {
+        category: incident.category,
+        count: Some(i32::try_from(incident.count).unwrap_or(i32::MAX)),
+        observed_at: k8s_openapi::jiff::Timestamp::new(incident.observed_at, 0)
+            .ok()
+            .map(|timestamp| timestamp.to_string()),
+    }
+}
+
+fn gibibytes(value: u64) -> u64 {
+    value.saturating_mul(1024 * 1024 * 1024)
 }
 
 fn unix_timestamp() -> i64 {

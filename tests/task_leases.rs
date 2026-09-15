@@ -207,9 +207,9 @@ async fn migrations_are_versioned_and_idempotent() {
         .await
         .unwrap();
     database.migrate().await.unwrap();
-    assert_eq!(database.schema_version().await.unwrap(), 22);
+    assert_eq!(database.schema_version().await.unwrap(), 23);
     database.migrate().await.unwrap();
-    assert_eq!(database.schema_version().await.unwrap(), 22);
+    assert_eq!(database.schema_version().await.unwrap(), 23);
 }
 
 #[tokio::test]

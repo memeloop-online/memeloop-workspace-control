@@ -1,89 +1,107 @@
-import { useRef, useState } from "react";
+import { useState } from "react";
+import { Button, Caption1, Dialog, DialogBody, DialogContent, DialogSurface, DialogTitle, Divider, Text, Title3 } from "@fluentui/react-components";
+import { CopyRegular, DismissRegular, PlugConnectedRegular } from "@fluentui/react-icons";
+import type { ApiClient } from "./api";
 import { useI18n } from "./i18n";
-import { jumpHostKnownHostsEntry, workspaceKnownHostsEntry } from "./sshIdentity";
-import type { WorkspaceResponse, WorkspaceSshConnection } from "./types";
+import type { WorkspaceSshConnection } from "./types";
+import { useWorkspaceStyles } from "./workspaces/workspaceStyles";
 
 interface Props {
+  api: ApiClient;
+  workspaceId: string;
   connection: WorkspaceSshConnection;
-  workspaceHostKey: WorkspaceResponse["workspace_host_key"];
-  jumpHostKey: WorkspaceResponse["jump_host_key"];
 }
 
-export function WorkspaceConnectionDialog({ connection, workspaceHostKey, jumpHostKey }: Props) {
+export function WorkspaceConnectionDialog({ api, workspaceId, connection }: Props) {
   const { t } = useI18n();
-  const dialog = useRef<HTMLDialogElement>(null);
-  const titleId = `connection-title-${connection.alias}`;
-  const jumpKnownHosts = jumpHostKey ? jumpHostKnownHostsEntry(connection, jumpHostKey) : null;
+  const styles = useWorkspaceStyles();
+  const [open, setOpen] = useState(false);
+  const [clientPublicKey, setClientPublicKey] = useState<string | null>(null);
+  const [keyLoading, setKeyLoading] = useState(false);
+  const [keyUnavailable, setKeyUnavailable] = useState(false);
+
+  async function loadClientPublicKey() {
+    if (keyLoading) return;
+    setKeyLoading(true);
+    setKeyUnavailable(false);
+    try {
+      const result = await api.workspaceClientPublicKey(workspaceId);
+      setClientPublicKey(result.public_key);
+    } catch {
+      setClientPublicKey(null);
+      setKeyUnavailable(true);
+    } finally {
+      setKeyLoading(false);
+    }
+  }
+
+  function openDialog() {
+    setOpen(true);
+    if (!clientPublicKey) void loadClientPublicKey();
+  }
+
   return <>
-    <button className="connection-dialog-trigger" onClick={() => dialog.current?.showModal()}>{t("openSshConnection")}</button>
-    <dialog ref={dialog} className="connection-dialog" aria-labelledby={titleId} onClick={(event) => {
-      if (event.target === dialog.current) dialog.current.close();
-    }}>
-      <div className="connection-dialog-content">
-        <header><h3 id={titleId}>{t("sshConnectionTitle")}</h3><button className="connection-dialog-close" aria-label={t("close")} onClick={() => dialog.current?.close()}>×</button></header>
-        <p className="connection-dialog-intro">{t("sshConnectionIntro")}</p>
-        <dl className="connection-facts">
-          <div><dt>{t("displayName")}</dt><dd>{connection.display_name}</dd></div>
-          <div><dt>{t("sshAlias")}</dt><dd><code>{connection.alias}</code></dd></div>
-          <div><dt>{t("hostname")}</dt><dd><code>{connection.hostname}</code></dd></div>
-          <div><dt>{t("sshPort")}</dt><dd><code>{connection.port}</code></dd></div>
-          <div><dt>{t("workspaceUser")}</dt><dd><code>{connection.user}</code></dd></div>
-        </dl>
-
-        <section aria-labelledby={`${titleId}-app`}>
-          <h4 id={`${titleId}-app`}>{t("codexAppConnection")}</h4>
-          <p>{t("codexAppAliasHelp")}</p>
-          <dl className="connection-facts app-fields">
-            <div><dt>{t("displayName")}</dt><dd><code>{connection.app.display_name}</code></dd></div>
-            <div><dt>{t("hostname")}</dt><dd><code>{connection.app.hostname}</code></dd></div>
-            <div><dt>{t("sshPortOptional")}</dt><dd>{connection.app.ssh_port ?? t("leaveBlank")}</dd></div>
-          </dl>
-        </section>
-
-        <section aria-labelledby={`${titleId}-config`}>
-          <h4 id={`${titleId}-config`}>{t("sshConfig")}</h4>
-          <p>{t("sshConfigInstallHelp")}</p>
-          <CopyBlock label={t("copySshConfig")} value={connection.config} multiline />
-        </section>
-        <section aria-labelledby={`${titleId}-command`}>
-          <h4 id={`${titleId}-command`}>{t("sshCommand")}</h4>
-          <CopyBlock label={t("copy")} value={connection.command} />
-        </section>
-        {(workspaceHostKey || jumpHostKey) && <section aria-labelledby={`${titleId}-keys`} className="host-identity-section">
-          <h4 id={`${titleId}-keys`}>{t("hostIdentity")}</h4>
-          <p>{t("hostIdentityHelp")}</p>
-          {workspaceHostKey && <IdentityBlock title={t("workspaceHost")} fingerprint={workspaceHostKey.fingerprint} knownHosts={workspaceKnownHostsEntry(connection, workspaceHostKey)} />}
-          {jumpHostKey && <IdentityBlock title={t("jumpHost")} fingerprint={jumpHostKey.fingerprint} knownHosts={jumpKnownHosts} />}
-        </section>}
-        <section aria-labelledby={`${titleId}-client-key`} className="client-key-section">
-          <h4 id={`${titleId}-client-key`}>{t("workspaceClientKey")}</h4>
-          <p>{t("workspaceClientKeyHelp")}</p>
-          <CopyBlock label={t("copyClientKeyCommand")} value="cat ~/.ssh/id_ed25519.pub" />
-        </section>
-      </div>
-    </dialog>
+    <Button appearance="outline" icon={<PlugConnectedRegular />} onClick={openDialog}>{t("openSshConnection")}</Button>
+    <Dialog open={open} onOpenChange={(_, data) => setOpen(data.open)}>
+      <DialogSurface className={styles.dialogSurface}>
+        <DialogBody className={styles.dialogBody}>
+          <DialogTitle action={<Button appearance="subtle" icon={<DismissRegular />} aria-label={t("close")} onClick={() => setOpen(false)} />}>{t("sshConnectionTitle")}</DialogTitle>
+          <DialogContent className={styles.dialogBody}>
+            <Text>{t("sshConnectionIntro")}</Text>
+            <dl className={styles.dialogFacts}>
+              <Fact label={t("displayName")} value={connection.display_name} styles={styles} />
+              <Fact label={t("sshAlias")} value={connection.alias} code styles={styles} />
+              <Fact label={t("hostname")} value={connection.hostname} code styles={styles} />
+              <Fact label={t("sshPort")} value={String(connection.port)} code styles={styles} />
+              <Fact label={t("workspaceUser")} value={connection.user} code styles={styles} />
+            </dl>
+            <Divider />
+            <section className={styles.dialogSection}>
+              <Title3>{t("codexAppConnection")}</Title3>
+              <Caption1>{t("codexAppAliasHelp")}</Caption1>
+              <dl className={styles.dialogFacts}>
+                <Fact label={t("displayName")} value={connection.app.display_name} code styles={styles} />
+                <Fact label={t("hostname")} value={connection.app.hostname} code styles={styles} />
+                <Fact label={t("sshPortOptional")} value={connection.app.ssh_port === null ? t("leaveBlank") : String(connection.app.ssh_port)} code styles={styles} />
+              </dl>
+            </section>
+            <Divider />
+            <section className={styles.dialogSection}>
+              <Title3>{t("sshConfig")}</Title3>
+              <Caption1>{t("sshConfigInstallHelp")}</Caption1>
+              <CopyBlock label={t("copySshConfig")} value={connection.config} multiline />
+            </section>
+            <section className={styles.dialogSection}>
+              <Title3>{t("sshCommand")}</Title3>
+              <CopyBlock label={t("copy")} value={connection.command} />
+            </section>
+            <section className={styles.dialogSection}>
+              <Title3>{t("workspacePublicKey")}</Title3>
+              <Caption1>{t("workspaceClientKeyHelp")}</Caption1>
+              {keyLoading && <Text role="status">{t("loadingWorkspacePublicKey")}</Text>}
+              {clientPublicKey && <CopyBlock label={t("copyWorkspacePublicKey")} value={clientPublicKey} />}
+              {keyUnavailable && <div className={styles.notice}><Text>{t("workspacePublicKeyUnavailable")}</Text><Button appearance="subtle" onClick={() => void loadClientPublicKey()}>{t("retry")}</Button></div>}
+            </section>
+          </DialogContent>
+        </DialogBody>
+      </DialogSurface>
+    </Dialog>
   </>;
-}
-
-function IdentityBlock({ title, fingerprint, knownHosts }: { title: string; fingerprint: string; knownHosts: string | null }) {
-  const { t } = useI18n();
-  return <div className="host-identity">
-    <strong>{title}</strong>
-    <CopyBlock label={t("copyFingerprint")} value={fingerprint} />
-    {knownHosts && <CopyBlock label={t("copyKnownHostsEntry")} value={knownHosts} />}
-  </div>;
 }
 
 function CopyBlock({ label, value, multiline = false }: { label: string; value: string; multiline?: boolean }) {
   const { t } = useI18n();
+  const styles = useWorkspaceStyles();
   const [copied, setCopied] = useState(false);
-  const copy = () => {
-    void navigator.clipboard.writeText(value);
-    setCopied(true);
-    window.setTimeout(() => setCopied(false), 1_200);
+  const copy = async () => {
+    try { await navigator.clipboard.writeText(value); setCopied(true); window.setTimeout(() => setCopied(false), 1_200); } catch { /* Clipboard permissions are optional; the value remains selectable. */ }
   };
-  return <div className={`connection-copy${multiline ? " multiline" : ""}`}>
-    {multiline ? <pre><code>{value}</code></pre> : <code>{value}</code>}
-    <button aria-label={`${t("copy")} ${label}`} onClick={copy}>{copied ? t("copied") : label}</button>
+  return <div className={styles.copyBlock}>
+    <pre className={styles.copyValue}><code>{value}</code></pre>
+    <Button appearance="secondary" icon={<CopyRegular />} aria-label={`${t("copy")} ${label}`} onClick={() => void copy()}>{copied ? t("copied") : label}</Button>
   </div>;
+}
+
+function Fact({ label, value, code = false, styles }: { label: string; value: string; code?: boolean; styles: ReturnType<typeof useWorkspaceStyles> }) {
+  return <div className={styles.dialogFact}><Caption1>{label}</Caption1><Text className={code ? styles.code : undefined}>{value}</Text></div>;
 }

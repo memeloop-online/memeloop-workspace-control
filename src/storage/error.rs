@@ -60,6 +60,8 @@ pub enum StorageError {
     UnknownWorkspaceState(String),
     #[error("database contains unknown workspace access mode {0}")]
     UnknownAccessMode(String),
+    #[error("database contains unknown runtime incident category {0}")]
+    UnknownRuntimeIncidentCategory(String),
     #[error("workspace was not found")]
     WorkspaceNotFound,
     #[error("workspace HTTP port must be allowed and between 1 and 65535")]
@@ -78,6 +80,18 @@ pub enum StorageError {
     InvalidWorkspaceImageUpdate,
     #[error("workspace image can only be changed while stopped and at the expected generation")]
     WorkspaceImageUpdateConflict,
+    #[error("node pool is invalid")]
+    InvalidNodePool,
+    #[error("node pool was not found")]
+    NodePoolNotFound,
+    #[error("node pool is disabled or unavailable")]
+    NodePoolUnavailable,
+    #[error("node pool is not allowed by the workspace template")]
+    NodePoolNotAllowed,
+    #[error("node pool is enabled or still referenced")]
+    NodePoolInUse,
+    #[error("workspace placement can only be changed while stopped and at the expected generation")]
+    WorkspacePlacementUpdateConflict,
     #[error("workspace template was not found or is disabled")]
     TemplateNotFound,
     #[error("workspace template is invalid")]

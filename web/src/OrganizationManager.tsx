@@ -1,5 +1,13 @@
+import {
+  Button,
+  Field,
+  Input,
+  Text,
+} from "@fluentui/react-components";
+
 import type { Organization } from "./types";
 import { useI18n } from "./i18n";
+import { AdminCard, AdminToolbar, SaveButton, useAdminStyles } from "./admin/fluentAdmin";
 
 export interface OrganizationManagerProps {
   organization: Organization | undefined;
@@ -29,12 +37,27 @@ export function OrganizationManager({
   onCreate,
 }: OrganizationManagerProps) {
   const { t } = useI18n();
-  return <div className="system-card">
-    <h3>{t("organizationManagement")}</h3>
-    {organization ? <>
-      <label>{t("currentOrganizationName")}<input value={organizationName} onChange={(event) => onOrganizationNameChange(event.target.value)} /></label>
-      <div className="form-actions"><button className="button" disabled={!canEdit || !organizationName.trim() || organizationName.trim() === organization.name} onClick={onSave}>{t("saveOrganization")}</button>{canDelete && <button className="button danger" onClick={onDelete}>{t("deleteOrganization")}</button>}</div>
-    </> : <p>{t("organizationUnavailable")}</p>}
-    {canCreate && <div className="quota-editor"><label>{t("newOrganizationName")}<input value={newOrganizationName} onChange={(event) => onNewOrganizationNameChange(event.target.value)} /></label><div className="quota-actions"><button className="button primary" disabled={!newOrganizationName.trim()} onClick={onCreate}>{t("createOrganization")}</button></div></div>}
-  </div>;
+  const styles = useAdminStyles();
+
+  return <AdminCard title={t("organizationManagement")}>
+    {organization ? <div className={styles.stack}>
+      <Field label={t("currentOrganizationName")}>
+        <Input value={organizationName} onChange={(event) => onOrganizationNameChange(event.target.value)} />
+      </Field>
+      <AdminToolbar action={<div className={styles.actions}>
+        <SaveButton disabled={!canEdit || !organizationName.trim() || organizationName.trim() === organization.name} onClick={onSave}>{t("saveOrganization")}</SaveButton>
+        {canDelete && <Button appearance="secondary" onClick={onDelete}>{t("deleteOrganization")}</Button>}
+      </div>}>
+        <Text size={300}>{organization.name}</Text>
+      </AdminToolbar>
+    </div> : <Text>{t("organizationUnavailable")}</Text>}
+    {canCreate && <div className={styles.stack}>
+      <Field label={t("newOrganizationName")}>
+        <Input value={newOrganizationName} onChange={(event) => onNewOrganizationNameChange(event.target.value)} />
+      </Field>
+      <div className={styles.actions}>
+        <SaveButton disabled={!newOrganizationName.trim()} onClick={onCreate}>{t("createOrganization")}</SaveButton>
+      </div>
+    </div>}
+  </AdminCard>;
 }

@@ -14,7 +14,7 @@ use uuid::Uuid;
 use crate::{
     auth::Permission,
     injections::{InjectionItem, ResolvedInjectionSummary},
-    quota::Resources,
+    quota::{QuotaResources, Resources},
     storage::{CreateWorkspace, IdempotencyDecision},
     workspaces::{Workspace, WorkspaceAction},
 };
@@ -37,6 +37,8 @@ use creation::{authorize_creation, create_admitted_workspace};
 pub(super) struct CreateWorkspaceRequest {
     #[serde(flatten)]
     pub workspace: CreateWorkspace,
+    #[serde(default)]
+    pub node_pool: Option<String>,
     #[serde(default)]
     pub inline_workspace_injections: Vec<InjectionItem>,
 }
@@ -121,7 +123,7 @@ pub(super) struct WorkspaceResponsePage {
 #[derive(Debug, Serialize, ToSchema)]
 pub(super) struct WorkspaceListSummary {
     pub total_count: u64,
-    pub requested: Resources,
+    pub requested: QuotaResources,
     pub state_counts: BTreeMap<String, u64>,
 }
 

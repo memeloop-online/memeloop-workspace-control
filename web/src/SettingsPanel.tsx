@@ -1,12 +1,27 @@
 import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
+import {
+  Body1,
+  Button,
+  Card,
+  CardHeader,
+  Dropdown,
+  Field,
+  Input,
+  MessageBar,
+  MessageBarBody,
+  Option,
+  Subtitle1,
+  Title2,
+  makeStyles,
+  tokens,
+} from "@fluentui/react-components";
 
 import type { ApiClient } from "./api";
 import { useI18n } from "./i18n";
 import { ApiKeySection } from "./settings/ApiKeySection";
 import type { Organization, Principal, UserProfile } from "./types";
 import { UserAvatar } from "./UserAvatar";
-import "./settings-ui.css";
 
 interface Props {
   api: ApiClient;
@@ -18,6 +33,86 @@ interface Props {
   onError: (message: string) => void;
 }
 
+const useStyles = makeStyles({
+  root: {
+    display: "grid",
+    gap: tokens.spacingVerticalXXL,
+    width: "100%",
+    maxWidth: "1180px",
+    margin: "0 auto",
+    padding: `${tokens.spacingVerticalXL} ${tokens.spacingHorizontalXL}`,
+    boxSizing: "border-box",
+    "@media (max-width: 640px)": {
+      padding: `${tokens.spacingVerticalL} ${tokens.spacingHorizontalM}`,
+    },
+  },
+  heading: {
+    display: "grid",
+    gap: tokens.spacingVerticalXS,
+  },
+  headingDescription: {
+    color: tokens.colorNeutralForeground2,
+    maxWidth: "70ch",
+  },
+  cards: {
+    display: "grid",
+    gridTemplateColumns: "repeat(12, minmax(0, 1fr))",
+    gap: tokens.spacingHorizontalL,
+    alignItems: "stretch",
+    "@media (max-width: 900px)": {
+      gridTemplateColumns: "1fr",
+    },
+  },
+  halfCard: {
+    gridColumn: "span 6",
+    minWidth: 0,
+    "@media (max-width: 900px)": {
+      gridColumn: "auto",
+    },
+  },
+  fullCard: {
+    gridColumn: "1 / -1",
+    minWidth: 0,
+  },
+  card: {
+    display: "grid",
+    alignContent: "start",
+    gap: tokens.spacingVerticalL,
+    padding: tokens.spacingHorizontalXL,
+    minWidth: 0,
+    "@media (max-width: 640px)": {
+      padding: tokens.spacingHorizontalL,
+    },
+  },
+  cardHeader: {
+    display: "flex",
+    alignItems: "center",
+    gap: tokens.spacingHorizontalM,
+    minWidth: 0,
+  },
+  cardHeaderText: {
+    display: "grid",
+    gap: tokens.spacingVerticalXXS,
+    minWidth: 0,
+  },
+  cardDescription: {
+    color: tokens.colorNeutralForeground2,
+  },
+  form: {
+    display: "grid",
+    gap: tokens.spacingVerticalL,
+  },
+  actions: {
+    display: "flex",
+    alignItems: "center",
+    gap: tokens.spacingHorizontalM,
+    flexWrap: "wrap",
+  },
+  status: {
+    minWidth: 0,
+  },
+});
+
 export function SettingsPanel({
   api,
   principal,
@@ -28,6 +123,7 @@ export function SettingsPanel({
   onError,
 }: Props) {
   const { t } = useI18n();
+  const classes = useStyles();
   const [profile, setProfile] = useState<UserProfile>({
     display_name: principal.display_name,
     avatar_url: principal.avatar_url ?? null,
@@ -49,10 +145,8 @@ export function SettingsPanel({
         if (active) onError(message(error, t("requestFailed")));
       });
     return () => { active = false; };
-    // The shell currently supplies onProfileChanged inline. Profile loading is
-    // scoped to an authenticated API client, not to that render callback.
-    // Keeping this dependency narrow prevents a profile request on every
-    // parent render.
+    // Profile loading is scoped to this API client. The shell callback is
+    // intentionally excluded so parent renders do not repeat the request.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [api]);
 
@@ -76,37 +170,48 @@ export function SettingsPanel({
     }
   }
 
-  return <section className="panel-stack settings-page">
-    <div className="section-heading"><h2>{t("settingsTitle")}</h2></div>
-    <div className="settings-grid settings-grid-refined">
-      <ProfileCard
-        avatarDraft={avatarDraft}
-        principal={principal}
-        profile={profile}
-        profileSaved={profileSaved}
-        saving={saving}
-        onAvatarChange={(value) => {
-          setProfileSaved(false);
-          setAvatarDraft(value ?? "");
-          setProfile((current) => ({ ...current, avatar_url: value }));
-        }}
-        onDisplayNameChange={(displayName) => {
-          setProfileSaved(false);
-          setProfile((current) => ({ ...current, display_name: displayName }));
-        }}
-        onSave={(event) => void saveProfile(event)}
-      />
-      <OrganizationCard
-        organizationId={organizationId}
-        organizations={organizations}
-        onOrganizationChange={onOrganizationChange}
-      />
-      <ApiKeySection api={api} organizationId={organizationId} principal={principal} onError={onError} />
-    </div>
-  </section>;
+  return <main className={classes.root} aria-labelledby="settings-title">
+      <header className={classes.heading}>
+        <Title2 id="settings-title">{t("settingsTitle")}</Title2>
+        <Body1 className={classes.headingDescription}>{t("organizationSwitchHelp")}</Body1>
+      </header>
+      <div className={classes.cards}>
+        <ProfileCard
+          className={classes.halfCard}
+          cardClassName={classes.card}
+          avatarDraft={avatarDraft}
+          principal={principal}
+          profile={profile}
+          profileSaved={profileSaved}
+          saving={saving}
+          onAvatarChange={(value) => {
+            setProfileSaved(false);
+            setAvatarDraft(value ?? "");
+            setProfile((current) => ({ ...current, avatar_url: value }));
+          }}
+          onDisplayNameChange={(displayName) => {
+            setProfileSaved(false);
+            setProfile((current) => ({ ...current, display_name: displayName }));
+          }}
+          onSave={(event) => void saveProfile(event)}
+        />
+        <OrganizationCard
+          className={classes.halfCard}
+          cardClassName={classes.card}
+          organizationId={organizationId}
+          organizations={organizations}
+          onOrganizationChange={onOrganizationChange}
+        />
+        <section className={classes.fullCard} aria-labelledby="api-keys-title">
+          <ApiKeySection api={api} organizationId={organizationId} principal={principal} onError={onError} />
+        </section>
+      </div>
+    </main>;
 }
 
 interface ProfileCardProps {
+  className: string;
+  cardClassName: string;
   avatarDraft: string;
   principal: Principal;
   profile: UserProfile;
@@ -118,6 +223,8 @@ interface ProfileCardProps {
 }
 
 function ProfileCard({
+  className,
+  cardClassName,
   avatarDraft,
   principal,
   profile,
@@ -128,60 +235,77 @@ function ProfileCard({
   onSave,
 }: ProfileCardProps) {
   const { t } = useI18n();
-  return <section className="settings-card settings-profile-card">
-    <div className="settings-card-heading">
+  const classes = useStyles();
+  return <Card className={`${className} ${cardClassName}`}>
+    <div className={classes.cardHeader}>
       <UserAvatar displayName={profile.display_name} userId={principal.user_id} avatarUrl={profile.avatar_url} size="large" />
-      <div><h3>{t("profileSettings")}</h3></div>
+      <div className={classes.cardHeaderText}>
+        <Subtitle1>{t("profileSettings")}</Subtitle1>
+        <Body1 className={classes.cardDescription}>{t("displayName")}</Body1>
+      </div>
     </div>
-    <form className="settings-form" onSubmit={onSave}>
-      <label>
-        <span>{t("displayName")}</span>
-        <input
+    <form className={classes.form} onSubmit={onSave}>
+      <Field label={t("displayName")} required>
+        <Input
           required
           minLength={1}
           maxLength={80}
           value={profile.display_name}
           onChange={(event) => onDisplayNameChange(event.target.value)}
         />
-      </label>
-      <div className="avatar-editor">
-        <UserAvatar
-          displayName={profile.display_name}
-          userId={principal.user_id}
-          avatarUrl={avatarDraft || null}
-          size="large"
-          disabled={saving}
-          onChange={onAvatarChange}
-        />
+      </Field>
+      <UserAvatar
+        displayName={profile.display_name}
+        userId={principal.user_id}
+        avatarUrl={avatarDraft || null}
+        size="large"
+        disabled={saving}
+        onChange={onAvatarChange}
+      />
+      <div className={classes.actions}>
+        <Button appearance="primary" type="submit" disabled={saving || !profile.display_name.trim()}>
+          {saving ? t("saving") : t("saveProfile")}
+        </Button>
+        {profileSaved && <MessageBar className={classes.status} intent="success">
+          <MessageBarBody>{t("profileSaved")}</MessageBarBody>
+        </MessageBar>}
       </div>
-      <button className="button primary" disabled={saving || !profile.display_name.trim()}>{saving ? t("saving") : t("saveProfile")}</button>
-      {profileSaved && <p className="success-inline" role="status">{t("profileSaved")}</p>}
     </form>
-  </section>;
+  </Card>;
 }
 
 function OrganizationCard({
+  className,
+  cardClassName,
   organizationId,
   organizations,
   onOrganizationChange,
-}: Pick<Props, "organizationId" | "organizations" | "onOrganizationChange">) {
+}: Pick<Props, "organizationId" | "organizations" | "onOrganizationChange"> & { className: string; cardClassName: string }) {
   const { t } = useI18n();
-  return <section className="settings-card settings-organization-card">
-    <h3>{t("organizationSettings")}</h3>
-    <p>{t("organizationSwitchHelp")}</p>
-    <label className="settings-form">
-      <span>{t("currentOrganization")}</span>
-      <select
-        value={organizationId}
-        onChange={(event) => {
-          if (event.target.value) onOrganizationChange(event.target.value);
+  const classes = useStyles();
+  const selectedOrganization = organizations.find((organization) => organization.id === organizationId);
+  return <Card className={`${className} ${cardClassName}`}>
+    <div className={classes.cardHeader}>
+      <div className={classes.cardHeaderText}>
+        <Subtitle1>{t("organizationSettings")}</Subtitle1>
+        <Body1 className={classes.cardDescription}>{t("organizationSwitchHelp")}</Body1>
+      </div>
+    </div>
+    <Field label={t("currentOrganization")} required>
+      <Dropdown
+        value={selectedOrganization?.name ?? ""}
+        selectedOptions={organizationId ? [organizationId] : []}
+        disabled={organizations.length === 0}
+        onOptionSelect={(_, data) => {
+          if (data.optionValue) onOrganizationChange(data.optionValue);
         }}
       >
-        {!organizationId && <option value="" disabled>{t("chooseOrganization")}</option>}
-        {organizations.map((organization) => <option key={organization.id} value={organization.id}>{organization.name}</option>)}
-      </select>
-    </label>
-  </section>;
+        {organizations.map((organization) => <Option key={organization.id} value={organization.id} text={organization.name}>
+          {organization.name}
+        </Option>)}
+      </Dropdown>
+    </Field>
+  </Card>;
 }
 
 function message(error: unknown, fallback: string) {

@@ -93,7 +93,7 @@ async fn sqlite_snapshot_contains_ciphertext_and_resets_only_pending_work() {
 
     let snapshot = database.export_snapshot(200).await.unwrap();
     assert_eq!(snapshot.format_version, 2);
-    assert_eq!(snapshot.schema_version, 22);
+    assert_eq!(snapshot.schema_version, 23);
     assert_eq!(snapshot.installation_id, "snapshot-test");
     assert_eq!(snapshot.tables["injection_items"].len(), 1);
     assert!(snapshot.tables.contains_key("workspace_injection_refs"));
@@ -101,6 +101,7 @@ async fn sqlite_snapshot_contains_ciphertext_and_resets_only_pending_work() {
     assert_eq!(snapshot.tables["plugin_packages"].len(), 1);
     assert_eq!(snapshot.tables["plugin_assets"].len(), 1);
     assert_eq!(snapshot.tables["plugin_catalog_metadata"].len(), 1);
+    assert!(snapshot.tables["workspace_runtime_incidents"].is_empty());
     let workspace_row = &snapshot.tables["workspaces"][0];
     for removed_field in [
         "runtime_namespace_scope",

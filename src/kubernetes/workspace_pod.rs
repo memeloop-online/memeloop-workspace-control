@@ -2,8 +2,8 @@ use std::collections::BTreeMap;
 
 use k8s_openapi::{
     api::core::v1::{
-        Affinity, Container, ContainerPort, EnvVar, ExecAction, LocalObjectReference, NodeAffinity,
-        NodeSelector, PreferredSchedulingTerm, Probe, ResourceRequirements, VolumeMount,
+        Container, ContainerPort, EnvVar, ExecAction, LocalObjectReference, Probe,
+        ResourceRequirements, VolumeMount,
     },
     apimachinery::pkg::api::resource::Quantity,
 };
@@ -17,11 +17,12 @@ use super::{
 
 mod support;
 
-use support::{
-    env, hostname_term, injection_env_from, quantities, root_security_context, sshd_argument,
-};
+use support::{env, injection_env_from, quantities, root_security_context, sshd_argument};
 
 const BOOTSTRAP: &str = "/etc/workspace-platform/mwc-workspace-bootstrap";
+const SCRATCH_ROOT: &str = "/var/lib/mwc/workspace-scratch";
+const WORKSPACE_CACHE_SUB_PATH: &str = "workspace-cache";
+const CODEX_SESSION_SUB_PATH: &str = "codex-session-scratch";
 const BUILD_SCRATCH: &str = "/var/lib/mwc/build-scratch";
 const CODEX_SCRATCH: &str = "/var/lib/mwc/codex-scratch";
 const BUILDKIT_VOLUME_MOUNT: &str = "/run/mwc-buildkit";
@@ -55,10 +56,7 @@ impl<'a> WorkspacePod<'a> {
         quantities(
             format!("{}m", self.template.pod_requests.cpu_millis),
             format!("{}Mi", self.template.pod_requests.memory_mib),
-            self.template
-                .pod_requests
-                .ephemeral_storage_mib
-                .map(|value| format!("{value}Mi")),
+            Some("512Mi".to_owned()),
         )
     }
 
@@ -84,23 +82,39 @@ impl<'a> WorkspacePod<'a> {
     }
 
     pub fn resource_limits(&self) -> BTreeMap<String, Quantity> {
-        let policy_limit_mib = self
-            .template
-            .storage_policy
-            .build_scratch_gib
-            .saturating_add(self.template.storage_policy.codex_scratch_gib)
-            .saturating_mul(1_024)
-            .saturating_add(256);
-        let ephemeral_limit = self
-            .template
-            .ephemeral_storage_limit_mib
-            .unwrap_or_default()
-            .max(policy_limit_mib);
         quantities(
             format!("{}m", self.template.resources.cpu_millis),
             format!("{}Mi", self.template.resources.memory_mib),
-            Some(format!("{ephemeral_limit}Mi")),
+            Some("2048Mi".to_owned()),
         )
+    }
+
+    pub fn workspace_scratch_init_container(&self, image: &str) -> Container {
+        Container {
+            name: "workspace-scratch-init".to_owned(),
+            image: Some(image.to_owned()),
+            command: Some(vec!["sh".to_owned(), "-c".to_owned()]),
+            args: Some(vec![scratch_init_script().to_owned()]),
+            env: Some(vec![
+                env("MWC_WORKSPACE_USER", self.login_user),
+                env(
+                    "MWC_BUILDKIT_ENABLED",
+                    if self.template.buildkit {
+                        "true"
+                    } else {
+                        "false"
+                    },
+                ),
+            ]),
+            volume_mounts: Some(vec![mount(buildkit::SCRATCH_VOLUME, SCRATCH_ROOT, false)]),
+            resources: Some(ResourceRequirements {
+                requests: Some(quantities("10m", "16Mi", None)),
+                limits: Some(quantities("100m", "64Mi", None)),
+                ..ResourceRequirements::default()
+            }),
+            security_context: Some(root_security_context(true)),
+            ..Container::default()
+        }
     }
 
     pub fn workspace_init_container(
@@ -176,42 +190,11 @@ impl<'a> WorkspacePod<'a> {
     }
 
     pub fn buildkit_container(&self) -> Option<Container> {
-        buildkit::container(
-            self.has_buildkit(),
-            self.template.storage_policy.buildkit_cache_gib,
-        )
+        buildkit::container(self.has_buildkit())
     }
 
     pub fn buildkit_bootstrap_container(&self) -> Option<Container> {
         buildkit::bootstrap_container(self.has_buildkit())
-    }
-
-    pub fn affinity(&self) -> Option<Affinity> {
-        if self.template.required_node_names.is_empty()
-            && self.template.preferred_node_names.is_empty()
-        {
-            return None;
-        }
-        let required = (!self.template.required_node_names.is_empty()).then(|| NodeSelector {
-            node_selector_terms: vec![hostname_term(&self.template.required_node_names)],
-        });
-        let preferred = (!self.template.preferred_node_names.is_empty()).then(|| {
-            vec![PreferredSchedulingTerm {
-                weight: 100,
-                preference: hostname_term(&self.template.preferred_node_names),
-            }]
-        });
-        Some(Affinity {
-            node_affinity: Some(NodeAffinity {
-                required_during_scheduling_ignored_during_execution: required,
-                preferred_during_scheduling_ignored_during_execution: preferred,
-            }),
-            ..Affinity::default()
-        })
-    }
-
-    pub fn node_selector(&self) -> Option<BTreeMap<String, String>> {
-        (!self.template.node_selector.is_empty()).then(|| self.template.node_selector.clone())
     }
 
     pub fn pod_security_context(&self) -> Option<k8s_openapi::api::core::v1::PodSecurityContext> {
@@ -266,11 +249,7 @@ impl<'a> WorkspacePod<'a> {
             env("MWC_BUILD_SCRATCH", BUILD_SCRATCH),
             env(
                 "MWC_HOME_RESERVE_MIB",
-                &self
-                    .template
-                    .storage_policy
-                    .effective_home_reserve_mib(self.template.resources.disk_gib)
-                    .to_string(),
+                &fixed_home_disk_margin_mib(self.template.resources.disk_gib).to_string(),
             ),
         ];
         environment.extend(self.session_platform_env());
@@ -333,14 +312,61 @@ impl<'a> WorkspacePod<'a> {
         mounts.extend([
             mount("runtime-tmp", "/tmp", false),
             mount("runtime-tmp", "/var/tmp", false),
-            mount("build-scratch", BUILD_SCRATCH, false),
-            mount("codex-scratch", CODEX_SCRATCH, false),
+            scratch_sub_path_mount(BUILD_SCRATCH, WORKSPACE_CACHE_SUB_PATH),
+            scratch_sub_path_mount(CODEX_SCRATCH, CODEX_SESSION_SUB_PATH),
         ]);
         if self.has_buildkit() {
-            mounts.push(mount("buildkit-cache", BUILDKIT_VOLUME_MOUNT, false));
+            mounts.push(scratch_sub_path_mount(
+                BUILDKIT_VOLUME_MOUNT,
+                buildkit::CACHE_SUB_PATH,
+            ));
         }
         mounts
     }
+}
+
+fn scratch_sub_path_mount(path: &str, sub_path: &str) -> VolumeMount {
+    VolumeMount {
+        name: buildkit::SCRATCH_VOLUME.to_owned(),
+        mount_path: path.to_owned(),
+        sub_path: Some(sub_path.to_owned()),
+        read_only: Some(false),
+        ..VolumeMount::default()
+    }
+}
+
+fn fixed_home_disk_margin_mib(disk_gib: u64) -> u64 {
+    disk_gib.saturating_mul(1_024).saturating_div(10).min(1_024)
+}
+
+fn scratch_init_script() -> &'static str {
+    r#"set -eu
+scratch_root=/var/lib/mwc/workspace-scratch
+workspace_group=$(id -gn "$MWC_WORKSPACE_USER")
+
+prepare_directory() {
+    path=$1
+    owner=$2
+    group=$3
+    if [ -L "$path" ] || { [ -e "$path" ] && [ ! -d "$path" ]; }; then
+        echo "unsafe workspace scratch path: $path" >&2
+        exit 70
+    fi
+    mkdir -p -- "$path"
+    chown "$owner:$group" -- "$path"
+    chmod 0700 -- "$path"
+}
+
+if [ -L "$scratch_root" ] || [ ! -d "$scratch_root" ]; then
+    echo "workspace scratch volume is not mounted" >&2
+    exit 70
+fi
+prepare_directory "$scratch_root/workspace-cache" "$MWC_WORKSPACE_USER" "$workspace_group"
+prepare_directory "$scratch_root/codex-session-scratch" "$MWC_WORKSPACE_USER" "$workspace_group"
+if [ "$MWC_BUILDKIT_ENABLED" = true ]; then
+    prepare_directory "$scratch_root/build-cache" 1000 1000
+fi
+"#
 }
 
 pub(super) fn apply_injected_environment_overrides(

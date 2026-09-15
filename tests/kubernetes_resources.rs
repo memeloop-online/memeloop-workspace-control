@@ -2,11 +2,11 @@ use memeloop_workspace_control::{
     injections::{InjectionItem, InjectionKind, InjectionValue, resolve_injections},
     kubernetes::{
         BuildError, InternetEgressConfig, ORGANIZATION_ID_LABEL, OWNER_INSTALLATION_LABEL,
-        OWNER_USER_ID_LABEL, OwnershipError, ResourceBuilder, TEMPLATE_ID_LABEL, TtydMtlsConfig,
-        WORKSPACE_ID_LABEL,
+        OWNER_USER_ID_LABEL, OwnershipError, ResourceBuilder, STORAGE_ROLE_LABEL,
+        TEMPLATE_ID_LABEL, TtydMtlsConfig, WORKSPACE_ID_LABEL,
     },
     quota::Resources,
-    templates::{EgressPolicy, ScratchMedium, WorkspaceTemplateSpec},
+    templates::{EgressPolicy, WorkspaceTemplateSpec},
     workspace_runtime::{WorkspaceRuntimeIdentity, WorkspaceRuntimeNames},
     workspaces::{AccessMode, Workspace, WorkspaceState},
 };
@@ -38,6 +38,7 @@ fn builder() -> ResourceBuilder {
             "mwc-ssh-jump".to_owned(),
         )]),
         storage_class_name: Some("managed-delete".to_owned()),
+        scratch_storage_class_name: Some("local-nvme-scratch".to_owned()),
         web_shell_domain: Some("shell.example.com".to_owned()),
         port_mapping_domain: Some("ports.example.com".to_owned()),
         higress_gateway_name: "higress-gateway".to_owned(),
@@ -56,6 +57,7 @@ fn workspace(state: WorkspaceState) -> Workspace {
         owner_id: Uuid::now_v7(),
         name: "test-workspace".to_owned(),
         template_id: Some(Uuid::now_v7()),
+        node_pool: "default".to_owned(),
         runtime: WorkspaceRuntimeIdentity::new(id, &short_id).unwrap(),
         template: WorkspaceTemplateSpec::standard(
             "registry.example/workspace:1",
@@ -277,9 +279,6 @@ fn node_template(image: &str, resources: Resources) -> WorkspaceTemplateSpec {
     template.buildkit = true;
     template.pod_requests.cpu_millis = 1_000;
     template.pod_requests.memory_mib = 1_024;
-    template.pod_requests.ephemeral_storage_mib = Some(256);
-    template.ephemeral_storage_limit_mib = Some(1_024);
-    template.required_node_names = vec!["westlake".to_owned(), "haixia".to_owned()];
     template
 }
 
@@ -1178,7 +1177,13 @@ fn builds_single_replica_workspace_with_standard_components() {
         .as_ref()
         .unwrap();
     assert_eq!(
-        pod_spec.init_containers.as_ref().unwrap()[0]
+        pod_spec
+            .init_containers
+            .as_ref()
+            .unwrap()
+            .iter()
+            .find(|container| container.name == "workspace-bootstrap")
+            .unwrap()
             .command
             .as_ref()
             .unwrap()[0],
@@ -1342,10 +1347,11 @@ fn node_template_reuses_the_existing_image_with_platform_bootstrap() {
         "Unconfined"
     );
     let init_containers = pod.init_containers.as_ref().unwrap();
-    assert_eq!(init_containers.len(), 2);
-    assert_eq!(init_containers[1].name, "buildkit-bootstrap");
+    assert_eq!(init_containers.len(), 3);
+    assert_eq!(init_containers[0].name, "workspace-scratch-init");
+    assert_eq!(init_containers[2].name, "buildkit-bootstrap");
     assert!(
-        init_containers[1].args.as_ref().unwrap()[0]
+        init_containers[2].args.as_ref().unwrap()[0]
             .contains("cp /usr/bin/buildctl /var/lib/mwc-buildkit/bin/buildctl")
     );
     assert!(buildkit.command.is_none());
@@ -1412,17 +1418,25 @@ fn node_template_reuses_the_existing_image_with_platform_bootstrap() {
 }
 
 #[test]
-fn regenerable_data_uses_bounded_pod_lifetime_storage() {
+fn temporary_storage_uses_one_generic_ephemeral_claim_and_isolated_subpaths() {
     let mut workspace = workspace(WorkspaceState::Ready);
     workspace.template.buildkit = true;
-    workspace.template.storage_policy.runtime_tmp_memory_mib = 640;
-    workspace.template.storage_policy.build_scratch_gib = 14;
-    workspace.template.storage_policy.buildkit_cache_gib = 9;
-    workspace.template.storage_policy.codex_scratch_gib = 3;
+    workspace.template.storage_policy.temporary_storage_gib = 26;
 
     let names = runtime_names(&workspace);
     let resources = builder().build(&workspace).unwrap();
-    let pod = resources.stateful_set.spec.unwrap().template.spec.unwrap();
+    let stateful_set = resources.stateful_set.spec.unwrap();
+    let durable_claims = stateful_set.volume_claim_templates.as_ref().unwrap();
+    assert_eq!(durable_claims.len(), 1);
+    assert_eq!(
+        durable_claims[0].metadata.name.as_deref(),
+        Some(names.resources.data_claim_template.as_str())
+    );
+    assert_eq!(
+        durable_claims[0].metadata.labels.as_ref().unwrap()[STORAGE_ROLE_LABEL],
+        "home"
+    );
+    let pod = stateful_set.template.spec.unwrap();
     let volume = |name: &str| {
         pod.volumes
             .as_ref()
@@ -1430,37 +1444,108 @@ fn regenerable_data_uses_bounded_pod_lifetime_storage() {
             .iter()
             .find(|volume| volume.name == name)
             .unwrap()
-            .empty_dir
+    };
+    let empty_dir = |name: &str| volume(name).empty_dir.as_ref().unwrap();
+    let scratch = volume("workspace-scratch");
+    assert!(scratch.empty_dir.is_none());
+    assert!(scratch.persistent_volume_claim.is_none());
+    let claim_template = scratch
+        .ephemeral
+        .as_ref()
+        .unwrap()
+        .volume_claim_template
+        .as_ref()
+        .unwrap();
+    let expected_workspace_id = workspace.id.to_string();
+    assert_eq!(
+        claim_template.spec.access_modes.as_deref(),
+        Some(["ReadWriteOnce".to_owned()].as_slice())
+    );
+    assert_eq!(
+        claim_template.spec.storage_class_name.as_deref(),
+        Some("local-nvme-scratch")
+    );
+    assert_eq!(
+        claim_template
+            .spec
+            .resources
             .as_ref()
             .unwrap()
-    };
-    assert_eq!(volume("runtime-tmp").medium.as_deref(), Some("Memory"));
-    assert_eq!(
-        volume("runtime-tmp").size_limit.as_ref().unwrap().0,
-        "640Mi"
+            .requests
+            .as_ref()
+            .unwrap()["storage"]
+            .0,
+        "26Gi"
     );
     assert_eq!(
-        volume("build-scratch").size_limit.as_ref().unwrap().0,
-        "14Gi"
+        claim_template
+            .metadata
+            .as_ref()
+            .unwrap()
+            .labels
+            .as_ref()
+            .unwrap()
+            .get(WORKSPACE_ID_LABEL)
+            .map(String::as_str),
+        Some(expected_workspace_id.as_str())
     );
-    assert_eq!(volume("build-scratch").medium, None);
     assert_eq!(
-        volume("buildkit-cache").size_limit.as_ref().unwrap().0,
-        "9Gi"
+        claim_template
+            .metadata
+            .as_ref()
+            .unwrap()
+            .labels
+            .as_ref()
+            .unwrap()[STORAGE_ROLE_LABEL],
+        "temporary"
     );
-    assert_eq!(volume("buildkit-cache").medium, None);
     assert_eq!(
-        volume("codex-scratch").size_limit.as_ref().unwrap().0,
-        "3Gi"
+        pod.volumes
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|volume| volume.name.contains("scratch"))
+            .count(),
+        1
     );
-    assert_eq!(volume("codex-scratch").medium, None);
+    assert_eq!(empty_dir("runtime-tmp").medium.as_deref(), Some("Memory"));
     assert_eq!(
-        volume("runtime-ssh").size_limit.as_ref().unwrap().0,
+        empty_dir("runtime-tmp").size_limit.as_ref().unwrap().0,
+        "512Mi"
+    );
+    assert_eq!(empty_dir("runtime-ssh").medium.as_deref(), Some("Memory"));
+    assert_eq!(
+        empty_dir("runtime-ssh").size_limit.as_ref().unwrap().0,
         "128Mi"
     );
-    assert_eq!(volume("runtime-ssh").medium.as_deref(), Some("Memory"));
-    assert_eq!(volume("ttyd-tmp").medium.as_deref(), Some("Memory"));
-    assert_eq!(volume("ttyd-tmp").size_limit.as_ref().unwrap().0, "128Mi");
+    assert_eq!(empty_dir("ttyd-tmp").medium.as_deref(), Some("Memory"));
+    assert_eq!(
+        empty_dir("ttyd-tmp").size_limit.as_ref().unwrap().0,
+        "128Mi"
+    );
+
+    let init_containers = pod.init_containers.as_ref().unwrap();
+    assert_eq!(
+        init_containers
+            .iter()
+            .map(|container| container.name.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "workspace-scratch-init",
+            "workspace-bootstrap",
+            "buildkit-bootstrap"
+        ]
+    );
+    let scratch_init = &init_containers[0];
+    let scratch_init_mount = &scratch_init.volume_mounts.as_ref().unwrap()[0];
+    assert_eq!(scratch_init_mount.name, "workspace-scratch");
+    assert_eq!(
+        scratch_init_mount.mount_path,
+        "/var/lib/mwc/workspace-scratch"
+    );
+    assert!(scratch_init_mount.sub_path.is_none());
+    assert!(scratch_init.args.as_ref().unwrap()[0].contains("unsafe workspace scratch path"));
+    assert!(!scratch_init.args.as_ref().unwrap()[0].contains("chown -R"));
 
     let workspace_container = pod
         .containers
@@ -1468,17 +1553,19 @@ fn regenerable_data_uses_bounded_pod_lifetime_storage() {
         .find(|container| container.name == "workspace")
         .unwrap();
     let mounts = workspace_container.volume_mounts.as_ref().unwrap();
+    for (path, sub_path) in [
+        ("/var/lib/mwc/build-scratch", "workspace-cache"),
+        ("/var/lib/mwc/codex-scratch", "codex-session-scratch"),
+        ("/run/mwc-buildkit", "build-cache"),
+    ] {
+        assert!(mounts.iter().any(|mount| {
+            mount.name == "workspace-scratch"
+                && mount.mount_path == path
+                && mount.sub_path.as_deref() == Some(sub_path)
+        }));
+    }
     assert!(mounts.iter().any(|mount| {
         mount.name == "runtime-tmp" && matches!(mount.mount_path.as_str(), "/tmp" | "/var/tmp")
-    }));
-    assert!(mounts.iter().any(|mount| {
-        mount.name == "build-scratch" && mount.mount_path == "/var/lib/mwc/build-scratch"
-    }));
-    assert!(mounts.iter().any(|mount| {
-        mount.name == "codex-scratch" && mount.mount_path == "/var/lib/mwc/codex-scratch"
-    }));
-    assert!(mounts.iter().any(|mount| {
-        mount.name == "buildkit-cache" && mount.mount_path == "/run/mwc-buildkit"
     }));
     assert!(!mounts.iter().any(|mount| {
         mount.name == names.resources.data_claim_template
@@ -1515,7 +1602,7 @@ fn regenerable_data_uses_bounded_pod_lifetime_storage() {
             .as_ref()
             .unwrap()["ephemeral-storage"]
             .0,
-        "17664Mi"
+        "2048Mi"
     );
 
     let buildkit = pod
@@ -1523,39 +1610,17 @@ fn regenerable_data_uses_bounded_pod_lifetime_storage() {
         .iter()
         .find(|container| container.name == "buildkitd")
         .unwrap();
-    assert!(
-        buildkit
-            .volume_mounts
-            .as_ref()
-            .unwrap()
-            .iter()
-            .any(|mount| {
-                mount.name == "buildkit-cache" && mount.mount_path == "/var/lib/mwc-buildkit"
-            })
-    );
-    assert!(
-        buildkit
-            .volume_mounts
-            .as_ref()
-            .unwrap()
-            .iter()
-            .any(|mount| {
-                mount.name == "buildkit-cache"
-                    && mount.mount_path == "/tmp"
-                    && mount.sub_path.as_deref() == Some("tmp")
-            })
-    );
-    assert!(
-        !buildkit
-            .volume_mounts
-            .as_ref()
-            .unwrap()
-            .iter()
-            .any(|mount| {
-                mount.name == names.resources.data_claim_template
-                    && matches!(mount.mount_path.as_str(), "/tmp" | "/var/tmp")
-            })
-    );
+    let buildkit_mounts = buildkit.volume_mounts.as_ref().unwrap();
+    assert!(buildkit_mounts.iter().any(|mount| {
+        mount.name == "workspace-scratch"
+            && mount.mount_path == "/var/lib/mwc-buildkit"
+            && mount.sub_path.as_deref() == Some("build-cache")
+    }));
+    assert!(buildkit_mounts.iter().any(|mount| {
+        mount.name == "workspace-scratch"
+            && mount.mount_path == "/tmp"
+            && mount.sub_path.as_deref() == Some("build-cache/tmp")
+    }));
     assert_eq!(
         buildkit
             .resources
@@ -1565,7 +1630,7 @@ fn regenerable_data_uses_bounded_pod_lifetime_storage() {
             .as_ref()
             .unwrap()["ephemeral-storage"]
             .0,
-        "9Gi"
+        "1Gi"
     );
     assert_eq!(
         buildkit
@@ -1576,7 +1641,7 @@ fn regenerable_data_uses_bounded_pod_lifetime_storage() {
             .as_ref()
             .unwrap()["ephemeral-storage"]
             .0,
-        "1Gi"
+        "256Mi"
     );
 
     let sshd = &resources.workspace_config.data.as_ref().unwrap()["sshd_config"];
@@ -1585,60 +1650,88 @@ fn regenerable_data_uses_bounded_pod_lifetime_storage() {
 }
 
 #[test]
-fn memory_scratch_uses_tmpfs_without_changing_container_resources() {
+fn temporary_storage_without_a_platform_class_uses_one_bounded_disk_empty_dir() {
     let mut workspace = workspace(WorkspaceState::Ready);
-    workspace.template.buildkit = true;
-    let disk_resources = builder().build(&workspace).unwrap();
+    workspace.template.storage_policy.temporary_storage_gib = 24;
+    let mut resource_builder = builder();
+    resource_builder.scratch_storage_class_name = None;
 
-    workspace.template.storage_policy.scratch_medium = ScratchMedium::Memory;
-    let memory_resources = builder().build(&workspace).unwrap();
-    let disk_pod = disk_resources
+    let pod = resource_builder
+        .build(&workspace)
+        .unwrap()
         .stateful_set
         .spec
         .unwrap()
         .template
         .spec
         .unwrap();
-    let memory_pod = memory_resources
+    let scratch = pod
+        .volumes
+        .as_ref()
+        .unwrap()
+        .iter()
+        .find(|volume| volume.name == "workspace-scratch")
+        .unwrap();
+    assert!(scratch.ephemeral.is_none());
+    let empty_dir = scratch.empty_dir.as_ref().unwrap();
+    assert_eq!(empty_dir.medium, None);
+    assert_eq!(empty_dir.size_limit.as_ref().unwrap().0, "24Gi");
+}
+
+#[test]
+fn buildkit_disabled_omits_build_cache_initialization_mounts_and_containers() {
+    let mut workspace = workspace(WorkspaceState::Ready);
+    workspace.template.buildkit = false;
+    let pod = builder()
+        .build(&workspace)
+        .unwrap()
         .stateful_set
         .spec
         .unwrap()
         .template
         .spec
         .unwrap();
-    let memory_volume = |name: &str| {
-        memory_pod
-            .volumes
-            .as_ref()
-            .unwrap()
-            .iter()
-            .find(|volume| volume.name == name)
-            .unwrap()
-            .empty_dir
-            .as_ref()
-            .unwrap()
-    };
-    for name in ["build-scratch", "buildkit-cache", "codex-scratch"] {
-        assert_eq!(memory_volume(name).medium.as_deref(), Some("Memory"));
-    }
 
-    for container_name in ["workspace", "buildkitd"] {
-        let disk_container = disk_pod
-            .containers
+    assert!(
+        !pod.containers
             .iter()
-            .find(|container| container.name == container_name)
-            .unwrap();
-        let memory_container = memory_pod
-            .containers
-            .iter()
-            .find(|container| container.name == container_name)
-            .unwrap();
-        assert_eq!(&memory_container.resources, &disk_container.resources);
-    }
-    assert_eq!(
-        &memory_pod.init_containers.as_ref().unwrap()[0].resources,
-        &disk_pod.init_containers.as_ref().unwrap()[0].resources
+            .any(|container| container.name == "buildkitd")
     );
+    let init_containers = pod.init_containers.as_ref().unwrap();
+    assert_eq!(
+        init_containers
+            .iter()
+            .map(|container| container.name.as_str())
+            .collect::<Vec<_>>(),
+        ["workspace-scratch-init", "workspace-bootstrap"]
+    );
+    assert!(
+        init_containers[0]
+            .env
+            .as_ref()
+            .unwrap()
+            .iter()
+            .any(|variable| {
+                variable.name == "MWC_BUILDKIT_ENABLED"
+                    && variable.value.as_deref() == Some("false")
+            })
+    );
+    for container in pod.containers.iter().chain(init_containers.iter().skip(1)) {
+        assert!(
+            !container
+                .volume_mounts
+                .as_ref()
+                .unwrap()
+                .iter()
+                .any(|mount| {
+                    mount.mount_path.contains("buildkit")
+                        || mount
+                            .sub_path
+                            .as_deref()
+                            .is_some_and(|path| path.starts_with("build-cache"))
+                })
+        );
+    }
 }
 
 #[test]

@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use utoipa::ToSchema;
@@ -55,6 +57,7 @@ pub struct Workspace {
     pub owner_id: Uuid,
     pub name: String,
     pub template_id: Option<Uuid>,
+    pub node_pool: String,
     pub runtime: WorkspaceRuntimeIdentity,
     #[serde(flatten)]
     pub template: WorkspaceTemplateSpec,
@@ -62,6 +65,15 @@ pub struct Workspace {
     pub generation: u64,
     pub created_at: i64,
     pub updated_at: i64,
+}
+
+/// Private Kubernetes scheduling material stored by a system-managed node pool.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct ResolvedPlacement {
+    pub selector: BTreeMap<String, String>,
+    pub required_hosts: Vec<String>,
+    pub preferred_hosts: Vec<String>,
 }
 
 impl WorkspaceState {

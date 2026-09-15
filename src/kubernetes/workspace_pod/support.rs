@@ -3,22 +3,10 @@ use std::collections::BTreeMap;
 use crate::workspace_runtime::WorkspaceResourceNames;
 use k8s_openapi::{
     api::core::v1::{
-        ConfigMapEnvSource, EnvFromSource, EnvVar, NodeSelectorRequirement, NodeSelectorTerm,
-        SeccompProfile, SecretEnvSource, SecurityContext,
+        ConfigMapEnvSource, EnvFromSource, EnvVar, SeccompProfile, SecretEnvSource, SecurityContext,
     },
     apimachinery::pkg::api::resource::Quantity,
 };
-
-pub(super) fn hostname_term(values: &[String]) -> NodeSelectorTerm {
-    NodeSelectorTerm {
-        match_expressions: Some(vec![NodeSelectorRequirement {
-            key: "kubernetes.io/hostname".to_owned(),
-            operator: "In".to_owned(),
-            values: Some(values.to_vec()),
-        }]),
-        ..NodeSelectorTerm::default()
-    }
-}
 
 pub(super) fn injection_env_from(names: &WorkspaceResourceNames) -> Vec<EnvFromSource> {
     vec![

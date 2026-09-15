@@ -290,16 +290,19 @@ fn append_workspace_metrics(body: &mut String, metrics: &crate::storage::Workspa
         let _ = writeln!(body, "mwc_workspaces{{state=\"{}\"}} {count}", label(state));
     }
     body.push_str("# HELP mwc_resource_requested Requested resources across all non-deleted workspaces.\n# TYPE mwc_resource_requested gauge\n");
-    let total = metrics
-        .users
-        .iter()
-        .fold(crate::quota::Resources::default(), |mut total, user| {
+    let total = metrics.users.iter().fold(
+        crate::quota::QuotaResources::default(),
+        |mut total, user| {
             total.cpu_millis = total.cpu_millis.saturating_add(user.resources.cpu_millis);
             total.memory_mib = total.memory_mib.saturating_add(user.resources.memory_mib);
             total.gpu_count = total.gpu_count.saturating_add(user.resources.gpu_count);
             total.disk_gib = total.disk_gib.saturating_add(user.resources.disk_gib);
+            total.temporary_storage_gib = total
+                .temporary_storage_gib
+                .saturating_add(user.resources.temporary_storage_gib);
             total
-        });
+        },
+    );
     append_resources(body, "mwc_resource_requested", "", &total);
     body.push_str("# HELP mwc_user_workspaces Workspaces per owner and lifecycle state.\n# TYPE mwc_user_workspaces gauge\n# HELP mwc_user_resource_requested Requested resources per workspace owner.\n# TYPE mwc_user_resource_requested gauge\n");
     for user in &metrics.users {
@@ -324,7 +327,7 @@ fn append_resources(
     body: &mut String,
     metric: &str,
     prefix: &str,
-    resources: &crate::quota::Resources,
+    resources: &crate::quota::QuotaResources,
 ) {
     let separator = if prefix.is_empty() { "" } else { "," };
     for (resource, unit, value) in [
@@ -332,6 +335,11 @@ fn append_resources(
         ("memory", "mebibytes", resources.memory_mib),
         ("gpu", "devices", u64::from(resources.gpu_count)),
         ("disk", "gibibytes", resources.disk_gib),
+        (
+            "temporary_storage",
+            "gibibytes",
+            resources.temporary_storage_gib,
+        ),
     ] {
         let _ = writeln!(
             body,

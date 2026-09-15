@@ -8,10 +8,10 @@ use k8s_openapi::{
     apimachinery::pkg::api::resource::Quantity,
 };
 
-use super::resource_helpers::mount;
-
 pub(super) const IMAGE: &str = "harbor.k3s.onetwo.website/docker-io/moby/buildkit:v0.33.0-rootless@sha256:80b15f0735e87bab7bf59ec4d695dfb4a7cfb25521cf56dc75d6f256285b63ef";
 pub(super) const ENDPOINT: &str = "tcp://127.0.0.1:1234";
+pub(super) const SCRATCH_VOLUME: &str = "workspace-scratch";
+pub(super) const CACHE_SUB_PATH: &str = "build-cache";
 
 pub(super) fn bootstrap_container(enabled: bool) -> Option<Container> {
     enabled.then(|| Container {
@@ -24,27 +24,17 @@ pub(super) fn bootstrap_container(enabled: bool) -> Option<Container> {
             limits: Some(quantities("100m", "128Mi", "128Mi")),
             ..ResourceRequirements::default()
         }),
-        volume_mounts: Some(vec![mount(
-            "buildkit-cache",
-            "/var/lib/mwc-buildkit",
-            false,
-        )]),
+        volume_mounts: Some(vec![cache_mount("/var/lib/mwc-buildkit", CACHE_SUB_PATH)]),
         security_context: Some(non_root_security_context(false, false)),
         ..Container::default()
     })
 }
 
 fn buildkit_tmp_mount() -> VolumeMount {
-    VolumeMount {
-        name: "buildkit-cache".to_owned(),
-        mount_path: "/tmp".to_owned(),
-        sub_path: Some("tmp".to_owned()),
-        read_only: Some(false),
-        ..VolumeMount::default()
-    }
+    cache_mount("/tmp", "build-cache/tmp")
 }
 
-pub(super) fn container(enabled: bool, cache_limit_gib: u64) -> Option<Container> {
+pub(super) fn container(enabled: bool) -> Option<Container> {
     if !enabled {
         return None;
     }
@@ -80,17 +70,27 @@ pub(super) fn container(enabled: bool, cache_limit_gib: u64) -> Option<Container
             ..probe
         }),
         resources: Some(ResourceRequirements {
-            requests: Some(quantities("250m", "512Mi", "1Gi")),
-            limits: Some(quantities("4", "4Gi", &format!("{cache_limit_gib}Gi"))),
+            requests: Some(quantities("250m", "512Mi", "256Mi")),
+            limits: Some(quantities("4", "4Gi", "1Gi")),
             ..ResourceRequirements::default()
         }),
         volume_mounts: Some(vec![
-            mount("buildkit-cache", "/var/lib/mwc-buildkit", false),
+            cache_mount("/var/lib/mwc-buildkit", CACHE_SUB_PATH),
             buildkit_tmp_mount(),
         ]),
         security_context: Some(non_root_security_context(true, true)),
         ..Container::default()
     })
+}
+
+fn cache_mount(path: &str, sub_path: &str) -> VolumeMount {
+    VolumeMount {
+        name: SCRATCH_VOLUME.to_owned(),
+        mount_path: path.to_owned(),
+        sub_path: Some(sub_path.to_owned()),
+        read_only: Some(false),
+        ..VolumeMount::default()
+    }
 }
 
 fn quantities(cpu: &str, memory: &str, ephemeral: &str) -> BTreeMap<String, Quantity> {

@@ -2,44 +2,52 @@
 
 ## Storage layers and quotas
 
-MWC separates durable user data from data that can be regenerated. `emptyDir.sizeLimit` values are
-upper bounds, not node-disk reservations. Kubelet may still evict a Pod under node-wide
-ephemeral-storage pressure; template requests provide scheduler capacity signals, while limits and
-volume bounds contain a single workspace.
+MWC separates durable user data from data that can be regenerated. A template declares one total
+temporary-storage capacity through `spec.storage_policy.temporary_storage_gib`. When the platform
+configures a scratch StorageClass, that value becomes the request for one Pod-owned generic
+ephemeral PVC named `workspace-scratch`. The selected class should provide hard capacity
+enforcement; the durable Home class remains a separate choice. Kubelet may still evict a Pod
+because of writable-layer or log pressure, so containers keep small local `ephemeral-storage`
+requests and limits that do not include PVC capacity.
 
 | Layer | Default | Contents |
 | --- | --- | --- |
 | Durable Home | Template disk size on a Longhorn PVC | Repositories, user configuration, credentials, Codex conversations and SQLite state |
 | Platform connection runtime | 128 MiB memory `emptyDir` | sshd configuration, host-key copy, current authorized keys, kubeconfig, socket/PID files and pressure banner |
 | Interactive temporary space | 512 MiB memory `emptyDir` for the workspace and a separate 128 MiB memory `emptyDir` for ttyd | `/tmp` and `/var/tmp`; ttyd cannot exhaust the workspace shell's temporary space |
-| Regenerable build data | 12 GiB node-local `emptyDir` | compiler `TMPDIR`, Cargo target output, `$HOME/.cache` for new/clean Homes, and package-manager caches |
-| Rootless image builds | 8 GiB node-local `emptyDir` | BuildKit state, cache, configuration, socket, temporary files and `buildctl` |
-| Codex scratch | 2 GiB node-local `emptyDir` | Only `$HOME/.codex/tmp` and `$HOME/.codex/.tmp`; the rest of `.codex` remains durable |
+| Regenerable temporary storage | One template-sized generic ephemeral PVC when the scratch class is set; one bounded disk `emptyDir` otherwise | Workspace/compiler caches, optional BuildKit cache, and Codex/session scratch in isolated subpaths with one shared total quota |
 
-Templates may override volume sizes. The Home emergency reserve is selected automatically as
-the smaller of 1 GiB and 10% of the PVC; templates may choose a smaller explicit value through
-`spec.storage_policy`. The platform-wide pressure thresholds are deliberately fixed at 80% and
-90%, matching the runtime API and Prometheus rules. MWC raises effective container
-ephemeral-storage limits to cover the build and Codex scratch boundaries plus runtime headroom.
-This limit is containment, not reservation. New templates request 2 GiB for the workspace
-container, editable in the template form or YAML source. When enabled, BuildKit requests 1 GiB
-separately and its limit follows the configured BuildKit cache boundary.
+The Home emergency reserve is a platform rule, not a template knob: it is the smaller of 1 GiB and
+10% of the Home PVC. The platform-wide pressure thresholds are fixed at 80% and 90%, matching the
+runtime API and Prometheus rules. New templates request 512 MiB and limit 2 GiB of local
+`ephemeral-storage` for the workspace container's writable layer and logs. When enabled, BuildKit
+requests 256 MiB and limits 1 GiB for the same purpose. Temporary-storage capacity never inflates
+those container values.
 
-### Scratch backing medium
+### Temporary-storage backing and layout
 
-`spec.storage_policy.scratch_medium` selects the backing medium for `build-scratch`,
-`buildkit-cache`, and `codex-scratch`: `disk` (the default) keeps their existing node-local
-`emptyDir` behavior, while `memory` renders all three as `emptyDir.medium: Memory`. This is an
-explicit template choice; it is not inferred from `runtime_class_name` or any RuntimeClass.
+With Helm `workspace.scratchStorageClassName` configured, the Pod spec contains one Kubernetes
+generic ephemeral volume. Its inline claim template requests `ReadWriteOnce` capacity equal to
+`temporary_storage_gib`. Kubernetes creates one PVC, makes the Pod its owner, and deletes it with
+the Pod. Workspace cache, BuildKit cache, and Codex/session scratch share this hard total capacity;
+one consumer filling the volume reduces the capacity available to the others.
 
-Memory-backed scratch is tmpfs. Its written bytes are charged to the container that writes them
-(including BuildKit's own container), and therefore contribute to Pod memory pressure. The
-volume `sizeLimit` remains a cap, not extra RAM: a full or pressured memory cgroup can OOM before
-that size is reached. MWC does not automatically add memory requests, limits, or quota for this
-mode. The existing ephemeral-storage requests and limits remain unchanged.
-In `disk` mode, `sizeLimit` is
-also not a hard reservation or synchronous quota; kubelet can still evict Pods under node
-ephemeral-storage pressure.
+The scratch class is intentionally independent from `workspace.storageClassName`. Use a class for
+node-local NVMe or another local block/LVM/ZFS pool that enforces requested capacity and uses
+topology-aware scheduling and `volumeBindingMode: WaitForFirstConsumer`, for example a correctly
+configured TopoLVM or local LVM/ZFS CSI class. Do not default scratch to replicated Longhorn Home
+storage: regeneration does not justify its network and replica overhead. If no scratch class is
+configured, MWC renders the same single volume as a disk-backed `emptyDir` with `sizeLimit` equal to
+the template capacity. This compatibility fallback is a kubelet-enforced bound, not provisioned
+capacity or a scheduler reservation, and remains subject to node ephemeral-storage pressure and
+eviction.
+
+The scratch initialization container mounts the whole volume first, rejects unsafe non-directory
+or symlink subpaths, and creates only the required top-level directories with exact ownership and
+modes. Later containers mount `workspace-cache`, `codex-session-scratch`, and, when BuildKit is
+enabled, `build-cache` through Kubernetes `subPath` mounts. A BuildKit-disabled Pod neither creates
+the `build-cache` directory nor mounts a BuildKit path. The platform's `/tmp`, SSH runtime, and ttyd
+temporary space remain separate small tmpfs volumes and do not consume the scratch quota.
 
 For a new or cleaned Home, MWC links regenerable cache paths into build scratch. A non-empty
 cache is never deleted or replaced automatically. Stop the workspace, clean that cache
@@ -47,10 +55,12 @@ explicitly, and start it again; the empty path is then linked to the bounded lay
 
 ## Lifecycle and cleanup
 
-- A running Pod owns all `emptyDir` data. No job deletes files by age and no mtime policy can race
-  an active compiler or linker.
-- Stop scales the StatefulSet to zero. Kubernetes removes the Pod and all build, temporary,
-  BuildKit, Codex scratch, and connection-runtime volumes; the Home PVC remains.
+- A running Pod owns all scratch data, either through one generic ephemeral PVC owner reference or
+  through one `emptyDir`. No job deletes files by age and no mtime policy can race an active compiler
+  or linker.
+- Stop scales the StatefulSet to zero. Kubernetes removes the Pod and automatically reclaims its
+  generic ephemeral scratch PVC, plus temporary and connection-runtime `emptyDir` volumes; the Home
+  PVC remains.
 - Start creates clean Pod-lifetime volumes and re-materializes current keys, kubeconfig, and
   template-selected credential and file injections. Restart has the same scratch cleanup semantics.
 - Delete removes the workspace Namespace, Home PVC, Secrets, ConfigMaps, routes, and runtime data
@@ -73,26 +83,28 @@ The runtime API reports `storage.used_percent` and `storage.pressure`. The Helm
   not require a Home write. Optional durable-directory/cache-link updates are best-effort and mark
   the runtime degraded. A missing, read-only, or otherwise invalid Home mount remains a hard error.
 
-The same rule group records MWC's own ephemeral-storage requests for capacity planning. On every
-node currently carrying a workspace from this installation it also records all Pods' combined
-ephemeral-storage request percentage, alerts at 80/90%, and alerts when Kubernetes reports
+The same rule group records MWC's own local ephemeral-storage requests for writable-layer and log
+capacity planning. On every node currently carrying a workspace from this installation it also
+records all Pods' combined ephemeral-storage request percentage, alerts at 80/90%, and alerts when
+Kubernetes reports
 `DiskPressure`. Joining through `kube_pod_info` works whether or not the installed
 kube-state-metrics version adds a `node` label directly to resource-request series. Scoping the
 rules to this installation's active workspace nodes prevents unrelated-node alerts and labels each
-alert with `installation_id`. These node alerts cover eviction risk that an individual
-`emptyDir.sizeLimit` cannot prevent.
+alert with `installation_id`. These node alerts cover writable-layer, log, and
+compatibility-fallback `emptyDir` eviction risk. Scratch PVC pool capacity must be monitored
+through the selected CSI driver's storage metrics.
 
 MWC intentionally has no workspace agent. Native SSH is standard OpenSSH, and Web Shell is
-browser → Higress → ttyd → localhost OpenSSH. BuildKit is a regular sidecar and cannot gate sshd
-startup if its own bounded volume fails. Workspace Services continue publishing the Pod endpoint
-for this recovery channel even while an optional sidecar reports unready.
+browser → Higress → ttyd → localhost OpenSSH. BuildKit is a regular sidecar and cannot gate
+sshd readiness. Workspace Services continue publishing the Pod endpoint for this recovery channel
+even while an optional sidecar reports unready.
 
 ## Codex state and logs
 
 The whole `.codex` directory is never placed on an ephemeral volume. Conversation/session data,
 logs, SQLite state and its WAL/SHM files stay on Home; only `.codex/tmp` and `.codex/.tmp` are
-regenerable. MWC never runs a sidecar, scheduled
-cleanup, online `VACUUM`, or any other process that concurrently edits Codex SQLite files.
+regenerable. MWC never runs a sidecar, scheduled cleanup, online `VACUUM`, or any other process
+that concurrently edits Codex SQLite files.
 
 Current Codex releases retain log rows for ten days and bound each thread/process log stream to
 approximately 10 MiB or 1,000 rows. Startup performs a passive checkpoint, not a `VACUUM`, so
@@ -110,7 +122,9 @@ lose threads or corrupt state.
 ## Existing infrastructure
 
 - Longhorn provides durable Home volumes, snapshots, and offline recovery points.
-- Kubernetes enforces Pod lifecycle and bounded `emptyDir` volumes.
+- A separately selected local CSI StorageClass provides temporary-storage capacity; one Kubernetes
+  generic ephemeral volume binds its PVC lifecycle to the workspace Pod.
+- Kubernetes enforces Pod lifecycle and bounds memory or compatibility-fallback `emptyDir` volumes.
 - Existing kubelet PVC metrics feed Prometheus; Prometheus Operator installs the recording and
   alert rules; Grafana and Alertmanager visualize and route them.
 - OpenSSH, ttyd, BuildKit, and control-plane stdout/stderr remain ordinary Kubernetes container

@@ -12,28 +12,39 @@ spec:
   groups:
     - name: {{ include "mwc.name" . }}.workspace-storage
       rules:
-        - record: mwc_workspace_home_used_percent
+        - record: mwc_workspace_persistent_storage_used_percent
           expr: |
             100 * (
               max by (namespace, persistentvolumeclaim) (kubelet_volume_stats_used_bytes)
               and on (namespace, persistentvolumeclaim)
               max by (namespace, persistentvolumeclaim) (
-                kube_pod_spec_volumes_persistentvolumeclaims_info
-                and on (namespace, pod)
-                max by (namespace, pod) (
-                  kube_pod_labels{label_workspace_memeloop_dev_owner_installation="{{ .Values.installationId }}",label_workspace_memeloop_dev_workspace_id!=""}
-                )
+                kube_persistentvolumeclaim_labels{label_workspace_memeloop_dev_owner_installation="{{ .Values.installationId }}",label_workspace_memeloop_dev_workspace_id!="",label_workspace_memeloop_dev_storage_role="home"}
               )
             )
             / on (namespace, persistentvolumeclaim) (
               max by (namespace, persistentvolumeclaim) (kubelet_volume_stats_capacity_bytes)
               and on (namespace, persistentvolumeclaim)
               max by (namespace, persistentvolumeclaim) (
-                kube_pod_spec_volumes_persistentvolumeclaims_info
-                and on (namespace, pod)
-                max by (namespace, pod) (
-                  kube_pod_labels{label_workspace_memeloop_dev_owner_installation="{{ .Values.installationId }}",label_workspace_memeloop_dev_workspace_id!=""}
-                )
+                kube_persistentvolumeclaim_labels{label_workspace_memeloop_dev_owner_installation="{{ .Values.installationId }}",label_workspace_memeloop_dev_workspace_id!="",label_workspace_memeloop_dev_storage_role="home"}
+              )
+            )
+          labels:
+            installation_id: {{ .Values.installationId | quote }}
+            storage: persistent
+        - record: mwc_workspace_temporary_storage_used_percent
+          expr: |
+            100 * (
+              max by (namespace, persistentvolumeclaim) (kubelet_volume_stats_used_bytes)
+              and on (namespace, persistentvolumeclaim)
+              max by (namespace, persistentvolumeclaim) (
+                kube_persistentvolumeclaim_labels{label_workspace_memeloop_dev_owner_installation="{{ .Values.installationId }}",label_workspace_memeloop_dev_workspace_id!="",label_workspace_memeloop_dev_storage_role="temporary"}
+              )
+            )
+            / on (namespace, persistentvolumeclaim) (
+              max by (namespace, persistentvolumeclaim) (kubelet_volume_stats_capacity_bytes)
+              and on (namespace, persistentvolumeclaim)
+              max by (namespace, persistentvolumeclaim) (
+                kube_persistentvolumeclaim_labels{label_workspace_memeloop_dev_owner_installation="{{ .Values.installationId }}",label_workspace_memeloop_dev_workspace_id!="",label_workspace_memeloop_dev_storage_role="temporary"}
               )
             )
           labels:
@@ -80,29 +91,52 @@ spec:
             max by (node) (kube_node_status_allocatable{resource="ephemeral_storage",unit="byte"})
           labels:
             installation_id: {{ .Values.installationId | quote }}
-        - alert: MwcWorkspaceHomeStorageWarning
+        - alert: MwcWorkspacePersistentStorageWarning
           expr: |
-            mwc_workspace_home_used_percent{installation_id="{{ .Values.installationId }}"}
+            mwc_workspace_persistent_storage_used_percent{installation_id="{{ .Values.installationId }}"}
               >= 80
             and
-            mwc_workspace_home_used_percent{installation_id="{{ .Values.installationId }}"}
+            mwc_workspace_persistent_storage_used_percent{installation_id="{{ .Values.installationId }}"}
               < 90
           for: {{ .Values.monitoring.prometheusRule.warningFor | quote }}
           labels:
             severity: warning
           annotations:
-            summary: "Workspace Home storage is approaching capacity"
-            description: "{{`{{ $labels.namespace }}`}}/{{`{{ $labels.persistentvolumeclaim }}`}} Home PVC usage has remained above 80%."
-        - alert: MwcWorkspaceHomeStorageCritical
+            summary: "Workspace persistent storage is approaching capacity"
+            description: "{{`{{ $labels.namespace }}`}}/{{`{{ $labels.persistentvolumeclaim }}`}} usage has remained above 80%."
+        - alert: MwcWorkspacePersistentStorageCritical
           expr: |
-            mwc_workspace_home_used_percent{installation_id="{{ .Values.installationId }}"}
+            mwc_workspace_persistent_storage_used_percent{installation_id="{{ .Values.installationId }}"}
               >= 90
           for: {{ .Values.monitoring.prometheusRule.criticalFor | quote }}
           labels:
             severity: critical
           annotations:
-            summary: "Workspace Home storage is critically full"
-            description: "{{`{{ $labels.namespace }}`}}/{{`{{ $labels.persistentvolumeclaim }}`}} Home PVC usage has remained above 90%; SSH remains available so durable data can be cleaned safely."
+            summary: "Workspace persistent storage is critically full"
+            description: "{{`{{ $labels.namespace }}`}}/{{`{{ $labels.persistentvolumeclaim }}`}} usage has remained above 90%."
+        - alert: MwcWorkspaceTemporaryStorageWarning
+          expr: |
+            mwc_workspace_temporary_storage_used_percent{installation_id="{{ .Values.installationId }}"}
+              >= 80
+            and
+            mwc_workspace_temporary_storage_used_percent{installation_id="{{ .Values.installationId }}"}
+              < 90
+          for: {{ .Values.monitoring.prometheusRule.warningFor | quote }}
+          labels:
+            severity: warning
+          annotations:
+            summary: "Workspace temporary storage is approaching capacity"
+            description: "{{`{{ $labels.namespace }}`}}/{{`{{ $labels.persistentvolumeclaim }}`}} usage has remained above 80%."
+        - alert: MwcWorkspaceTemporaryStorageCritical
+          expr: |
+            mwc_workspace_temporary_storage_used_percent{installation_id="{{ .Values.installationId }}"}
+              >= 90
+          for: {{ .Values.monitoring.prometheusRule.criticalFor | quote }}
+          labels:
+            severity: critical
+          annotations:
+            summary: "Workspace temporary storage is critically full"
+            description: "{{`{{ $labels.namespace }}`}}/{{`{{ $labels.persistentvolumeclaim }}`}} usage has remained above 90%."
         - alert: MwcNodeEphemeralStorageRequestsWarning
           expr: mwc_node_ephemeral_storage_requested_percent{installation_id="{{ .Values.installationId }}"} >= 80 and mwc_node_ephemeral_storage_requested_percent{installation_id="{{ .Values.installationId }}"} < 90
           for: {{ .Values.monitoring.prometheusRule.warningFor | quote }}

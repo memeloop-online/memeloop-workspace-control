@@ -141,11 +141,40 @@ impl Database {
             Self::Sqlite {
                 pool,
                 installation_id,
-            } => insert_template_sqlite(pool, installation_id.as_str(), &template, now).await?,
+            } => {
+                let mut transaction = pool.begin().await?;
+                insert_template_sqlite(&mut transaction, installation_id.as_str(), &template, now)
+                    .await?;
+                super::node_pool_store::sync_template_placement_sqlite(
+                    &mut transaction,
+                    installation_id.as_str(),
+                    template.id,
+                    &template.template.placement,
+                )
+                .await?;
+                transaction.commit().await?;
+            }
             Self::Postgres {
                 pool,
                 installation_id,
-            } => insert_template_postgres(pool, installation_id.as_str(), &template, now).await?,
+            } => {
+                let mut transaction = pool.begin().await?;
+                insert_template_postgres(
+                    &mut transaction,
+                    installation_id.as_str(),
+                    &template,
+                    now,
+                )
+                .await?;
+                super::node_pool_store::sync_template_placement_postgres(
+                    &mut transaction,
+                    installation_id.as_str(),
+                    template.id,
+                    &template.template.placement,
+                )
+                .await?;
+                transaction.commit().await?;
+            }
         }
         Ok(template)
     }
@@ -165,29 +194,57 @@ impl Database {
             Self::Sqlite {
                 pool,
                 installation_id,
-            } => update_template_sqlite(
-                pool,
-                installation_id.as_str(),
-                template_id,
-                &document,
-                &yaml,
-                now,
-            )
-            .await?
-            .map(TemplateDatabaseRow::Sqlite),
+            } => {
+                let mut transaction = pool.begin().await?;
+                let row = update_template_sqlite(
+                    &mut transaction,
+                    installation_id.as_str(),
+                    template_id,
+                    &document,
+                    &yaml,
+                    now,
+                )
+                .await?
+                .map(TemplateDatabaseRow::Sqlite);
+                if row.is_some() {
+                    super::node_pool_store::sync_template_placement_sqlite(
+                        &mut transaction,
+                        installation_id.as_str(),
+                        template_id,
+                        &document.spec.placement,
+                    )
+                    .await?;
+                }
+                transaction.commit().await?;
+                row
+            }
             Self::Postgres {
                 pool,
                 installation_id,
-            } => update_template_postgres(
-                pool,
-                installation_id.as_str(),
-                template_id,
-                &document,
-                &yaml,
-                now,
-            )
-            .await?
-            .map(TemplateDatabaseRow::Postgres),
+            } => {
+                let mut transaction = pool.begin().await?;
+                let row = update_template_postgres(
+                    &mut transaction,
+                    installation_id.as_str(),
+                    template_id,
+                    &document,
+                    &yaml,
+                    now,
+                )
+                .await?
+                .map(TemplateDatabaseRow::Postgres);
+                if row.is_some() {
+                    super::node_pool_store::sync_template_placement_postgres(
+                        &mut transaction,
+                        installation_id.as_str(),
+                        template_id,
+                        &document.spec.placement,
+                    )
+                    .await?;
+                }
+                transaction.commit().await?;
+                row
+            }
         };
         decode_optional_template(row)
     }
@@ -305,49 +362,49 @@ fn ensure_template_deletable(enabled: bool, referenced: bool) -> Result<(), Stor
 }
 
 async fn insert_template_sqlite(
-    pool: &sqlx::SqlitePool,
+    connection: &mut SqliteConnection,
     installation_id: &str,
     template: &WorkspaceTemplate,
     now: i64,
 ) -> Result<(), StorageError> {
-    sqlx::query("INSERT INTO workspace_templates (id, installation_id, organization_id, name, image, access_mode, cpu_millis, memory_mib, gpu_count, disk_gib, enabled, created_at, updated_at, template_yaml) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 1, ?11, ?11, ?12)")
-        .bind(template.id.to_string()).bind(installation_id).bind(template.organization_id.map(|id| id.to_string())).bind(&template.name).bind(&template.template.image).bind(template.template.access_mode.as_str()).bind(as_i64(template.template.resources.cpu_millis)?).bind(as_i64(template.template.resources.memory_mib)?).bind(i64::from(template.template.resources.gpu_count)).bind(as_i64(template.template.resources.disk_gib)?).bind(now).bind(&template.yaml).execute(pool).await?;
+    sqlx::query("INSERT INTO workspace_templates (id, installation_id, organization_id, name, image, access_mode, cpu_millis, memory_mib, gpu_count, disk_gib, temporary_storage_gib, enabled, created_at, updated_at, template_yaml) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 1, ?12, ?12, ?13)")
+        .bind(template.id.to_string()).bind(installation_id).bind(template.organization_id.map(|id| id.to_string())).bind(&template.name).bind(&template.template.image).bind(template.template.access_mode.as_str()).bind(as_i64(template.template.resources.cpu_millis)?).bind(as_i64(template.template.resources.memory_mib)?).bind(i64::from(template.template.resources.gpu_count)).bind(as_i64(template.template.resources.disk_gib)?).bind(as_i64(template.template.storage_policy.temporary_storage_gib)?).bind(now).bind(&template.yaml).execute(&mut *connection).await?;
     Ok(())
 }
 
 async fn insert_template_postgres(
-    pool: &sqlx::PgPool,
+    connection: &mut PgConnection,
     installation_id: &str,
     template: &WorkspaceTemplate,
     now: i64,
 ) -> Result<(), StorageError> {
-    sqlx::query("INSERT INTO workspace_templates (id, installation_id, organization_id, name, image, access_mode, cpu_millis, memory_mib, gpu_count, disk_gib, enabled, created_at, updated_at, template_yaml) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 1, $11, $11, $12)")
-        .bind(template.id.to_string()).bind(installation_id).bind(template.organization_id.map(|id| id.to_string())).bind(&template.name).bind(&template.template.image).bind(template.template.access_mode.as_str()).bind(as_i64(template.template.resources.cpu_millis)?).bind(as_i64(template.template.resources.memory_mib)?).bind(i64::from(template.template.resources.gpu_count)).bind(as_i64(template.template.resources.disk_gib)?).bind(now).bind(&template.yaml).execute(pool).await?;
+    sqlx::query("INSERT INTO workspace_templates (id, installation_id, organization_id, name, image, access_mode, cpu_millis, memory_mib, gpu_count, disk_gib, temporary_storage_gib, enabled, created_at, updated_at, template_yaml) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 1, $12, $12, $13)")
+        .bind(template.id.to_string()).bind(installation_id).bind(template.organization_id.map(|id| id.to_string())).bind(&template.name).bind(&template.template.image).bind(template.template.access_mode.as_str()).bind(as_i64(template.template.resources.cpu_millis)?).bind(as_i64(template.template.resources.memory_mib)?).bind(i64::from(template.template.resources.gpu_count)).bind(as_i64(template.template.resources.disk_gib)?).bind(as_i64(template.template.storage_policy.temporary_storage_gib)?).bind(now).bind(&template.yaml).execute(&mut *connection).await?;
     Ok(())
 }
 
 async fn update_template_sqlite(
-    pool: &sqlx::SqlitePool,
+    connection: &mut SqliteConnection,
     installation_id: &str,
     id: Uuid,
     document: &WorkspaceTemplateDocument,
     yaml: &str,
     now: i64,
 ) -> Result<Option<SqliteRow>, StorageError> {
-    Ok(sqlx::query(&format!("UPDATE workspace_templates SET name=?1,image=?2,access_mode=?3,cpu_millis=?4,memory_mib=?5,gpu_count=?6,disk_gib=?7,template_yaml=?8,updated_at=?9 WHERE installation_id=?10 AND id=?11 RETURNING {TEMPLATE_COLUMNS}"))
-        .bind(document.metadata.name.trim()).bind(document.spec.image.trim()).bind(document.spec.access_mode.as_str()).bind(as_i64(document.spec.resources.cpu_millis)?).bind(as_i64(document.spec.resources.memory_mib)?).bind(i64::from(document.spec.resources.gpu_count)).bind(as_i64(document.spec.resources.disk_gib)?).bind(yaml).bind(now).bind(installation_id).bind(id.to_string()).fetch_optional(pool).await?)
+    Ok(sqlx::query(&format!("UPDATE workspace_templates SET name=?1,image=?2,access_mode=?3,cpu_millis=?4,memory_mib=?5,gpu_count=?6,disk_gib=?7,temporary_storage_gib=?8,template_yaml=?9,updated_at=?10 WHERE installation_id=?11 AND id=?12 RETURNING {TEMPLATE_COLUMNS}"))
+        .bind(document.metadata.name.trim()).bind(document.spec.image.trim()).bind(document.spec.access_mode.as_str()).bind(as_i64(document.spec.resources.cpu_millis)?).bind(as_i64(document.spec.resources.memory_mib)?).bind(i64::from(document.spec.resources.gpu_count)).bind(as_i64(document.spec.resources.disk_gib)?).bind(as_i64(document.spec.storage_policy.temporary_storage_gib)?).bind(yaml).bind(now).bind(installation_id).bind(id.to_string()).fetch_optional(&mut *connection).await?)
 }
 
 async fn update_template_postgres(
-    pool: &sqlx::PgPool,
+    connection: &mut PgConnection,
     installation_id: &str,
     id: Uuid,
     document: &WorkspaceTemplateDocument,
     yaml: &str,
     now: i64,
 ) -> Result<Option<PgRow>, StorageError> {
-    Ok(sqlx::query(&format!("UPDATE workspace_templates SET name=$1,image=$2,access_mode=$3,cpu_millis=$4,memory_mib=$5,gpu_count=$6,disk_gib=$7,template_yaml=$8,updated_at=$9 WHERE installation_id=$10 AND id=$11 RETURNING {TEMPLATE_COLUMNS}"))
-        .bind(document.metadata.name.trim()).bind(document.spec.image.trim()).bind(document.spec.access_mode.as_str()).bind(as_i64(document.spec.resources.cpu_millis)?).bind(as_i64(document.spec.resources.memory_mib)?).bind(i64::from(document.spec.resources.gpu_count)).bind(as_i64(document.spec.resources.disk_gib)?).bind(yaml).bind(now).bind(installation_id).bind(id.to_string()).fetch_optional(pool).await?)
+    Ok(sqlx::query(&format!("UPDATE workspace_templates SET name=$1,image=$2,access_mode=$3,cpu_millis=$4,memory_mib=$5,gpu_count=$6,disk_gib=$7,temporary_storage_gib=$8,template_yaml=$9,updated_at=$10 WHERE installation_id=$11 AND id=$12 RETURNING {TEMPLATE_COLUMNS}"))
+        .bind(document.metadata.name.trim()).bind(document.spec.image.trim()).bind(document.spec.access_mode.as_str()).bind(as_i64(document.spec.resources.cpu_millis)?).bind(as_i64(document.spec.resources.memory_mib)?).bind(i64::from(document.spec.resources.gpu_count)).bind(as_i64(document.spec.resources.disk_gib)?).bind(as_i64(document.spec.storage_policy.temporary_storage_gib)?).bind(yaml).bind(now).bind(installation_id).bind(id.to_string()).fetch_optional(&mut *connection).await?)
 }
 
 fn parse_document(yaml: &str) -> Result<WorkspaceTemplateDocument, StorageError> {

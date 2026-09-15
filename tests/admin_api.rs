@@ -160,7 +160,7 @@ async fn management_api_enforces_system_and_organization_boundaries() {
             .header("content-type", "application/json")
             .header("idempotency-key", "set-created-user-quota")
             .body(Body::from(
-                json!({"cpu_millis":2000,"memory_mib":4096,"gpu_count":0,"disk_gib":50})
+                json!({"cpu_millis":2000,"memory_mib":4096,"gpu_count":0,"disk_gib":50,"temporary_storage_gib":75})
                     .to_string(),
             ))
             .unwrap(),
@@ -180,7 +180,9 @@ async fn management_api_enforces_system_and_organization_boundaries() {
         )
         .await
         .unwrap();
-    assert_eq!(body_json(get_user_quota).await["disk_gib"], 50);
+    let user_quota = body_json(get_user_quota).await;
+    assert_eq!(user_quota["disk_gib"], 50);
+    assert_eq!(user_quota["temporary_storage_gib"], 75);
 
     let membership = app
         .clone()
@@ -201,7 +203,7 @@ async fn management_api_enforces_system_and_organization_boundaries() {
         .unwrap();
     assert_eq!(membership.status(), StatusCode::NO_CONTENT);
 
-    let quota = json!({"cpu_millis":4000,"memory_mib":8192,"gpu_count":1,"disk_gib":100});
+    let quota = json!({"cpu_millis":4000,"memory_mib":8192,"gpu_count":1,"disk_gib":100,"temporary_storage_gib":200});
     let set_quota = app
         .clone()
         .oneshot(
@@ -217,6 +219,19 @@ async fn management_api_enforces_system_and_organization_boundaries() {
         .await
         .unwrap();
     assert_eq!(set_quota.status(), StatusCode::NO_CONTENT);
+    let get_quota = app
+        .clone()
+        .oneshot(
+            authenticated(
+                Request::get(format!("/api/v1/organizations/{}/quota", organization.id)),
+                CREATED_TOKEN,
+            )
+            .body(Body::empty())
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(body_json(get_quota).await, quota);
 
     let organizations = app
         .clone()
@@ -451,7 +466,7 @@ async fn management_api_enforces_system_and_organization_boundaries() {
     let scaling: Value = body_json(scaling).await;
     assert_eq!(scaling["database_mode"], "sqlite");
     assert_eq!(scaling["configured_replicas"], 1);
-    assert_eq!(scaling["schema_version"], 22);
+    assert_eq!(scaling["schema_version"], 23);
 }
 
 #[tokio::test]

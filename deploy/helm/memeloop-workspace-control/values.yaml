@@ -29,6 +29,10 @@ sqlite:
 
 workspace:
   storageClassName: ""
+  # Optional local temporary-storage CSI class. When set, each workspace uses one Pod-owned
+  # generic ephemeral PVC with a template-selected hard total quota. Leave empty to use one
+  # bounded node-local disk emptyDir as a compatibility fallback.
+  scratchStorageClassName: ""
   ttydImage: ""
   ttydMtls:
     # Existing cert-manager-managed server Secret in the product namespace. It

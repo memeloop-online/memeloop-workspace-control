@@ -24,6 +24,9 @@ pub(super) fn resource_builder(config: &AppConfig) -> Result<ResourceBuilder, io
     let storage_class_name = std::env::var("MWC_STORAGE_CLASS_NAME")
         .ok()
         .filter(|value| !value.trim().is_empty());
+    let scratch_storage_class_name = std::env::var("MWC_SCRATCH_STORAGE_CLASS_NAME")
+        .ok()
+        .filter(|value| !value.trim().is_empty());
     let web_shell_domain = std::env::var("MWC_WEB_SHELL_DOMAIN")
         .ok()
         .filter(|value| !value.trim().is_empty());
@@ -85,6 +88,7 @@ pub(super) fn resource_builder(config: &AppConfig) -> Result<ResourceBuilder, io
             "mwc-ssh-jump".to_owned(),
         )]),
         storage_class_name,
+        scratch_storage_class_name,
         web_shell_domain,
         port_mapping_domain: config.port_mapping_public_domain.clone(),
         higress_gateway_name: std::env::var("MWC_HIGRESS_GATEWAY_NAME")

@@ -10,7 +10,7 @@ use crate::{
 };
 
 pub(crate) const WORKSPACE_COLUMNS: &str = "id, short_id, organization_id, owner_id, name, \
-    template_id, template_snapshot_yaml, state, \
+    template_id, template_snapshot_yaml, node_pool, state, \
     generation, created_at, updated_at";
 
 pub(crate) fn select_workspace_sql(installation: &str, id: &str) -> String {
@@ -75,6 +75,7 @@ where
         owner_id: Uuid::parse_str(&row.try_get::<String, _>("owner_id")?)?,
         name: row.try_get("name")?,
         template_id: template_id.map(|id| Uuid::parse_str(&id)).transpose()?,
+        node_pool: row.try_get("node_pool")?,
         runtime,
         template: document.spec,
         state: WorkspaceState::from_database(&state)

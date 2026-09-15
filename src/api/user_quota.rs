@@ -8,7 +8,7 @@ use axum::{
 };
 use uuid::Uuid;
 
-use crate::{quota::Resources, storage::IdempotencyDecision};
+use crate::{quota::QuotaResources, storage::IdempotencyDecision};
 
 use super::{
     ApiError, AppState,
@@ -18,12 +18,12 @@ use super::{
     },
 };
 
-#[utoipa::path(get, path = "/api/v1/admin/users/{user_id}/quota", responses((status = 200, body = Option<Resources>), (status = 403, body = super::ErrorEnvelope)))]
+#[utoipa::path(get, path = "/api/v1/admin/users/{user_id}/quota", responses((status = 200, body = Option<QuotaResources>), (status = 403, body = super::ErrorEnvelope)))]
 pub(super) async fn get(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Path(user_id): Path<Uuid>,
-) -> Result<Json<Option<Resources>>, ApiError> {
+) -> Result<Json<Option<QuotaResources>>, ApiError> {
     let actor = principal(&state, &headers).await?;
     if !actor.may_manage_system() && actor.user_id != user_id {
         return Err(ApiError::Forbidden);
@@ -31,12 +31,12 @@ pub(super) async fn get(
     Ok(Json(state.database.get_user_quota(user_id).await?))
 }
 
-#[utoipa::path(put, path = "/api/v1/admin/users/{user_id}/quota", request_body = Resources, params(("Idempotency-Key" = String, Header)), responses((status = 204), (status = 403, body = super::ErrorEnvelope)))]
+#[utoipa::path(put, path = "/api/v1/admin/users/{user_id}/quota", request_body = QuotaResources, params(("Idempotency-Key" = String, Header)), responses((status = 204), (status = 403, body = super::ErrorEnvelope)))]
 pub(super) async fn set(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Path(user_id): Path<Uuid>,
-    Json(resources): Json<Resources>,
+    Json(resources): Json<QuotaResources>,
 ) -> Result<Response, ApiError> {
     let actor = principal(&state, &headers).await?;
     if !actor.may_manage_system() {

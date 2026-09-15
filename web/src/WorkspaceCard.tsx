@@ -1,21 +1,18 @@
 import { useMemo, useState } from "react";
+import { Badge, Button, Caption1, Card, Divider, ProgressBar, Text, Tooltip, Title3 } from "@fluentui/react-components";
+import { ArrowClockwiseRegular, ChevronDownRegular, ChevronUpRegular, DeleteRegular, DesktopRegular, LocationRegular, PlayRegular, StopRegular, WindowConsoleRegular } from "@fluentui/react-icons";
 import { useI18n } from "./i18n";
-import type { Locale } from "./i18n";
-import type { WorkspaceResponse, WorkspaceRuntime } from "./types";
+import type { Locale, MessageKey } from "./i18n";
+import type { AvailableNodePool, WorkspaceResponse, WorkspaceRuntime, WorkspaceRuntimeEvent } from "./types";
 import { WorkspaceConnectionDialog } from "./WorkspaceConnectionDialog";
 import { WorkspacePortMappings } from "./WorkspacePortMappings";
 import type { ApiClient } from "./api";
+import { nodePoolDisplayName } from "./forms/NodePoolPicker";
 import { safeBootstrapUrl } from "./portMappings";
 import { reserveWebShellWindow } from "./workspaceShell";
-import {
-  aggregateRuntimeUsage,
-  formatCpuMillis,
-  formatMemoryMiB,
-  formatPercent,
-  parseCpuMillis,
-  parseMemoryMiB,
-  usagePercent,
-} from "./workspaceMetrics";
+import { aggregateRuntimeUsage, formatCpuMillis, formatMemoryMiB, formatPercent, parseCpuMillis, parseMemoryMiB, usagePercent } from "./workspaceMetrics";
+import { StorageMeter } from "./workspaces/StorageMeter";
+import { useWorkspaceStyles } from "./workspaces/workspaceStyles";
 
 type WorkspaceAction = "start" | "stop" | "restart" | "delete";
 type DetailView = "status" | "events";
@@ -24,17 +21,21 @@ interface Props {
   api: ApiClient;
   item: WorkspaceResponse;
   runtime?: WorkspaceRuntime;
+  nodePools: AvailableNodePool[];
   onAction: (item: WorkspaceResponse, action: WorkspaceAction) => void;
   onOpenShell: (id: string) => Promise<void>;
   onRequestRuntime: (id: string) => Promise<void>;
+  onChangePlacement: (item: WorkspaceResponse) => void;
   onError: (message: string) => void;
   canConnect: boolean;
   canChangeState: boolean;
   canDelete: boolean;
+  canChangePlacement: boolean;
 }
 
-export function WorkspaceCard({ api, item, runtime, onAction, onOpenShell, onRequestRuntime, onError, canConnect, canChangeState, canDelete }: Props) {
+export function WorkspaceCard({ api, item, runtime, nodePools, onAction, onOpenShell, onRequestRuntime, onChangePlacement, onError, canConnect, canChangeState, canDelete, canChangePlacement }: Props) {
   const { locale, t } = useI18n();
+  const styles = useWorkspaceStyles();
   const [detailView, setDetailView] = useState<DetailView | null>(null);
   const [openingDesktop, setOpeningDesktop] = useState(false);
   const workspace = item.workspace;
@@ -42,45 +43,37 @@ export function WorkspaceCard({ api, item, runtime, onAction, onOpenShell, onReq
     setDetailView((current) => current === view ? null : view);
     if (view === "events" && detailView !== "events") void onRequestRuntime(workspace.id);
   };
+  const running = workspace.state === "ready";
+  const stopped = workspace.state === "stopped";
 
-  return (
-    <article className="workspace-card">
-      <div className="workspace-main">
-        <div className="workspace-title"><div><h3>{workspace.name}</h3><code>{workspace.short_id}</code></div></div>
-        <StateBadge state={workspace.state} locale={locale} />
+  return <Card className={styles.card} appearance="filled-alternative">
+    <div className={styles.cardHeader}>
+      <div className={styles.cardTitle}><Title3 className={styles.titleText}>{workspace.name}</Title3><Caption1 className={styles.idText}>{workspace.short_id}</Caption1></div>
+      <StateBadge state={workspace.state} />
+    </div>
+    <div className={styles.metadata}><Text>{workspace.workspace_user}</Text><Text>{workspace.access_mode === "public" ? t("public") : t("internal")}</Text><Text className={styles.metadataCode}>{item.namespace}</Text><Text>{t("nodePool")}: {nodePoolDisplayName(nodePools, workspace.node_pool)}</Text>{workspace.resources.gpu_count > 0 && <Text>{workspace.resources.gpu_count} GPU</Text>}</div>
+    <ResourceOverview item={item} runtime={runtime} locale={locale} />
+    {canChangePlacement && running && <Caption1 className={styles.meterHint}>{t("locationChangeAfterStop")}</Caption1>}
+    <div className={styles.toolbar} role="toolbar" aria-label={t("workspaces")}>
+      <div className={styles.toolbarGroup}>
+        {canConnect && running && item.ssh_connection && <WorkspaceConnectionDialog api={api} workspaceId={workspace.id} connection={item.ssh_connection} />}
+        {canConnect && running && <Tooltip content={t("webShellClipboardHelp")} relationship="description"><Button appearance="primary" icon={<WindowConsoleRegular />} onClick={() => void onOpenShell(workspace.id)}>{t("webShell")}</Button></Tooltip>}
+        {canConnect && running && item.desktop?.status === "ready" && item.desktop.https_url && <Button appearance="outline" icon={<DesktopRegular />} disabled={openingDesktop} onClick={() => void openDesktop(api, workspace.id, item.desktop!.mapping_id, setOpeningDesktop, onError, t)}>{openingDesktop ? t("desktopOpening") : t("openDesktop")}</Button>}
+        {canConnect && running && <WorkspacePortMappings api={api} workspaceId={workspace.id} workspaceReady onError={onError} />}
+        {canChangeState && running && <Button appearance="subtle" icon={<StopRegular />} onClick={() => onAction(item, "stop")}>{t("stop")}</Button>}
+        {canChangeState && running && <Button appearance="subtle" icon={<ArrowClockwiseRegular />} onClick={() => onAction(item, "restart")}>{t("restart")}</Button>}
+        {canChangeState && (workspace.state === "stopped" || workspace.state === "failed") && <Button appearance="primary" icon={<PlayRegular />} onClick={() => onAction(item, "start")}>{t("start")}</Button>}
+        {canChangePlacement && stopped && <Button appearance="subtle" icon={<LocationRegular />} onClick={() => onChangePlacement(item)}>{t("changeLocation")}</Button>}
       </div>
-
-      <div className="workspace-meta compact">
-        <span>{workspace.workspace_user}</span>
-        <span>{workspace.access_mode === "public" ? t("public") : t("internal")}</span>
-        <code>{item.namespace}</code>
-        {workspace.resources.gpu_count === 0 && <span className="gpu-meta">0 GPU</span>}
+      <div className={styles.toolbarGroupEnd}>
+        {runtime && workspace.state !== "stopped" && <Button appearance={detailView === "status" ? "secondary" : "subtle"} icon={detailView === "status" ? <ChevronUpRegular /> : <ChevronDownRegular />} aria-expanded={detailView === "status"} onClick={() => toggleDetail("status")}>{t("runtimeStatus")}</Button>}
+        {runtime && <Button appearance={detailView === "events" ? "secondary" : "subtle"} icon={detailView === "events" ? <ChevronUpRegular /> : <ChevronDownRegular />} aria-expanded={detailView === "events"} onClick={() => toggleDetail("events")}>{t("eventLog")}</Button>}
+        {canDelete && !(workspace.state === "deleting" || workspace.state === "deleted") && <Button appearance="subtle" className={styles.dangerButton} icon={<DeleteRegular />} onClick={() => onAction(item, "delete")}>{t("delete")}</Button>}
       </div>
-
-      <ResourceOverview item={item} runtime={runtime} />
-
-      {canConnect && item.ssh_connection && <WorkspaceConnectionDialog connection={item.ssh_connection} workspaceHostKey={item.workspace_host_key} jumpHostKey={item.jump_host_key} />}
-
-      <div className="workspace-toolbar">
-        <div className="primary-actions">
-          {canConnect && workspace.state === "ready" && <button className="terminal-action" onClick={() => void onOpenShell(workspace.id)}>{t("webShell")}</button>}
-          {canConnect && workspace.state === "ready" && item.desktop?.status === "ready" && item.desktop.https_url && <button className="desktop-action" disabled={openingDesktop} onClick={() => void openDesktop(api, workspace.id, item.desktop!.mapping_id, setOpeningDesktop, onError, t)}>{openingDesktop ? t("desktopOpening") : t("openDesktop")}</button>}
-          {canConnect && workspace.state === "ready" && <WorkspacePortMappings api={api} workspaceId={workspace.id} workspaceReady onError={onError} />}
-          {canChangeState && workspace.state === "ready" && <button onClick={() => onAction(item, "stop")}>{t("stop")}</button>}
-          {canChangeState && workspace.state === "ready" && <button onClick={() => onAction(item, "restart")}>{t("restart")}</button>}
-          {canChangeState && (workspace.state === "stopped" || workspace.state === "failed") && <button onClick={() => onAction(item, "start")}>{t("start")}</button>}
-        </div>
-        <div className="detail-actions">
-          {runtime && workspace.state !== "stopped" && <button className={detailView === "status" ? "active" : ""} aria-controls={`runtime-${workspace.short_id}`} aria-expanded={detailView === "status"} onClick={() => toggleDetail("status")}>{t("runtimeStatus")} <span aria-hidden="true">{detailView === "status" ? "▴" : "▾"}</span></button>}
-          {runtime && <button className={detailView === "events" ? "active" : ""} aria-controls={`events-${workspace.short_id}`} aria-expanded={detailView === "events"} onClick={() => toggleDetail("events")}>{t("eventLog")} <span aria-hidden="true">{detailView === "events" ? "▴" : "▾"}</span></button>}
-          {canDelete && !(["deleting", "deleted"] as string[]).includes(workspace.state) && <button className="danger" onClick={() => onAction(item, "delete")}>{t("delete")}</button>}
-        </div>
-      </div>
-
-      {runtime && workspace.state !== "stopped" && detailView === "status" && <RuntimeStatus id={`runtime-${workspace.short_id}`} runtime={runtime} />}
-      {runtime && detailView === "events" && <EventLog id={`events-${workspace.short_id}`} runtime={runtime} locale={locale} />}
-    </article>
-  );
+    </div>
+    {runtime && workspace.state !== "stopped" && detailView === "status" && <RuntimeStatus runtime={runtime} />}
+    {runtime && detailView === "events" && <EventLog runtime={runtime} locale={locale} />}
+  </Card>;
 }
 
 async function openDesktop(api: ApiClient, workspaceId: string, mappingId: string, setOpening: (value: boolean) => void, onError: (message: string) => void, t: ReturnType<typeof useI18n>["t"]) {
@@ -90,112 +83,61 @@ async function openDesktop(api: ApiClient, workspaceId: string, mappingId: strin
     const bootstrap = await api.bootstrapPortMapping(workspaceId, mappingId);
     const destination = safeBootstrapUrl(bootstrap.bootstrap_url);
     if (!destination) throw new Error(t("desktopUnsafeBootstrapUrl"));
-    if (target) target.location.replace(destination);
-    else window.location.assign(destination);
-  } catch (error) {
-    target?.close();
-    onError(error instanceof Error ? error.message : t("desktopOpenFailed"));
-  } finally {
-    setOpening(false);
-  }
+    if (target) target.location.replace(destination); else window.location.assign(destination);
+  } catch (error) { target?.close(); onError(error instanceof Error ? error.message : t("desktopOpenFailed")); }
+  finally { setOpening(false); }
 }
 
-function ResourceOverview({ item, runtime }: { item: WorkspaceResponse; runtime?: WorkspaceRuntime }) {
+function ResourceOverview({ item, runtime, locale }: { item: WorkspaceResponse; runtime?: WorkspaceRuntime; locale: Locale }) {
   const { t } = useI18n();
+  const styles = useWorkspaceStyles();
   const isStopped = item.workspace.state === "stopped";
   const usage = useMemo(() => runtime && !isStopped ? aggregateRuntimeUsage(runtime) : { cpuMillis: null, memoryMiB: null }, [isStopped, runtime]);
   const resources = item.workspace.resources;
-  const cpuPercent = usagePercent(usage.cpuMillis, resources.cpu_millis);
-  const memoryPercent = usagePercent(usage.memoryMiB, resources.memory_mib);
-  return <div className="resource-overview">
-    <ResourceMeter label="CPU" actual={formatCpuMillis(usage.cpuMillis)} requested={`${resources.cpu_millis}m`} percent={cpuPercent} />
-    <ResourceMeter label={t("memory")} actual={formatMemoryMiB(usage.memoryMiB)} requested={`${formatMemoryMiB(resources.memory_mib)}`} percent={memoryPercent} />
-    <DiskMeter runtime={isStopped ? undefined : runtime} configuredGiB={resources.disk_gib} />
-    {resources.gpu_count > 0 && <div className="capacity-meter"><div><span>GPU</span><strong>{resources.gpu_count} GPU</strong></div><small>{t("configuredAllocation")} · {t("gpuTelemetryUnavailable")}</small></div>}
+  const persistent = isStopped ? undefined : runtime?.persistent_storage;
+  const temporary = isStopped ? undefined : runtime?.temporary_storage;
+  return <div className={styles.resourceGrid}>
+    <ResourceMeter label="CPU" actual={formatCpuMillis(usage.cpuMillis)} requested={`${resources.cpu_millis}m`} percent={usagePercent(usage.cpuMillis, resources.cpu_millis)} />
+    <ResourceMeter label={t("memory")} actual={formatMemoryMiB(usage.memoryMiB)} requested={`${formatMemoryMiB(resources.memory_mib)}`} percent={usagePercent(usage.memoryMiB, resources.memory_mib)} />
+    <StorageMeter label={t("persistentDisk")} telemetry={persistent} configuredGiB={resources.disk_gib} locale={locale} />
+    <StorageMeter label={t("temporaryStorage")} telemetry={temporary} configuredGiB={item.workspace.storage_policy.temporary_storage_gib} locale={locale} />
+    {resources.gpu_count > 0 && <div className={styles.meter}><div className={styles.meterHeader}><Text>GPU</Text><Text className={styles.meterValue}>{resources.gpu_count} GPU</Text></div><Caption1 className={styles.meterHint}>{t("configuredAllocation")} · {t("gpuTelemetryUnavailable")}</Caption1></div>}
   </div>;
 }
 
 function ResourceMeter({ label, actual, requested, percent }: { label: string; actual: string; requested: string; percent: number | null }) {
   const { t } = useI18n();
+  const styles = useWorkspaceStyles();
   const valueText = percent === null ? `${label}: ${t("metricsUnavailable")}` : `${actual} / ${requested}, ${formatPercent(percent)}`;
-  return <div className="resource-meter">
-    <div className="resource-meter-heading"><span>{label}</span><strong>{actual} <small>/ {requested}</small></strong></div>
-    <div className="resource-track" role="progressbar" aria-label={`${label} ${t("usageOfLimit")}`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent ?? undefined} aria-valuetext={valueText}><span className={percent !== null && percent > 0 ? "has-value" : ""} style={{ width: percent === null ? "0" : `${percent}%` }} /></div>
-    <small>{t("usageOfLimit")} · {formatPercent(percent)}</small>
-  </div>;
+  return <Tooltip content={valueText} relationship="description"><div className={styles.meter}><div className={styles.meterHeader}><Text>{label}</Text><Text className={styles.meterValue}>{actual} <Caption1>/ {requested}</Caption1></Text></div><ProgressBar value={percent === null ? undefined : percent / 100} aria-label={`${label} ${t("usageOfLimit")}`} /><Caption1 className={styles.meterHint}>{t("usageOfLimit")} · {formatPercent(percent)}</Caption1></div></Tooltip>;
 }
 
-function DiskMeter({ runtime, configuredGiB }: { runtime?: WorkspaceRuntime; configuredGiB: number }) {
-  const { locale, t } = useI18n();
-  const telemetry = runtime?.storage;
-  const usable = telemetry?.status === "available" || telemetry?.status === "stale";
-  const used = usable ? telemetry.used_bytes : null;
-  const capacity = usable ? telemetry.capacity_bytes : null;
-  const percent = used !== null && capacity !== null && capacity > 0 ? Math.min(100, Math.max(0, used / capacity * 100)) : null;
-  const configured = formatStorageCapacity(runtime?.pvc_capacity, configuredGiB);
-  const actual = used === null ? "—" : formatBytes(used);
-  const status = telemetry?.status === "stale" ? t("storageTelemetryStale") : telemetry?.status === "disabled" ? t("storageTelemetryDisabled") : telemetry?.status === "available" ? t("storageTelemetryAvailable") : t("storageTelemetryUnavailable");
-  const valueText = percent === null ? `${t("disk")}: ${status}` : `${actual} / ${formatBytes(capacity ?? 0)}, ${formatPercent(percent)}`;
-  const observedTitle = telemetry?.observed_at ? `${t("observedAt")} ${new Date(telemetry.observed_at * 1_000).toLocaleString(locale)}` : undefined;
-  return <div className="resource-meter disk-meter" title={observedTitle}>
-    <div className="resource-meter-heading"><span>{t("disk")}</span><strong>{actual} <small>/ {configured}</small></strong></div>
-    <div className="resource-track" role="progressbar" aria-label={`${t("disk")} ${t("storageUsage")}`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent ?? undefined} aria-valuetext={valueText}><span className={percent !== null && percent > 0 ? "has-value" : ""} style={{ width: percent === null ? "0" : `${percent}%` }} /></div>
-    <small>{t("usageOfLimit")} · {formatPercent(percent)}</small>
-    {telemetry?.status !== "available" && <small className="telemetry-status">{status}</small>}
-  </div>;
-}
-
-function RuntimeStatus({ id, runtime }: { id: string; runtime: WorkspaceRuntime }) {
+function RuntimeStatus({ runtime }: { runtime: WorkspaceRuntime }) {
   const { t } = useI18n();
-  return <section id={id} className="runtime-panel" aria-label={t("runtimeStatus")}>
-    <h4>{t("containers")}</h4>
-    {runtime.pods.length === 0 && runtime.metrics.length === 0 && <p>{t("noRuntimeData")}</p>}
-    <div className="pod-status-grid">{runtime.pods.map((pod) => <div key={pod.name}><code>{pod.name}</code><span>{pod.phase ?? "unknown"}</span><span className={pod.ready ? "healthy" : "unhealthy"}>{pod.ready ? t("ready") : t("notReady")}</span><small>{pod.restarts} {t("restarts")}</small></div>)}</div>
-    {runtime.metrics.length > 0 && <div className="container-metrics">{runtime.metrics.map((metric) => <div key={`${metric.pod}-${metric.container}`}><code>{metric.container}</code><span>CPU {formatCpuMillis(parseCpuMillis(metric.cpu))}</span><span>{t("memory")} {formatMemoryMiB(parseMemoryMiB(metric.memory))}</span></div>)}</div>}
-  </section>;
+  const styles = useWorkspaceStyles();
+  return <section className={styles.statusPanel} aria-label={t("runtimeStatus")}><div className={styles.panelHeading}><Title3>{t("containers")}</Title3><Caption1>{runtime.metrics_available ? t("usageAvailable") : t("metricsUnavailable")}</Caption1></div>{runtime.pods.length === 0 && runtime.metrics.length === 0 && <Text>{t("noRuntimeData")}</Text>}<div className={styles.podGrid}>{runtime.pods.map((pod) => <div className={styles.podRow} key={pod.name}><Text className={styles.code}>{pod.name}</Text><Text>{pod.phase ?? "unknown"}</Text><Badge appearance="tint" color={pod.ready ? "success" : "danger"}>{pod.ready ? t("ready") : t("notReady")}</Badge><Caption1>{pod.restarts} {t("restarts")}</Caption1></div>)}</div>{runtime.metrics.length > 0 && <Divider />}{runtime.metrics.length > 0 && <div className={styles.podGrid}>{runtime.metrics.map((metric) => <div className={styles.podRow} key={`${metric.pod}-${metric.container}`}><Text className={styles.code}>{metric.container}</Text><Text>CPU {formatCpuMillis(parseCpuMillis(metric.cpu))}</Text><Text>{t("memory")} {formatMemoryMiB(parseMemoryMiB(metric.memory))}</Text></div>)}</div>}</section>;
 }
 
-function EventLog({ id, runtime, locale }: { id: string; runtime: WorkspaceRuntime; locale: Locale }) {
+function EventLog({ runtime, locale }: { runtime: WorkspaceRuntime; locale: Locale }) {
   const { t } = useI18n();
-  return <section id={id} className="runtime-panel event-panel" aria-label={t("eventLog")}>
-    <h4>{t("eventLog")}</h4>
-    {runtime.events.length === 0 && <p>{t("noEvents")}</p>}
-    {runtime.events.slice(0, 12).map((event, index) => <article key={`${event.last_timestamp}-${event.reason}-${index}`}>
-      <div><strong>{event.reason ?? event.event_type ?? "Event"}</strong>{event.event_type && <span className={`event-type ${event.event_type.toLowerCase()}`}>{event.event_type}</span>}</div>
-      <p>{event.message ?? "—"}</p>
-      <small>{t("observedAt")} {formatTimestamp(event.last_timestamp, locale)} · {t("eventCount")} {event.count ?? 1}</small>
-    </article>)}
-  </section>;
+  const styles = useWorkspaceStyles();
+  return <section className={styles.statusPanel} aria-label={t("eventLog")}><Title3>{t("eventLog")}</Title3>{runtime.events.length === 0 && <Text>{t("noEvents")}</Text>}<div className={styles.eventList}>{runtime.events.slice(0, 12).map((event, index) => <article className={styles.event} key={`${event.observed_at}-${event.category}-${index}`}><Text weight="semibold">{t(eventCategoryKeys[event.category].label)}</Text><Text>{t(eventCategoryKeys[event.category].description)}</Text><Caption1 className={styles.eventMeta}>{t("observedAt")} {formatTimestamp(event.observed_at, locale)} · {t("eventCount")} {event.count ?? 1}</Caption1></article>)}</div></section>;
 }
 
-function StateBadge({ state }: { state: string; locale: Locale }) {
+const eventCategoryKeys: Record<WorkspaceRuntimeEvent["category"], { label: MessageKey; description: MessageKey }> = {
+  disk_pressure: { label: "eventCategoryDiskPressure", description: "eventCategoryDiskPressureDescription" },
+  evicted: { label: "eventCategoryEvicted", description: "eventCategoryEvictedDescription" },
+  temporary_storage_provisioning: { label: "eventCategoryTemporaryStorageProvisioning", description: "eventCategoryTemporaryStorageProvisioningDescription" },
+  temporary_storage_attachment: { label: "eventCategoryTemporaryStorageAttachment", description: "eventCategoryTemporaryStorageAttachmentDescription" },
+  volume_unavailable: { label: "eventCategoryVolumeUnavailable", description: "eventCategoryVolumeUnavailableDescription" },
+  other: { label: "eventCategoryOther", description: "eventCategoryOtherDescription" },
+};
+
+function StateBadge({ state }: { state: string }) {
   const { t } = useI18n();
-  const labels = {
-    provisioning: "stateProvisioning", ready: "stateReady", stopping: "stateStopping", stopped: "stateStopped", starting: "stateStarting", restarting: "stateRestarting", deleting: "stateDeleting", deleted: "stateDeleted", failed: "stateFailed",
-  } as const;
-  return <span className={`state-badge ${state}`}>{state in labels ? t(labels[state as keyof typeof labels]) : state}</span>;
+  const labels = { provisioning: "stateProvisioning", ready: "stateReady", stopping: "stateStopping", stopped: "stateStopped", starting: "stateStarting", restarting: "stateRestarting", deleting: "stateDeleting", deleted: "stateDeleted", failed: "stateFailed" } as const;
+  const color = state === "ready" ? "success" : state === "failed" || state === "deleting" ? "danger" : state === "stopped" || state === "deleted" ? "informative" : "warning";
+  return <Badge appearance="tint" color={color}>{state in labels ? t(labels[state as keyof typeof labels]) : state}</Badge>;
 }
 
-function formatTimestamp(value: string | null, locale: Locale): string {
-  if (!value) return "—";
-  const parsed = new Date(value);
-  return Number.isNaN(parsed.valueOf()) ? value : parsed.toLocaleString(locale);
-}
-
-function formatStorageCapacity(value: string | null | undefined, fallbackGiB: number): string {
-  if (!value) return `${fallbackGiB} GiB`;
-  const binary = value.match(/^([0-9]+(?:\.[0-9]+)?)(Ki|Mi|Gi|Ti)$/);
-  return binary ? `${binary[1]} ${binary[2]}B` : value;
-}
-
-function formatBytes(value: number): string {
-  if (!Number.isFinite(value) || value < 0) return "—";
-  const units = ["B", "KiB", "MiB", "GiB", "TiB"];
-  let scaled = value;
-  let unit = 0;
-  while (scaled >= 1024 && unit < units.length - 1) {
-    scaled /= 1024;
-    unit += 1;
-  }
-  return `${scaled >= 10 || unit === 0 ? scaled.toFixed(0) : scaled.toFixed(1)} ${units[unit]}`;
-}
+function formatTimestamp(value: string | null, locale: Locale): string { if (!value) return "—"; const parsed = new Date(value); return Number.isNaN(parsed.valueOf()) ? value : parsed.toLocaleString(locale); }

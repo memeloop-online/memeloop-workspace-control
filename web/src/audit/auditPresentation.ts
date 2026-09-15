@@ -11,6 +11,7 @@ const ACTION_LABELS: Readonly<Record<string, MessageKey>> = {
   "workspace.mark_stopped": "auditActionWorkspaceStopped",
   "workspace.mark_deleted": "auditActionWorkspaceDeleted",
   "workspace.mark_failed": "auditActionWorkspaceFailed",
+  "workspace.placement_updated": "auditActionWorkspacePlacement",
   "workspace.port_mapping.create": "auditActionPortMappingCreate",
   "workspace.port_mapping.delete": "auditActionPortMappingDelete",
   "injection.replace": "auditActionCredentialReplace",

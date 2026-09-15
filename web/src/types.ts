@@ -124,8 +124,26 @@ export interface WorkspacePage {
 
 export interface WorkspaceSummary {
   total_count: number;
-  requested: Resources;
+  requested: QuotaResources;
   state_counts: Partial<Record<WorkspaceState, number>>;
+}
+
+export interface QuotaResources {
+  cpu_millis: number;
+  memory_mib: number;
+  gpu_count: number;
+  disk_gib: number;
+  temporary_storage_gib: number;
+}
+
+export interface AvailableNodePool {
+  name: string;
+  display_name: string;
+}
+
+export interface WorkspacePlacement {
+  allowed_node_pools: string[];
+  default_node_pool: string;
 }
 
 export type UsageAvailability = "available" | "unavailable" | "unknown";
@@ -134,7 +152,7 @@ export type UsageAvailability = "available" | "unavailable" | "unknown";
 export interface OrganizationUsageSummary {
   total_count: number;
   state_counts: Partial<Record<WorkspaceState, number>>;
-  requested: Resources;
+  requested: QuotaResources;
   actual: { cpu_millis: number | null; memory_mib: number | null; disk_bytes: number | null };
   observed_at: number | null;
   availability: { cpu: UsageAvailability; memory: UsageAvailability; disk: UsageAvailability };
@@ -157,7 +175,6 @@ export interface WorkspaceTemplate {
   access_mode: AccessMode;
   resources: Resources;
   pod_requests: PodResourceRequest;
-  ephemeral_storage_limit_mib: number | null;
   workspace_user: string;
   workspace_home: string;
   buildkit: boolean;
@@ -165,9 +182,7 @@ export interface WorkspaceTemplate {
   cluster_access: boolean;
   egress_policy: EgressPolicy;
   runtime_class_name: string | null;
-  required_node_names: string[];
-  preferred_node_names: string[];
-  node_selector: Record<string, string>;
+  placement: WorkspacePlacement;
   desktop?: WorkspaceDesktopTemplate | null;
   yaml: string;
   enabled: boolean;
@@ -180,18 +195,12 @@ export interface WorkspaceDesktopTemplate {
 }
 
 export interface WorkspaceStoragePolicy {
-  runtime_tmp_memory_mib: number;
-  build_scratch_gib: number;
-  buildkit_cache_gib: number;
-  codex_scratch_gib: number;
-  scratch_medium: "disk" | "memory";
-  home_reserve_mib: number | null;
+  temporary_storage_gib: number;
 }
 
 export interface PodResourceRequest {
   cpu_millis: number;
   memory_mib: number;
-  ephemeral_storage_mib: number | null;
 }
 
 export interface AuditRecord {
@@ -243,10 +252,10 @@ export interface Workspace {
   owner_id: string;
   name: string;
   template_id: string | null;
+  node_pool: string;
   image: string;
   access_mode: AccessMode;
   pod_requests: PodResourceRequest;
-  ephemeral_storage_limit_mib: number | null;
   workspace_user: string;
   workspace_home: string;
   buildkit: boolean;
@@ -254,9 +263,7 @@ export interface Workspace {
   cluster_access: boolean;
   egress_policy: EgressPolicy;
   runtime_class_name: string | null;
-  required_node_names: string[];
-  preferred_node_names: string[];
-  node_selector: Record<string, string>;
+  placement: WorkspacePlacement;
   state: WorkspaceState;
   resources: Resources;
   generation: number;
@@ -305,20 +312,30 @@ export interface WorkspaceSshConnection {
 
 export interface WorkspaceRuntime {
   allocated: Resources;
-  pvc_capacity: string | null;
-  storage: {
-    status: "available" | "stale" | "unavailable" | "disabled";
-    used_bytes: number | null;
-    capacity_bytes: number | null;
-    available_bytes: number | null;
-    observed_at: number | null;
-    used_percent: number | null;
-    pressure: "normal" | "warning" | "critical" | null;
-  };
+  persistent_storage: WorkspaceStorageTelemetry;
+  temporary_storage: WorkspaceStorageTelemetry;
   metrics_available: boolean;
   pods: { name: string; phase: string | null; ready: boolean; restarts: number }[];
   metrics: { pod: string; container: string; cpu: string | null; memory: string | null }[];
-  events: { reason: string | null; message: string | null; event_type: string | null; count: number | null; last_timestamp: string | null }[];
+  events: WorkspaceRuntimeEvent[];
+}
+
+export interface WorkspaceRuntimeEvent {
+  category: "disk_pressure" | "evicted" | "temporary_storage_provisioning" | "temporary_storage_attachment" | "volume_unavailable" | "other";
+  count: number | null;
+  observed_at: string | null;
+}
+
+export interface WorkspaceStorageTelemetry {
+  configured_bytes: number;
+  used_bytes: number | null;
+  capacity_bytes: number | null;
+  available_bytes: number | null;
+  observed_at: number | null;
+  used_percent: number | null;
+  pressure: "normal" | "warning" | "critical" | null;
+  coverage: "exact" | "stale" | "unavailable" | "disabled";
+  backing: "persistent_volume" | "ephemeral_volume" | "node_local" | "unknown";
 }
 
 export interface WorkspaceRuntimeEntry {
@@ -331,9 +348,11 @@ export interface CreateWorkspace {
   owner_id: string;
   name: string;
   template_id: string;
+  node_pool?: string | null;
   resources: Resources | null;
   organization_injection_refs: string[] | null;
   user_injection_refs: string[] | null;
+  inline_workspace_injections?: InjectionDraft[];
 }
 
 export interface StoredInjection {

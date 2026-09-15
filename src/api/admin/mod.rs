@@ -6,6 +6,7 @@ mod api_keys;
 #[path = "audit.rs"]
 mod audit_api;
 mod memberships;
+mod node_pools;
 mod quota;
 #[path = "settings.rs"]
 mod settings;
@@ -20,6 +21,11 @@ pub(super) use audit_api::{__path_audit, audit};
 pub(super) use memberships::{
     __path_list_members, __path_remove_membership, __path_upsert_membership, MembershipRequest,
     list_members, remove_membership, upsert_membership,
+};
+pub(super) use node_pools::{
+    __path_delete as __path_delete_node_pool, __path_list as __path_list_node_pools,
+    __path_put as __path_put_node_pool, delete as delete_node_pool, list as list_node_pools,
+    put as put_node_pool,
 };
 pub(super) use quota::{__path_get_quota, __path_set_quota, get_quota, set_quota};
 pub(super) use settings::{

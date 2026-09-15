@@ -1,5 +1,3 @@
-use std::collections::BTreeMap;
-
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use utoipa::ToSchema;
@@ -35,8 +33,6 @@ pub struct WorkspaceTemplateSpec {
     pub access_mode: AccessMode,
     pub resources: Resources,
     pub pod_requests: PodResourceRequest,
-    #[serde(default)]
-    pub ephemeral_storage_limit_mib: Option<u64>,
     pub workspace_user: String,
     pub workspace_home: String,
     #[serde(default)]
@@ -54,11 +50,7 @@ pub struct WorkspaceTemplateSpec {
     #[serde(default)]
     pub runtime_class_name: Option<String>,
     #[serde(default)]
-    pub required_node_names: Vec<String>,
-    #[serde(default)]
-    pub preferred_node_names: Vec<String>,
-    #[serde(default)]
-    pub node_selector: BTreeMap<String, String>,
+    pub placement: WorkspacePlacement,
     /// Optional browser-accessible desktop endpoint exposed through the
     /// authenticated workspace HTTP gateway. This is a container port, never
     /// a host port, NodePort, or direct RDP endpoint.
@@ -114,64 +106,71 @@ pub enum EgressPolicy {
 
 /// Bounded, Pod-lifetime storage for data that can be regenerated safely.
 ///
-/// The workspace Home PVC remains the durable boundary. These limits do not reserve node disk;
-/// Kubernetes enforces them only as upper bounds for the corresponding `emptyDir` volumes.
+/// The workspace Home PVC remains the durable boundary. Disk-backed sizes become PVC requests
+/// when a platform scratch StorageClass is configured, or `emptyDir` bounds otherwise.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct WorkspaceStoragePolicy {
-    pub runtime_tmp_memory_mib: u64,
-    pub scratch_medium: ScratchMedium,
-    pub build_scratch_gib: u64,
-    pub buildkit_cache_gib: u64,
-    pub codex_scratch_gib: u64,
-    pub home_reserve_mib: Option<u64>,
+    /// Total high-speed, Pod-lifetime storage reserved for regenerable workspace data.
+    pub temporary_storage_gib: u64,
 }
 
 impl Default for WorkspaceStoragePolicy {
     fn default() -> Self {
         Self {
-            runtime_tmp_memory_mib: 512,
-            scratch_medium: ScratchMedium::Disk,
-            build_scratch_gib: 12,
-            buildkit_cache_gib: 8,
-            codex_scratch_gib: 2,
-            home_reserve_mib: None,
+            temporary_storage_gib: 22,
         }
     }
 }
 
-/// Backing medium for regenerable build, BuildKit, and Codex scratch volumes.
-///
-/// Disk uses node-local storage. Memory makes these `emptyDir` volumes tmpfs-backed; bytes written
-/// there are charged to the writing container's memory cgroup.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum ScratchMedium {
-    #[default]
-    Disk,
-    Memory,
-}
-
 impl WorkspaceStoragePolicy {
-    fn validate(self, disk_gib: u64) -> Result<(), TemplateError> {
-        if !(64..=4_096).contains(&self.runtime_tmp_memory_mib)
-            || !(1..=256).contains(&self.build_scratch_gib)
-            || !(1..=256).contains(&self.buildkit_cache_gib)
-            || !(1..=32).contains(&self.codex_scratch_gib)
-            || self.home_reserve_mib.is_some_and(|reserve| {
-                !(64..=4_096).contains(&reserve)
-                    || reserve >= disk_gib.saturating_mul(1_024)
-                    || reserve.saturating_mul(10) > disk_gib.saturating_mul(1_024)
-            })
-        {
+    fn validate(self) -> Result<(), TemplateError> {
+        if !(1..=2_048).contains(&self.temporary_storage_gib) {
             return Err(TemplateError::StoragePolicy);
         }
         Ok(())
     }
+}
 
-    pub(crate) fn effective_home_reserve_mib(self, disk_gib: u64) -> u64 {
-        self.home_reserve_mib
-            .unwrap_or_else(|| disk_gib.saturating_mul(1_024).saturating_div(10).min(1_024))
+/// Tenant-visible placement policy. Kubernetes selectors remain private to the selected node pool.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct WorkspacePlacement {
+    pub allowed_node_pools: Vec<String>,
+    pub default_node_pool: String,
+}
+
+impl Default for WorkspacePlacement {
+    fn default() -> Self {
+        Self {
+            allowed_node_pools: vec!["default".to_owned()],
+            default_node_pool: "default".to_owned(),
+        }
+    }
+}
+
+impl WorkspacePlacement {
+    fn validate(&self) -> Result<(), TemplateError> {
+        if self.allowed_node_pools.is_empty()
+            || self.allowed_node_pools.len() > 32
+            || !valid_node_pool_name(&self.default_node_pool)
+            || !self
+                .allowed_node_pools
+                .iter()
+                .any(|pool| pool == &self.default_node_pool)
+        {
+            return Err(TemplateError::Placement);
+        }
+        let mut pools = self.allowed_node_pools.clone();
+        if pools.iter().any(|pool| !valid_node_pool_name(pool)) {
+            return Err(TemplateError::Placement);
+        }
+        pools.sort_unstable();
+        pools.dedup();
+        if pools.len() != self.allowed_node_pools.len() {
+            return Err(TemplateError::Placement);
+        }
+        Ok(())
     }
 }
 
@@ -180,8 +179,6 @@ impl WorkspaceStoragePolicy {
 pub struct PodResourceRequest {
     pub cpu_millis: u64,
     pub memory_mib: u64,
-    #[serde(default)]
-    pub ephemeral_storage_mib: Option<u64>,
 }
 
 impl WorkspaceTemplateDocument {
@@ -241,11 +238,6 @@ impl WorkspaceTemplateSpec {
             || self.pod_requests.memory_mib == 0
             || self.pod_requests.cpu_millis > self.resources.cpu_millis
             || self.pod_requests.memory_mib > self.resources.memory_mib
-            || self
-                .pod_requests
-                .ephemeral_storage_mib
-                .zip(self.ephemeral_storage_limit_mib)
-                .is_some_and(|(request, limit)| request > limit)
         {
             return Err(TemplateError::PodResources);
         }
@@ -261,22 +253,11 @@ impl WorkspaceTemplateSpec {
         {
             return Err(TemplateError::RuntimeClass);
         }
-        if self
-            .required_node_names
-            .iter()
-            .chain(&self.preferred_node_names)
-            .any(|name| !valid_selector_part(name))
-            || self
-                .node_selector
-                .iter()
-                .any(|(key, value)| !valid_selector_part(key) || !valid_selector_part(value))
-        {
-            return Err(TemplateError::Scheduling);
-        }
+        self.placement.validate()?;
         if let Some(desktop) = &self.desktop {
             desktop.validate()?;
         }
-        self.storage_policy.validate(self.resources.disk_gib)?;
+        self.storage_policy.validate()?;
         Ok(())
     }
 
@@ -292,9 +273,7 @@ impl WorkspaceTemplateSpec {
             pod_requests: PodResourceRequest {
                 cpu_millis: resources.cpu_millis,
                 memory_mib: resources.memory_mib,
-                ephemeral_storage_mib: Some(2_048),
             },
-            ephemeral_storage_limit_mib: Some(14_592),
             workspace_user: "workspace".to_owned(),
             workspace_home: "/workspace".to_owned(),
             buildkit: false,
@@ -302,9 +281,7 @@ impl WorkspaceTemplateSpec {
             cluster_access: false,
             egress_policy: EgressPolicy::Unrestricted,
             runtime_class_name: None,
-            required_node_names: Vec::new(),
-            preferred_node_names: Vec::new(),
-            node_selector: BTreeMap::new(),
+            placement: WorkspacePlacement::default(),
             desktop: None,
         }
     }
@@ -333,12 +310,17 @@ fn valid_workspace_home(value: &str) -> bool {
             .all(|part| !part.is_empty() && !matches!(part, "." | ".."))
 }
 
-fn valid_selector_part(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 253
-        && !value
-            .chars()
-            .any(|character| character.is_control() || character.is_whitespace())
+fn valid_node_pool_name(value: &str) -> bool {
+    value.len() <= 63
+        && !value.is_empty()
+        && value.as_bytes().first().is_some_and(u8::is_ascii_lowercase)
+        && value
+            .as_bytes()
+            .last()
+            .is_some_and(u8::is_ascii_alphanumeric)
+        && value.bytes().all(|character| {
+            character.is_ascii_lowercase() || character.is_ascii_digit() || character == b'-'
+        })
 }
 
 fn valid_runtime_class_name(value: &str) -> bool {
@@ -375,8 +357,8 @@ pub enum TemplateError {
     WorkspaceIdentity,
     #[error("Kubernetes RuntimeClass name is invalid")]
     RuntimeClass,
-    #[error("template scheduling constraints are invalid")]
-    Scheduling,
+    #[error("template placement policy is invalid")]
+    Placement,
     #[error("template storage policy is invalid")]
     StoragePolicy,
     #[error("template browser desktop endpoint is invalid")]

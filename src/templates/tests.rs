@@ -18,10 +18,9 @@ fn yaml_round_trip_contains_only_explicit_template_fields() {
     let yaml = document.to_yaml().unwrap();
     assert!(yaml.contains("access_mode: internal"));
     assert!(yaml.contains("workspace_user: node-dev"));
-    assert!(yaml.contains("runtime_tmp_memory_mib: 512"));
-    assert!(yaml.contains("scratch_medium: disk"));
-    assert!(yaml.contains("build_scratch_gib: 12"));
-    assert!(yaml.contains("buildkit_cache_gib: 8"));
+    assert!(yaml.contains("temporary_storage_gib: 22"));
+    assert!(yaml.contains("allowed_node_pools:"));
+    assert!(yaml.contains("default_node_pool: default"));
     assert!(yaml.contains("runtime_class_name: null"));
     assert!(yaml.contains("egress_policy: unrestricted"));
     assert_eq!(WorkspaceTemplateDocument::parse(&yaml).unwrap(), document);
@@ -32,7 +31,7 @@ fn yaml_round_trip_contains_only_explicit_template_fields() {
 }
 
 #[test]
-fn storage_policy_defaults_scratch_medium_to_disk_for_existing_templates() {
+fn storage_and_placement_defaults_are_neutral() {
     let yaml = r#"
 apiVersion: workspace.memeloop.dev/v1
 kind: WorkspaceTemplate
@@ -52,17 +51,11 @@ spec:
   workspace_user: workspace
   workspace_home: /workspace
   storage_policy:
-    runtime_tmp_memory_mib: 512
-    build_scratch_gib: 12
-    buildkit_cache_gib: 8
-    codex_scratch_gib: 2
-    home_reserve_mib: null
+    temporary_storage_gib: 30
 "#;
     let document = WorkspaceTemplateDocument::parse(yaml).unwrap();
-    assert_eq!(
-        document.spec.storage_policy.scratch_medium,
-        ScratchMedium::Disk
-    );
+    assert_eq!(document.spec.storage_policy.temporary_storage_gib, 30);
+    assert_eq!(document.spec.placement, WorkspacePlacement::default());
 }
 
 #[test]
@@ -95,19 +88,21 @@ fn desktop_endpoint_is_optional_and_validated_as_a_browser_http_port() {
 }
 
 #[test]
-fn scratch_medium_round_trips_and_rejects_unknown_values() {
+fn storage_policy_round_trips_and_rejects_removed_fields() {
     let policy = WorkspaceStoragePolicy {
-        scratch_medium: ScratchMedium::Memory,
-        ..WorkspaceStoragePolicy::default()
+        temporary_storage_gib: 64,
     };
     let json = serde_json::to_value(policy).unwrap();
-    assert_eq!(json["scratch_medium"], "memory");
+    assert_eq!(json["temporary_storage_gib"], 64);
     assert_eq!(
         serde_json::from_value::<WorkspaceStoragePolicy>(json).unwrap(),
         policy
     );
     assert!(
-        serde_json::from_str::<WorkspaceStoragePolicy>(r#"{"scratch_medium":"memoryy"}"#).is_err()
+        serde_json::from_str::<WorkspaceStoragePolicy>(
+            r#"{"temporary_storage_gib":22,"scratch":"memory"}"#
+        )
+        .is_err()
     );
 }
 
@@ -169,7 +164,7 @@ fn rejects_workspace_identity_that_could_escape_generated_ssh_configuration() {
 }
 
 #[test]
-fn storage_policy_requires_bounded_volumes_and_a_safe_home_reserve() {
+fn storage_policy_requires_a_bounded_total_and_valid_placement() {
     let mut spec = WorkspaceTemplateSpec::standard(
         "registry.example/dev:latest",
         AccessMode::Internal,
@@ -180,20 +175,17 @@ fn storage_policy_requires_bounded_volumes_and_a_safe_home_reserve() {
             disk_gib: 20,
         },
     );
-    spec.storage_policy.home_reserve_mib = Some(0);
+    spec.storage_policy.temporary_storage_gib = 0;
     assert_eq!(spec.validate(), Err(TemplateError::StoragePolicy));
 
     spec.storage_policy = WorkspaceStoragePolicy::default();
-    spec.storage_policy.runtime_tmp_memory_mib = 0;
+    spec.storage_policy.temporary_storage_gib = 2_049;
     assert_eq!(spec.validate(), Err(TemplateError::StoragePolicy));
 
     spec.storage_policy = WorkspaceStoragePolicy::default();
-    spec.storage_policy.home_reserve_mib = Some(2_048);
+    spec.placement.allowed_node_pools.push("gpu".to_owned());
+    spec.placement.default_node_pool = "gpu".to_owned();
     assert_eq!(spec.validate(), Ok(()));
-    spec.storage_policy.home_reserve_mib = Some(2_049);
-    assert_eq!(spec.validate(), Err(TemplateError::StoragePolicy));
-
-    let policy = WorkspaceStoragePolicy::default();
-    assert_eq!(policy.effective_home_reserve_mib(60), 1_024);
-    assert_eq!(policy.effective_home_reserve_mib(5), 512);
+    spec.placement.allowed_node_pools.push("gpu".to_owned());
+    assert_eq!(spec.validate(), Err(TemplateError::Placement));
 }

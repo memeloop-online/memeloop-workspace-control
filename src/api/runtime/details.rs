@@ -1,7 +1,20 @@
 use super::*;
 
+#[derive(Debug, Clone, Default)]
+pub(super) struct WorkspaceStoragePvcIdentities {
+    pub(super) persistent: Option<StorageIdentity>,
+    pub(super) temporary: Option<StorageIdentity>,
+}
+
+impl WorkspaceStoragePvcIdentities {
+    pub(super) fn identities(&self) -> impl Iterator<Item = StorageIdentity> + '_ {
+        self.persistent.iter().chain(self.temporary.iter()).cloned()
+    }
+}
+
 pub(super) struct WorkspaceRuntimeDetails {
-    pub(super) pvc_capacity: Option<String>,
+    pub(super) storage_pvcs: WorkspaceStoragePvcIdentities,
+    pub(super) scratch_backing: StorageBacking,
     pub(super) metrics_available: bool,
     pub(super) pods: Vec<PodRuntime>,
     pub(super) metrics: Vec<PodMetric>,
@@ -47,21 +60,12 @@ pub(super) async fn fetch_workspace_runtime_details(
         .collect::<Vec<_>>();
     newest_events(&mut events, 50);
 
-    let pvc_capacity = Api::<PersistentVolumeClaim>::namespaced(client.clone(), namespace)
-        .get_opt(&names.resources.data_pvc_ordinal_zero())
+    let storage_pvcs = Api::<PersistentVolumeClaim>::namespaced(client.clone(), namespace)
+        .list(&ListParams::default().labels(selector))
         .await
         .map_err(ApiError::Kubernetes)?
-        .filter(|pvc| {
-            object_workspace_id(&pvc.metadata.labels) == Some(workspace_id)
-                && pvc.metadata.labels.as_ref().is_some_and(|labels| {
-                    labels
-                        .get(OWNER_INSTALLATION_LABEL)
-                        .is_some_and(|value| value == installation_id)
-                })
-        })
-        .and_then(|pvc| pvc.status)
-        .and_then(|status| status.capacity)
-        .and_then(|capacity| capacity.get("storage").map(|quantity| quantity.0.clone()));
+        .items;
+    let storage_pvcs = storage_pvc_identities(storage_pvcs, workspace_id, installation_id);
 
     let metric_result = pod_metrics(client.clone(), namespace, selector).await;
     let (metrics_available, metrics) = match metric_result {
@@ -80,7 +84,8 @@ pub(super) async fn fetch_workspace_runtime_details(
     };
 
     Ok(WorkspaceRuntimeDetails {
-        pvc_capacity,
+        storage_pvcs,
+        scratch_backing: scratch_backing_from_pods(&pod_list.items),
         metrics_available,
         pods,
         metrics,
@@ -88,18 +93,57 @@ pub(super) async fn fetch_workspace_runtime_details(
     })
 }
 
-pub(super) fn storage_identity(
-    installation_id: &InstallationId,
-    workspace: &Workspace,
-) -> Result<StorageIdentity, crate::workspace_runtime::WorkspaceRuntimeIdentityError> {
-    Ok((
-        workspace.runtime.namespace().to_owned(),
-        crate::workspace_runtime::WorkspaceRuntimeNames::for_workspace(
-            installation_id,
-            &workspace.runtime,
-            &workspace.short_id,
-        )?
-        .resources
-        .data_pvc_ordinal_zero(),
-    ))
+fn storage_pvc_identities(
+    pvcs: Vec<PersistentVolumeClaim>,
+    workspace_id: Uuid,
+    installation_id: &str,
+) -> WorkspaceStoragePvcIdentities {
+    let mut identities = WorkspaceStoragePvcIdentities::default();
+    for pvc in pvcs {
+        let labels = pvc.metadata.labels.as_ref();
+        if object_workspace_id(&pvc.metadata.labels) != Some(workspace_id)
+            || !labels.is_some_and(|labels| {
+                labels
+                    .get(OWNER_INSTALLATION_LABEL)
+                    .is_some_and(|value| value == installation_id)
+            })
+        {
+            continue;
+        }
+        let Some(namespace) = pvc.metadata.namespace else {
+            continue;
+        };
+        let Some(name) = pvc.metadata.name else {
+            continue;
+        };
+        match labels
+            .and_then(|labels| labels.get(STORAGE_ROLE_LABEL))
+            .map(String::as_str)
+        {
+            Some(STORAGE_ROLE_HOME) => identities.persistent = Some((namespace, name)),
+            Some(STORAGE_ROLE_TEMPORARY) => identities.temporary = Some((namespace, name)),
+            _ => {}
+        }
+    }
+    identities
+}
+
+pub(super) fn scratch_backing_from_pods(pods: &[Pod]) -> StorageBacking {
+    let Some(volume) = pods.iter().find_map(|pod| {
+        pod.spec
+            .as_ref()?
+            .volumes
+            .as_ref()?
+            .iter()
+            .find(|volume| volume.name == "workspace-scratch")
+    }) else {
+        return StorageBacking::Unknown;
+    };
+    if volume.ephemeral.is_some() {
+        StorageBacking::EphemeralVolume
+    } else if volume.empty_dir.is_some() {
+        StorageBacking::NodeLocal
+    } else {
+        StorageBacking::Unknown
+    }
 }

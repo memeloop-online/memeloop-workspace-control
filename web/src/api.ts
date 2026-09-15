@@ -4,6 +4,7 @@ import type {
   ApiKeySummary,
   ApiKeyScope,
   AuditPage,
+  AvailableNodePool,
   CreatedApiKey,
   CreateUserInput,
   CreateWorkspace,
@@ -15,7 +16,7 @@ import type {
   OrganizationPage,
   OrganizationUsageSummary,
   Principal,
-  Resources,
+  QuotaResources,
   ResolvedInjection,
   Role,
   ScalingStatus,
@@ -31,6 +32,7 @@ import type {
   WorkspaceRuntimeEntry,
   WorkspaceTemplate,
 } from "./types";
+import i18next from "i18next";
 import type { CreatePortMappingInput, PortMapping } from "./portMappings";
 
 const TOKEN_KEY = "mwc.api-token";
@@ -182,7 +184,7 @@ export class ApiClient {
     return this.request(`/api/v1/organizations/${encodeURIComponent(organizationId)}/members?${queryString(options)}`);
   }
 
-  quota(organizationId: string): Promise<Resources | null> {
+  quota(organizationId: string): Promise<QuotaResources | null> {
     return this.request(`/api/v1/organizations/${organizationId}/quota`);
   }
 
@@ -190,19 +192,29 @@ export class ApiClient {
     return this.request(`/api/v1/organizations/${encodeURIComponent(organizationId)}/usage-summary`);
   }
 
-  setQuota(organizationId: string, resources: Resources): Promise<void> {
+  setQuota(organizationId: string, resources: QuotaResources): Promise<void> {
     return this.request(`/api/v1/organizations/${organizationId}/quota`, {
       method: "PUT", body: JSON.stringify(resources), idempotent: true,
     });
   }
 
-  userQuota(userId: string): Promise<Resources | null> {
+  userQuota(userId: string): Promise<QuotaResources | null> {
     return this.request(`/api/v1/admin/users/${userId}/quota`);
   }
 
-  setUserQuota(userId: string, resources: Resources): Promise<void> {
+  setUserQuota(userId: string, resources: QuotaResources): Promise<void> {
     return this.request(`/api/v1/admin/users/${userId}/quota`, {
       method: "PUT", body: JSON.stringify(resources), idempotent: true,
+    });
+  }
+
+  nodePools(): Promise<AvailableNodePool[]> {
+    return this.request("/api/v1/node-pools");
+  }
+
+  updateWorkspacePlacement(workspaceId: string, input: { node_pool: string; expected_generation: number }): Promise<WorkspaceResponse> {
+    return this.request(`/api/v1/workspaces/${workspaceId}/placement`, {
+      method: "PUT", body: JSON.stringify(input), idempotent: true,
     });
   }
 
@@ -300,6 +312,10 @@ export class ApiClient {
     return this.request(`/api/v1/workspaces/${workspaceId}/runtime`);
   }
 
+  workspaceClientPublicKey(workspaceId: string): Promise<{ public_key: string }> {
+    return this.request(`/api/v1/workspaces/${workspaceId}/ssh-client-public-key`);
+  }
+
   workspaceRuntimes(organizationId: string, workspaceIds: string[]): Promise<WorkspaceRuntimeEntry[]> {
     return this.request(`/api/v1/workspace-runtimes?${queryString({ organization_id: organizationId, workspace_ids: workspaceIds.join(",") })}`);
   }
@@ -386,7 +402,7 @@ export class ApiClient {
         // Keep the stable HTTP fallback below.
       }
       const error = new Error(
-        failure.error?.message ?? `请求失败（HTTP ${response.status}）`,
+        failure.error?.message ?? `${i18next.t("requestFailed")} (HTTP ${response.status})`,
       ) as Error & { status: number; code?: string };
       error.status = response.status;
       error.code = failure.error?.code;

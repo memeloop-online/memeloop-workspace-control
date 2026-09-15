@@ -4,8 +4,10 @@ use k8s_openapi::{
     api::{
         apps::v1::{StatefulSet, StatefulSetSpec},
         core::v1::{
-            ConfigMapVolumeSource, Container, EmptyDirVolumeSource, KeyToPath,
-            PersistentVolumeClaim, PersistentVolumeClaimSpec, PodSpec, PodTemplateSpec,
+            Affinity, ConfigMapVolumeSource, Container, EmptyDirVolumeSource,
+            EphemeralVolumeSource, KeyToPath, NodeAffinity, NodeSelector, NodeSelectorRequirement,
+            NodeSelectorTerm, PersistentVolumeClaim, PersistentVolumeClaimSpec,
+            PersistentVolumeClaimTemplate, PodSpec, PodTemplateSpec, PreferredSchedulingTerm,
             ProjectedVolumeSource, ResourceRequirements, SecretProjection, SecretVolumeSource,
             Volume, VolumeProjection, VolumeResourceRequirements,
         },
@@ -17,13 +19,14 @@ use k8s_openapi::{
 };
 
 use crate::{
-    templates::{ScratchMedium, WorkspaceStoragePolicy},
+    templates::WorkspaceStoragePolicy,
     workspace_runtime::{WorkspaceResourceNames, WorkspaceRuntimeNames},
     workspaces::Workspace,
 };
 
 use super::{
-    ResourceBuilder, namespaced_metadata, resource_helpers::pod_labels, workspace_pod::WorkspacePod,
+    ResolvedPlacement, ResourceBuilder, namespaced_metadata, resource_helpers::pod_labels,
+    workspace_pod::WorkspacePod,
 };
 
 #[path = "workload_ttyd.rs"]
@@ -35,6 +38,7 @@ pub(super) fn stateful_set(
     labels: &BTreeMap<String, String>,
     template_labels: &BTreeMap<String, String>,
     workspace: &Workspace,
+    placement: &ResolvedPlacement,
     replicas: i32,
 ) -> StatefulSet {
     let names = &runtime.resources;
@@ -59,7 +63,15 @@ pub(super) fn stateful_set(
                     )])),
                     ..ObjectMeta::default()
                 }),
-                spec: Some(pod_spec(builder, pod, workspace, containers, names)),
+                spec: Some(pod_spec(
+                    builder,
+                    pod,
+                    workspace,
+                    containers,
+                    names,
+                    &stable_labels,
+                    placement,
+                )),
             },
             volume_claim_templates: Some(vec![workspace_claim(
                 builder,
@@ -98,12 +110,17 @@ fn pod_spec(
     workspace: &Workspace,
     containers: Vec<Container>,
     names: &WorkspaceResourceNames,
+    stable_labels: &BTreeMap<String, String>,
+    placement: &ResolvedPlacement,
 ) -> PodSpec {
-    let mut init_containers = vec![pod.workspace_init_container(
-        &workspace.template.image,
-        workspace_resources(pod, workspace),
-        names,
-    )];
+    let mut init_containers = vec![
+        pod.workspace_scratch_init_container(&workspace.template.image),
+        pod.workspace_init_container(
+            &workspace.template.image,
+            workspace_resources(pod, workspace),
+            names,
+        ),
+    ];
     if let Some(buildkit_bootstrap) = pod.buildkit_bootstrap_container() {
         init_containers.push(buildkit_bootstrap);
     }
@@ -114,8 +131,8 @@ fn pod_spec(
         runtime_class_name: workspace.template.runtime_class_name.clone(),
         init_containers: Some(init_containers),
         containers,
-        affinity: pod.affinity(),
-        node_selector: pod.node_selector(),
+        affinity: placement_affinity(placement),
+        node_selector: (!placement.selector.is_empty()).then(|| placement.selector.clone()),
         security_context: pod.pod_security_context(),
         image_pull_secrets: pod.image_pull_secrets(),
         volumes: Some(workspace_volumes(
@@ -123,8 +140,43 @@ fn pod_spec(
             names,
             builder.ttyd_mtls.as_ref(),
             builder.http_proxy_enabled(),
+            builder.scratch_storage_class_name.as_deref(),
+            stable_labels,
         )),
         ..PodSpec::default()
+    }
+}
+
+fn placement_affinity(placement: &ResolvedPlacement) -> Option<Affinity> {
+    if placement.required_hosts.is_empty() && placement.preferred_hosts.is_empty() {
+        return None;
+    }
+    let required = (!placement.required_hosts.is_empty()).then(|| NodeSelector {
+        node_selector_terms: vec![hostname_term(&placement.required_hosts)],
+    });
+    let preferred = (!placement.preferred_hosts.is_empty()).then(|| {
+        vec![PreferredSchedulingTerm {
+            weight: 100,
+            preference: hostname_term(&placement.preferred_hosts),
+        }]
+    });
+    Some(Affinity {
+        node_affinity: Some(NodeAffinity {
+            required_during_scheduling_ignored_during_execution: required,
+            preferred_during_scheduling_ignored_during_execution: preferred,
+        }),
+        ..Affinity::default()
+    })
+}
+
+fn hostname_term(values: &[String]) -> NodeSelectorTerm {
+    NodeSelectorTerm {
+        match_expressions: Some(vec![NodeSelectorRequirement {
+            key: "kubernetes.io/hostname".to_owned(),
+            operator: "In".to_owned(),
+            values: Some(values.to_vec()),
+        }]),
+        ..NodeSelectorTerm::default()
     }
 }
 
@@ -148,6 +200,8 @@ fn workspace_volumes(
     names: &WorkspaceResourceNames,
     ttyd_mtls: Option<&super::TtydMtlsConfig>,
     http_proxy_enabled: bool,
+    scratch_storage_class_name: Option<&str>,
+    stable_labels: &BTreeMap<String, String>,
 ) -> Vec<Volume> {
     let mut volumes = vec![
         Volume {
@@ -191,10 +245,7 @@ fn workspace_volumes(
         },
         Volume {
             name: "runtime-tmp".to_owned(),
-            empty_dir: Some(bounded_empty_dir(
-                &format!("{}Mi", policy.runtime_tmp_memory_mib),
-                Some("Memory"),
-            )),
+            empty_dir: Some(bounded_empty_dir("512Mi", Some("Memory"))),
             ..Volume::default()
         },
         Volume {
@@ -202,30 +253,11 @@ fn workspace_volumes(
             empty_dir: Some(bounded_empty_dir("128Mi", Some("Memory"))),
             ..Volume::default()
         },
-        Volume {
-            name: "build-scratch".to_owned(),
-            empty_dir: Some(bounded_empty_dir(
-                &format!("{}Gi", policy.build_scratch_gib),
-                scratch_medium(policy),
-            )),
-            ..Volume::default()
-        },
-        Volume {
-            name: "buildkit-cache".to_owned(),
-            empty_dir: Some(bounded_empty_dir(
-                &format!("{}Gi", policy.buildkit_cache_gib),
-                scratch_medium(policy),
-            )),
-            ..Volume::default()
-        },
-        Volume {
-            name: "codex-scratch".to_owned(),
-            empty_dir: Some(bounded_empty_dir(
-                &format!("{}Gi", policy.codex_scratch_gib),
-                scratch_medium(policy),
-            )),
-            ..Volume::default()
-        },
+        scratch_volume(
+            policy.temporary_storage_gib,
+            scratch_storage_class_name,
+            stable_labels,
+        ),
     ];
     if let Some(mtls) = ttyd_mtls {
         volumes.push(ttyd_tls_volume(mtls));
@@ -244,10 +276,39 @@ fn workspace_volumes(
     volumes
 }
 
-fn scratch_medium(policy: &WorkspaceStoragePolicy) -> Option<&'static str> {
-    match policy.scratch_medium {
-        ScratchMedium::Disk => None,
-        ScratchMedium::Memory => Some("Memory"),
+fn scratch_volume(
+    size_gib: u64,
+    storage_class_name: Option<&str>,
+    stable_labels: &BTreeMap<String, String>,
+) -> Volume {
+    // An unset platform class deliberately preserves bounded node-local disk compatibility.
+    if storage_class_name.is_none() {
+        return Volume {
+            name: "workspace-scratch".to_owned(),
+            empty_dir: Some(bounded_empty_dir(&format!("{size_gib}Gi"), None)),
+            ..Volume::default()
+        };
+    }
+
+    let mut labels = stable_labels.clone();
+    labels.insert(super::STORAGE_ROLE_LABEL.to_owned(), "temporary".to_owned());
+    Volume {
+        name: "workspace-scratch".to_owned(),
+        ephemeral: Some(EphemeralVolumeSource {
+            volume_claim_template: Some(PersistentVolumeClaimTemplate {
+                metadata: Some(ObjectMeta {
+                    labels: Some(labels),
+                    ..ObjectMeta::default()
+                }),
+                spec: PersistentVolumeClaimSpec {
+                    access_modes: Some(vec!["ReadWriteOnce".to_owned()]),
+                    storage_class_name: storage_class_name.map(str::to_owned),
+                    resources: Some(storage_resources(&format!("{size_gib}Gi"))),
+                    ..PersistentVolumeClaimSpec::default()
+                },
+            }),
+        }),
+        ..Volume::default()
     }
 }
 
@@ -303,10 +364,11 @@ fn bounded_empty_dir(size: &str, medium: Option<&str>) -> EmptyDirVolumeSource {
 
 fn workspace_claim(
     builder: &ResourceBuilder,
-    stable_labels: BTreeMap<String, String>,
+    mut stable_labels: BTreeMap<String, String>,
     workspace: &Workspace,
     names: &WorkspaceResourceNames,
 ) -> PersistentVolumeClaim {
+    stable_labels.insert(super::STORAGE_ROLE_LABEL.to_owned(), "home".to_owned());
     PersistentVolumeClaim {
         metadata: ObjectMeta {
             name: Some(names.data_claim_template.clone()),
@@ -316,15 +378,22 @@ fn workspace_claim(
         spec: Some(PersistentVolumeClaimSpec {
             access_modes: Some(vec!["ReadWriteOnce".to_owned()]),
             storage_class_name: builder.storage_class_name.clone(),
-            resources: Some(VolumeResourceRequirements {
-                requests: Some(BTreeMap::from([(
-                    "storage".to_owned(),
-                    Quantity(format!("{}Gi", workspace.template.resources.disk_gib)),
-                )])),
-                ..VolumeResourceRequirements::default()
-            }),
+            resources: Some(storage_resources(&format!(
+                "{}Gi",
+                workspace.template.resources.disk_gib
+            ))),
             ..PersistentVolumeClaimSpec::default()
         }),
         ..PersistentVolumeClaim::default()
+    }
+}
+
+fn storage_resources(size: &str) -> VolumeResourceRequirements {
+    VolumeResourceRequirements {
+        requests: Some(BTreeMap::from([(
+            "storage".to_owned(),
+            Quantity(size.to_owned()),
+        )])),
+        ..VolumeResourceRequirements::default()
     }
 }

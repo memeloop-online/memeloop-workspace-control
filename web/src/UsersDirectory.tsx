@@ -1,6 +1,32 @@
 import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import {
+  Button,
+  Checkbox,
+  DataGrid,
+  DataGridBody,
+  DataGridCell,
+  DataGridHeader,
+  DataGridHeaderCell,
+  DataGridRow,
+  Dialog,
+  DialogActions,
+  DialogBody,
+  DialogContent,
+  DialogSurface,
+  DialogTitle,
+  Field,
+  Input,
+  Option,
+  Select,
+  Spinner,
+  Text,
+  Textarea,
+} from "@fluentui/react-components";
+import type { TableColumnDefinition } from "@fluentui/react-components";
+import { ArrowLeftRegular, ArrowRightRegular, EditRegular, KeyRegular, SaveRegular } from "@fluentui/react-icons";
+
+import {
   formatApiKeyExpiry,
   formatApiKeyPageStatus,
   formatApiKeyScopes,
@@ -8,11 +34,11 @@ import {
   formatTime,
 } from "./adminApiKeyView";
 import type { ApiClient } from "./api";
-import { ConfirmDialog } from "./components/ConfirmDialog";
 import { applyLocalRevocations, getApiKeyStatus } from "./apiKeyStatus";
 import { useI18n } from "./i18n";
 import { hasApiKeyScope } from "./permissions";
 import type { ApiKeyPage, ApiKeySummary, MembershipSummary, Principal, Role, UserSummary } from "./types";
+import { AdminToolbar, SaveButton, useAdminStyles } from "./admin/fluentAdmin";
 
 type DirectoryItem = UserSummary & { membershipRole: Role | null };
 
@@ -29,6 +55,7 @@ export interface UsersDirectoryProps {
 
 export function UsersDirectory({ api, organizationId, principal, canManageUsers, canEditQuota, refreshVersion, onError, onEditQuota }: UsersDirectoryProps) {
   const { t } = useI18n();
+  const styles = useAdminStyles();
   const [query, setQuery] = useState("");
   const [size, setSize] = useState(50);
   const [items, setItems] = useState<DirectoryItem[]>([]);
@@ -38,12 +65,12 @@ export function UsersDirectory({ api, organizationId, principal, canManageUsers,
   const [loading, setLoading] = useState(false);
   const loadingRef = useRef(false);
   const requestRef = useRef(0);
+  const [selectedUser, setSelectedUser] = useState<DirectoryItem | null>(null);
+  const [apiKeyUser, setApiKeyUser] = useState<DirectoryItem | null>(null);
 
   useEffect(() => {
     let active = true;
     const requestId = ++requestRef.current;
-    const search = query.trim() || undefined;
-    // Prevent a role from the old organization/query from briefly offering an action.
     setItems([]);
     setNextCursor(null);
     setCursorHistory([null]);
@@ -51,15 +78,13 @@ export function UsersDirectory({ api, organizationId, principal, canManageUsers,
     loadingRef.current = true;
     setLoading(true);
     const timer = window.setTimeout(() => {
-      void loadPageData(api, organizationId, size, search, canManageUsers, null)
+      void loadPageData(api, organizationId, size, query.trim() || undefined, canManageUsers, null)
         .then((page) => {
           if (!active || requestRef.current !== requestId) return;
           setItems(page.items);
           setNextCursor(page.nextCursor);
         })
-        .catch((error) => {
-          if (active && requestRef.current === requestId) onError(message(error, t("requestFailed")));
-        })
+        .catch((error) => { if (active && requestRef.current === requestId) onError(message(error, t("requestFailed"))); })
         .finally(() => {
           if (requestRef.current !== requestId) return;
           loadingRef.current = false;
@@ -75,8 +100,7 @@ export function UsersDirectory({ api, organizationId, principal, canManageUsers,
     loadingRef.current = true;
     setLoading(true);
     try {
-      const search = query.trim() || undefined;
-      const page = await loadPageData(api, organizationId, size, search, canManageUsers, pageCursor);
+      const page = await loadPageData(api, organizationId, size, query.trim() || undefined, canManageUsers, pageCursor);
       if (requestRef.current !== requestId) return false;
       setItems(page.items);
       setNextCursor(page.nextCursor);
@@ -94,17 +118,17 @@ export function UsersDirectory({ api, organizationId, principal, canManageUsers,
 
   async function nextPage() {
     if (!nextCursor) return;
-    const pageCursor = nextCursor;
-    if (await loadPage(pageCursor)) {
-      setCursorHistory((history) => [...history, pageCursor]);
+    const cursor = nextCursor;
+    if (await loadPage(cursor)) {
+      setCursorHistory((history) => [...history, cursor]);
       setPageNumber((page) => page + 1);
     }
   }
 
   async function previousPage() {
     if (pageNumber <= 1) return;
-    const pageCursor = cursorHistory[pageNumber - 2] ?? null;
-    if (await loadPage(pageCursor)) {
+    const cursor = cursorHistory[pageNumber - 2] ?? null;
+    if (await loadPage(cursor)) {
       setCursorHistory((history) => history.slice(0, -1));
       setPageNumber((page) => page - 1);
     }
@@ -112,20 +136,31 @@ export function UsersDirectory({ api, organizationId, principal, canManageUsers,
 
   function updateUser(updated: UserSummary) {
     setItems((current) => current.map((user) => user.id === updated.id ? { ...updated, membershipRole: user.membershipRole } : user));
+    setSelectedUser((user) => user?.id === updated.id ? { ...updated, membershipRole: user.membershipRole } : user);
   }
 
   function updateMembership(userId: string, membershipRole: Role | null) {
     setItems((current) => current.map((user) => user.id === userId ? { ...user, membershipRole } : user));
+    setSelectedUser((user) => user?.id === userId ? { ...user, membershipRole } : user);
   }
 
-  return <div>
-    <div className="form-actions"><label>{t("searchUsers")}<input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t("searchUsersPlaceholder")} /></label><label>{t("rowsPerPage")}<select value={size} onChange={(event) => setSize(Number(event.target.value))}><option value="25">25</option><option value="50">50</option><option value="100">100</option></select></label></div>
-    <div className="workspace-pagination" aria-label={t("userPagination")}><button className="button" type="button" disabled={pageNumber <= 1 || loading} onClick={() => void previousPage()}>{t("previousPage")}</button><span role="status">{t("userPageStatus")} {pageNumber} · {items.length}</span><button className="button" type="button" disabled={!nextCursor || loading} onClick={() => void nextPage()}>{t("nextPage")}</button></div>
-    <div className="user-directory-list" role="list" aria-busy={loading} tabIndex={0} style={{ display: "grid", gap: "8px", maxHeight: "560px", overflowY: "auto", marginTop: "12px" }}>
-      {items.map((user) => <UserDirectoryRow key={user.id} user={user} api={api} organizationId={organizationId} principal={principal} canManageUsers={canManageUsers} canEditQuota={canEditQuota} onError={onError} onUpdated={updateUser} onMembershipChanged={updateMembership} onEditQuota={onEditQuota} />)}
-      {items.length === 0 && loading && <p role="status">{t("loading")}</p>}
-      {items.length === 0 && !loading && <p>{t("noUsers")}</p>}
-    </div>
+  return <div className={styles.stack}>
+    <AdminToolbar action={<div className={styles.actions}>
+      <Field label={t("rowsPerPage")}><Select value={String(size)} onChange={(event) => setSize(Number(event.target.value))}><Option value="25">25</Option><Option value="50">50</Option><Option value="100">100</Option></Select></Field>
+      <Button icon={<ArrowLeftRegular />} disabled={pageNumber <= 1 || loading} onClick={() => void previousPage()}>{t("previousPage")}</Button>
+      <Button icon={<ArrowRightRegular />} iconPosition="after" disabled={!nextCursor || loading} onClick={() => void nextPage()}>{t("nextPage")}</Button>
+    </div>}>
+      <Field label={t("searchUsers")}><Input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t("searchUsersPlaceholder")} /></Field>
+      <Text size={300}>{t("userPageStatus")} {pageNumber} · {items.length}</Text>
+    </AdminToolbar>
+    {loading && items.length === 0 ? <Spinner label={t("loading")} /> : items.length === 0 ? <Text className={styles.empty}>{t("noUsers")}</Text> : <div className={styles.table} aria-busy={loading}>
+      <DataGrid items={items} columns={userColumns({ t, styles, canManageUsers, canEditQuota, principal, setSelectedUser, setApiKeyUser, onEditQuota })}>
+        <DataGridHeader><DataGridRow<DirectoryItem>>{(column) => <DataGridHeaderCell>{column.renderHeaderCell()}</DataGridHeaderCell>}</DataGridRow></DataGridHeader>
+        <DataGridBody<DirectoryItem>>{({ item }) => <DataGridRow<DirectoryItem>>{(column) => <DataGridCell>{column.renderCell(item)}</DataGridCell>}</DataGridRow>}</DataGridBody>
+      </DataGrid>
+    </div>}
+    {selectedUser && <UserEditDialog user={selectedUser} api={api} organizationId={organizationId} principal={principal} canManageUsers={canManageUsers} onClose={() => setSelectedUser(null)} onError={onError} onUpdated={updateUser} onMembershipChanged={updateMembership} />}
+    {apiKeyUser && <AdminUserApiKeysDialog api={api} userId={apiKeyUser.id} userDisplayName={apiKeyUser.display_name} onClose={() => setApiKeyUser(null)} onError={onError} />}
   </div>;
 }
 
@@ -135,58 +170,32 @@ async function loadPageData(api: ApiClient, organizationId: string, size: number
     return { items: page.items.map(memberToItem), nextCursor: page.next_cursor };
   }
   const users = await api.usersPage({ limit: size, search, cursor: cursor ?? undefined, organization_id: organizationId });
-  return {
-    items: users.items.map(userToItem),
-    nextCursor: users.next_cursor,
-  };
+  return { items: users.items.map(userToItem), nextCursor: users.next_cursor };
 }
 
-function userToItem(user: UserSummary): DirectoryItem {
-  return { ...user, membershipRole: user.membership_role ?? null };
-}
+function userToItem(user: UserSummary): DirectoryItem { return { ...user, membershipRole: user.membership_role ?? null }; }
+function memberToItem(membership: MembershipSummary): DirectoryItem { return { ...membership.user, membershipRole: membership.role }; }
 
-function memberToItem(membership: MembershipSummary): DirectoryItem {
-  return { ...membership.user, membershipRole: membership.role };
-}
-
-function UserDirectoryRow({ user, api, organizationId, principal, canManageUsers, canEditQuota, onError, onUpdated, onMembershipChanged, onEditQuota }: { user: DirectoryItem; api: ApiClient; organizationId: string; principal: Principal; canManageUsers: boolean; canEditQuota: boolean; onError: (message: string) => void; onUpdated: (user: UserSummary) => void; onMembershipChanged: (userId: string, role: Role | null) => void; onEditQuota: (userId: string) => void }) {
+function UserEditDialog({ user, api, organizationId, principal, canManageUsers, onClose, onError, onUpdated, onMembershipChanged }: { user: DirectoryItem; api: ApiClient; organizationId: string; principal: Principal; canManageUsers: boolean; onClose: () => void; onError: (message: string) => void; onUpdated: (user: UserSummary) => void; onMembershipChanged: (userId: string, role: Role | null) => void }) {
   const { t } = useI18n();
+  const styles = useAdminStyles();
   const [displayName, setDisplayName] = useState(user.display_name);
   const [systemAdmin, setSystemAdmin] = useState(user.system_admin);
   const [disabled, setDisabled] = useState(user.disabled);
   const [role, setRole] = useState<Role>(user.membershipRole ?? "member");
   const [saving, setSaving] = useState(false);
-  const [membershipMessage, setMembershipMessage] = useState("");
-  const [showApiKeys, setShowApiKeys] = useState(false);
-  const [confirmMemberRemoval, setConfirmMemberRemoval] = useState(false);
+  const [status, setStatus] = useState("");
   const isCurrentUser = user.id === principal.user_id;
-
-  useEffect(() => {
-    setDisplayName(user.display_name);
-    setSystemAdmin(user.system_admin);
-    setDisabled(user.disabled);
-    setRole(user.membershipRole ?? "member");
-  }, [user.id, user.display_name, user.system_admin, user.disabled, user.membershipRole]);
 
   async function save() {
     if (!displayName.trim()) return;
     setSaving(true);
     try {
-      const updated = await api.updateUser(user.id, { display_name: displayName.trim(), system_admin: systemAdmin, disabled });
-      onUpdated(updated);
-    } catch (error) {
-      onError(message(error, t("requestFailed")));
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function saveMembership() {
-    setSaving(true);
-    try {
+      if (canManageUsers) onUpdated(await api.updateUser(user.id, { display_name: displayName.trim(), system_admin: systemAdmin, disabled }));
       await api.setMembership(organizationId, user.id, role);
       onMembershipChanged(user.id, role);
-      setMembershipMessage(t("membershipSaved"));
+      setStatus(t("membershipSaved"));
+      onClose();
     } catch (error) {
       onError(message(error, t("requestFailed")));
     } finally {
@@ -199,8 +208,7 @@ function UserDirectoryRow({ user, api, organizationId, principal, canManageUsers
     try {
       await api.removeMembership(organizationId, user.id);
       onMembershipChanged(user.id, null);
-      setConfirmMemberRemoval(false);
-      setMembershipMessage(t("membershipRemoved"));
+      onClose();
     } catch (error) {
       onError(message(error, t("requestFailed")));
     } finally {
@@ -208,132 +216,56 @@ function UserDirectoryRow({ user, api, organizationId, principal, canManageUsers
     }
   }
 
-  return <>
-    <article role="listitem" style={{ display: "grid", gap: "9px", padding: "12px", border: "1px solid var(--line)", borderRadius: "9px", background: "var(--surface-2)" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: "10px" }}><strong>{user.display_name}</strong><span>{user.disabled ? t("userStatusDisabled") : t("userStatusActive")}</span></div>
-      {canManageUsers && <>
-        <code>{user.id}</code>
-        <label>{t("displayName")}<input value={displayName} onChange={(event) => setDisplayName(event.target.value)} /></label>
-        <div className="check-row"><label><input type="checkbox" checked={systemAdmin} disabled={isCurrentUser} onChange={(event) => setSystemAdmin(event.target.checked)} />{t("systemAdmin")}</label><label><input type="checkbox" checked={disabled} disabled={isCurrentUser} onChange={(event) => setDisabled(event.target.checked)} />{disabled ? t("enableUser") : t("disableUser")}</label></div>
-        <div className="form-actions" style={{ flexWrap: "wrap", gap: "8px" }}><button className="button primary" disabled={saving || !displayName.trim()} onClick={() => void save()}>{saving ? t("saving") : t("saveUser")}</button>{principal.system_admin && !isCurrentUser && hasApiKeyScope(principal, "manage_system") && hasApiKeyScope(principal, "manage_api_keys") && <button className="button" type="button" disabled={saving} onClick={() => setShowApiKeys(true)}>{t("manageUserApiKeys")}</button>}</div>
-      </>}
-      {canEditQuota && <div className="form-actions"><button className="button" disabled={saving} onClick={() => onEditQuota(user.id)}>{t("editUserQuota")}</button></div>}
-      <div className="form-actions" style={{ flexWrap: "wrap", gap: "8px" }}><label>{t("role")}<select value={role} disabled={saving} onChange={(event) => setRole(event.target.value as Role)}><option value="member">{t("roleMember")}</option><option value="organization_admin">{t("roleOrganizationAdmin")}</option></select></label><button className="button" disabled={saving} onClick={() => void saveMembership()}>{user.membershipRole ? t("saveMembership") : t("addOrganizationMember")}</button>{user.membershipRole && <button className="button danger" disabled={saving} onClick={() => setConfirmMemberRemoval(true)}>{t("removeOrganizationMember")}</button>}</div>
-      {membershipMessage && <small role="status">{membershipMessage}</small>}
-    </article>
-    {showApiKeys && <AdminUserApiKeysDialog api={api} userId={user.id} userDisplayName={user.display_name} onClose={() => setShowApiKeys(false)} onError={onError} />}
-    <ConfirmDialog open={confirmMemberRemoval} title={t("removeOrganizationMember")} description={t("revokeMemberConfirm")} confirmLabel={t("removeOrganizationMember")} cancelLabel={t("cancel")} busy={saving} danger details={<strong>{user.display_name}</strong>} onClose={() => setConfirmMemberRemoval(false)} onConfirm={() => void removeMember()} />
-  </>;
+  return <Dialog open onOpenChange={(_, data) => { if (!data.open && !saving) onClose(); }}><DialogSurface><DialogBody><DialogTitle>{t("saveUser")} · {user.display_name}</DialogTitle><DialogContent className={styles.dialogBody}>
+    {canManageUsers && <><Field label={t("displayName")} required><Input value={displayName} onChange={(event) => setDisplayName(event.target.value)} /></Field><Checkbox checked={systemAdmin} disabled={isCurrentUser} onChange={(_, data) => setSystemAdmin(Boolean(data.checked))} label={t("systemAdmin")} /><Checkbox checked={disabled} disabled={isCurrentUser} onChange={(_, data) => setDisabled(Boolean(data.checked))} label={disabled ? t("enableUser") : t("disableUser")} /></>}
+    <Field label={t("role")}><Select value={role} disabled={saving} onChange={(event) => setRole(event.target.value as Role)}><Option value="member">{t("roleMember")}</Option><Option value="organization_admin">{t("roleOrganizationAdmin")}</Option></Select></Field>
+    {status && <Text>{status}</Text>}
+  </DialogContent><DialogActions><Button appearance="secondary" disabled={saving} onClick={onClose}>{t("cancel")}</Button>{user.membershipRole && <Button disabled={saving} onClick={() => void removeMember()}>{t("removeOrganizationMember")}</Button>}<SaveButton icon={<SaveRegular />} disabled={saving || !displayName.trim()} onClick={() => void save()}>{saving ? t("saving") : t("saveUser")}</SaveButton></DialogActions></DialogBody></DialogSurface></Dialog>;
 }
 
 function AdminUserApiKeysDialog({ api, userId, userDisplayName, onClose, onError }: { api: ApiClient; userId: string; userDisplayName: string; onClose: () => void; onError: (message: string) => void }) {
   const { locale, t } = useI18n();
+  const styles = useAdminStyles();
   const [items, setItems] = useState<ApiKeySummary[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [cursorHistory, setCursorHistory] = useState<(string | null)[]>([null]);
   const [pageNumber, setPageNumber] = useState(1);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [retryRequest, setRetryRequest] = useState<RetryRequest | null>(null);
   const [revokingKeyId, setRevokingKeyId] = useState<string | null>(null);
   const [reason, setReason] = useState("");
   const [revoking, setRevoking] = useState(false);
-  const dialogRef = useRef<HTMLDialogElement>(null);
-  const requestRef = useRef(0);
-  const loadingRef = useRef(false);
   const localRevocationsRef = useRef(new Map<string, number>());
 
-  useEffect(() => {
-    dialogRef.current?.showModal();
-    return () => dialogRef.current?.close();
-  }, []);
+  useEffect(() => { void loadPage(null, "reset"); }, [api, userId]);
 
-  useEffect(() => {
-    setItems([]);
-    setNextCursor(null);
-    setCursorHistory([null]);
-    setPageNumber(1);
-    void loadPage(null, "reset", true);
-    return () => {
-      requestRef.current += 1;
-      loadingRef.current = false;
-    };
-  }, [api, userId, onError, t]);
-
-  async function loadPage(cursor: string | null, navigation: PageNavigation = "stay", force = false): Promise<ApiKeyPage | null> {
-    if (loadingRef.current && !force) return null;
-    const requestId = ++requestRef.current;
-    loadingRef.current = true;
+  async function loadPage(cursor: string | null, navigation: "reset" | "next" | "previous" = "reset") {
     setLoading(true);
-    setError(null);
-    setRetryRequest(null);
     try {
       const page = await api.adminUserApiKeys(userId, { status: "all", limit: 25, cursor: cursor ?? undefined });
-      if (requestRef.current !== requestId) return null;
-      const normalizedPage = { ...page, items: applyLocalRevocations(page.items, localRevocationsRef.current) };
-      setItems(normalizedPage.items);
+      const normalized = { ...page, items: applyLocalRevocations(page.items, localRevocationsRef.current) };
+      setItems(normalized.items);
       setNextCursor(page.next_cursor);
-      if (navigation === "reset") {
-        setCursorHistory([null]);
-        setPageNumber(1);
-      } else if (navigation === "next") {
-        setCursorHistory((history) => [...history, cursor]);
-        setPageNumber((pageNumberValue) => pageNumberValue + 1);
-      } else if (navigation === "previous") {
-        setCursorHistory((history) => history.slice(0, -1));
-        setPageNumber((pageNumberValue) => Math.max(1, pageNumberValue - 1));
-      }
-      return normalizedPage;
+      if (navigation === "reset") { setCursorHistory([null]); setPageNumber(1); }
+      if (navigation === "next") { setCursorHistory((history) => [...history, cursor]); setPageNumber((value) => value + 1); }
+      if (navigation === "previous") { setCursorHistory((history) => history.slice(0, -1)); setPageNumber((value) => Math.max(1, value - 1)); }
     } catch (error) {
-      if (requestRef.current === requestId) {
-        const failure = message(error, t("requestFailed"));
-        setError(failure);
-        setRetryRequest({ cursor, navigation });
-        onError(failure);
-      }
-      return null;
+      onError(message(error, t("requestFailed")));
     } finally {
-      if (requestRef.current === requestId) {
-        loadingRef.current = false;
-        setLoading(false);
-      }
+      setLoading(false);
     }
-  }
-
-  async function nextPage() {
-    if (!nextCursor) return;
-    const cursor = nextCursor;
-    await loadPage(cursor, "next");
-  }
-
-  async function previousPage() {
-    if (pageNumber <= 1) return;
-    const cursor = cursorHistory[pageNumber - 2] ?? null;
-    await loadPage(cursor, "previous");
-  }
-
-  async function retry() {
-    if (!retryRequest) return;
-    await loadPage(retryRequest.cursor, retryRequest.navigation);
   }
 
   async function revoke(event: FormEvent, key: ApiKeySummary) {
     event.preventDefault();
-    const trimmedReason = reason.trim();
-    if (!trimmedReason) return;
+    if (!reason.trim()) return;
     setRevoking(true);
     try {
-      await api.revokeAdminUserApiKey(userId, key.id, trimmedReason);
+      await api.revokeAdminUserApiKey(userId, key.id, reason.trim());
       const revokedAt = Math.floor(Date.now() / 1_000);
       localRevocationsRef.current.set(key.id, revokedAt);
       setItems((current) => current.map((item) => item.id === key.id ? { ...item, revoked_at: item.revoked_at ?? revokedAt } : item));
       setRevokingKeyId(null);
       setReason("");
-      const refreshedPage = await loadPage(cursorHistory[pageNumber - 1] ?? null);
-      if (refreshedPage?.items.length === 0 && pageNumber > 1) {
-        const previousCursor = cursorHistory[pageNumber - 2] ?? null;
-        await loadPage(previousCursor, "previous");
-      }
     } catch (error) {
       onError(message(error, t("requestFailed")));
     } finally {
@@ -341,33 +273,28 @@ function AdminUserApiKeysDialog({ api, userId, userDisplayName, onClose, onError
     }
   }
 
-  const close = () => {
-    if (!revoking) onClose();
-  };
-
-  return <dialog ref={dialogRef} className="connection-dialog" aria-labelledby="admin-api-keys-title" onCancel={(event) => { event.preventDefault(); if (!revoking) onClose(); }}>
-    <div className="connection-dialog-content">
-      <header><div><h3 id="admin-api-keys-title">{t("manageUserApiKeys")}</h3><p>{t("manageUserApiKeysHelp")} {userDisplayName}</p></div><button className="connection-dialog-close" type="button" aria-label={t("close")} disabled={revoking} onClick={close}>×</button></header>
-      {error && <div className="error-banner" role="alert"><span>{error}</span> <button className="button" type="button" disabled={loading || !retryRequest} onClick={() => void retry()}>{t("retryApiKeys")}</button></div>}
-      <div className="workspace-pagination" aria-label={t("apiKeyPagination")}><button className="button" type="button" disabled={pageNumber <= 1 || loading || revoking} onClick={() => void previousPage()}>{t("previousPage")}</button><span role="status">{formatApiKeyPageStatus(locale, pageNumber, items.length, t)}</span><button className="button" type="button" disabled={!nextCursor || loading || revoking} onClick={() => void nextPage()}>{t("nextPage")}</button></div>
-      {loading && items.length === 0 && !error ? <div role="status" aria-label={t("loading")} style={{ display: "grid", gap: "8px" }}><div className="loading-skeleton" style={{ height: "78px" }} /><div className="loading-skeleton" style={{ height: "78px" }} /></div> : items.length === 0 && !error ? <p>{t("noApiKeys")}</p> : items.length > 0 ? <div style={{ display: "grid", gap: "8px", maxHeight: "480px", overflowY: "auto" }}>
-        {items.map((key) => <article key={key.id} style={{ display: "grid", gap: "10px", padding: "12px", border: "1px solid var(--line)", borderRadius: "9px", background: "var(--surface-2)" }}>
-          <div style={{ display: "grid", gap: "4px" }}><strong>{key.name}</strong><code>{key.prefix}</code><small>{formatApiKeyScopes(key, t)}</small></div>
-          <dl className="connection-facts"><div><dt>{t("createdAt")}</dt><dd>{formatTime(key.created_at, locale)}</dd></div><div><dt>{t("lastUsedAt")}</dt><dd>{key.last_used_at ? formatTime(key.last_used_at, locale) : t("never")}</dd></div><div><dt>{t("apiKeyExpires")}</dt><dd>{formatApiKeyExpiry(key.expires_at, locale, t)}</dd></div><div><dt>{t("revokedAt")}</dt><dd>{key.revoked_at !== null ? formatTime(key.revoked_at, locale) : t("never")}</dd></div><div><dt>{t("apiKeyStatus")}</dt><dd>{formatApiKeyStatus(key, t)}</dd></div></dl>
-          {getApiKeyStatus(key) === "active" && (revokingKeyId === key.id ? <form onSubmit={(event) => void revoke(event, key)} style={{ display: "grid", gap: "8px" }}><label>{t("apiKeyRevocationReason")}<textarea required maxLength={500} value={reason} onChange={(event) => setReason(event.target.value)} placeholder={t("apiKeyRevocationReasonPlaceholder")} /></label><small>{t("apiKeyRevocationReasonHelp")}</small><div className="form-actions"><button className="button danger" disabled={revoking || !reason.trim()}>{revoking ? t("saving") : t("revokeApiKey")}</button><button className="button" type="button" disabled={revoking} onClick={() => { setRevokingKeyId(null); setReason(""); }}>{t("cancel")}</button></div></form> : <button className="button danger" type="button" disabled={revoking || loading} onClick={() => { setRevokingKeyId(key.id); setReason(""); }}>{t("revokeApiKey")}</button>)}
-        </article>)}
-      </div> : null}
-    </div>
-  </dialog>;
+  return <Dialog open onOpenChange={(_, data) => { if (!data.open && !revoking) onClose(); }}><DialogSurface><DialogBody><DialogTitle>{t("manageUserApiKeys")} · {userDisplayName}</DialogTitle><DialogContent className={styles.dialogBody}>
+    <AdminToolbar action={<div className={styles.actions}><Button icon={<ArrowLeftRegular />} disabled={pageNumber <= 1 || loading || revoking} onClick={() => void loadPage(cursorHistory[pageNumber - 2] ?? null, "previous")}>{t("previousPage")}</Button><Button icon={<ArrowRightRegular />} iconPosition="after" disabled={!nextCursor || loading || revoking} onClick={() => void loadPage(nextCursor, "next")}>{t("nextPage")}</Button></div>}><Text size={300}>{formatApiKeyPageStatus(locale, pageNumber, items.length, t)}</Text></AdminToolbar>
+    {loading && items.length === 0 ? <Spinner label={t("loading")} /> : items.length === 0 ? <Text className={styles.empty}>{t("noApiKeys")}</Text> : <DataGrid items={items} columns={apiKeyColumns({ t, locale, styles, revokingKeyId, revoking, loading, reason, setRevokingKeyId, setReason, revoke })}><DataGridHeader><DataGridRow<ApiKeySummary>>{(column) => <DataGridHeaderCell>{column.renderHeaderCell()}</DataGridHeaderCell>}</DataGridRow></DataGridHeader><DataGridBody<ApiKeySummary>>{({ item }) => <DataGridRow<ApiKeySummary>>{(column) => <DataGridCell>{column.renderCell(item)}</DataGridCell>}</DataGridRow>}</DataGridBody></DataGrid>}
+  </DialogContent><DialogActions><Button appearance="secondary" disabled={revoking} onClick={onClose}>{t("close")}</Button></DialogActions></DialogBody></DialogSurface></Dialog>;
 }
 
-type PageNavigation = "reset" | "next" | "previous" | "stay";
-
-interface RetryRequest {
-  cursor: string | null;
-  navigation: PageNavigation;
+function userColumns({ t, styles, canManageUsers, canEditQuota, principal, setSelectedUser, setApiKeyUser, onEditQuota }: { t: ReturnType<typeof useI18n>["t"]; styles: ReturnType<typeof useAdminStyles>; canManageUsers: boolean; canEditQuota: boolean; principal: Principal; setSelectedUser: (user: DirectoryItem) => void; setApiKeyUser: (user: DirectoryItem) => void; onEditQuota: (userId: string) => void }): TableColumnDefinition<DirectoryItem>[] {
+  return [
+    { columnId: "user", compare: (a, b) => a.display_name.localeCompare(b.display_name), renderHeaderCell: () => t("user"), renderCell: (item) => <div className={styles.stack}><Text weight="semibold">{item.display_name}</Text><Text size={200}>{item.id}</Text></div> },
+    { columnId: "role", compare: (a, b) => String(a.membershipRole).localeCompare(String(b.membershipRole)), renderHeaderCell: () => t("role"), renderCell: (item) => item.membershipRole === "organization_admin" ? t("roleOrganizationAdmin") : item.membershipRole === "member" ? t("roleMember") : t("notEnabled") },
+    { columnId: "status", compare: (a, b) => Number(a.disabled) - Number(b.disabled), renderHeaderCell: () => t("workspaceState"), renderCell: (item) => item.disabled ? t("userStatusDisabled") : t("userStatusActive") },
+    { columnId: "actions", compare: () => 0, renderHeaderCell: () => t("manageUserApiKeys"), renderCell: (item) => <div className={styles.actions}>{(canManageUsers || item.membershipRole !== null) && <Button icon={<EditRegular />} onClick={() => setSelectedUser(item)}>{t("saveChanges")}</Button>}{canEditQuota && <Button onClick={() => onEditQuota(item.id)}>{t("editUserQuota")}</Button>}{principal.system_admin && item.id !== principal.user_id && hasApiKeyScope(principal, "manage_system") && hasApiKeyScope(principal, "manage_api_keys") && <Button icon={<KeyRegular />} onClick={() => setApiKeyUser(item)}>{t("manageUserApiKeys")}</Button>}</div> },
+  ];
 }
 
-function message(error: unknown, fallback: string) {
-  return error instanceof Error ? error.message : fallback;
+function apiKeyColumns({ t, locale, styles, revokingKeyId, revoking, loading, reason, setRevokingKeyId, setReason, revoke }: { t: ReturnType<typeof useI18n>["t"]; locale: string; styles: ReturnType<typeof useAdminStyles>; revokingKeyId: string | null; revoking: boolean; loading: boolean; reason: string; setRevokingKeyId: (id: string | null) => void; setReason: (reason: string) => void; revoke: (event: FormEvent, key: ApiKeySummary) => Promise<void> }): TableColumnDefinition<ApiKeySummary>[] {
+  return [
+    { columnId: "key", compare: (a, b) => a.name.localeCompare(b.name), renderHeaderCell: () => t("manageUserApiKeys"), renderCell: (item) => <div className={styles.stack}><Text weight="semibold">{item.name}</Text><Text size={200}>{item.prefix}</Text><Text size={200}>{formatApiKeyScopes(item, t)}</Text></div> },
+    { columnId: "status", compare: (a, b) => getApiKeyStatus(a).localeCompare(getApiKeyStatus(b)), renderHeaderCell: () => t("apiKeyStatus"), renderCell: (item) => formatApiKeyStatus(item, t) },
+    { columnId: "expires", compare: (a, b) => (a.expires_at ?? 0) - (b.expires_at ?? 0), renderHeaderCell: () => t("apiKeyExpires"), renderCell: (item) => formatApiKeyExpiry(item.expires_at, locale, t) },
+    { columnId: "actions", compare: () => 0, renderHeaderCell: () => t("apiKeyStatus"), renderCell: (item) => getApiKeyStatus(item) === "active" && (revokingKeyId === item.id ? <form className={styles.stack} onSubmit={(event) => void revoke(event, item)}><Field label={t("apiKeyRevocationReason")} required><Textarea value={reason} onChange={(event) => setReason(event.target.value)} placeholder={t("apiKeyRevocationReasonPlaceholder")} /></Field><div className={styles.actions}><Button type="button" disabled={revoking} onClick={() => setRevokingKeyId(null)}>{t("cancel")}</Button><SaveButton type="submit" disabled={revoking || !reason.trim()}>{revoking ? t("saving") : t("revokeApiKey")}</SaveButton></div></form> : <Button disabled={revoking || loading} onClick={() => { setRevokingKeyId(item.id); setReason(""); }}>{t("revokeApiKey")}</Button>) },
+  ];
 }
+
+function message(error: unknown, fallback: string) { return error instanceof Error ? error.message : fallback; }

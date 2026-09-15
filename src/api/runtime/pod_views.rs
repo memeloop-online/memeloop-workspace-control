@@ -10,7 +10,7 @@ use uuid::Uuid;
 
 use crate::{kubernetes::WORKSPACE_ID_LABEL, workspaces::WorkspaceState};
 
-use super::{PodEvent, PodMetric, PodRuntime};
+use super::{PodEvent, PodMetric, PodRuntime, RuntimeEventCategory};
 
 /// Returns whether a workspace state can have a live runtime to display.
 ///
@@ -93,16 +93,45 @@ pub(super) fn pod_event(event: Event) -> PodEvent {
         .and_then(|series| series.count)
         .or(event.count);
     PodEvent {
-        reason: event.reason,
-        message: event.message,
-        event_type: event.type_,
+        category: runtime_event_category(event.reason.as_deref(), event.message.as_deref()),
         count,
-        last_timestamp: observed_at,
+        observed_at,
+    }
+}
+
+/// Kubernetes event text is an operational diagnostic, not a tenant API
+/// payload: it can contain node names, storage topology or cloud-provider
+/// identifiers. Keep only a stable category while preserving the timestamp and
+/// aggregate count needed to understand the runtime timeline.
+fn runtime_event_category(reason: Option<&str>, message: Option<&str>) -> RuntimeEventCategory {
+    let reason = reason.unwrap_or_default().to_ascii_lowercase();
+    let message = message.unwrap_or_default().to_ascii_lowercase();
+    let contains = |needle: &str| reason.contains(needle) || message.contains(needle);
+    if contains("diskpressure") || contains("disk pressure") {
+        RuntimeEventCategory::DiskPressure
+    } else if contains("evicted") {
+        RuntimeEventCategory::Evicted
+    } else if contains("provision")
+        && (contains("workspace-scratch")
+            || contains("ephemeral volume")
+            || contains("persistentvolumeclaim"))
+    {
+        RuntimeEventCategory::TemporaryStorageProvisioning
+    } else if contains("attach")
+        && (contains("workspace-scratch")
+            || contains("ephemeral volume")
+            || contains("persistentvolumeclaim"))
+    {
+        RuntimeEventCategory::TemporaryStorageAttachment
+    } else if contains("failedmount") || contains("failed mount") || contains("volume") {
+        RuntimeEventCategory::VolumeUnavailable
+    } else {
+        RuntimeEventCategory::Other
     }
 }
 
 pub(super) fn newest_events(events: &mut Vec<PodEvent>, limit: usize) {
-    events.sort_by(|left, right| right.last_timestamp.cmp(&left.last_timestamp));
+    events.sort_by(|left, right| right.observed_at.cmp(&left.observed_at));
     events.truncate(limit);
 }
 
@@ -189,7 +218,8 @@ mod tests {
     use crate::workspaces::WorkspaceState;
 
     use super::{
-        PodEvent, active_pod_metrics, active_pod_names, has_live_runtime, newest_events, pod_event,
+        PodEvent, RuntimeEventCategory, active_pod_metrics, active_pod_names, has_live_runtime,
+        newest_events, pod_event, runtime_event_category,
     };
     use crate::api::runtime::PodMetric;
 
@@ -211,10 +241,7 @@ mod tests {
         };
         let event = pod_event(event);
         assert_eq!(event.count, Some(7));
-        assert_eq!(
-            event.last_timestamp.as_deref(),
-            Some("2026-08-28T10:00:00Z")
-        );
+        assert_eq!(event.observed_at.as_deref(), Some("2026-08-28T10:00:00Z"));
     }
 
     #[test]
@@ -227,11 +254,11 @@ mod tests {
         newest_events(&mut events, 2);
         assert_eq!(events.len(), 2);
         assert_eq!(
-            events[0].last_timestamp.as_deref(),
+            events[0].observed_at.as_deref(),
             Some("2026-08-28T10:00:00Z")
         );
         assert_eq!(
-            events[1].last_timestamp.as_deref(),
+            events[1].observed_at.as_deref(),
             Some("2026-08-28T09:00:00Z")
         );
     }
@@ -280,6 +307,26 @@ mod tests {
         );
         assert_eq!(metrics.len(), 1);
         assert_eq!(metrics[0].pod, "running");
+    }
+
+    #[test]
+    fn storage_incidents_are_normalized_without_exposing_event_text() {
+        assert!(matches!(
+            runtime_event_category(Some("Evicted"), Some("The node had disk pressure")),
+            RuntimeEventCategory::DiskPressure
+        ));
+        assert!(matches!(
+            runtime_event_category(Some("Evicted"), None),
+            RuntimeEventCategory::Evicted
+        ));
+        assert!(matches!(
+            runtime_event_category(Some("ProvisioningFailed"), Some("workspace-scratch")),
+            RuntimeEventCategory::TemporaryStorageProvisioning
+        ));
+        assert!(matches!(
+            runtime_event_category(Some("FailedAttachVolume"), Some("workspace-scratch")),
+            RuntimeEventCategory::TemporaryStorageAttachment
+        ));
     }
 
     fn pod_event_at(value: &str) -> PodEvent {

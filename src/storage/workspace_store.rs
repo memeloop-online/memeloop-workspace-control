@@ -44,6 +44,7 @@ pub struct CreateWorkspace {
 /// must use the template and runtime settings the admission step approved.
 pub struct AdmittedWorkspaceCreation<'a> {
     pub command: CreateWorkspace,
+    pub node_pool: Option<&'a str>,
     pub inline_injections: Option<(&'a EnvelopeCipher, &'a [InjectionItem])>,
     pub admitted_template_yaml: &'a str,
     pub allow_cluster_access: bool,
@@ -52,6 +53,7 @@ pub struct AdmittedWorkspaceCreation<'a> {
 }
 
 struct WorkspaceCreationOptions<'a> {
+    node_pool: Option<&'a str>,
     inline: Option<(&'a EnvelopeCipher, &'a [InjectionItem])>,
     admitted_template_yaml: Option<&'a str>,
     allow_cluster_access: bool,
@@ -66,7 +68,7 @@ pub struct WorkspacePage {
     /// Aggregate for every non-deleted workspace matching the organization and search query.
     /// This deliberately ignores the pagination cursor.
     pub total_count: u64,
-    pub requested: Resources,
+    pub requested: crate::quota::QuotaResources,
     pub state_counts: BTreeMap<String, u64>,
 }
 
@@ -153,6 +155,7 @@ impl Database {
         self.create_workspace_inner(
             command,
             WorkspaceCreationOptions {
+                node_pool: None,
                 inline: None,
                 admitted_template_yaml: None,
                 allow_cluster_access,
@@ -175,6 +178,7 @@ impl Database {
         self.create_workspace_inner(
             command,
             WorkspaceCreationOptions {
+                node_pool: None,
                 inline: Some((cipher, inline)),
                 admitted_template_yaml: None,
                 allow_cluster_access,
@@ -191,6 +195,7 @@ impl Database {
     ) -> Result<Workspace, StorageError> {
         let AdmittedWorkspaceCreation {
             command,
+            node_pool,
             inline_injections,
             admitted_template_yaml,
             allow_cluster_access,
@@ -200,6 +205,7 @@ impl Database {
         self.create_workspace_inner(
             command,
             WorkspaceCreationOptions {
+                node_pool,
                 inline: inline_injections,
                 admitted_template_yaml: Some(admitted_template_yaml),
                 allow_cluster_access,
@@ -225,6 +231,7 @@ impl Database {
         injection_refs.validate()?;
         let creation = creation::WorkspaceCreation {
             command: &command,
+            requested_node_pool: options.node_pool,
             injection_refs: &injection_refs,
             inline: options.inline,
             admitted_template_yaml: options.admitted_template_yaml,

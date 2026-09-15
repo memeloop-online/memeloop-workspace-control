@@ -9,7 +9,9 @@ use serde::de::DeserializeOwned;
 use thiserror::Error;
 use uuid::Uuid;
 
-use super::{BuildError, InjectionMaterialization, OwnershipError, ResourceBuilder};
+use super::{
+    BuildError, InjectionMaterialization, OwnershipError, ResolvedPlacement, ResourceBuilder,
+};
 use crate::{
     config::InstallationId,
     workspace_runtime::{WorkspaceRuntimeIdentityError, WorkspaceRuntimeNames},
@@ -42,10 +44,11 @@ impl KubernetesCoordinator {
     pub async fn reconcile_with_injections(
         &self,
         workspace: &Workspace,
+        placement: &ResolvedPlacement,
         injections: InjectionMaterialization,
         ssh_identity: Secret,
     ) -> Result<(), ReconcileError> {
-        let mut desired = self.builder.build(workspace)?;
+        let mut desired = self.builder.build_with_placement(workspace, placement)?;
         let revision = injections.revision()?;
         let workspace_container = desired
             .stateful_set

@@ -42,6 +42,7 @@ fn fixture() -> (ResourceBuilder, Workspace) {
         jump_host_namespace: "access".to_owned(),
         jump_host_pod_labels: BTreeMap::new(),
         storage_class_name: None,
+        scratch_storage_class_name: None,
         web_shell_domain: None,
         port_mapping_domain: None,
         higress_gateway_name: "higress".to_owned(),
@@ -55,6 +56,7 @@ fn fixture() -> (ResourceBuilder, Workspace) {
         owner_id: Uuid::now_v7(),
         name: "refresh".to_owned(),
         template_id: None,
+        node_pool: "default".to_owned(),
         runtime: WorkspaceRuntimeIdentity,
         template: WorkspaceTemplateSpec::standard(
             "example/workspace:1",

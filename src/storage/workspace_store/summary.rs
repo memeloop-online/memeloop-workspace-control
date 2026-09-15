@@ -3,14 +3,14 @@ use std::collections::BTreeMap;
 use sqlx::Row;
 use uuid::Uuid;
 
-use crate::quota::Resources;
+use crate::quota::QuotaResources;
 
 use super::{Database, StorageError};
 
 #[derive(Debug, Clone)]
 pub(super) struct WorkspacePageSummary {
     pub(super) total_count: u64,
-    pub(super) requested: Resources,
+    pub(super) requested: QuotaResources,
     pub(super) state_counts: BTreeMap<String, u64>,
 }
 
@@ -22,7 +22,7 @@ pub(super) struct WorkspacePageSummary {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct WorkspaceUsageSummary {
     pub total_count: u64,
-    pub requested: Resources,
+    pub requested: QuotaResources,
     pub state_counts: BTreeMap<String, u64>,
     /// Workspaces which can still have a live runtime. Stopped and failed
     /// workspaces are excluded; deleting and stopping workspaces remain active
@@ -93,13 +93,15 @@ fn usage_states_sql(filter: &str, postgres: bool) -> String {
     };
     format!(
         "SELECT state, {total_count} AS workspace_count, {cpu_millis} AS cpu_millis, \
-         {memory_mib} AS memory_mib, {gpu_count} AS gpu_count, {disk_gib} AS disk_gib \
+         {memory_mib} AS memory_mib, {gpu_count} AS gpu_count, {disk_gib} AS disk_gib, \
+         {temporary_storage_gib} AS temporary_storage_gib \
          FROM workspaces WHERE {filter} GROUP BY state",
         total_count = cast("COUNT(*)"),
         cpu_millis = cast("COALESCE(SUM(cpu_millis), 0)"),
         memory_mib = cast("COALESCE(SUM(memory_mib), 0)"),
         gpu_count = cast("COALESCE(SUM(gpu_count), 0)"),
         disk_gib = cast("COALESCE(SUM(disk_gib), 0)"),
+        temporary_storage_gib = cast("COALESCE(SUM(temporary_storage_gib), 0)"),
     )
 }
 
@@ -142,12 +144,13 @@ where
         };
         let state: String = row.try_get("state")?;
         let count = read_u64("workspace_count")?;
-        let requested = Resources {
+        let requested = QuotaResources {
             cpu_millis: read_u64("cpu_millis")?,
             memory_mib: read_u64("memory_mib")?,
             gpu_count: u32::try_from(row.try_get::<i64, _>("gpu_count")?)
                 .map_err(|_| StorageError::InvalidWorkspace)?,
             disk_gib: read_u64("disk_gib")?,
+            temporary_storage_gib: read_u64("temporary_storage_gib")?,
         };
         summary.total_count = summary
             .total_count
@@ -187,7 +190,8 @@ pub(super) async fn workspace_page_summary(
         COALESCE(SUM(cpu_millis), 0) AS cpu_millis, \
         COALESCE(SUM(memory_mib), 0) AS memory_mib, \
         COALESCE(SUM(gpu_count), 0) AS gpu_count, \
-        COALESCE(SUM(disk_gib), 0) AS disk_gib \
+        COALESCE(SUM(disk_gib), 0) AS disk_gib, \
+        COALESCE(SUM(temporary_storage_gib), 0) AS temporary_storage_gib \
         FROM workspaces WHERE {sqlite_filter}"
     );
     let postgres_filter = workspace_filter_sql("$1", "$2", "$3", "$4");
@@ -196,7 +200,8 @@ pub(super) async fn workspace_page_summary(
         CAST(COALESCE(SUM(cpu_millis), 0) AS BIGINT) AS cpu_millis, \
         CAST(COALESCE(SUM(memory_mib), 0) AS BIGINT) AS memory_mib, \
         CAST(COALESCE(SUM(gpu_count), 0) AS BIGINT) AS gpu_count, \
-        CAST(COALESCE(SUM(disk_gib), 0) AS BIGINT) AS disk_gib \
+        CAST(COALESCE(SUM(disk_gib), 0) AS BIGINT) AS disk_gib, \
+        CAST(COALESCE(SUM(temporary_storage_gib), 0) AS BIGINT) AS temporary_storage_gib \
         FROM workspaces WHERE {postgres_filter}"
     );
     let aggregate = match database {
@@ -286,12 +291,13 @@ where
     };
     Ok(WorkspacePageSummary {
         total_count: read_u64("total_count")?,
-        requested: Resources {
+        requested: QuotaResources {
             cpu_millis: read_u64("cpu_millis")?,
             memory_mib: read_u64("memory_mib")?,
             gpu_count: u32::try_from(row.try_get::<i64, _>("gpu_count")?)
                 .map_err(|_| StorageError::InvalidWorkspace)?,
             disk_gib: read_u64("disk_gib")?,
+            temporary_storage_gib: read_u64("temporary_storage_gib")?,
         },
         state_counts: BTreeMap::new(),
     })

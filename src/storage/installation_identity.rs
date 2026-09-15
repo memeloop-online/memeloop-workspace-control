@@ -54,6 +54,38 @@ impl Database {
                 stored: configured.1,
             });
         }
+        self.ensure_default_node_pool().await?;
+        Ok(())
+    }
+
+    async fn ensure_default_node_pool(&self) -> Result<(), StorageError> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|_| StorageError::Clock)?
+            .as_secs();
+        let now = i64::try_from(now).map_err(|_| StorageError::Clock)?;
+        match self {
+            Self::Sqlite {
+                pool,
+                installation_id,
+            } => {
+                sqlx::query("INSERT INTO node_pools (installation_id, name, display_name, placement_json, enabled, created_at, updated_at) VALUES (?1, 'default', 'Default', '{\"selector\":{},\"required_hosts\":[],\"preferred_hosts\":[]}', 1, ?2, ?2) ON CONFLICT (installation_id, name) DO NOTHING")
+                    .bind(installation_id.as_str())
+                    .bind(now)
+                    .execute(pool)
+                    .await?;
+            }
+            Self::Postgres {
+                pool,
+                installation_id,
+            } => {
+                sqlx::query("INSERT INTO node_pools (installation_id, name, display_name, placement_json, enabled, created_at, updated_at) VALUES ($1, 'default', 'Default', '{\"selector\":{},\"required_hosts\":[],\"preferred_hosts\":[]}', 1, $2, $2) ON CONFLICT (installation_id, name) DO NOTHING")
+                    .bind(installation_id.as_str())
+                    .bind(now)
+                    .execute(pool)
+                    .await?;
+            }
+        }
         Ok(())
     }
 }

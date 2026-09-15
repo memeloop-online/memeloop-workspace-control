@@ -1,3 +1,12 @@
+import {
+  Body2,
+  Checkbox,
+  Field,
+  Text,
+  makeStyles,
+  tokens,
+} from "@fluentui/react-components";
+
 import type { ApiKeyScope } from "../types";
 import type { MessageKey } from "../i18n";
 
@@ -16,35 +25,78 @@ interface Props {
   translate: (key: MessageKey) => string;
 }
 
-/**
- * The native checkbox remains in the tab order. The card label expands its
- * target to a comfortable touch size without hiding the selected state.
- */
+const useStyles = makeStyles({
+  root: {
+    display: "grid",
+    gap: tokens.spacingVerticalS,
+  },
+  label: {
+    color: tokens.colorNeutralForeground1,
+    fontWeight: tokens.fontWeightSemibold,
+  },
+  grid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+    gap: tokens.spacingHorizontalS,
+    "@media (max-width: 900px)": {
+      gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+    },
+    "@media (max-width: 640px)": {
+      gridTemplateColumns: "1fr",
+    },
+  },
+  option: {
+    display: "grid",
+    gap: tokens.spacingVerticalXS,
+    minWidth: 0,
+    padding: tokens.spacingHorizontalM,
+    border: `${tokens.strokeWidthThin} solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusMedium,
+    backgroundColor: tokens.colorNeutralBackground1,
+    transitionProperty: "border-color, background-color, box-shadow",
+    transitionDuration: tokens.durationNormal,
+    ":hover": {
+      border: `${tokens.strokeWidthThin} solid ${tokens.colorNeutralStroke1Hover}`,
+      backgroundColor: tokens.colorNeutralBackground1Hover,
+    },
+  },
+  selected: {
+    border: `${tokens.strokeWidthThin} solid ${tokens.colorBrandStroke1}`,
+    backgroundColor: tokens.colorBrandBackground2,
+    boxShadow: tokens.shadow2,
+  },
+  risk: {
+    border: `${tokens.strokeWidthThin} solid ${tokens.colorPaletteRedBorder2}`,
+  },
+  description: {
+    paddingInlineStart: tokens.spacingHorizontalXXL,
+    color: tokens.colorNeutralForeground2,
+  },
+});
+
 export function ApiKeyScopePicker({ scopes, selected, onChange, legend, translate }: Props) {
+  const classes = useStyles();
+
   function toggle(scope: ApiKeyScope) {
     onChange(selected.includes(scope)
       ? selected.filter((item) => item !== scope)
       : [...selected, scope]);
   }
 
-  return <fieldset className="api-key-scope-picker">
-    <legend>{legend}</legend>
-    <div className="api-key-scope-grid">
+  return <Field className={classes.root} label={legend} required>
+    <div className={classes.grid}>
       {scopes.map(({ scope, label, description, risk }) => {
         const checked = selected.includes(scope);
-        return <label className="api-key-scope-card" data-risk={risk} data-selected={checked} key={scope}>
-          <input
+        return <div className={`${classes.option} ${checked ? classes.selected : ""} ${risk === "high" ? classes.risk : ""}`} key={scope}>
+          <Checkbox
             checked={checked}
-            type="checkbox"
+            label={translate(label)}
             onChange={() => toggle(scope)}
           />
-          <span className="api-key-scope-mark" aria-hidden="true">{checked ? "✓" : ""}</span>
-          <span className="api-key-scope-copy">
-            <strong>{translate(label)}</strong>
-            <small>{translate(description)}</small>
-          </span>
-        </label>;
+          <Body2 className={classes.description}>{translate(description)}</Body2>
+        </div>;
       })}
+      {scopes.length === 0 && <Text>{translate("scopeUnknown")}</Text>}
     </div>
-  </fieldset>;
+  </Field>;
 }

@@ -60,8 +60,8 @@ impl MetricScope {
 
     fn pvc_labels(&self) -> String {
         format!(
-            "max by(namespace,persistentvolumeclaim) (kube_persistentvolumeclaim_labels{{{}}})",
-            self.matcher
+            "max by(namespace,persistentvolumeclaim) (kube_persistentvolumeclaim_labels{{{},label_workspace_memeloop_dev_storage_role=\"home\"}})",
+            self.matcher,
         )
     }
 }
@@ -300,6 +300,11 @@ mod tests {
         assert!(queries.cpu.contains("container!=\"POD\""));
         assert!(queries.active_pods.contains("== 1"));
         assert!(queries.cpu.contains("and on(namespace,pod,container)"));
+        assert!(
+            queries
+                .disk
+                .contains("label_workspace_memeloop_dev_storage_role=\"home\"")
+        );
     }
 
     fn sample(value: f64) -> Option<ScalarSample> {

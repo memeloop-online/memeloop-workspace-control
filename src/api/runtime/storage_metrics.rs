@@ -20,8 +20,8 @@ const CRITICAL_PERCENT: f64 = 90.0;
 
 #[derive(Debug, Clone, Copy, Serialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum StorageTelemetryStatus {
-    Available,
+pub(crate) enum StorageTelemetryCoverage {
+    Exact,
     Stale,
     Unavailable,
     Disabled,
@@ -35,50 +35,88 @@ pub(crate) enum StoragePressure {
     Critical,
 }
 
+/// The storage implementation behind one product-level storage allocation.
+///
+/// `NodeLocal` is the bounded `emptyDir` compatibility mode. Kubernetes does
+/// not expose reliable per-volume byte usage for that mode, so its telemetry
+/// coverage is always unavailable rather than a synthetic zero.
+#[derive(Debug, Clone, Copy, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum StorageBacking {
+    PersistentVolume,
+    EphemeralVolume,
+    NodeLocal,
+    Unknown,
+}
+
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub(crate) struct StorageTelemetry {
-    pub(super) status: StorageTelemetryStatus,
+    pub(super) configured_bytes: u64,
     pub(super) used_bytes: Option<u64>,
     pub(super) capacity_bytes: Option<u64>,
     pub(super) available_bytes: Option<u64>,
     pub(super) observed_at: Option<i64>,
     pub(super) used_percent: Option<f64>,
     pub(super) pressure: Option<StoragePressure>,
+    pub(super) coverage: StorageTelemetryCoverage,
+    pub(super) backing: StorageBacking,
 }
 
 impl StorageTelemetry {
-    fn empty(status: StorageTelemetryStatus) -> Self {
+    fn unavailable(
+        configured_bytes: u64,
+        coverage: StorageTelemetryCoverage,
+        backing: StorageBacking,
+    ) -> Self {
         Self {
-            status,
+            configured_bytes,
             used_bytes: None,
             capacity_bytes: None,
             available_bytes: None,
             observed_at: None,
             used_percent: None,
             pressure: None,
+            coverage,
+            backing,
         }
     }
 }
 
 pub(super) struct StorageMetricBatch {
-    status: StorageTelemetryStatus,
+    status: StorageTelemetryCoverage,
     used: MetricMap,
     capacity: MetricMap,
     available: MetricMap,
 }
 
 impl StorageMetricBatch {
-    pub(super) fn telemetry(&self, namespace: &str, pvc: &str, now: i64) -> StorageTelemetry {
-        if !matches!(self.status, StorageTelemetryStatus::Available) {
-            return StorageTelemetry::empty(self.status);
+    pub(super) fn telemetry(
+        &self,
+        identity: Option<&StorageIdentity>,
+        configured_bytes: u64,
+        backing: StorageBacking,
+        now: i64,
+    ) -> StorageTelemetry {
+        if !matches!(self.status, StorageTelemetryCoverage::Exact) {
+            return StorageTelemetry::unavailable(configured_bytes, self.status, backing);
         }
-        let key = (namespace.to_owned(), pvc.to_owned());
+        let Some(key) = identity else {
+            return StorageTelemetry::unavailable(
+                configured_bytes,
+                StorageTelemetryCoverage::Unavailable,
+                backing,
+            );
+        };
         let (Some(used), Some(capacity), Some(available)) = (
-            self.used.get(&key),
-            self.capacity.get(&key),
-            self.available.get(&key),
+            self.used.get(key),
+            self.capacity.get(key),
+            self.available.get(key),
         ) else {
-            return StorageTelemetry::empty(StorageTelemetryStatus::Unavailable);
+            return StorageTelemetry::unavailable(
+                configured_bytes,
+                StorageTelemetryCoverage::Unavailable,
+                backing,
+            );
         };
         let observed_at = used
             .observed_at
@@ -90,10 +128,11 @@ impl StorageMetricBatch {
             Some((used.value as f64 / capacity.value as f64 * 100.0).clamp(0.0, 100.0))
         };
         StorageTelemetry {
-            status: if now.saturating_sub(observed_at) > STALE_AFTER_SECONDS {
-                StorageTelemetryStatus::Stale
+            configured_bytes,
+            coverage: if now.saturating_sub(observed_at) > STALE_AFTER_SECONDS {
+                StorageTelemetryCoverage::Stale
             } else {
-                StorageTelemetryStatus::Available
+                StorageTelemetryCoverage::Exact
             },
             used_bytes: Some(used.value),
             capacity_bytes: Some(capacity.value),
@@ -101,6 +140,7 @@ impl StorageMetricBatch {
             observed_at: Some(observed_at),
             used_percent,
             pressure: used_percent.map(storage_pressure),
+            backing,
         }
     }
 }
@@ -150,23 +190,26 @@ pub(super) async fn fetch(
     observability: &Observability,
 ) -> StorageMetricBatch {
     let Some(base_url) = base_url else {
-        return empty_batch(StorageTelemetryStatus::Disabled);
+        return empty_batch(StorageTelemetryCoverage::Disabled);
     };
+    if identities.is_empty() {
+        return empty_batch(StorageTelemetryCoverage::Unavailable);
+    }
     match fetch_configured(base_url, identities, observability).await {
         Ok(metrics) => StorageMetricBatch {
-            status: StorageTelemetryStatus::Available,
+            status: StorageTelemetryCoverage::Exact,
             used: metrics.used,
             capacity: metrics.capacity,
             available: metrics.available,
         },
         Err(error) => {
             tracing::debug!(%error, "Prometheus PVC telemetry is unavailable");
-            empty_batch(StorageTelemetryStatus::Unavailable)
+            empty_batch(StorageTelemetryCoverage::Unavailable)
         }
     }
 }
 
-fn empty_batch(status: StorageTelemetryStatus) -> StorageMetricBatch {
+fn empty_batch(status: StorageTelemetryCoverage) -> StorageMetricBatch {
     StorageMetricBatch {
         status,
         used: MetricMap::new(),

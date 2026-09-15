@@ -132,6 +132,17 @@ async fn ensure_import_destination_empty(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
 ) -> Result<(), StorageError> {
     for table in IMPORT_DESTINATION_DATA_TABLES {
+        if *table == "node_pools" {
+            let unexpected: bool = sqlx::query_scalar(
+                "SELECT EXISTS (SELECT 1 FROM node_pools WHERE name <> 'default' LIMIT 1)",
+            )
+            .fetch_one(&mut **transaction)
+            .await?;
+            if unexpected {
+                return Err(StorageError::ImportDestinationNotEmpty);
+            }
+            continue;
+        }
         let sql = format!("SELECT EXISTS (SELECT 1 FROM {table} LIMIT 1)");
         let has_rows: bool = sqlx::query_scalar(&sql)
             .fetch_one(&mut **transaction)
@@ -140,6 +151,9 @@ async fn ensure_import_destination_empty(
             return Err(StorageError::ImportDestinationNotEmpty);
         }
     }
+    sqlx::query("DELETE FROM node_pools WHERE name = 'default'")
+        .execute(&mut **transaction)
+        .await?;
     Ok(())
 }
 
@@ -210,8 +224,11 @@ const IMPORT_ORDER: &[&str] = &[
     "user_quotas",
     "plugin_configurations",
     "image_policies",
+    "node_pools",
     "workspace_templates",
+    "workspace_template_node_pools",
     "workspaces",
+    "workspace_runtime_incidents",
     "workspace_port_mappings",
     "workspace_injection_refs",
     "audit_log",
@@ -234,8 +251,11 @@ const IMPORT_DESTINATION_DATA_TABLES: &[&str] = &[
     "organization_quotas",
     "user_quotas",
     "image_policies",
+    "node_pools",
     "workspace_templates",
+    "workspace_template_node_pools",
     "workspaces",
+    "workspace_runtime_incidents",
     "workspace_port_mappings",
     "workspace_port_mapping_tickets",
     "workspace_port_mapping_sessions",
@@ -277,11 +297,11 @@ const EXPORT_QUERIES: &[(&str, &str)] = &[
     ),
     (
         "organization_quotas",
-        "SELECT json_object('installation_id', installation_id, 'organization_id', organization_id, 'cpu_millis', cpu_millis, 'memory_mib', memory_mib, 'gpu_count', gpu_count, 'disk_gib', disk_gib, 'updated_at', updated_at) item FROM organization_quotas WHERE installation_id = ?1 ORDER BY organization_id",
+        "SELECT json_object('installation_id', installation_id, 'organization_id', organization_id, 'cpu_millis', cpu_millis, 'memory_mib', memory_mib, 'gpu_count', gpu_count, 'disk_gib', disk_gib, 'temporary_storage_gib', temporary_storage_gib, 'updated_at', updated_at) item FROM organization_quotas WHERE installation_id = ?1 ORDER BY organization_id",
     ),
     (
         "user_quotas",
-        "SELECT json_object('installation_id', installation_id, 'user_id', user_id, 'cpu_millis', cpu_millis, 'memory_mib', memory_mib, 'gpu_count', gpu_count, 'disk_gib', disk_gib, 'updated_at', updated_at) item FROM user_quotas WHERE installation_id = ?1 ORDER BY user_id",
+        "SELECT json_object('installation_id', installation_id, 'user_id', user_id, 'cpu_millis', cpu_millis, 'memory_mib', memory_mib, 'gpu_count', gpu_count, 'disk_gib', disk_gib, 'temporary_storage_gib', temporary_storage_gib, 'updated_at', updated_at) item FROM user_quotas WHERE installation_id = ?1 ORDER BY user_id",
     ),
     (
         "plugin_configurations",
@@ -292,12 +312,24 @@ const EXPORT_QUERIES: &[(&str, &str)] = &[
         "SELECT json_object('installation_id', installation_id, 'image', image, 'contract_version', contract_version, 'enabled', enabled, 'created_at', created_at, 'updated_at', updated_at) item FROM image_policies WHERE installation_id = ?1 ORDER BY image",
     ),
     (
+        "node_pools",
+        "SELECT json_object('installation_id', installation_id, 'name', name, 'display_name', display_name, 'placement_json', placement_json, 'enabled', enabled, 'created_at', created_at, 'updated_at', updated_at) item FROM node_pools WHERE installation_id = ?1 ORDER BY name",
+    ),
+    (
         "workspace_templates",
-        "SELECT json_object('id', id, 'installation_id', installation_id, 'organization_id', organization_id, 'name', name, 'image', image, 'access_mode', access_mode, 'cpu_millis', cpu_millis, 'memory_mib', memory_mib, 'gpu_count', gpu_count, 'disk_gib', disk_gib, 'enabled', enabled, 'created_at', created_at, 'updated_at', updated_at, 'template_yaml', template_yaml) item FROM workspace_templates WHERE installation_id = ?1 ORDER BY id",
+        "SELECT json_object('id', id, 'installation_id', installation_id, 'organization_id', organization_id, 'name', name, 'image', image, 'access_mode', access_mode, 'cpu_millis', cpu_millis, 'memory_mib', memory_mib, 'gpu_count', gpu_count, 'disk_gib', disk_gib, 'temporary_storage_gib', temporary_storage_gib, 'enabled', enabled, 'created_at', created_at, 'updated_at', updated_at, 'template_yaml', template_yaml) item FROM workspace_templates WHERE installation_id = ?1 ORDER BY id",
+    ),
+    (
+        "workspace_template_node_pools",
+        "SELECT json_object('installation_id', installation_id, 'template_id', template_id, 'node_pool', node_pool, 'is_default', is_default) item FROM workspace_template_node_pools WHERE installation_id = ?1 ORDER BY template_id, node_pool",
     ),
     (
         "workspaces",
-        "SELECT json_object('id', id, 'installation_id', installation_id, 'short_id', short_id, 'organization_id', organization_id, 'owner_id', owner_id, 'name', name, 'template_id', template_id, 'image', image, 'access_mode', access_mode, 'state', state, 'cpu_millis', cpu_millis, 'memory_mib', memory_mib, 'gpu_count', gpu_count, 'disk_gib', disk_gib, 'generation', generation, 'created_at', created_at, 'updated_at', updated_at, 'deleted_at', deleted_at, 'template_snapshot_yaml', template_snapshot_yaml) item FROM workspaces WHERE installation_id = ?1 ORDER BY id",
+        "SELECT json_object('id', id, 'installation_id', installation_id, 'short_id', short_id, 'organization_id', organization_id, 'owner_id', owner_id, 'name', name, 'template_id', template_id, 'image', image, 'access_mode', access_mode, 'state', state, 'cpu_millis', cpu_millis, 'memory_mib', memory_mib, 'gpu_count', gpu_count, 'disk_gib', disk_gib, 'temporary_storage_gib', temporary_storage_gib, 'node_pool', node_pool, 'generation', generation, 'created_at', created_at, 'updated_at', updated_at, 'deleted_at', deleted_at, 'template_snapshot_yaml', template_snapshot_yaml) item FROM workspaces WHERE installation_id = ?1 ORDER BY id",
+    ),
+    (
+        "workspace_runtime_incidents",
+        "SELECT json_object('id', id, 'installation_id', installation_id, 'workspace_id', workspace_id, 'category', category, 'observed_at', observed_at, 'count', count, 'first_seen_at', first_seen_at, 'last_seen_at', last_seen_at) item FROM workspace_runtime_incidents WHERE installation_id = ?1 ORDER BY workspace_id, observed_at, category, id",
     ),
     (
         "workspace_port_mappings",

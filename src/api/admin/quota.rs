@@ -8,7 +8,7 @@ use axum::{
 };
 use uuid::Uuid;
 
-use crate::{auth::Permission, quota::Resources};
+use crate::{auth::Permission, quota::QuotaResources};
 
 use super::{
     ApiError, AppState, ErrorEnvelope, finish_empty,
@@ -16,12 +16,12 @@ use super::{
     principal, reserve,
 };
 
-#[utoipa::path(get, path = "/api/v1/organizations/{organization_id}/quota", responses((status = 200, body = Option<Resources>), (status = 403, body = ErrorEnvelope)))]
+#[utoipa::path(get, path = "/api/v1/organizations/{organization_id}/quota", responses((status = 200, body = Option<QuotaResources>), (status = 403, body = ErrorEnvelope)))]
 pub(in crate::api) async fn get_quota(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Path(organization_id): Path<Uuid>,
-) -> Result<Json<Option<Resources>>, ApiError> {
+) -> Result<Json<Option<QuotaResources>>, ApiError> {
     let actor = principal(&state, &headers).await?;
     if !actor.allows(Permission::ReadWorkspace, organization_id) {
         return Err(ApiError::Forbidden);
@@ -34,12 +34,12 @@ pub(in crate::api) async fn get_quota(
     ))
 }
 
-#[utoipa::path(put, path = "/api/v1/organizations/{organization_id}/quota", request_body = Resources, params(("Idempotency-Key" = String, Header)), responses((status = 204), (status = 403, body = ErrorEnvelope)))]
+#[utoipa::path(put, path = "/api/v1/organizations/{organization_id}/quota", request_body = QuotaResources, params(("Idempotency-Key" = String, Header)), responses((status = 204), (status = 403, body = ErrorEnvelope)))]
 pub(in crate::api) async fn set_quota(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Path(organization_id): Path<Uuid>,
-    Json(resources): Json<Resources>,
+    Json(resources): Json<QuotaResources>,
 ) -> Result<Response, ApiError> {
     let actor = principal(&state, &headers).await?;
     if !actor.allows(Permission::ManageOrganization, organization_id) {

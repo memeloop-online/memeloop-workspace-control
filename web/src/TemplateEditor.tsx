@@ -1,4 +1,14 @@
-import { useMemo, useRef, useState } from "react";
+import {
+  Button,
+  Card,
+  Field,
+  Tab,
+  TabList,
+  Text,
+  Textarea,
+} from "@fluentui/react-components";
+import { AddRegular, DeleteRegular, EditRegular, SaveRegular } from "@fluentui/react-icons";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent } from "react";
 
 import type { ApiClient } from "./api";
@@ -6,15 +16,16 @@ import { ConfirmDialog } from "./components/ConfirmDialog";
 import { useI18n } from "./i18n";
 import { TemplateInjectionsDialog } from "./injections/TemplateInjectionsDialog";
 import {
-  TEMPLATE_NUMBER_POLICIES,
   TemplateDraftError,
   emptyTemplateDraft,
   templateDraftFromTemplate,
   templateDraftFromYaml,
   templateDraftToYaml,
 } from "./templates/templateDraft";
-import type { NumericPolicy, TemplateDraft } from "./templates/templateDraft";
-import type { AccessMode, EgressPolicy, WorkspaceTemplate } from "./types";
+import type { TemplateDraft } from "./templates/templateDraft";
+import { TemplateForm } from "./templates/TemplateForm";
+import type { AvailableNodePool, WorkspaceTemplate } from "./types";
+import { AdminToolbar, SaveButton, useAdminStyles } from "./admin/fluentAdmin";
 
 interface Props {
   api: ApiClient;
@@ -27,6 +38,7 @@ interface Props {
 
 export function TemplateEditor({ api, organizationId, templates, canGrantClusterAccess, onRefresh, onError }: Props) {
   const { t } = useI18n();
+  const styles = useAdminStyles();
   const manageButtonRef = useRef<HTMLButtonElement>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [mode, setMode] = useState<"form" | "yaml">("form");
@@ -36,7 +48,18 @@ export function TemplateEditor({ api, organizationId, templates, canGrantCluster
   const [managingInjections, setManagingInjections] = useState(false);
   const [pendingSave, setPendingSave] = useState<{ candidate: TemplateDraft; yaml: string } | null>(null);
   const [pendingAction, setPendingAction] = useState<{ kind: "disable" | "delete"; template: WorkspaceTemplate } | null>(null);
+  const [nodePools, setNodePools] = useState<AvailableNodePool[]>([]);
+  const [nodePoolsError, setNodePoolsError] = useState(false);
   const selected = useMemo(() => templates.find((item) => item.id === selectedId) ?? null, [templates, selectedId]);
+
+  useEffect(() => {
+    let active = true;
+    setNodePoolsError(false);
+    api.nodePools()
+      .then((pools) => { if (active) setNodePools(pools); })
+      .catch(() => { if (active) { setNodePools([]); setNodePoolsError(true); } });
+    return () => { active = false; };
+  }, [api]);
 
   function startNew() {
     const next = emptyTemplateDraft();
@@ -91,9 +114,7 @@ export function TemplateEditor({ api, organizationId, templates, canGrantCluster
   async function persist(candidate: TemplateDraft, yaml: string) {
     setSaving(true);
     try {
-      const saved = selectedId
-        ? await api.replaceTemplate(selectedId, yaml)
-        : await api.createTemplate({ organization_id: organizationId, yaml });
+      const saved = selectedId ? await api.replaceTemplate(selectedId, yaml) : await api.createTemplate({ organization_id: organizationId, yaml });
       const savedDraft = templateDraftFromTemplate(saved);
       setSelectedId(saved.id);
       setDraft(savedDraft);
@@ -123,7 +144,9 @@ export function TemplateEditor({ api, organizationId, templates, canGrantCluster
       await onRefresh();
     } catch (error) {
       onError(errorMessage(error, t));
-    } finally { setSaving(false); }
+    } finally {
+      setSaving(false);
+    }
   }
 
   async function remove(template: WorkspaceTemplate) {
@@ -140,89 +163,47 @@ export function TemplateEditor({ api, organizationId, templates, canGrantCluster
     }
   }
 
-  return <div className="template-manager">
-    <div className="template-manager-toolbar">
-      <div><h3>{t("templates")}</h3><small>{selected ? `${t("editingTemplate")} · ${selected.name}` : t("newTemplate")}</small></div>
-      <button type="button" className="button" onClick={startNew}>{t("newTemplate")}</button>
-    </div>
-    <div className="template-manager-layout">
-      <div className="template-list selectable-list" role="listbox" aria-label={t("templates")}>
-        {templates.map((template) => <button type="button" role="option" aria-selected={selectedId === template.id} className={selectedId === template.id ? "selected" : ""} key={template.id} onClick={() => selectTemplate(template)}>
-          <span><strong>{template.name}</strong><small>{t("workspaceUser")}: <code>{template.workspace_user}</code> · {template.access_mode === "internal" ? t("internal") : t("public")}</small></span>
-          <span className={template.enabled ? "healthy" : "muted"}>{template.enabled ? t("enabled") : t("disabled")}</span>
-        </button>)}
-        {templates.length === 0 && <p>{t("noTemplates")}</p>}
+  return <div className={styles.stack}>
+    <AdminToolbar action={<Button icon={<AddRegular />} onClick={startNew}>{t("newTemplate")}</Button>}>
+      <div className={styles.stack}>
+        <Text weight="semibold" size={500}>{t("templates")}</Text>
+        <Text size={300} className={styles.muted}>{selected ? `${t("editingTemplate")} · ${selected.name}` : t("newTemplate")}</Text>
       </div>
-      <form className="template-editor" onSubmit={save}>
-        <div className="editor-tabs" role="tablist">
-          <button type="button" role="tab" aria-selected={mode === "form"} className={mode === "form" ? "active" : ""} onClick={() => switchMode("form")}>{t("formMode")}</button>
-          <button type="button" role="tab" aria-selected={mode === "yaml"} className={mode === "yaml" ? "active" : ""} onClick={() => switchMode("yaml")}>{t("yamlMode")}</button>
-        </div>
-        {mode === "yaml" ? (
-          <label className="yaml-editor"><Field label={t("templateYaml")} help={t("templateYamlHelp")} /><textarea spellCheck={false} value={yamlText} onChange={(event) => setYamlText(event.target.value)} /></label>
-        ) : (
-          <div className="template-form">
-            <label><Field label={t("templateName")} help={t("templateNameHelp")} /><input required value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></label>
-            <label className="wide"><Field label={t("allowedOciImage")} help={t("templateImageHelp")} /><input required value={draft.image} onChange={(event) => setDraft({ ...draft, image: event.target.value })} placeholder="registry/image@sha256:…" /></label>
-            <label><Field label={t("accessMode")} help={draft.accessMode === "internal" ? t("internalHelp") : t("publicHelp")} /><select value={draft.accessMode} onChange={(event) => setDraft({ ...draft, accessMode: event.target.value as AccessMode })}><option value="internal">{t("internal")}</option><option value="public">{t("public")}</option></select></label>
-            <label><Field label={t("workspaceUser")} help={t("workspaceUserHelp")} /><input required value={draft.user} onChange={(event) => setDraft({ ...draft, user: event.target.value })} placeholder="workspace" /></label>
-            <label className="wide"><Field label={t("workspaceHome")} help={t("workspaceHomeHelp")} /><input required value={draft.home} onChange={(event) => setDraft({ ...draft, home: event.target.value })} placeholder="/workspace" /></label>
-            <NumberField label={`${t("cpuLimit")} (m)`} value={draft.cpu} policy={TEMPLATE_NUMBER_POLICIES.cpu} update={(cpu) => setDraft({ ...draft, cpu })} />
-            <NumberField label={`${t("memoryLimit")} (MiB)`} value={draft.memory} policy={TEMPLATE_NUMBER_POLICIES.memory} update={(memory) => setDraft({ ...draft, memory })} />
-            <NumberField label={`${t("cpuRequest")} (m)`} value={draft.requestCpu} policy={TEMPLATE_NUMBER_POLICIES.requestCpu} update={(requestCpu) => setDraft({ ...draft, requestCpu })} />
-            <NumberField label={`${t("memoryRequest")} (MiB)`} value={draft.requestMemory} policy={TEMPLATE_NUMBER_POLICIES.requestMemory} update={(requestMemory) => setDraft({ ...draft, requestMemory })} />
-            <NumberField label="GPU" value={draft.gpu} policy={TEMPLATE_NUMBER_POLICIES.gpu} update={(gpu) => setDraft({ ...draft, gpu })} />
-            <NumberField label={`${t("disk")} (GiB)`} value={draft.disk} policy={TEMPLATE_NUMBER_POLICIES.disk} update={(disk) => setDraft({ ...draft, disk })} />
-            <NumberField optional label={`${t("ephemeralRequest")} (MiB)`} help={t("ephemeralHelp")} value={draft.requestEphemeral} policy={TEMPLATE_NUMBER_POLICIES.ephemeral} update={(requestEphemeral) => setDraft({ ...draft, requestEphemeral })} />
-            <NumberField optional label={`${t("ephemeralLimit")} (MiB)`} help={t("ephemeralHelp")} value={draft.limitEphemeral} policy={TEMPLATE_NUMBER_POLICIES.ephemeral} update={(limitEphemeral) => setDraft({ ...draft, limitEphemeral })} />
-            <fieldset className="storage-policy-fields full">
-              <legend><Field label={t("storagePolicyTitle")} help={t("storagePolicyHelp")} /></legend>
-              <NumberField label={`${t("runtimeTmpMemory")} (MiB)`} help={t("runtimeTmpMemoryHelp")} value={draft.storagePolicy.runtime_tmp_memory_mib} policy={TEMPLATE_NUMBER_POLICIES.runtimeTmpMemory} update={(runtime_tmp_memory_mib) => setDraft({ ...draft, storagePolicy: { ...draft.storagePolicy, runtime_tmp_memory_mib } })} />
-              <NumberField label={`${t("buildScratch")} (GiB)`} help={t("buildScratchHelp")} value={draft.storagePolicy.build_scratch_gib} policy={TEMPLATE_NUMBER_POLICIES.buildScratch} update={(build_scratch_gib) => setDraft({ ...draft, storagePolicy: { ...draft.storagePolicy, build_scratch_gib } })} />
-              <NumberField label={`${t("buildkitCache")} (GiB)`} help={t("buildkitCacheHelp")} value={draft.storagePolicy.buildkit_cache_gib} policy={TEMPLATE_NUMBER_POLICIES.buildkitCache} update={(buildkit_cache_gib) => setDraft({ ...draft, storagePolicy: { ...draft.storagePolicy, buildkit_cache_gib } })} />
-              <NumberField label={`${t("codexScratch")} (GiB)`} help={t("codexScratchHelp")} value={draft.storagePolicy.codex_scratch_gib} policy={TEMPLATE_NUMBER_POLICIES.codexScratch} update={(codex_scratch_gib) => setDraft({ ...draft, storagePolicy: { ...draft.storagePolicy, codex_scratch_gib } })} />
-              <label>
-                <Field label={t("scratchMedium")} help={t("scratchMediumHelp")} />
-                <select
-                  value={draft.storagePolicy.scratch_medium}
-                  onChange={(event) => setDraft({
-                    ...draft,
-                    storagePolicy: { ...draft.storagePolicy, scratch_medium: event.target.value as "disk" | "memory" },
-                  })}
-                >
-                  <option value="disk">{t("scratchMediumDisk")}</option>
-                  <option value="memory">{t("scratchMediumMemory")}</option>
-                </select>
-              </label>
-              <NumberField optional label={`${t("homeReserve")} (MiB)`} help={t("homeReserveHelp")} value={draft.storagePolicy.home_reserve_mib} policy={TEMPLATE_NUMBER_POLICIES.homeReserve} update={(home_reserve_mib) => setDraft({ ...draft, storagePolicy: { ...draft.storagePolicy, home_reserve_mib } })} />
-            </fieldset>
-            <Check label="BuildKit" help={t("buildkitHelp")} checked={draft.buildkit} update={(buildkit) => setDraft({ ...draft, buildkit })} />
-            <Check label={t("maintenanceAccess")} help={t("maintenanceAccessHelp")} checked={draft.clusterAccess} disabled={!canGrantClusterAccess} update={(clusterAccess) => setDraft({ ...draft, clusterAccess })} />
-            <fieldset className="desktop-fields full">
-              <legend><Field label={t("browserDesktop")} help={t("browserDesktopHelp")} /></legend>
-              <Check label={t("enableBrowserDesktop")} help={t("enableBrowserDesktopHelp")} checked={draft.desktopEnabled} update={(desktopEnabled) => setDraft({ ...draft, desktopEnabled })} />
-              {draft.desktopEnabled && <>
-                <NumberField label={t("desktopInternalPort")} help={t("desktopInternalPortHelp")} value={draft.desktopPort} policy={TEMPLATE_NUMBER_POLICIES.desktopPort} update={(desktopPort) => setDraft({ ...draft, desktopPort })} />
-                <label><Field label={t("desktopDisplayName")} help={t("desktopDisplayNameHelp")} /><input value={draft.desktopDisplayName} maxLength={80} onChange={(event) => setDraft({ ...draft, desktopDisplayName: event.target.value })} placeholder={t("desktopDisplayNamePlaceholder")} /></label>
-              </>}
-            </fieldset>
-            <label><Field label={t("egressPolicy")} help={t("egressPolicyHelp")} /><select value={draft.egressPolicy} onChange={(event) => setDraft({ ...draft, egressPolicy: event.target.value as EgressPolicy })}><option value="unrestricted">{t("egressUnrestricted")}</option><option value="internet_only">{t("egressInternetOnly")}</option></select></label>
-            <label className="wide"><Field label={t("runtimeClassName")} help={t("runtimeClassNameHelp")} /><input value={draft.runtimeClassName} onChange={(event) => setDraft({ ...draft, runtimeClassName: event.target.value })} placeholder="gvisor-sandbox" /></label>
-            <label className="wide"><Field label={t("requiredNodes")} help={t("nodeListHelp")} /><input value={draft.requiredNodes} onChange={(event) => setDraft({ ...draft, requiredNodes: event.target.value })} placeholder="westlake, haixia" /></label>
-            <label className="wide"><Field label={t("preferredNodes")} help={t("nodeListHelp")} /><input value={draft.preferredNodes} onChange={(event) => setDraft({ ...draft, preferredNodes: event.target.value })} /></label>
-            <label className="wide"><Field label={t("nodeSelector")} help={t("keyValueLinesHelp")} /><textarea value={draft.nodeSelector} onChange={(event) => setDraft({ ...draft, nodeSelector: event.target.value })} placeholder="k3s-worker-ready=true" /></label>
-          </div>
-        )}
-        <div className="template-injection-actions">
-          <button ref={manageButtonRef} type="button" className="button" aria-haspopup="dialog" aria-describedby={!selected ? "template-injections-disabled-help" : undefined} disabled={!selected || saving} onClick={() => setManagingInjections(true)}>{t("manageTemplateInjections")}</button>
-          {!selected && <small id="template-injections-disabled-help">{t("saveTemplateBeforeInjections")}</small>}
-        </div>
-        <div className="form-actions">
-          <button className="button primary" disabled={saving}>{saving ? t("saving") : selectedId ? t("saveChanges") : t("createTemplate")}</button>
-          {selected && <button type="button" className={selected.enabled ? "button danger" : "button"} disabled={saving} onClick={() => void toggle(selected)}>{selected.enabled ? t("disable") : t("enable")}</button>}
-          {selected && !selected.enabled && <button type="button" className="button danger" disabled={saving} onClick={() => setPendingAction({ kind: "delete", template: selected })}>{t("deleteTemplate")}</button>}
-        </div>
-      </form>
+    </AdminToolbar>
+    <div className={styles.formGrid}>
+      <Card appearance="outline" className={styles.list} role="listbox" aria-label={t("templates")}>
+        {templates.map((template) => <Button
+          key={template.id}
+          role="option"
+          aria-selected={selectedId === template.id}
+          appearance={selectedId === template.id ? "primary" : "subtle"}
+          className={styles.listButton}
+          onClick={() => selectTemplate(template)}
+        >
+          <span className={styles.stack}><Text weight="semibold">{template.name}</Text><Text size={200}>{template.image}</Text></span>
+          <Text size={200}>{template.enabled ? t("enabled") : t("disabled")}</Text>
+        </Button>)}
+        {templates.length === 0 && <Text className={styles.empty}>{t("noTemplates")}</Text>}
+      </Card>
+      <Card appearance="outline" className={styles.card}>
+        <form className={styles.stack} onSubmit={(event) => void save(event)}>
+          <TabList selectedValue={mode} onTabSelect={(_, data) => switchMode(data.value as "form" | "yaml")}>
+            <Tab value="form" icon={<EditRegular />}>{t("formMode")}</Tab>
+            <Tab value="yaml">{t("yamlMode")}</Tab>
+          </TabList>
+          {mode === "yaml" ? <Field label={t("templateYaml")} hint={t("templateYamlHelp")}>
+            <Textarea className={styles.yaml} spellCheck={false} value={yamlText} onChange={(event) => setYamlText(event.target.value)} />
+          </Field> : <TemplateForm draft={draft} setDraft={setDraft} canGrantClusterAccess={canGrantClusterAccess} nodePools={nodePools} nodePoolsError={nodePoolsError} saving={saving} t={t} styles={styles} />}
+          <AdminToolbar action={<div className={styles.actions}>
+            <Button ref={manageButtonRef} type="button" disabled={!selected || saving} onClick={() => setManagingInjections(true)}>{t("manageTemplateInjections")}</Button>
+            <SaveButton type="submit" icon={<SaveRegular />} disabled={saving}>{saving ? t("saving") : selectedId ? t("saveChanges") : t("createTemplate")}</SaveButton>
+            {selected && <Button type="button" appearance="secondary" disabled={saving} onClick={() => void toggle(selected)}>{selected.enabled ? t("disable") : t("enable")}</Button>}
+            {selected && !selected.enabled && <Button type="button" appearance="subtle" icon={<DeleteRegular />} disabled={saving} onClick={() => setPendingAction({ kind: "delete", template: selected })}>{t("deleteTemplate")}</Button>}
+          </div>}>
+            {!selected && <Text size={200} className={styles.muted}>{t("saveTemplateBeforeInjections")}</Text>}
+          </AdminToolbar>
+        </form>
+      </Card>
     </div>
     {selected && <TemplateInjectionsDialog api={api} organizationId={organizationId} template={selected} open={managingInjections} returnFocusRef={manageButtonRef} onClose={() => setManagingInjections(false)} onError={onError} />}
     <ConfirmDialog open={pendingSave !== null} title={selectedId ? t("saveChanges") : t("createTemplate")} description={t("templateHighRiskConfirm")} confirmLabel={selectedId ? t("saveChanges") : t("createTemplate")} cancelLabel={t("cancel")} busy={saving} danger details={<strong>{pendingSave?.candidate.name}</strong>} onClose={() => setPendingSave(null)} onConfirm={() => pendingSave && void persist(pendingSave.candidate, pendingSave.yaml)} />
@@ -230,23 +211,11 @@ export function TemplateEditor({ api, organizationId, templates, canGrantCluster
   </div>;
 }
 
-function NumberField({ label, help, value, policy, optional = false, update }: { label: string; help?: string; value: string; policy: NumericPolicy; optional?: boolean; update: (value: string) => void }) {
-  return <label><Field label={label} help={help} /><input required={!optional} type="number" inputMode="numeric" min={policy.min} step={policy.step} max={policy.max} value={value} onChange={(event) => update(event.target.value)} /></label>;
-}
-
-function Field({ label, help }: { label: string; help?: string }) {
-  return <span className="field-title"><span>{label}</span>{help && <span className="help-tip" title={help} aria-label={help} tabIndex={0}>?</span>}</span>;
-}
-
-function Check({ label, help, checked, disabled = false, update }: { label: string; help: string; checked: boolean; disabled?: boolean; update: (value: boolean) => void }) {
-  return <label className="check-field"><input type="checkbox" checked={checked} disabled={disabled} onChange={(event) => update(event.target.checked)} /><Field label={label} help={help} /></label>;
-}
-
 function errorMessage(error: unknown, t: ReturnType<typeof useI18n>["t"]) {
   if (error instanceof TemplateDraftError) {
     if (error.code === "resource_request_exceeds_limit") return t("resourceRequestExceedsLimit");
-    if (error.code === "ephemeral_request_exceeds_limit") return t("ephemeralRequestExceedsLimit");
+    if (error.code === "invalid_node_pool_placement") return t("invalidNodePoolPlacement");
     return t("invalidTemplateNumber");
   }
-  return error instanceof Error ? error.message : "Request failed";
+  return error instanceof Error ? error.message : t("requestFailed");
 }

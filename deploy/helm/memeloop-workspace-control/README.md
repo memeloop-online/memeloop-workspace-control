@@ -24,6 +24,17 @@ release Namespace. The control plane and every workspace use this Namespace; wor
 resource names and ownership labels isolate their StatefulSets, Services, claims, configuration,
 NetworkPolicies and routes without creating per-workspace Namespaces.
 
+`workspace.storageClassName` is the durable Home class. Configure
+`workspace.scratchStorageClassName` independently to place regenerable temporary data on a local
+high-performance CSI class with hard capacity enforcement and
+`volumeBindingMode: WaitForFirstConsumer`, such as a TopoLVM or local LVM/ZFS class. Each workspace
+Pod then receives one RWO generic ephemeral PVC at the template's total temporary-storage size.
+Workspace cache, optional BuildKit cache, and Codex/session scratch use isolated subpaths while
+sharing that hard total quota. Kubernetes owns and deletes the claim with the Pod. Do not point
+this value at the durable replicated Home class merely as a default: network and replica overhead
+are normally undesirable for regenerable data. Leaving the value empty uses one bounded node-local
+disk `emptyDir` as a compatibility fallback.
+
 The internal listener on port `8081` exposes OpenMetrics at `/metrics`, including HTTP
 latency/errors, active streams, upstream calls, durable queues, process/allocator memory, plugin
 state, and platform/per-user workspace aggregates. The business listener on port `8080` does not

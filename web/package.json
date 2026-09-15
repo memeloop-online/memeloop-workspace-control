@@ -11,17 +11,20 @@
     "test:browser": "node tests/plugin-sandbox-check.mjs"
   },
   "dependencies": {
-    "@rjsf/core": "6.4.1",
-    "@rjsf/utils": "6.4.1",
-    "@rjsf/validator-ajv8": "6.4.1",
+    "@fluentui/react-components": "9.74.7",
+    "@fluentui/react-icons": "2.0.341",
+    "@rjsf/core": "6.10.0",
+    "@rjsf/utils": "6.10.0",
+    "@rjsf/validator-ajv8": "6.10.0",
     "@vitejs/plugin-react": "6.1.0",
     "i18next": "26.4.0",
     "react": "19.2.8",
     "react-dom": "19.2.8",
     "react-i18next": "17.0.12",
+    "react-router-dom": "7.18.3",
     "typescript": "7.0.2",
     "vite": "8.2.2",
-    "yaml": "2.8.2"
+    "yaml": "2.9.1"
   },
   "devDependencies": {
     "@types/react": "19.2.14",

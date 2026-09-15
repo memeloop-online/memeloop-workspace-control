@@ -9,14 +9,14 @@ use serde::Serialize;
 use utoipa::ToSchema;
 use uuid::Uuid;
 
-use crate::{auth::Permission, quota::Resources};
+use crate::{auth::Permission, quota::QuotaResources};
 
 use super::{ApiError, AppState, auth::principal};
 
 #[derive(Debug, Serialize, ToSchema)]
 pub(super) struct OrganizationUsageSummary {
     total_count: u64,
-    requested: Resources,
+    requested: QuotaResources,
     state_counts: BTreeMap<String, u64>,
     actual: ActualUsage,
     observed_at: Option<i64>,

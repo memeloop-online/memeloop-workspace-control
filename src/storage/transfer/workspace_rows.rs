@@ -7,7 +7,7 @@ use crate::{
     workspace_runtime::{WorkspaceRuntimeIdentity, workspace_short_id_for},
 };
 
-// This is the complete schema-v22 `workspaces` column set, matching the export query.
+// This is the complete current `workspaces` column set, matching the export query.
 // PostgreSQL's json_populate_recordset ignores unknown JSON members, so accepting a subset
 // here would make an untrusted snapshot differ from the data that is actually imported.
 const WORKSPACE_COLUMNS: &[&str] = &[
@@ -25,6 +25,8 @@ const WORKSPACE_COLUMNS: &[&str] = &[
     "memory_mib",
     "gpu_count",
     "disk_gib",
+    "temporary_storage_gib",
+    "node_pool",
     "generation",
     "created_at",
     "updated_at",

@@ -1,8 +1,26 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
+import {
+  Body2,
+  Button,
+  Card,
+  CardHeader,
+  Dialog,
+  DialogActions,
+  DialogBody,
+  DialogContent,
+  DialogSurface,
+  DialogTitle,
+  Input,
+  MessageBar,
+  MessageBarBody,
+  Spinner,
+  Subtitle1,
+  makeStyles,
+  tokens,
+} from "@fluentui/react-components";
 
 import type { ApiClient } from "../api";
 import { API_KEY_SCOPES } from "../apiKeyScopes";
-import { ConfirmDialog } from "../components/ConfirmDialog";
 import { useI18n } from "../i18n";
 import type { ApiKeyScope, ApiKeySummary, CreatedApiKey, Principal, WorkspaceTemplate } from "../types";
 import { ApiKeyCreateForm } from "./ApiKeyCreateForm";
@@ -16,8 +34,51 @@ interface Props {
   onError: (message: string) => void;
 }
 
+const useStyles = makeStyles({
+  card: {
+    display: "grid",
+    gap: tokens.spacingVerticalL,
+    padding: tokens.spacingHorizontalXL,
+    minWidth: 0,
+    "@media (max-width: 640px)": {
+      padding: tokens.spacingHorizontalL,
+    },
+  },
+  header: {
+    minWidth: 0,
+  },
+  description: {
+    color: tokens.colorNeutralForeground2,
+  },
+  loading: {
+    display: "grid",
+    placeItems: "center",
+    minHeight: "140px",
+  },
+  created: {
+    display: "grid",
+    gap: tokens.spacingVerticalS,
+  },
+  createdValue: {
+    display: "grid",
+    gridTemplateColumns: "minmax(0, 1fr) auto",
+    gap: tokens.spacingHorizontalS,
+    alignItems: "center",
+    "@media (max-width: 640px)": {
+      gridTemplateColumns: "1fr",
+    },
+  },
+  createdInput: {
+    minWidth: 0,
+  },
+  dialogDetails: {
+    marginBlockStart: tokens.spacingVerticalM,
+  },
+});
+
 export function ApiKeySection({ api, organizationId, principal, onError }: Props) {
   const { locale, t } = useI18n();
+  const classes = useStyles();
   const [keys, setKeys] = useState<ApiKeySummary[]>([]);
   const [name, setName] = useState("");
   const [scopes, setScopes] = useState<ApiKeyScope[]>(["read_workspace"]);
@@ -71,14 +132,13 @@ export function ApiKeySection({ api, organizationId, principal, onError }: Props
   }, [api, onError, t]);
 
   useEffect(() => {
-    // The organization-scoped template list must never leak into the next
-    // organization while its request is in flight.
     setTemplates([]);
     setTemplateRestriction((current) => templateRestrictionDisabled || current);
     setAllowedTemplateIds([]);
     if (!organizationId) return;
     let active = true;
-    void api.templates(organizationId).then((items) => { if (active) setTemplates(items); })
+    void api.templates(organizationId)
+      .then((items) => { if (active) setTemplates(items); })
       .catch((error) => { if (active) onError(message(error, t("requestFailed"))); });
     return () => { active = false; };
   }, [api, organizationId, onError, t, templateRestrictionDisabled]);
@@ -130,14 +190,16 @@ export function ApiKeySection({ api, organizationId, principal, onError }: Props
     }
   }
 
-  return <section className="settings-card settings-api-key-card">
-    <div className="settings-api-key-heading">
-      <div><h3>{t("apiKeys")}</h3><p>{t("apiKeysHelp")}</p></div>
-    </div>
-    {access === "unavailable" ? <p className="settings-unavailable" role="status">{t("apiKeysUnavailable")}</p>
-      : access === "loading" ? <p className="settings-loading" role="status">{t("loading")}</p>
+  return <Card className={classes.card}>
+    <CardHeader
+      className={classes.header}
+      header={<Subtitle1 id="api-keys-title">{t("apiKeys")}</Subtitle1>}
+      description={<Body2 className={classes.description}>{t("apiKeysHelp")}</Body2>}
+    />
+    {access === "unavailable" ? <MessageBar intent="warning"><MessageBarBody>{t("apiKeysUnavailable")}</MessageBarBody></MessageBar>
+      : access === "loading" ? <div className={classes.loading} role="status"><Spinner label={t("loading")} /></div>
         : <>
-          {createdKey && <CreatedApiKeyNotice value={createdKey} onHide={() => setCreatedKey(null)} />}
+          {createdKey && <CreatedApiKeyNotice value={createdKey} onHide={() => setCreatedKey(null)} classes={classes} />}
           <ApiKeyCreateForm
             creating={creating}
             expiresAt={expiresAt}
@@ -158,29 +220,39 @@ export function ApiKeySection({ api, organizationId, principal, onError }: Props
           />
           <ApiKeyList keys={keys} locale={locale} translate={t} onRevoke={setRevoking} />
         </>}
-    <ConfirmDialog
-      busy={revokeBusy}
-      cancelLabel={t("cancel")}
-      confirmLabel={t("revokeApiKey")}
-      danger
-      description={revoking ? `${t("revokeApiKeyConfirm")} ${revoking.name}?` : t("revokeApiKeyConfirm")}
-      details={revoking ? <code>{revoking.prefix}</code> : undefined}
-      open={Boolean(revoking)}
-      title={t("revokeApiKey")}
-      onClose={() => setRevoking(null)}
-      onConfirm={() => void confirmRevoke()}
-    />
-  </section>;
+    <Dialog open={Boolean(revoking)} onOpenChange={(_, data) => { if (!data.open && !revokeBusy) setRevoking(null); }}>
+      <DialogSurface>
+        <DialogBody>
+          <DialogTitle>{t("revokeApiKey")}</DialogTitle>
+          <DialogContent>
+            {t("revokeApiKeyConfirm")}
+            {revoking && <div className={classes.dialogDetails}><strong>{revoking.name}</strong><br /><code>{revoking.prefix}</code></div>}
+          </DialogContent>
+          <DialogActions>
+            <Button appearance="secondary" disabled={revokeBusy} onClick={() => setRevoking(null)}>{t("cancel")}</Button>
+            <Button appearance="primary" disabled={revokeBusy} onClick={() => void confirmRevoke()}>
+              {revokeBusy ? <Spinner size="tiny" /> : t("revokeApiKey")}
+            </Button>
+          </DialogActions>
+        </DialogBody>
+      </DialogSurface>
+    </Dialog>
+  </Card>;
 }
 
-function CreatedApiKeyNotice({ value, onHide }: { value: CreatedApiKey; onHide: () => void }) {
+function CreatedApiKeyNotice({ value, onHide, classes }: { value: CreatedApiKey; onHide: () => void; classes: ReturnType<typeof useStyles> }) {
   const { t } = useI18n();
-  return <div className="new-api-key" role="status">
-    <strong>{t("apiKeyCreated")}</strong>
-    <p>{t("apiKeyCreatedHelp")}</p>
-    <div><code>{value.token}</code><button className="button" type="button" onClick={() => void navigator.clipboard.writeText(value.token)}>{t("copy")}</button></div>
-    <button className="text-button" type="button" onClick={onHide}>{t("hideApiKey")}</button>
-  </div>;
+  return <MessageBar className={classes.created} intent="success">
+    <MessageBarBody>
+      <strong>{t("apiKeyCreated")}</strong>
+      <p>{t("apiKeyCreatedHelp")}</p>
+      <div className={classes.createdValue}>
+        <Input className={classes.createdInput} value={value.token} readOnly type="password" />
+        <Button appearance="secondary" onClick={() => void navigator.clipboard.writeText(value.token)}>{t("copy")}</Button>
+      </div>
+      <Button appearance="subtle" onClick={onHide}>{t("hideApiKey")}</Button>
+    </MessageBarBody>
+  </MessageBar>;
 }
 
 function message(error: unknown, fallback: string) {

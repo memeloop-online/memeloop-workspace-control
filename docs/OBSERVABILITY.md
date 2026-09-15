@@ -55,8 +55,9 @@ all collapse into fixed vocabularies. User display names, workspace names, URLs,
 messages and credential values are excluded. Per-owner series use stable user UUIDs because the
 product explicitly supports Grafana aggregation per user.
 
-The chart's optional `PrometheusRule` turns these signals into operational alerts. Workspace Home
-PVC usage and node ephemeral-storage requests use warning/critical bands at 80%/90%. A sustained
+The chart's optional `PrometheusRule` turns these signals into operational alerts. Workspace
+persistent and temporary PVC usage, plus node ephemeral-storage requests, use warning/critical
+bands at 80%/90%. A sustained
 oldest pending job age above 15 minutes raises `MwcJobsPendingTooOld`; an increase in the durable
 failed-job count within 15 minutes raises `MwcJobsFailed`. Retained historical failures therefore
 remain visible in Grafana without keeping Alertmanager permanently firing. The `monitoring.prometheusRule.warningFor` and
@@ -68,6 +69,37 @@ Actual workspace CPU and memory remain Kubernetes runtime telemetry. Managed Nam
 PVCs and workloads carry installation, organization, owner and workspace labels. Grafana can join
 `container_cpu_usage_seconds_total` or `container_memory_working_set_bytes` with `kube_pod_labels`
 and aggregate on `label_workspace_memeloop_dev_owner_user_id`.
+
+## Workspace storage telemetry
+
+The workspace runtime API reports two storage allocations: `persistent_storage` and
+`temporary_storage`. Each has a configured capacity, observed used/capacity/available bytes,
+percentage, pressure band, storage backing, telemetry coverage and observation time. The API uses
+the `workspace.memeloop.dev/storage-role` PVC label to distinguish the durable Home claim
+(`home`) from the pod-owned temporary claim (`temporary`). It never groups all PVCs that happen
+to share a workspace label.
+
+Temporary storage uses a generic ephemeral PVC when the platform configures a scratch
+StorageClass. In that mode Prometheus `kubelet_volume_stats_*` provides exact byte telemetry.
+The bounded node-local `emptyDir` compatibility mode has an enforced limit but Kubernetes does
+not expose reliable per-volume usage. It therefore reports `coverage: unavailable`, with all byte
+measurements absent; it never reports a fabricated zero. The observation time is metadata for a
+sample, not a user-facing status string.
+
+Runtime events expose a stable category, count and observation time. `DiskPressure`, `Evicted`,
+temporary-storage provisioning and attachment failures are normalized into that vocabulary.
+Original Kubernetes event text is omitted because it may expose node, topology, provider or mount
+details. A production deployment should additionally persist these normalized incidents once the
+`workspace_runtime_incidents` storage migration is installed; Kubernetes Events are subject to
+cluster retention and must not be the only incident record.
+
+The recording rules `mwc_workspace_persistent_storage_used_percent` and
+`mwc_workspace_temporary_storage_used_percent` use the storage-role label and provide 80%/90%
+warning and critical alerts. They retain Kubernetes namespace and PVC labels for alert routing;
+the MWC process metrics intentionally do not emit a series per workspace. Platform-wide requested
+temporary capacity remains the low-cardinality
+`mwc_resource_requested{resource="temporary_storage",unit="gibibytes"}` metric, with the
+existing per-user series reserved for Grafana owner aggregation.
 
 ## Release profiling
 

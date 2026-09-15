@@ -1,12 +1,24 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
-import type { KeyboardEvent as ReactKeyboardEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  Badge,
+  Button,
+  Card,
+  CardHeader,
+  Divider,
+  Tab,
+  TabList,
+  Text,
+  makeStyles,
+  tokens,
+} from "@fluentui/react-components";
+import { EyeRegular } from "@fluentui/react-icons";
+
 import type { ApiClient } from "./api";
 import { ConfirmDialog } from "./components/ConfirmDialog";
 import { WorkspaceCombobox } from "./forms/WorkspaceCombobox";
 import { useI18n } from "./i18n";
 import { canManageOrganization as mayManageOrganization } from "./permissions";
 import type {
-  InjectionKind,
   InjectionScope,
   Principal,
   ResolvedInjection,
@@ -15,11 +27,8 @@ import type {
   WorkspaceTemplate,
 } from "./types";
 import { InjectionEditorForm } from "./injections/InjectionEditorForm";
-import {
-  draftFromStored,
-  emptyInjectionDraft,
-  injectionDraftForSave,
-} from "./injections/editorModel";
+import { InjectionList } from "./injections/InjectionList";
+import { draftFromStored, emptyInjectionDraft, injectionDraftForSave } from "./injections/editorModel";
 
 interface Props {
   api: ApiClient;
@@ -29,9 +38,91 @@ interface Props {
   onError: (message: string) => void;
 }
 
+const useStyles = makeStyles({
+  root: {
+    display: "grid",
+    gap: tokens.spacingVerticalL,
+    minWidth: 0,
+  },
+  heading: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: tokens.spacingHorizontalM,
+    flexWrap: "wrap",
+  },
+  headingCopy: {
+    display: "grid",
+    gap: tokens.spacingVerticalXXS,
+  },
+  scope: {
+    width: "fit-content",
+    maxWidth: "100%",
+  },
+  workspace: {
+    width: "100%",
+  },
+  mobileTabs: {
+    display: "none",
+    [`@media (max-width: 760px)`]: {
+      display: "flex",
+      width: "100%",
+    },
+  },
+  layout: {
+    display: "grid",
+    gridTemplateColumns: "minmax(17rem, 0.8fr) minmax(0, 1.4fr)",
+    gap: tokens.spacingVerticalL,
+    alignItems: "start",
+    [`@media (max-width: 900px)`]: {
+      gridTemplateColumns: "minmax(15rem, 0.9fr) minmax(0, 1.2fr)",
+    },
+    [`@media (max-width: 760px)`]: {
+      display: "block",
+    },
+  },
+  list: {
+    minWidth: 0,
+    [`@media (max-width: 760px)`]: {
+      display: "block",
+    },
+  },
+  editor: {
+    minWidth: 0,
+    [`@media (max-width: 760px)`]: {
+      marginTop: tokens.spacingVerticalL,
+    },
+  },
+  mobileHidden: {
+    [`@media (max-width: 760px)`]: {
+      display: "none",
+    },
+  },
+  preview: {
+    display: "grid",
+    gap: tokens.spacingVerticalM,
+  },
+  previewGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(14rem, 1fr))",
+    gap: tokens.spacingVerticalS,
+  },
+  previewItem: {
+    display: "grid",
+    gap: tokens.spacingVerticalXXS,
+    padding: tokens.spacingHorizontalM,
+    borderRadius: tokens.borderRadiusMedium,
+    backgroundColor: tokens.colorNeutralBackground2,
+  },
+  previewMeta: {
+    color: tokens.colorNeutralForeground2,
+    fontSize: tokens.fontSizeBase200,
+  },
+});
+
 export function InjectionPanel(props: Props) {
   const { t } = useI18n();
-  const scopeTabsId = useId();
+  const styles = useStyles();
   const canManageOrganization = mayManageOrganization(props.principal, props.organizationId, "manage_organization");
   const scopeValues: InjectionScope[] = [...(canManageOrganization ? ["organization" as const] : []), "user", "workspace"];
   const [scope, setScope] = useState<InjectionScope>("user");
@@ -49,13 +140,6 @@ export function InjectionPanel(props: Props) {
   const [mobilePane, setMobilePane] = useState<"list" | "editor">("list");
   const [confirmDelete, setConfirmDelete] = useState(false);
 
-  const filteredItems = useMemo(() => {
-    const query = search.trim().toLocaleLowerCase();
-    if (!query) return items;
-    return items.filter((item) => [item.key, item.target, item.kind, kindLabel(item.kind, t)]
-      .some((value) => value.toLocaleLowerCase().includes(query)));
-  }, [items, search, t]);
-
   const scopeId = useMemo(() => {
     if (scope === "organization") return props.organizationId;
     if (scope === "user") return props.principal.user_id;
@@ -66,9 +150,7 @@ export function InjectionPanel(props: Props) {
     [props.workspaces, props.organizationId],
   );
   const searchWorkspaces = useCallback(
-    (query: string) => props.api
-      .workspacesPage(props.organizationId, { limit: 30, search: query.trim() || undefined })
-      .then((page) => page.items),
+    (query: string) => props.api.workspacesPage(props.organizationId, { limit: 30, search: query.trim() || undefined }).then((page) => page.items),
     [props.api, props.organizationId],
   );
 
@@ -82,9 +164,9 @@ export function InjectionPanel(props: Props) {
       const next = await props.api.injections(scope, scopeId);
       if (injectionLoadRequestRef.current === requestId) setItems(next);
     } catch (error) {
-      if (injectionLoadRequestRef.current === requestId) props.onError(message(error));
+      if (injectionLoadRequestRef.current === requestId) props.onError(message(error, t("operationFailed")));
     }
-  }, [props.api, props.onError, scope, scopeId, props.organizationId]);
+  }, [props.api, props.onError, scope, scopeId]);
 
   useEffect(() => {
     if (previousOrganizationIdRef.current === props.organizationId) return;
@@ -106,17 +188,15 @@ export function InjectionPanel(props: Props) {
     setWorkspaceId(workspaceItems[0].workspace.id);
   }, [workspaceId, workspaceItems]);
 
-  useEffect(() => {
-    void load();
-  }, [load]);
+  useEffect(() => { void load(); }, [load]);
 
   useEffect(() => {
     let active = true;
     props.api.templates(props.organizationId)
       .then((value) => { if (active) setTemplates(value.filter((item) => item.enabled)); })
-      .catch((error) => active && props.onError(message(error)));
+      .catch((error) => active && props.onError(message(error, t("operationFailed"))));
     return () => { active = false; };
-  }, [props.api, props.organizationId]);
+  }, [props.api, props.organizationId, props.onError]);
 
   function resetDraft() {
     setSelectedKey(null);
@@ -128,6 +208,7 @@ export function InjectionPanel(props: Props) {
     setScope(value);
     resetDraft();
     setPreview([]);
+    setSearch("");
   }
 
   function selectItem(item: StoredInjection) {
@@ -146,33 +227,16 @@ export function InjectionPanel(props: Props) {
     setMobilePane("editor");
   }
 
-  function scopeKeyDown(event: ReactKeyboardEvent<HTMLButtonElement>, current: InjectionScope) {
-    const currentIndex = scopeValues.indexOf(current);
-    let nextIndex = currentIndex;
-    if (event.key === "ArrowRight" || event.key === "ArrowDown") nextIndex = (currentIndex + 1) % scopeValues.length;
-    else if (event.key === "ArrowLeft" || event.key === "ArrowUp") nextIndex = (currentIndex - 1 + scopeValues.length) % scopeValues.length;
-    else if (event.key === "Home") nextIndex = 0;
-    else if (event.key === "End") nextIndex = scopeValues.length - 1;
-    else return;
-    event.preventDefault();
-    const next = scopeValues[nextIndex];
-    changeScope(next);
-    requestAnimationFrame(() => document.getElementById(`${scopeTabsId}-${next}`)?.focus());
-  }
-
   async function save() {
     if (!scopeId) return;
     setSaving(true);
     try {
       const item = injectionDraftForSave(draft);
-      await props.api.replaceInjection(scope, scopeId, {
-        ...item,
-        locked: scope === "organization" && draft.locked,
-      });
+      await props.api.replaceInjection(scope, scopeId, { ...item, locked: scope === "organization" && draft.locked });
       resetDraft();
       await load();
     } catch (error) {
-      props.onError(error instanceof Error && error.message === "invalid_file_mode" ? t("invalidFileMode") : message(error));
+      props.onError(error instanceof Error && error.message === "invalid_file_mode" ? t("invalidFileMode") : message(error, t("operationFailed")));
     } finally {
       setSaving(false);
     }
@@ -187,7 +251,7 @@ export function InjectionPanel(props: Props) {
       setConfirmDelete(false);
       await load();
     } catch (error) {
-      props.onError(message(error));
+      props.onError(message(error, t("operationFailed")));
     } finally {
       setSaving(false);
     }
@@ -196,86 +260,53 @@ export function InjectionPanel(props: Props) {
   async function runPreview() {
     try {
       const inline = draft.key && scope === "workspace" ? [injectionDraftForSave(draft)] : [];
-      setPreview(
-        await props.api.previewInjections({
-          organization_id: props.organizationId,
-          user_id: props.principal.user_id,
-          workspace_id: workspaceId || null,
-          inline_workspace_injections: inline,
-        }),
-      );
+      setPreview(await props.api.previewInjections({ organization_id: props.organizationId, user_id: props.principal.user_id, workspace_id: workspaceId || null, inline_workspace_injections: inline }));
     } catch (error) {
-      props.onError(message(error));
+      props.onError(message(error, t("operationFailed")));
     }
   }
 
+  const scopeLabel = scope === "organization" ? t("scopeOrganization") : scope === "user" ? t("scopeUser") : t("scopeWorkspace");
+
   return (
-    <section className="panel-stack">
-      <div className="section-heading">
-        <h2>{t("credentialsTitle")}</h2>
-        <button className="button" onClick={() => void runPreview()}>{t("credentialsPreview")}</button>
-      </div>
-      <div className="scope-tabs" role="tablist" aria-label={t("credentials")}>
-        {scopeValues.map((value) => (
-          <button id={`${scopeTabsId}-${value}`} role="tab" aria-selected={scope === value} aria-controls={`${scopeTabsId}-panel`} tabIndex={scope === value ? 0 : -1} className={scope === value ? "active" : ""} onClick={() => changeScope(value)} onKeyDown={(event) => scopeKeyDown(event, value)} key={value}>
-            {value === "organization" ? t("scopeOrganization") : value === "user" ? t("scopeUser") : t("scopeWorkspace")}
-          </button>
-        ))}
-      </div>
-      <div id={`${scopeTabsId}-panel`} role="tabpanel" aria-labelledby={`${scopeTabsId}-${scope}`} className="injection-scope-panel">
-        {scope === "workspace" && (
-          <WorkspaceCombobox
-            key={props.organizationId}
-            items={workspaceItems}
-            loadItems={searchWorkspaces}
-            selectedId={workspaceId}
-            onChange={(id) => {
-              workspaceSelectionTouchedRef.current = id === "";
-              setWorkspaceId(id);
-            }}
-          />
-        )}
-        <div className="mobile-master-detail" aria-label={t("credentials")}>
-          <button type="button" aria-pressed={mobilePane === "list"} onClick={() => setMobilePane("list")}>{t("savedCredentials")}</button>
-          <button type="button" aria-pressed={mobilePane === "editor"} onClick={() => selectedKey ? setMobilePane("editor") : startNew()}>{selectedKey ? t("editingCredential") : t("newCredential")}</button>
+    <section className={styles.root}>
+      <div className={styles.heading}>
+        <div className={styles.headingCopy}>
+          <Text as="h2" size={600} weight="semibold">{t("credentialsTitle")}</Text>
+          <Text size={300}>{scopeLabel}</Text>
         </div>
-        <div className="injection-layout">
-        <div className={`injection-list${mobilePane === "list" ? "" : " mobile-pane-hidden"}`}>
-          <h3>{t("savedCredentials")}</h3>
-          <input className="credential-search" type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder={t("searchCredentials")} aria-label={t("searchCredentials")} />
-          <p className="sr-only" role="status" aria-live="polite">{filteredItems.length === 0 ? t("noCredentials") : `${t("savedCredentials")}: ${filteredItems.length}`}</p>
-          <div className="credential-scroll" aria-label={t("savedCredentials")}>
-          {filteredItems.length === 0 && <div className="empty compact" role="status">{t("noCredentials")}</div>}
-          {filteredItems.map((item) => (
-            <button className={`injection-row${selectedKey === item.key ? " selected" : ""}`} aria-pressed={selectedKey === item.key} key={item.key} onClick={() => selectItem(item)}>
-              <span className="kind-icon" title={kindLabel(item.kind, t)} aria-label={kindLabel(item.kind, t)}>{kindShortLabel(item.kind, t)}</span>
-              <span><strong>{item.key}</strong><small>{item.target}</small></span>
-              <span className="version">v{item.version}{item.locked ? ` · ${t("locked")}` : ""}</span>
-            </button>
-          ))}
-          </div>
+        <Button type="button" appearance="secondary" icon={<EyeRegular aria-hidden="true" />} onClick={() => void runPreview()}>{t("credentialsPreview")}</Button>
+      </div>
+      <TabList className={styles.scope} selectedValue={scope} onTabSelect={(_, data) => changeScope(data.value as InjectionScope)} aria-label={t("credentials")}>
+        {scopeValues.map((value) => <Tab key={value} value={value}>{value === "organization" ? t("scopeOrganization") : value === "user" ? t("scopeUser") : t("scopeWorkspace")}</Tab>)}
+      </TabList>
+      {scope === "workspace" && <div className={styles.workspace}><WorkspaceCombobox key={props.organizationId} items={workspaceItems} loadItems={searchWorkspaces} selectedId={workspaceId} onChange={(id) => { workspaceSelectionTouchedRef.current = id === ""; setWorkspaceId(id); }} /></div>}
+      <TabList className={styles.mobileTabs} selectedValue={mobilePane} onTabSelect={(_, data) => data.value === "editor" ? (selectedKey ? setMobilePane("editor") : startNew()) : setMobilePane("list")} aria-label={t("credentials")}>
+        <Tab value="list">{t("savedCredentials")}</Tab>
+        <Tab value="editor">{selectedKey ? t("editingCredential") : t("newCredential")}</Tab>
+      </TabList>
+      <div className={styles.layout}>
+        <div className={`${styles.list} ${mobilePane === "editor" ? styles.mobileHidden : ""}`}>
+          <InjectionList items={items} selectedKey={selectedKey} search={search} title={t("savedCredentials")} emptyLabel={t("noCredentials")} onSearchChange={setSearch} onSelect={selectItem} />
         </div>
-
-        <div className={`injection-editor-pane${mobilePane === "editor" ? "" : " mobile-pane-hidden"}`}>
+        <Card className={`${styles.editor} ${mobilePane === "list" ? styles.mobileHidden : ""}`} appearance="outline">
           <InjectionEditorForm draft={draft} update={setDraft} scope={scope} templates={templates} selectedKey={selectedKey} saving={saving} disabled={!scopeId} onReset={resetDraft} onSubmit={save} onDelete={() => setConfirmDelete(true)} />
-        </div>
-        </div>
+        </Card>
       </div>
-
-      {preview.length > 0 && <div className="preview-card"><h3>{t("resolvedSources")}</h3><div className="preview-grid">{preview.map((item) => <div key={item.key}><strong>{item.key}</strong><span>{item.source === "organization" ? t("fromOrganization") : item.source === "user" ? t("fromUser") : t("fromWorkspace")}</span><small>{item.target}{item.locked ? ` · ${t("locked")}` : ""}</small></div>)}</div></div>}
+      {preview.length > 0 && (
+        <Card className={styles.preview} appearance="outline">
+          <CardHeader header={<Text weight="semibold">{t("resolvedSources")}</Text>} description={<Badge appearance="tint">{preview.length}</Badge>} />
+          <Divider />
+          <div className={styles.previewGrid}>
+            {preview.map((item) => <div className={styles.previewItem} key={item.key}><Text weight="semibold">{item.key}</Text><Text className={styles.previewMeta}>{item.source === "organization" ? t("fromOrganization") : item.source === "user" ? t("fromUser") : t("fromWorkspace")}</Text><Text className={styles.previewMeta}>{item.target}{item.locked ? ` · ${t("locked")}` : ""}</Text></div>)}
+          </div>
+        </Card>
+      )}
       <ConfirmDialog open={confirmDelete} title={t("delete")} description={t("deleteCredentialConfirm")} confirmLabel={t("delete")} cancelLabel={t("cancel")} busy={saving} danger details={selectedKey && <code>{selectedKey}</code>} onClose={() => setConfirmDelete(false)} onConfirm={() => void remove()} />
     </section>
   );
 }
 
-function kindShortLabel(kind: InjectionKind, t: ReturnType<typeof useI18n>["t"]) {
-  return kind === "environment_variable" ? t("kindShortEnvironment") : kind === "ssh_public_key" ? t("kindShortSsh") : kind === "secret_file" ? t("kindShortSecret") : t("kindShortConfig");
-}
-
-function kindLabel(kind: InjectionKind, t: ReturnType<typeof useI18n>["t"]) {
-  return kind === "environment_variable" ? t("environmentVariable") : kind === "ssh_public_key" ? t("sshPublicKey") : kind === "secret_file" ? t("credentialFile") : t("configFile");
-}
-
-function message(error: unknown) {
-  return error instanceof Error ? error.message : "操作失败";
+function message(error: unknown, fallback: string) {
+  return error instanceof Error ? error.message : fallback;
 }

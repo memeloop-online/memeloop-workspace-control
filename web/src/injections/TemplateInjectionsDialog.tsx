@@ -1,15 +1,24 @@
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { useEffect, useState } from "react";
+import {
+  Button,
+  Dialog,
+  DialogBody,
+  DialogContent,
+  DialogSurface,
+  DialogTitle,
+  Divider,
+  makeStyles,
+  tokens,
+} from "@fluentui/react-components";
+import { DismissRegular } from "@fluentui/react-icons";
 
 import type { ApiClient } from "../api";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { useI18n } from "../i18n";
-import type { InjectionKind, StoredInjection, WorkspaceTemplate } from "../types";
+import type { StoredInjection, WorkspaceTemplate } from "../types";
 import { InjectionEditorForm } from "./InjectionEditorForm";
-import {
-  draftFromStored,
-  emptyInjectionDraft,
-  injectionDraftForSave,
-} from "./editorModel";
+import { InjectionList } from "./InjectionList";
+import { draftFromStored, emptyInjectionDraft, injectionDraftForSave } from "./editorModel";
 import type { InjectionEditorDraft } from "./editorModel";
 
 interface Props {
@@ -22,6 +31,32 @@ interface Props {
   onError: (message: string) => void;
 }
 
+const useStyles = makeStyles({
+  surface: {
+    width: "min(72rem, calc(100vw - 2rem))",
+    maxWidth: "72rem",
+  },
+  body: {
+    minHeight: 0,
+  },
+  layout: {
+    display: "grid",
+    gridTemplateColumns: "minmax(17rem, 0.8fr) minmax(0, 1.4fr)",
+    gap: tokens.spacingVerticalL,
+    alignItems: "start",
+    [`@media (max-width: 760px)`]: {
+      gridTemplateColumns: "1fr",
+    },
+  },
+  editor: {
+    minWidth: 0,
+    overflow: "auto",
+    maxHeight: "min(65vh, 48rem)",
+    border: `${tokens.strokeWidthThin} solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusMedium,
+  },
+});
+
 export function TemplateInjectionsDialog({
   api,
   organizationId,
@@ -32,9 +67,7 @@ export function TemplateInjectionsDialog({
   onError,
 }: Props) {
   const { t } = useI18n();
-  const dialogRef = useRef<HTMLDialogElement>(null);
-  const titleId = useId();
-  const descriptionId = useId();
+  const styles = useStyles();
   const [items, setItems] = useState<StoredInjection[]>([]);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [draft, setDraft] = useState<InjectionEditorDraft>(() => emptyInjectionDraft(template.id));
@@ -43,29 +76,16 @@ export function TemplateInjectionsDialog({
   const [search, setSearch] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(false);
 
-  const filteredItems = useMemo(() => {
-    const query = search.trim().toLocaleLowerCase();
-    if (!query) return items;
-    return items.filter((item) => [item.key, item.target, item.kind, kindLabel(item.kind, t)]
-      .some((value) => value.toLocaleLowerCase().includes(query)));
-  }, [items, search, t]);
-
   useEffect(() => {
-    const dialog = dialogRef.current;
-    if (!dialog) return;
-    if (open && !dialog.open) {
-      dialog.showModal();
-      requestAnimationFrame(() => dialog.querySelector<HTMLElement>("[data-dialog-autofocus]")?.focus());
-      void load();
-    } else if (!open && dialog.open) {
-      dialog.close();
-    }
-  }, [open, template.id]);
-
-  useEffect(() => {
-    resetDraft();
+    setSelectedKey(null);
+    setDraft(emptyInjectionDraft(template.id));
     setSearch("");
   }, [template.id]);
+
+  useEffect(() => {
+    if (!open) return;
+    void load();
+  }, [open, template.id, organizationId]);
 
   async function load() {
     setLoading(true);
@@ -73,7 +93,7 @@ export function TemplateInjectionsDialog({
       const organizationItems = await api.injections("organization", organizationId);
       setItems(organizationItems.filter((item) => item.template_selector === template.id));
     } catch (error) {
-      onError(message(error));
+      onError(message(error, t("requestFailed")));
     } finally {
       setLoading(false);
     }
@@ -101,7 +121,7 @@ export function TemplateInjectionsDialog({
       resetDraft();
       await load();
     } catch (error) {
-      onError(error instanceof Error && error.message === "invalid_file_mode" ? t("invalidFileMode") : message(error));
+      onError(error instanceof Error && error.message === "invalid_file_mode" ? t("invalidFileMode") : message(error, t("requestFailed")));
     } finally {
       setSaving(false);
     }
@@ -116,13 +136,13 @@ export function TemplateInjectionsDialog({
       setConfirmDelete(false);
       await load();
     } catch (error) {
-      onError(message(error));
+      onError(message(error, t("requestFailed")));
     } finally {
       setSaving(false);
     }
   }
 
-  function requestClose() {
+  function close() {
     if (saving) return;
     onClose();
     requestAnimationFrame(() => returnFocusRef.current?.focus());
@@ -130,70 +150,30 @@ export function TemplateInjectionsDialog({
 
   return (
     <>
-    <dialog
-      ref={dialogRef}
-      className="template-injections-dialog"
-      aria-labelledby={titleId}
-      aria-describedby={descriptionId}
-      aria-busy={loading || saving}
-      onCancel={(event) => { event.preventDefault(); requestClose(); }}
-      onClose={() => { if (open) onClose(); }}
-      onClick={(event) => { if (event.target === event.currentTarget) requestClose(); }}
-    >
-      <div className="dialog-surface">
-        <header className="dialog-heading">
-          <div>
-            <h3 id={titleId}>{t("manageTemplateInjections")} · {template.name}</h3>
-            <p id={descriptionId}>{t("templateInjectionDialogHelp")}</p>
-          </div>
-          <button type="button" className="button" data-dialog-autofocus onClick={requestClose} disabled={saving} aria-label={t("close")}>{t("close")}</button>
-        </header>
-        <div className="template-injections-layout">
-          <div className="injection-list">
-            <h3>{t("savedCredentials")}</h3>
-            <input className="credential-search" type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder={t("searchCredentials")} aria-label={t("searchCredentials")} />
-            <div className="credential-scroll">
-              {loading && <div className="empty compact">{t("loading")}</div>}
-              {!loading && filteredItems.length === 0 && <div className="empty compact">{t("noTemplateInjections")}</div>}
-              {!loading && filteredItems.map((item) => (
-                <button type="button" className={`injection-row${selectedKey === item.key ? " selected" : ""}`} aria-pressed={selectedKey === item.key} key={item.key} onClick={() => selectItem(item)}>
-                  <span className="kind-icon">{kindGlyph(item.kind)}</span>
-                  <span><strong>{item.key}</strong><small>{item.target}</small></span>
-                  <span className="version">v{item.version}{item.locked ? ` · ${t("locked")}` : ""}</span>
-                </button>
-              ))}
-            </div>
-          </div>
-          <InjectionEditorForm
-            draft={draft}
-            update={setDraft}
-            scope="organization"
-            templates={[template]}
-            fixedTemplate={template}
-            selectedKey={selectedKey}
-            saving={saving}
-            disabled={loading}
-            className="editor-card template-injections-editor"
-            onReset={resetDraft}
-            onSubmit={save}
-            onDelete={() => setConfirmDelete(true)}
-          />
-        </div>
-      </div>
-    </dialog>
-    <ConfirmDialog open={confirmDelete} title={t("delete")} description={t("deleteCredentialConfirm")} confirmLabel={t("delete")} cancelLabel={t("cancel")} busy={saving} danger details={selectedKey && <code>{selectedKey}</code>} onClose={() => setConfirmDelete(false)} onConfirm={() => void remove()} />
+      <Dialog open={open} onOpenChange={(_, data) => { if (!data.open) close(); }}>
+        <DialogSurface className={styles.surface} aria-busy={loading || saving}>
+          <DialogBody className={styles.body}>
+            <DialogTitle action={<Button appearance="subtle" icon={<DismissRegular aria-hidden="true" />} onClick={close}>{t("close")}</Button>}>
+              {t("manageTemplateInjections")} · {template.name}
+            </DialogTitle>
+            <DialogContent>
+              <p>{t("templateInjectionDialogHelp")}</p>
+              <Divider />
+              <div className={styles.layout}>
+                <InjectionList items={items} selectedKey={selectedKey} search={search} loading={loading} title={t("savedCredentials")} emptyLabel={t("noTemplateInjections")} onSearchChange={setSearch} onSelect={selectItem} />
+                <div className={styles.editor}>
+                  <InjectionEditorForm draft={draft} update={setDraft} scope="organization" templates={[template]} fixedTemplate={template} selectedKey={selectedKey} saving={saving} disabled={loading} onReset={resetDraft} onSubmit={save} onDelete={() => setConfirmDelete(true)} />
+                </div>
+              </div>
+            </DialogContent>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
+      <ConfirmDialog open={confirmDelete} title={t("delete")} description={t("deleteCredentialConfirm")} confirmLabel={t("delete")} cancelLabel={t("cancel")} busy={saving} danger details={selectedKey && <code>{selectedKey}</code>} onClose={() => setConfirmDelete(false)} onConfirm={() => void remove()} />
     </>
   );
 }
 
-function kindGlyph(kind: InjectionKind) {
-  return kind === "environment_variable" ? "ENV" : kind === "ssh_public_key" ? "SSH" : kind === "secret_file" ? "SEC" : "CFG";
-}
-
-function kindLabel(kind: InjectionKind, t: ReturnType<typeof useI18n>["t"]) {
-  return kind === "environment_variable" ? t("environmentVariable") : kind === "ssh_public_key" ? t("sshPublicKey") : kind === "secret_file" ? t("credentialFile") : t("configFile");
-}
-
-function message(error: unknown) {
-  return error instanceof Error ? error.message : "Request failed";
+function message(error: unknown, fallback: string) {
+  return error instanceof Error ? error.message : fallback;
 }

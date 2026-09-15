@@ -5,7 +5,7 @@ use sqlx::{Row, postgres::PgRow, sqlite::SqliteRow};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
-use crate::quota::Resources;
+use crate::quota::QuotaResources;
 
 use super::{Database, StorageError};
 
@@ -31,7 +31,7 @@ pub struct WorkspaceMetrics {
 pub struct UserWorkspaceMetrics {
     pub user_id: Uuid,
     pub states: BTreeMap<String, i64>,
-    pub resources: Resources,
+    pub resources: QuotaResources,
 }
 
 impl Database {
@@ -50,7 +50,8 @@ impl Database {
             CAST(SUM(w.cpu_millis) AS BIGINT) AS cpu_millis, \
             CAST(SUM(w.memory_mib) AS BIGINT) AS memory_mib, \
             CAST(SUM(w.gpu_count) AS BIGINT) AS gpu_count, \
-            CAST(SUM(w.disk_gib) AS BIGINT) AS disk_gib \
+            CAST(SUM(w.disk_gib) AS BIGINT) AS disk_gib, \
+            CAST(SUM(w.temporary_storage_gib) AS BIGINT) AS temporary_storage_gib \
             FROM workspaces w \
             WHERE w.installation_id = {install} AND w.state <> 'deleted' \
             GROUP BY w.owner_id, w.state ORDER BY w.owner_id, w.state";
@@ -85,7 +86,7 @@ struct WorkspaceMetricRow {
     user_id: Uuid,
     state: String,
     workspace_count: i64,
-    resources: Resources,
+    resources: QuotaResources,
 }
 
 fn decode_sqlite_workspace_metric(row: SqliteRow) -> Result<WorkspaceMetricRow, StorageError> {
@@ -106,7 +107,7 @@ where
         user_id: Uuid::parse_str(&row.try_get::<String, _>("owner_id")?)?,
         state: row.try_get("state")?,
         workspace_count: row.try_get("workspace_count")?,
-        resources: Resources {
+        resources: QuotaResources {
             cpu_millis: u64::try_from(row.try_get::<i64, _>("cpu_millis")?)
                 .map_err(|_| StorageError::InvalidWorkspace)?,
             memory_mib: u64::try_from(row.try_get::<i64, _>("memory_mib")?)
@@ -114,6 +115,8 @@ where
             gpu_count: u32::try_from(row.try_get::<i64, _>("gpu_count")?)
                 .map_err(|_| StorageError::InvalidWorkspace)?,
             disk_gib: u64::try_from(row.try_get::<i64, _>("disk_gib")?)
+                .map_err(|_| StorageError::InvalidWorkspace)?,
+            temporary_storage_gib: u64::try_from(row.try_get::<i64, _>("temporary_storage_gib")?)
                 .map_err(|_| StorageError::InvalidWorkspace)?,
         },
     })
@@ -129,7 +132,7 @@ fn aggregate_workspace_metrics(rows: Vec<WorkspaceMetricRow>) -> WorkspaceMetric
             .or_insert_with(|| UserWorkspaceMetrics {
                 user_id: row.user_id,
                 states: BTreeMap::new(),
-                resources: Resources::default(),
+                resources: QuotaResources::default(),
             });
         *user.states.entry(row.state).or_default() += row.workspace_count;
         user.resources.cpu_millis = user
@@ -148,6 +151,10 @@ fn aggregate_workspace_metrics(rows: Vec<WorkspaceMetricRow>) -> WorkspaceMetric
             .resources
             .disk_gib
             .saturating_add(row.resources.disk_gib);
+        user.resources.temporary_storage_gib = user
+            .resources
+            .temporary_storage_gib
+            .saturating_add(row.resources.temporary_storage_gib);
     }
     WorkspaceMetrics {
         states,
