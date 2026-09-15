@@ -316,9 +316,12 @@ jobs:
           grep -q 'name: diagnostics-tmp' <<<"${rendered_monitoring}"
           grep -q 'kubernetes.io/metadata.name: "monitoring"' <<<"${rendered_monitoring}"
           grep -q 'kind: PrometheusRule' <<<"${rendered_monitoring}"
-          grep -q 'record: mwc_workspace_home_used_percent' <<<"${rendered_monitoring}"
-          grep -q 'alert: MwcWorkspaceHomeStorageWarning' <<<"${rendered_monitoring}"
-          grep -q 'alert: MwcWorkspaceHomeStorageCritical' <<<"${rendered_monitoring}"
+          grep -q 'record: mwc_workspace_persistent_storage_used_percent' <<<"${rendered_monitoring}"
+          grep -q 'record: mwc_workspace_temporary_storage_used_percent' <<<"${rendered_monitoring}"
+          grep -q 'alert: MwcWorkspacePersistentStorageWarning' <<<"${rendered_monitoring}"
+          grep -q 'alert: MwcWorkspacePersistentStorageCritical' <<<"${rendered_monitoring}"
+          grep -q 'alert: MwcWorkspaceTemporaryStorageWarning' <<<"${rendered_monitoring}"
+          grep -q 'alert: MwcWorkspaceTemporaryStorageCritical' <<<"${rendered_monitoring}"
           grep -q 'record: mwc_node_workspace_ephemeral_storage_requested_bytes' <<<"${rendered_monitoring}"
           grep -q 'record: mwc_node_ephemeral_storage_requested_percent' <<<"${rendered_monitoring}"
           grep -q 'alert: MwcNodeEphemeralStorageRequestsWarning' <<<"${rendered_monitoring}"
@@ -329,10 +332,8 @@ jobs:
           grep -q 'alert: MwcJobsPendingTooOld' <<<"${rendered_monitoring}"
           grep -q 'kube_pod_spec_volumes_persistentvolumeclaims_info' <<<"${rendered_monitoring}"
           grep -q 'kube_pod_labels{label_workspace_memeloop_dev_owner_installation="monitoring",label_workspace_memeloop_dev_workspace_id!=""}' <<<"${rendered_monitoring}"
-          if grep -q 'kube_persistentvolumeclaim_labels' <<<"${rendered_monitoring}"; then
-            echo "Prometheus rules unexpectedly depend on non-allowlisted PVC labels" >&2
-            exit 1
-          fi
+          grep -q 'kube_persistentvolumeclaim_labels{label_workspace_memeloop_dev_owner_installation="monitoring",label_workspace_memeloop_dev_workspace_id!="",label_workspace_memeloop_dev_storage_role="home"}' <<<"${rendered_monitoring}"
+          grep -q 'kube_persistentvolumeclaim_labels{label_workspace_memeloop_dev_owner_installation="monitoring",label_workspace_memeloop_dev_workspace_id!="",label_workspace_memeloop_dev_storage_role="temporary"}' <<<"${rendered_monitoring}"
           if grep -Eq '(by|without|group_left|group_right)[[:space:]]*\([^)]*(workspace_id|label_workspace_memeloop_dev_workspace_id)' \
             <<<"${rendered_monitoring}"; then
             echo "Prometheus rules propagate workspace UUIDs into output labels" >&2
