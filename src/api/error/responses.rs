@@ -146,6 +146,9 @@ pub(super) fn storage_response(error: StorageError) -> ErrorResponse {
 }
 
 fn workspace_storage_response(error: &StorageError) -> Option<ErrorResponse> {
+    if let Some(response) = node_pool_storage_response(error) {
+        return Some(response);
+    }
     Some(match error {
         StorageError::WorkspaceNotFound => response(
             StatusCode::NOT_FOUND,
@@ -192,6 +195,37 @@ fn workspace_storage_response(error: &StorageError) -> Option<ErrorResponse> {
             "workspace_image_update_conflict",
             "workspace must be stopped and at the expected generation before its image can change",
         ),
+        StorageError::TemplateNotFound => response(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "template_not_found",
+            "workspace template is missing, disabled, outside the organization, or its values were changed",
+        ),
+        StorageError::InvalidTemplate => response(
+            StatusCode::BAD_REQUEST,
+            "invalid_template",
+            "template or image policy is invalid",
+        ),
+        StorageError::TemplateMustBeDisabled => response(
+            StatusCode::CONFLICT,
+            "template_must_be_disabled",
+            "disable the workspace template before deleting it",
+        ),
+        StorageError::TemplateInUse => response(
+            StatusCode::CONFLICT,
+            "template_in_use",
+            "the workspace template is still referenced by a workspace",
+        ),
+        StorageError::PrivilegedTemplateForbidden => response(
+            StatusCode::FORBIDDEN,
+            "privileged_template_forbidden",
+            "cluster-access templates require a system administrator",
+        ),
+        _ => return None,
+    })
+}
+
+fn node_pool_storage_response(error: &StorageError) -> Option<ErrorResponse> {
+    Some(match error {
         StorageError::InvalidNodePool => response(
             StatusCode::BAD_REQUEST,
             "invalid_node_pool",
@@ -221,31 +255,6 @@ fn workspace_storage_response(error: &StorageError) -> Option<ErrorResponse> {
             StatusCode::CONFLICT,
             "workspace_placement_update_conflict",
             "workspace must be stopped and at the expected generation before placement can change",
-        ),
-        StorageError::TemplateNotFound => response(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "template_not_found",
-            "workspace template is missing, disabled, outside the organization, or its values were changed",
-        ),
-        StorageError::InvalidTemplate => response(
-            StatusCode::BAD_REQUEST,
-            "invalid_template",
-            "template or image policy is invalid",
-        ),
-        StorageError::TemplateMustBeDisabled => response(
-            StatusCode::CONFLICT,
-            "template_must_be_disabled",
-            "disable the workspace template before deleting it",
-        ),
-        StorageError::TemplateInUse => response(
-            StatusCode::CONFLICT,
-            "template_in_use",
-            "the workspace template is still referenced by a workspace",
-        ),
-        StorageError::PrivilegedTemplateForbidden => response(
-            StatusCode::FORBIDDEN,
-            "privileged_template_forbidden",
-            "cluster-access templates require a system administrator",
         ),
         _ => return None,
     })

@@ -297,16 +297,14 @@ fn build_runtime_entries(
                 .storage_pvcs
                 .remove(&workspace_id)
                 .unwrap_or_default();
-            let scratch_backing = storage_pvcs
-                .temporary
-                .is_some()
-                .then_some(StorageBacking::EphemeralVolume)
-                .unwrap_or_else(|| {
-                    kubernetes
-                        .scratch_backings
-                        .remove(&workspace_id)
-                        .unwrap_or(StorageBacking::Unknown)
-                });
+            let scratch_backing = if storage_pvcs.temporary.is_some() {
+                StorageBacking::EphemeralVolume
+            } else {
+                kubernetes
+                    .scratch_backings
+                    .remove(&workspace_id)
+                    .unwrap_or(StorageBacking::Unknown)
+            };
             WorkspaceRuntimeEntry {
                 workspace_id,
                 runtime: WorkspaceRuntimeResponse {
@@ -412,12 +410,11 @@ pub(super) async fn get(
         temporary_storage: storage_metrics.telemetry(
             details.storage_pvcs.temporary.as_ref(),
             gibibytes(workspace.template.storage_policy.temporary_storage_gib),
-            details
-                .storage_pvcs
-                .temporary
-                .is_some()
-                .then_some(StorageBacking::EphemeralVolume)
-                .unwrap_or(details.scratch_backing),
+            if details.storage_pvcs.temporary.is_some() {
+                StorageBacking::EphemeralVolume
+            } else {
+                details.scratch_backing
+            },
             observed_now,
         ),
         metrics_available: details.metrics_available,

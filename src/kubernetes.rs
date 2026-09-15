@@ -348,6 +348,7 @@ impl ResourceBuilder {
         };
 
         let injections = materialization::build(&names, &labels, &[])?;
+        let (web_shell_ingress, web_shell_envoy_filter) = self.web_shell_resources(&names, &labels);
         Ok(DesiredResources {
             namespace: Namespace {
                 metadata: ObjectMeta {
@@ -401,21 +402,31 @@ impl ResourceBuilder {
                 WorkspacePod::from_template(&workspace.template),
             ),
             ssh_identity: resource_helpers::ssh_identity(&names, &labels, None),
-            web_shell_ingress: self.web_shell_domain.as_ref().map(|domain| {
-                higress::web_shell_ingress(&names, &labels, domain, self.ttyd_mtls.as_ref())
-            }),
-            web_shell_envoy_filter: self.web_shell_domain.as_ref().and_then(|_| {
-                self.ttyd_mtls.as_ref().map(|mtls| {
-                    envoy_filter::web_shell_san_filter(
-                        &names,
-                        &labels,
-                        &self.higress_namespace,
-                        &self.higress_pod_labels,
-                        mtls,
-                    )
-                })
-            }),
+            web_shell_ingress,
+            web_shell_envoy_filter,
         })
+    }
+
+    fn web_shell_resources(
+        &self,
+        names: &WorkspaceRuntimeNames,
+        labels: &BTreeMap<String, String>,
+    ) -> (Option<Ingress>, Option<DynamicObject>) {
+        let ingress = self.web_shell_domain.as_ref().map(|domain| {
+            higress::web_shell_ingress(names, labels, domain, self.ttyd_mtls.as_ref())
+        });
+        let filter = self.web_shell_domain.as_ref().and_then(|_| {
+            self.ttyd_mtls.as_ref().map(|mtls| {
+                envoy_filter::web_shell_san_filter(
+                    names,
+                    labels,
+                    &self.higress_namespace,
+                    &self.higress_pod_labels,
+                    mtls,
+                )
+            })
+        });
+        (ingress, filter)
     }
 
     fn validate_ttyd_gateway(&self) -> Result<(), BuildError> {

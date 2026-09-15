@@ -319,19 +319,19 @@ fn migrate_template_document(yaml: &str) -> Result<MigratedTemplateDocument, Sto
         serde_yaml_ng::from_str(yaml).map_err(|_| StorageError::InvalidTemplate)?;
     let spec = mapping_value_mut(&mut document, "spec")?;
     let temporary_storage_gib = migrate_storage_policy(spec)?;
-    spec.remove(&yaml_key("ephemeral_storage_limit_mib"));
+    spec.remove(yaml_key("ephemeral_storage_limit_mib"));
     if let Some(requests) = spec
-        .get_mut(&yaml_key("pod_requests"))
+        .get_mut(yaml_key("pod_requests"))
         .and_then(serde_yaml_ng::Value::as_mapping_mut)
     {
-        requests.remove(&yaml_key("ephemeral_storage_mib"));
+        requests.remove(yaml_key("ephemeral_storage_mib"));
     }
-    let previous_selector = string_map(spec.get(&yaml_key("node_selector")))?;
-    let required_nodes = string_list(spec.get(&yaml_key("required_node_names")))?;
-    let preferred_nodes = string_list(spec.get(&yaml_key("preferred_node_names")))?;
-    spec.remove(&yaml_key("required_node_names"));
-    spec.remove(&yaml_key("preferred_node_names"));
-    spec.remove(&yaml_key("node_selector"));
+    let previous_selector = string_map(spec.get(yaml_key("node_selector")))?;
+    let required_nodes = string_list(spec.get(yaml_key("required_node_names")))?;
+    let preferred_nodes = string_list(spec.get(yaml_key("preferred_node_names")))?;
+    spec.remove(yaml_key("required_node_names"));
+    spec.remove(yaml_key("preferred_node_names"));
+    spec.remove(yaml_key("node_selector"));
 
     let (placement, pools) =
         migrated_placement(previous_selector, required_nodes, preferred_nodes)?;
@@ -351,10 +351,10 @@ fn migrate_template_document(yaml: &str) -> Result<MigratedTemplateDocument, Sto
 
 fn migrate_storage_policy(spec: &mut serde_yaml_ng::Mapping) -> Result<u64, StorageError> {
     let existing = spec
-        .get(&yaml_key("storage_policy"))
+        .get(yaml_key("storage_policy"))
         .and_then(serde_yaml_ng::Value::as_mapping);
     let explicit = existing
-        .and_then(|policy| policy.get(&yaml_key("temporary_storage_gib")))
+        .and_then(|policy| policy.get(yaml_key("temporary_storage_gib")))
         .and_then(serde_yaml_ng::Value::as_u64);
     let previous_total = [
         ("build_scratch_gib", 12),
@@ -364,7 +364,7 @@ fn migrate_storage_policy(spec: &mut serde_yaml_ng::Mapping) -> Result<u64, Stor
     .into_iter()
     .map(|(key, default)| {
         existing
-            .and_then(|policy| policy.get(&yaml_key(key)))
+            .and_then(|policy| policy.get(yaml_key(key)))
             .and_then(serde_yaml_ng::Value::as_u64)
             .unwrap_or(default)
     })
@@ -420,7 +420,7 @@ fn mapping_value_mut<'a>(
 ) -> Result<&'a mut serde_yaml_ng::Mapping, StorageError> {
     value
         .as_mapping_mut()
-        .and_then(|mapping| mapping.get_mut(&yaml_key(key)))
+        .and_then(|mapping| mapping.get_mut(yaml_key(key)))
         .and_then(serde_yaml_ng::Value::as_mapping_mut)
         .ok_or(StorageError::InvalidTemplate)
 }
