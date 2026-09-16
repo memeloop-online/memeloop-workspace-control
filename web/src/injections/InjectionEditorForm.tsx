@@ -158,12 +158,18 @@ export function InjectionEditorForm({
             required
             readOnly={selectedKey !== null}
             value={draft.key}
-            onChange={(event) => update((current) => changeInjectionKey(current, event.currentTarget.value))}
+            onChange={(event) => {
+              const value = event.currentTarget.value;
+              update((current) => changeInjectionKey(current, value));
+            }}
             placeholder={t("keyHint")}
           />
         </Field>
         <Field label={<FieldLabel label={t("type")} />}>
-          <Select value={draft.kind} onChange={(event) => update((current) => changeInjectionKind(current, event.currentTarget.value as InjectionKind))}>
+          <Select value={draft.kind} onChange={(event) => {
+            const kind = event.currentTarget.value as InjectionKind;
+            update((current) => changeInjectionKind(current, kind));
+          }}>
             <option value="environment_variable">{t("environmentVariable")}</option>
             <option value="config_file">{t("configFile")}</option>
             <option value="secret_file">{t("credentialFile")}</option>
