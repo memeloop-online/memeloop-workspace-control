@@ -20,6 +20,7 @@ pub mod observability;
 pub(crate) mod plugin_distribution;
 pub mod plugins;
 pub mod quota;
+pub mod runtime_incidents;
 pub mod storage;
 pub mod templates;
 pub mod workspace_runtime;

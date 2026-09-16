@@ -15,6 +15,9 @@ const MAX_FUTURE_SKEW_SECONDS: i64 = 5 * 60;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum RuntimeEventCategory {
+    EphemeralStorage,
+    MemoryPressure,
+    PidPressure,
     DiskPressure,
     Evicted,
     TemporaryStorageProvisioning,
@@ -26,6 +29,9 @@ pub enum RuntimeEventCategory {
 impl RuntimeEventCategory {
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::EphemeralStorage => "ephemeral_storage",
+            Self::MemoryPressure => "memory_pressure",
+            Self::PidPressure => "pid_pressure",
             Self::DiskPressure => "disk_pressure",
             Self::Evicted => "evicted",
             Self::TemporaryStorageProvisioning => "temporary_storage_provisioning",
@@ -37,6 +43,9 @@ impl RuntimeEventCategory {
 
     fn from_stored(value: &str) -> Result<Self, StorageError> {
         match value {
+            "ephemeral_storage" => Ok(Self::EphemeralStorage),
+            "memory_pressure" => Ok(Self::MemoryPressure),
+            "pid_pressure" => Ok(Self::PidPressure),
             "disk_pressure" => Ok(Self::DiskPressure),
             "evicted" => Ok(Self::Evicted),
             "temporary_storage_provisioning" => Ok(Self::TemporaryStorageProvisioning),
@@ -53,7 +62,10 @@ impl RuntimeEventCategory {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NewWorkspaceRuntimeIncident {
     pub category: RuntimeEventCategory,
+    /// Stable beginning of the Kubernetes Event, not its latest recurrence.
     pub observed_at: i64,
+    /// Latest recurrence, used for retention without changing the incident key.
+    pub last_observed_at: i64,
     pub count: u32,
 }
 
@@ -86,14 +98,14 @@ impl Database {
             } => {
                 let mut transaction = pool.begin().await?;
                 for incident in incidents {
-                    sqlx::query("INSERT INTO workspace_runtime_incidents (id, installation_id, workspace_id, category, observed_at, count, first_seen_at, last_seen_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7) ON CONFLICT (installation_id, workspace_id, category, observed_at) DO UPDATE SET count = MAX(workspace_runtime_incidents.count, excluded.count), last_seen_at = MAX(workspace_runtime_incidents.last_seen_at, excluded.last_seen_at)")
+                    sqlx::query("INSERT INTO workspace_runtime_incidents (id, installation_id, workspace_id, category, observed_at, count, first_seen_at, last_seen_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?5, ?7) ON CONFLICT (installation_id, workspace_id, category, observed_at) DO UPDATE SET count = MAX(workspace_runtime_incidents.count, excluded.count), last_seen_at = MAX(workspace_runtime_incidents.last_seen_at, excluded.last_seen_at)")
                         .bind(Uuid::now_v7().to_string())
                         .bind(installation_id.as_str())
                         .bind(workspace_id.to_string())
                         .bind(incident.category.as_str())
                         .bind(incident.observed_at)
                         .bind(i64::from(incident.count))
-                        .bind(now)
+                        .bind(incident.last_observed_at)
                         .execute(&mut *transaction)
                         .await?;
                 }
@@ -112,14 +124,14 @@ impl Database {
             } => {
                 let mut transaction = pool.begin().await?;
                 for incident in incidents {
-                    sqlx::query("INSERT INTO workspace_runtime_incidents (id, installation_id, workspace_id, category, observed_at, count, first_seen_at, last_seen_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $7) ON CONFLICT (installation_id, workspace_id, category, observed_at) DO UPDATE SET count = GREATEST(workspace_runtime_incidents.count, EXCLUDED.count), last_seen_at = GREATEST(workspace_runtime_incidents.last_seen_at, EXCLUDED.last_seen_at)")
+                    sqlx::query("INSERT INTO workspace_runtime_incidents (id, installation_id, workspace_id, category, observed_at, count, first_seen_at, last_seen_at) VALUES ($1, $2, $3, $4, $5, $6, $5, $7) ON CONFLICT (installation_id, workspace_id, category, observed_at) DO UPDATE SET count = GREATEST(workspace_runtime_incidents.count, EXCLUDED.count), last_seen_at = GREATEST(workspace_runtime_incidents.last_seen_at, EXCLUDED.last_seen_at)")
                         .bind(Uuid::now_v7().to_string())
                         .bind(installation_id.as_str())
                         .bind(workspace_id.to_string())
                         .bind(incident.category.as_str())
                         .bind(incident.observed_at)
                         .bind(i64::from(incident.count))
-                        .bind(now)
+                        .bind(incident.last_observed_at)
                         .execute(&mut *transaction)
                         .await?;
                 }
@@ -257,20 +269,27 @@ fn normalized_incidents(
     let latest = now.saturating_add(MAX_FUTURE_SKEW_SECONDS);
     let mut normalized = BTreeMap::new();
     for incident in incidents {
-        if incident.observed_at < cutoff || incident.observed_at > latest {
+        if incident.last_observed_at < cutoff
+            || incident.last_observed_at > latest
+            || incident.observed_at > incident.last_observed_at
+        {
             continue;
         }
         normalized
             .entry((incident.category, incident.observed_at))
-            .and_modify(|count: &mut u32| *count = (*count).max(incident.count.max(1)))
-            .or_insert(incident.count.max(1));
+            .and_modify(|entry: &mut (u32, i64)| {
+                entry.0 = entry.0.max(incident.count.max(1));
+                entry.1 = entry.1.max(incident.last_observed_at);
+            })
+            .or_insert((incident.count.max(1), incident.last_observed_at));
     }
     normalized
         .into_iter()
         .map(
-            |((category, observed_at), count)| NewWorkspaceRuntimeIncident {
+            |((category, observed_at), (count, last_observed_at))| NewWorkspaceRuntimeIncident {
                 category,
                 observed_at,
+                last_observed_at,
                 count,
             },
         )
@@ -370,6 +389,7 @@ mod tests {
         NewWorkspaceRuntimeIncident {
             category,
             observed_at,
+            last_observed_at: observed_at,
             count,
         }
     }

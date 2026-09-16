@@ -48,17 +48,12 @@ pub(super) async fn fetch_workspace_runtime_details(
 
     let event_list = Api::<Event>::namespaced(client.clone(), namespace)
         .list(&ListParams::default().fields(&format!(
-            "involvedObject.kind=Pod,involvedObject.name={}",
+            "involvedObject.kind=Pod,involvedObject.name={},type=Warning",
             names.resources.pod_ordinal_zero(),
         )))
         .await
         .map_err(ApiError::Kubernetes)?;
-    let mut events = event_list
-        .items
-        .into_iter()
-        .map(pod_event)
-        .collect::<Vec<_>>();
-    newest_events(&mut events, 50);
+    let events = warning_events(event_list.items);
 
     let storage_pvcs = Api::<PersistentVolumeClaim>::namespaced(client.clone(), namespace)
         .list(&ListParams::default().labels(selector))
@@ -128,6 +123,16 @@ fn storage_pvc_identities(
     identities
 }
 
+fn warning_events(events: Vec<Event>) -> Vec<PodEvent> {
+    let mut events = events
+        .into_iter()
+        .filter(|event| event.type_.as_deref() == Some("Warning"))
+        .map(pod_event)
+        .collect::<Vec<_>>();
+    newest_events(&mut events, 50);
+    events
+}
+
 pub(super) fn scratch_backing_from_pods(pods: &[Pod]) -> StorageBacking {
     let Some(volume) = pods.iter().find_map(|pod| {
         pod.spec
@@ -145,5 +150,29 @@ pub(super) fn scratch_backing_from_pods(pods: &[Pod]) -> StorageBacking {
         StorageBacking::NodeLocal
     } else {
         StorageBacking::Unknown
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn details_only_forward_warning_events_for_persistence() {
+        let normal = Event {
+            type_: Some("Normal".into()),
+            reason: Some("SuccessfulAttachVolume".into()),
+            message: Some("AttachVolume succeeded for workspace-scratch".into()),
+            ..Event::default()
+        };
+        let warning = Event {
+            type_: Some("Warning".into()),
+            reason: Some("Evicted".into()),
+            message: Some("The node was low on resource: ephemeral-storage.".into()),
+            ..Event::default()
+        };
+        let events = warning_events(vec![normal, Event::default(), warning]);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].category, RuntimeEventCategory::EphemeralStorage);
     }
 }

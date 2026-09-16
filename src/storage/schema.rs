@@ -1,4 +1,4 @@
-pub(super) const SCHEMA_VERSION: i64 = 23;
+pub(super) const SCHEMA_VERSION: i64 = 24;
 
 pub(super) const MIGRATION_TABLE: &str = "CREATE TABLE IF NOT EXISTS schema_migrations (version BIGINT PRIMARY KEY, applied_at BIGINT NOT NULL)";
 
@@ -22,7 +22,7 @@ pub(super) const BASELINE: &[&str] = &[
     "CREATE INDEX workspaces_org_idx ON workspaces (installation_id, organization_id, state, created_at)",
     "CREATE INDEX workspaces_page_idx ON workspaces (installation_id, organization_id, state, created_at, id)",
     "CREATE INDEX workspaces_node_pool_idx ON workspaces (installation_id, node_pool, state, id)",
-    "CREATE TABLE workspace_runtime_incidents (id TEXT PRIMARY KEY, installation_id TEXT NOT NULL, workspace_id TEXT NOT NULL, category TEXT NOT NULL CHECK (category IN ('disk_pressure', 'evicted', 'temporary_storage_provisioning', 'temporary_storage_attachment', 'volume_unavailable', 'other')), observed_at BIGINT NOT NULL, count BIGINT NOT NULL CHECK (count > 0), first_seen_at BIGINT NOT NULL, last_seen_at BIGINT NOT NULL CHECK (last_seen_at >= first_seen_at), UNIQUE (installation_id, workspace_id, category, observed_at), FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE)",
+    "CREATE TABLE workspace_runtime_incidents (id TEXT PRIMARY KEY, installation_id TEXT NOT NULL, workspace_id TEXT NOT NULL, category TEXT NOT NULL CHECK (category IN ('ephemeral_storage', 'memory_pressure', 'pid_pressure', 'disk_pressure', 'evicted', 'temporary_storage_provisioning', 'temporary_storage_attachment', 'volume_unavailable', 'other')), observed_at BIGINT NOT NULL, count BIGINT NOT NULL CHECK (count > 0), first_seen_at BIGINT NOT NULL, last_seen_at BIGINT NOT NULL CHECK (last_seen_at >= first_seen_at), UNIQUE (installation_id, workspace_id, category, observed_at), FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE)",
     "CREATE INDEX workspace_runtime_incidents_recent_idx ON workspace_runtime_incidents (installation_id, workspace_id, last_seen_at, observed_at)",
     "CREATE TABLE workspace_injection_refs (installation_id TEXT NOT NULL, workspace_id TEXT NOT NULL, scope TEXT NOT NULL, injection_key TEXT NOT NULL, created_at BIGINT NOT NULL, PRIMARY KEY (installation_id, workspace_id, scope, injection_key), FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE)",
     "CREATE TABLE workspace_port_mappings (id TEXT PRIMARY KEY, installation_id TEXT NOT NULL, organization_id TEXT NOT NULL, workspace_id TEXT NOT NULL, internal_port BIGINT NOT NULL CHECK (internal_port BETWEEN 1 AND 65535), display_name TEXT, created_by TEXT NOT NULL, created_at BIGINT NOT NULL, UNIQUE (installation_id, workspace_id, internal_port), FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE, FOREIGN KEY (created_by) REFERENCES users(id))",

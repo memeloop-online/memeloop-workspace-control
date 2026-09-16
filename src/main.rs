@@ -61,6 +61,7 @@ async fn serve(config: AppConfig, database: Database) -> Result<(), Box<dyn std:
         shutdown_tx.subscribe(),
     )
     .await?;
+    let incident_client = kubernetes_client.clone();
     let state = app_state(
         &config,
         database.clone(),
@@ -70,6 +71,16 @@ async fn serve(config: AppConfig, database: Database) -> Result<(), Box<dyn std:
         diagnostics_enabled,
         plugins,
     )?;
+    let incident_handle = incident_client.map(|client| {
+        let database = database.clone();
+        let shutdown = shutdown_tx.subscribe();
+        tokio::spawn(async move {
+            memeloop_workspace_control::runtime_incidents::collect_until_shutdown(
+                client, database, shutdown,
+            )
+            .await;
+        })
+    });
     let worker = job_worker(
         &config,
         &database,
@@ -101,6 +112,9 @@ async fn serve(config: AppConfig, database: Database) -> Result<(), Box<dyn std:
         .await;
     let _ = shutdown_tx.send(true);
     await_background_tasks(worker_handle, internal_handle, egress_refresh_handle).await?;
+    if let Some(handle) = incident_handle {
+        handle.await?;
+    }
     server_result?;
     Ok(())
 }

@@ -321,7 +321,7 @@ export interface WorkspaceRuntime {
 }
 
 export interface WorkspaceRuntimeEvent {
-  category: "disk_pressure" | "evicted" | "temporary_storage_provisioning" | "temporary_storage_attachment" | "volume_unavailable" | "other";
+  category: "disk_pressure" | "evicted" | "temporary_storage_provisioning" | "temporary_storage_attachment" | "volume_unavailable" | "ephemeral_storage" | "memory_pressure" | "pid_pressure" | "other";
   count: number | null;
   observed_at: string | null;
 }

@@ -39,8 +39,12 @@ async fn migrate_sqlite(
     let version = current_sqlite_version(&mut transaction).await?;
     match version {
         schema::SCHEMA_VERSION => {}
-        22 => {
-            migrate_sqlite_22_to_23(&mut transaction, installation_id.as_str(), applied_at).await?;
+        22 | 23 => {
+            if version == 22 {
+                migrate_sqlite_22_to_23(&mut transaction, installation_id.as_str(), applied_at)
+                    .await?;
+            }
+            migrate_sqlite_23_to_24(&mut transaction).await?;
             sqlx::query("INSERT INTO schema_migrations (version, applied_at) VALUES (?1, ?2)")
                 .bind(schema::SCHEMA_VERSION)
                 .bind(applied_at)
@@ -89,9 +93,12 @@ async fn migrate_postgres(
             .await?;
     match version {
         schema::SCHEMA_VERSION => {}
-        22 => {
-            migrate_postgres_22_to_23(&mut transaction, installation_id.as_str(), applied_at)
-                .await?;
+        22 | 23 => {
+            if version == 22 {
+                migrate_postgres_22_to_23(&mut transaction, installation_id.as_str(), applied_at)
+                    .await?;
+            }
+            migrate_postgres_23_to_24(&mut transaction).await?;
             sqlx::query("INSERT INTO schema_migrations (version, applied_at) VALUES ($1, $2)")
                 .bind(schema::SCHEMA_VERSION)
                 .bind(applied_at)
@@ -111,6 +118,40 @@ async fn migrate_postgres(
         _ => return Err(StorageError::UnsupportedDatabaseVersion),
     }
     transaction.commit().await?;
+    Ok(())
+}
+
+async fn migrate_sqlite_23_to_24(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+) -> Result<(), StorageError> {
+    // SQLite cannot alter CHECK constraints. No tables reference incidents;
+    // copy all columns before replacing the table inside this transaction.
+    for statement in [
+        "ALTER TABLE workspace_runtime_incidents RENAME TO workspace_runtime_incidents_v23",
+        "DROP INDEX workspace_runtime_incidents_recent_idx",
+    ] {
+        sqlx::query(statement).execute(&mut **transaction).await?;
+    }
+    for statement in schema::BASELINE.iter().filter(|statement| {
+        statement.starts_with("CREATE TABLE workspace_runtime_incidents ")
+            || statement.starts_with("CREATE INDEX workspace_runtime_incidents_recent_idx ")
+    }) {
+        sqlx::query(statement).execute(&mut **transaction).await?;
+    }
+    for statement in [
+        "INSERT INTO workspace_runtime_incidents (id, installation_id, workspace_id, category, observed_at, count, first_seen_at, last_seen_at) SELECT id, installation_id, workspace_id, category, observed_at, count, first_seen_at, last_seen_at FROM workspace_runtime_incidents_v23",
+        "DROP TABLE workspace_runtime_incidents_v23",
+    ] {
+        sqlx::query(statement).execute(&mut **transaction).await?;
+    }
+    Ok(())
+}
+
+async fn migrate_postgres_23_to_24(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+) -> Result<(), StorageError> {
+    sqlx::query("ALTER TABLE workspace_runtime_incidents DROP CONSTRAINT workspace_runtime_incidents_category_check, ADD CONSTRAINT workspace_runtime_incidents_category_check CHECK (category IN ('ephemeral_storage', 'memory_pressure', 'pid_pressure', 'disk_pressure', 'evicted', 'temporary_storage_provisioning', 'temporary_storage_attachment', 'volume_unavailable', 'other'))")
+        .execute(&mut **transaction).await?;
     Ok(())
 }
 
@@ -568,6 +609,53 @@ mod current_tests {
     use crate::config::InstallationId;
 
     #[tokio::test]
+    async fn sqlite_incident_upgrade_preserves_history_and_accepts_resource_categories() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        let mut transaction = pool.begin().await.unwrap();
+        sqlx::query("CREATE TABLE workspaces (id TEXT PRIMARY KEY)")
+            .execute(&mut *transaction)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO workspaces VALUES ('workspace')")
+            .execute(&mut *transaction)
+            .await
+            .unwrap();
+        // Construct the previous schema's incident CHECK constraint.
+        for statement in schema::BASELINE.iter().filter(|statement| {
+            statement.starts_with("CREATE TABLE workspace_runtime_incidents ")
+                || statement.starts_with("CREATE INDEX workspace_runtime_incidents_recent_idx ")
+        }) {
+            let previous = statement.replace(
+                "'ephemeral_storage', 'memory_pressure', 'pid_pressure', ",
+                "",
+            );
+            sqlx::query(&previous)
+                .execute(&mut *transaction)
+                .await
+                .unwrap();
+        }
+        sqlx::query("INSERT INTO workspace_runtime_incidents VALUES ('old', 'test', 'workspace', 'evicted', 100, 3, 100, 101)")
+            .execute(&mut *transaction).await.unwrap();
+        migrate_sqlite_23_to_24(&mut transaction).await.unwrap();
+        for category in ["ephemeral_storage", "memory_pressure", "pid_pressure"] {
+            sqlx::query("INSERT INTO workspace_runtime_incidents VALUES (?1, 'test', 'workspace', ?1, 100, 1, 100, 100)")
+                .bind(category).execute(&mut *transaction).await.unwrap();
+        }
+        let count: i64 =
+            sqlx::query_scalar("SELECT count FROM workspace_runtime_incidents WHERE id = 'old'")
+                .fetch_one(&mut *transaction)
+                .await
+                .unwrap();
+        assert_eq!(count, 3);
+        assert!(sqlx::query("INSERT INTO workspace_runtime_incidents VALUES ('invalid', 'test', 'workspace', 'raw secret text', 100, 1, 100, 100)")
+            .execute(&mut *transaction).await.is_err());
+    }
+
+    #[tokio::test]
     async fn fresh_sqlite_bootstraps_current_schema_and_reaccepts_it() {
         let database = Database::connect("sqlite::memory:", "schema-test".parse().unwrap())
             .await
@@ -582,7 +670,7 @@ mod current_tests {
 
     #[tokio::test]
     async fn unsupported_sqlite_versions_are_rejected_without_conversion() {
-        for version in [20, 21, 24] {
+        for version in [20, 21, 25] {
             let installation: InstallationId = "schema-test".parse().unwrap();
             let database = Database::connect("sqlite::memory:", installation)
                 .await
@@ -626,8 +714,29 @@ mod current_tests {
             schema::SCHEMA_VERSION
         );
         fresh.migrate().await.unwrap();
+        // Simulate an existing v23 installation, then exercise the public
+        // migration entrypoint (including the PostgreSQL constraint name).
+        let Database::Postgres { pool, .. } = &fresh else {
+            unreachable!()
+        };
+        sqlx::query("ALTER TABLE workspace_runtime_incidents DROP CONSTRAINT workspace_runtime_incidents_category_check, ADD CONSTRAINT workspace_runtime_incidents_category_check CHECK (category IN ('disk_pressure', 'evicted', 'temporary_storage_provisioning', 'temporary_storage_attachment', 'volume_unavailable', 'other'))")
+            .execute(pool).await.unwrap();
+        sqlx::query("DELETE FROM schema_migrations")
+            .execute(pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO schema_migrations (version, applied_at) VALUES (23, 1)")
+            .execute(pool)
+            .await
+            .unwrap();
+        fresh.migrate().await.unwrap();
+        let constraint: String = sqlx::query_scalar("SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'workspace_runtime_incidents'::regclass AND conname = 'workspace_runtime_incidents_category_check'")
+            .fetch_one(pool).await.unwrap();
+        for category in ["ephemeral_storage", "memory_pressure", "pid_pressure"] {
+            assert!(constraint.contains(category));
+        }
         drop(fresh);
-        for version in [20, 21, 24] {
+        for version in [20, 21, 25] {
             let name = format!("mwc_schema_old_{}", uuid::Uuid::now_v7().simple());
             let database = postgres_database(&url, &name, Some(version)).await;
             assert!(matches!(

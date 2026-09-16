@@ -440,6 +440,7 @@ fn new_runtime_incident(event: &PodEvent) -> Option<NewWorkspaceRuntimeIncident>
     Some(NewWorkspaceRuntimeIncident {
         category: event.category,
         observed_at,
+        last_observed_at: observed_at,
         count: event
             .count
             .and_then(|count| u32::try_from(count).ok())

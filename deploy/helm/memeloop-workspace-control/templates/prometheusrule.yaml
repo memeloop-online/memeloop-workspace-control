@@ -49,6 +49,7 @@ spec:
             )
           labels:
             installation_id: {{ .Values.installationId | quote }}
+            storage: temporary
         - record: mwc_node_workspace_ephemeral_storage_requested_bytes
           expr: |
             sum by (node) (

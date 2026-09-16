@@ -8,9 +8,14 @@ use kube::{
 };
 use uuid::Uuid;
 
-use crate::{kubernetes::WORKSPACE_ID_LABEL, workspaces::WorkspaceState};
+use crate::{
+    kubernetes::WORKSPACE_ID_LABEL, runtime_incidents::runtime_event_category,
+    workspaces::WorkspaceState,
+};
 
-use super::{PodEvent, PodMetric, PodRuntime, RuntimeEventCategory};
+#[cfg(test)]
+use super::RuntimeEventCategory;
+use super::{PodEvent, PodMetric, PodRuntime};
 
 /// Returns whether a workspace state can have a live runtime to display.
 ///
@@ -73,20 +78,9 @@ pub(super) fn pod_runtime(pod: &Pod) -> PodRuntime {
 }
 
 pub(super) fn pod_event(event: Event) -> PodEvent {
-    let observed_at = event
-        .series
-        .as_ref()
-        .and_then(|series| series.last_observed_time.as_ref())
-        .map(|time| time.0.to_string())
-        .or_else(|| event.event_time.as_ref().map(|time| time.0.to_string()))
-        .or_else(|| event.last_timestamp.as_ref().map(|time| time.0.to_string()))
-        .or_else(|| {
-            event
-                .metadata
-                .creation_timestamp
-                .as_ref()
-                .map(|time| time.0.to_string())
-        });
+    let observed_at = crate::runtime_incidents::event_start(&event)
+        .and_then(|seconds| k8s_openapi::jiff::Timestamp::new(seconds, 0).ok())
+        .map(|time| time.to_string());
     let count = event
         .series
         .as_ref()
@@ -96,37 +90,6 @@ pub(super) fn pod_event(event: Event) -> PodEvent {
         category: runtime_event_category(event.reason.as_deref(), event.message.as_deref()),
         count,
         observed_at,
-    }
-}
-
-/// Kubernetes event text is an operational diagnostic, not a tenant API
-/// payload: it can contain node names, storage topology or cloud-provider
-/// identifiers. Keep only a stable category while preserving the timestamp and
-/// aggregate count needed to understand the runtime timeline.
-fn runtime_event_category(reason: Option<&str>, message: Option<&str>) -> RuntimeEventCategory {
-    let reason = reason.unwrap_or_default().to_ascii_lowercase();
-    let message = message.unwrap_or_default().to_ascii_lowercase();
-    let contains = |needle: &str| reason.contains(needle) || message.contains(needle);
-    if contains("diskpressure") || contains("disk pressure") {
-        RuntimeEventCategory::DiskPressure
-    } else if contains("evicted") {
-        RuntimeEventCategory::Evicted
-    } else if contains("provision")
-        && (contains("workspace-scratch")
-            || contains("ephemeral volume")
-            || contains("persistentvolumeclaim"))
-    {
-        RuntimeEventCategory::TemporaryStorageProvisioning
-    } else if contains("attach")
-        && (contains("workspace-scratch")
-            || contains("ephemeral volume")
-            || contains("persistentvolumeclaim"))
-    {
-        RuntimeEventCategory::TemporaryStorageAttachment
-    } else if contains("failedmount") || contains("failed mount") || contains("volume") {
-        RuntimeEventCategory::VolumeUnavailable
-    } else {
-        RuntimeEventCategory::Other
     }
 }
 
@@ -228,7 +191,7 @@ mod tests {
     }
 
     #[test]
-    fn event_prefers_series_time_and_count() {
+    fn event_keeps_stable_start_time_and_latest_series_count() {
         let event = Event {
             count: Some(2),
             event_time: Some(MicroTime(timestamp("2026-08-28T09:00:00Z"))),
@@ -241,7 +204,7 @@ mod tests {
         };
         let event = pod_event(event);
         assert_eq!(event.count, Some(7));
-        assert_eq!(event.observed_at.as_deref(), Some("2026-08-28T10:00:00Z"));
+        assert_eq!(event.observed_at.as_deref(), Some("2026-08-28T09:00:00Z"));
     }
 
     #[test]

@@ -144,6 +144,9 @@ const eventCategoryKeys: Record<WorkspaceRuntimeEvent["category"], { label: Mess
   temporary_storage_provisioning: { label: "eventCategoryTemporaryStorageProvisioning", description: "eventCategoryTemporaryStorageProvisioningDescription" },
   temporary_storage_attachment: { label: "eventCategoryTemporaryStorageAttachment", description: "eventCategoryTemporaryStorageAttachmentDescription" },
   volume_unavailable: { label: "eventCategoryVolumeUnavailable", description: "eventCategoryVolumeUnavailableDescription" },
+  ephemeral_storage: { label: "eventCategoryEphemeralStorage", description: "eventCategoryEphemeralStorageDescription" },
+  memory_pressure: { label: "eventCategoryMemoryPressure", description: "eventCategoryMemoryPressureDescription" },
+  pid_pressure: { label: "eventCategoryPidPressure", description: "eventCategoryPidPressureDescription" },
   other: { label: "eventCategoryOther", description: "eventCategoryOtherDescription" },
 };
 
