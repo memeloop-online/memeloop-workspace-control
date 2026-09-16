@@ -61,7 +61,8 @@ fn response(path: &str, bytes: Vec<u8>, status: StatusCode) -> Response<Body> {
         .header(
             "content-security-policy",
             "default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'self'; \
-            connect-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'",
+            connect-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; \
+            script-src 'self'",
         )
         .body(Body::from(bytes))
         .unwrap_or_else(|_| Response::new(Body::empty()))

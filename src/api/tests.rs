@@ -152,6 +152,12 @@ async fn embedded_ui_and_hashed_assets_are_served() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(response.headers()["cache-control"], "no-cache");
+    assert!(
+        response.headers()["content-security-policy"]
+            .to_str()
+            .unwrap()
+            .contains("style-src 'self' 'unsafe-inline'")
+    );
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let html = String::from_utf8(body.to_vec()).unwrap();
     assert!(html.contains("Memeloop Workspace Control"));
