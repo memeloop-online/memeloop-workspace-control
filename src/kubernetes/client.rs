@@ -213,4 +213,6 @@ pub enum ReconcileError {
     MissingEnvoyFilterUid,
     #[error("waiting for Web Shell Ingress removal before deleting its TLS validation filter")]
     WebShellIngressTerminating,
+    #[error("waiting for an immutable workspace StatefulSet to be recreated")]
+    StatefulSetRecreationPending,
 }

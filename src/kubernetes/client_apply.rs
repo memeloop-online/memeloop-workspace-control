@@ -226,13 +226,29 @@ impl KubernetesCoordinator {
             workspace_id,
         )
         .await?;
-        stateful_sets
+        if stateful_sets
+            .get_metadata_opt(&names.stateful_set)
+            .await?
+            .is_some_and(|resource| resource.metadata.deletion_timestamp.is_some())
+        {
+            return Err(ReconcileError::StatefulSetRecreationPending);
+        }
+        let stateful_set_result = stateful_sets
             .patch(
                 &names.stateful_set,
                 &apply,
                 &Patch::Apply(&desired.stateful_set),
             )
-            .await?;
+            .await;
+        if let Err(error) = stateful_set_result {
+            if immutable_stateful_set_update(&error) {
+                stateful_sets
+                    .delete(&names.stateful_set, &DeleteParams::default())
+                    .await?;
+                return Err(ReconcileError::StatefulSetRecreationPending);
+            }
+            return Err(error.into());
+        }
         let persistent_volume_claims =
             Api::<PersistentVolumeClaim>::namespaced(self.client.clone(), namespace_name);
         let pvc_name = names.data_pvc_ordinal_zero();
@@ -402,5 +418,51 @@ impl KubernetesCoordinator {
             )
             .await?;
         Ok(())
+    }
+}
+
+fn immutable_stateful_set_update(error: &kube::Error) -> bool {
+    let kube::Error::Api(response) = error else {
+        return false;
+    };
+    let message = response.message.to_ascii_lowercase();
+    response.code == 422
+        && response.reason == "Invalid"
+        && message.contains("updates to statefulset spec")
+        && message.contains("forbidden")
+}
+
+#[cfg(test)]
+mod immutable_stateful_set_tests {
+    use kube::error::ErrorResponse;
+
+    use super::immutable_stateful_set_update;
+
+    fn api_error(code: u16, reason: &str, message: &str) -> kube::Error {
+        kube::Error::Api(ErrorResponse {
+            status: "Failure".to_owned(),
+            message: message.to_owned(),
+            reason: reason.to_owned(),
+            code,
+        })
+    }
+
+    #[test]
+    fn recognizes_only_immutable_stateful_set_updates() {
+        assert!(immutable_stateful_set_update(&api_error(
+            422,
+            "Invalid",
+            "StatefulSet.apps example is invalid: spec: Forbidden: updates to statefulset spec are forbidden",
+        )));
+        assert!(!immutable_stateful_set_update(&api_error(
+            422,
+            "Invalid",
+            "StatefulSet.apps example has an invalid selector",
+        )));
+        assert!(!immutable_stateful_set_update(&api_error(
+            409,
+            "Conflict",
+            "updates to statefulset spec are forbidden",
+        )));
     }
 }

@@ -5,7 +5,7 @@ use crate::{
         select_injections,
     },
     jobs::{JobHandler, JobHandlerError},
-    kubernetes::{DeleteProgress, KubernetesCoordinator, ResourceBuilder},
+    kubernetes::{DeleteProgress, KubernetesCoordinator, ReconcileError, ResourceBuilder},
     storage::{ClaimedJob, Database, InjectionScopeRef, StorageError},
     workspaces::{Workspace, WorkspaceObservation, WorkspaceState},
 };
@@ -72,7 +72,7 @@ impl WorkspaceReconcileHandler {
         self.coordinator
             .reconcile_with_injections(workspace, &placement, materialization, ssh_identity)
             .await
-            .map_err(job_error)?;
+            .map_err(reconcile_error)?;
         self.database
             .ensure_desktop_port_mapping(workspace, unix_timestamp()?)
             .await
@@ -373,6 +373,13 @@ impl JobHandler for WorkspaceReconcileHandler {
 
 fn job_error(error: impl std::fmt::Display) -> JobHandlerError {
     JobHandlerError::Failed(error.to_string())
+}
+
+fn reconcile_error(error: ReconcileError) -> JobHandlerError {
+    match error {
+        ReconcileError::StatefulSetRecreationPending => JobHandlerError::Pending(error.to_string()),
+        error => job_error(error),
+    }
 }
 
 fn unix_timestamp() -> Result<i64, JobHandlerError> {
