@@ -31,13 +31,6 @@ const useStyles = makeStyles({
     paddingBlockStart: tokens.spacingVerticalL,
     borderTop: `${tokens.strokeWidthThin} solid ${tokens.colorNeutralStroke2}`,
   },
-  options: {
-    display: "grid",
-    gap: tokens.spacingVerticalS,
-  },
-  hint: {
-    color: tokens.colorNeutralForeground2,
-  },
   selection: {
     display: "flex",
     flexWrap: "wrap",
@@ -71,18 +64,15 @@ export function ApiKeyTemplatePicker({
   const selectedOptions = templates.filter((template) => selected.includes(template.id)).map((template) => template.id);
 
   return <fieldset className={classes.root} disabled={disabled}>
-    <div className={classes.options}>
-      <Checkbox
-        checked={restricted}
-        disabled={restrictionDisabled}
-        label={translate("apiKeyRestrictTemplates")}
-        onChange={(_, data) => {
-          onRestrictedChange(Boolean(data.checked));
-          if (!data.checked) onSelectedChange([]);
-        }}
-      />
-      <span className={classes.hint}>{translate("apiKeyTemplateRestriction")}</span>
-    </div>
+    <Checkbox
+      checked={restricted}
+      disabled={restrictionDisabled}
+      label={translate("apiKeyRestrictTemplates")}
+      onChange={(_, data) => {
+        onRestrictedChange(Boolean(data.checked));
+        if (!data.checked) onSelectedChange([]);
+      }}
+    />
     {restricted && <Field label={translate("templates")}>
       <div className={classes.picker}>
         <Combobox
