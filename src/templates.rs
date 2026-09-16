@@ -118,7 +118,7 @@ pub struct WorkspaceStoragePolicy {
 impl Default for WorkspaceStoragePolicy {
     fn default() -> Self {
         Self {
-            temporary_storage_gib: 22,
+            temporary_storage_gib: 10,
         }
     }
 }

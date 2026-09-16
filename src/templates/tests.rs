@@ -18,7 +18,7 @@ fn yaml_round_trip_contains_only_explicit_template_fields() {
     let yaml = document.to_yaml().unwrap();
     assert!(yaml.contains("access_mode: internal"));
     assert!(yaml.contains("workspace_user: node-dev"));
-    assert!(yaml.contains("temporary_storage_gib: 22"));
+    assert!(yaml.contains("temporary_storage_gib: 10"));
     assert!(yaml.contains("allowed_node_pools:"));
     assert!(yaml.contains("default_node_pool: default"));
     assert!(yaml.contains("runtime_class_name: null"));

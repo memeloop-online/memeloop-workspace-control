@@ -3,7 +3,7 @@ import { parse, stringify } from "yaml";
 import type { AccessMode, EgressPolicy, WorkspacePlacement, WorkspaceStoragePolicy, WorkspaceTemplate } from "../types";
 
 export const DEFAULT_STORAGE_POLICY: WorkspaceStoragePolicy = {
-  temporary_storage_gib: 22,
+  temporary_storage_gib: 10,
 };
 
 export const DEFAULT_PLACEMENT: WorkspacePlacement = {

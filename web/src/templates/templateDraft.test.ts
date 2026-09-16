@@ -44,7 +44,7 @@ test("template form normalization preserves the bounded storage policy", () => {
 test("new templates emit backend-compatible storage defaults", () => {
   const draft = { ...emptyTemplateDraft(), name: "defaults" };
   const yaml = templateDraftToYaml(draft);
-  assert.match(yaml, /temporary_storage_gib: 22/u);
+  assert.match(yaml, /temporary_storage_gib: 10/u);
   assert.match(yaml, /allowed_node_pools:\n      - default/u);
   assert.match(yaml, /default_node_pool: default/u);
   assert.doesNotMatch(yaml, /runtime_class_name/u);
@@ -148,7 +148,7 @@ test("template form rejects unknown fields at every schema object level", () => 
     yaml.replace("  image: \"\"\n", "  arbitrary_typo: true\n  image: \"\"\n"),
     yaml.replace("    cpu_millis: 2000\n", "    arbitrary_typo: true\n    cpu_millis: 2000\n"),
     yaml.replace("    cpu_millis: 500\n", "    arbitrary_typo: true\n    cpu_millis: 500\n"),
-    yaml.replace("    temporary_storage_gib: 22\n", "    arbitrary_typo: true\n    temporary_storage_gib: 22\n"),
+    yaml.replace("    temporary_storage_gib: 10\n", "    arbitrary_typo: true\n    temporary_storage_gib: 10\n"),
   ];
 
   for (const candidate of cases) {
