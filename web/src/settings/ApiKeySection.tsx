@@ -213,7 +213,7 @@ export function ApiKeySection({ api, organizationId, principal, onError }: Props
             onAllowedTemplateIdsChange={setAllowedTemplateIds}
             onSubmit={(event) => void createKey(event)}
           />
-          <ApiKeyList keys={keys} locale={locale} translate={t} onRevoke={setRevoking} />
+          <ApiKeyList keys={keys} templates={templates} locale={locale} translate={t} onRevoke={setRevoking} />
         </>}
     <ConfirmDialog
       open={revoking !== null}

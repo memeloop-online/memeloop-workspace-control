@@ -313,15 +313,10 @@ async fn preview_target(
     {
         return Err(ApiError::Forbidden);
     }
-    if request
-        .organization_id
-        .is_some_and(|organization_id| organization_id != workspace.organization_id)
-        || request.user_id != workspace.owner_id
-    {
-        return Err(ApiError::BadRequest(
-            "workspace preview organization_id and user_id must match the target workspace",
-        ));
-    }
+    // Existing-workspace previews use the workspace's persisted organization
+    // and owner below. The caller-supplied values describe creation previews
+    // and must not prevent an authorized administrator from inspecting a
+    // workspace owned by another user.
     Ok(Some(workspace))
 }
 

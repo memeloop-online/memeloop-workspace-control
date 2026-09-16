@@ -192,6 +192,21 @@ const viewIcons: Record<AppView, ReactElement> = {
 
 type Translation = (key: MessageKey) => string;
 
+function ThemeToggle({ themeMode, onToggleTheme, t }: { themeMode: "light" | "dark"; onToggleTheme: () => void; t: Translation }) {
+  const [tooltipVisible, setTooltipVisible] = useState(false);
+  const label = themeMode === "dark" ? t("themeLight") : t("themeDark");
+  return (
+    <Tooltip content={label} relationship="label" visible={tooltipVisible} onVisibleChange={(_, data) => setTooltipVisible(data.visible)}>
+      <Button
+        appearance="subtle"
+        icon={themeMode === "dark" ? <WeatherSunnyRegular /> : <DarkThemeRegular />}
+        aria-label={label}
+        onClick={() => { setTooltipVisible(false); onToggleTheme(); }}
+      />
+    </Tooltip>
+  );
+}
+
 interface LanguagePickerProps {
   locale: Locale;
   setLocale: (locale: Locale) => void;
@@ -251,7 +266,7 @@ export function LoginScreen(props: LoginScreenProps) {
               <Subtitle1>{props.t("loginTitle")}</Subtitle1>
             </div>
           }
-          action={<div className={classes.loginControls}><LanguagePicker locale={props.locale} setLocale={props.setLocale} t={props.t} compact /><Tooltip content={props.themeMode === "dark" ? props.t("themeLight") : props.t("themeDark")} relationship="label"><Button aria-label={props.themeMode === "dark" ? props.t("themeLight") : props.t("themeDark")} appearance="subtle" icon={props.themeMode === "dark" ? <WeatherSunnyRegular /> : <DarkThemeRegular />} onClick={props.onToggleTheme} /></Tooltip></div>}
+          action={<div className={classes.loginControls}><LanguagePicker locale={props.locale} setLocale={props.setLocale} t={props.t} compact /><ThemeToggle themeMode={props.themeMode} onToggleTheme={props.onToggleTheme} t={props.t} /></div>}
         />
         <form className={classes.loginForm} onSubmit={props.onSubmit}>
           <Field label={props.t("token")} required hint={props.t("tokenPlaceholder")}>
@@ -323,7 +338,7 @@ export function AppShell(props: AppShellProps) {
           <div className={classes.org}><span className={classes.orgLabel}>{props.t("currentOrganization")}</span><Body1Strong className={classes.orgName}>{props.currentOrganization?.name ?? props.t("noOrganization")}</Body1Strong></div>
           <div className={classes.topbarActions}>
             <div className={classes.desktopOnly}><LanguagePicker locale={props.locale} setLocale={props.setLocale} t={props.t} compact /></div>
-            <Tooltip content={props.themeMode === "dark" ? props.t("themeLight") : props.t("themeDark")} relationship="label"><Button appearance="subtle" icon={props.themeMode === "dark" ? <WeatherSunnyRegular /> : <DarkThemeRegular />} aria-label={props.themeMode === "dark" ? props.t("themeLight") : props.t("themeDark")} onClick={props.onToggleTheme} /></Tooltip>
+            <ThemeToggle themeMode={props.themeMode} onToggleTheme={props.onToggleTheme} t={props.t} />
             <UserMenu principal={props.principal} organizationRole={props.organizationRole} onSettings={() => props.onViewChange("settings")} onLogout={props.onLogout} t={props.t} classes={classes} />
           </div>
         </header>

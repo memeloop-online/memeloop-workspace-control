@@ -11,7 +11,6 @@ import {
 
 import type { MessageKey } from "../i18n";
 import type { WorkspaceTemplate } from "../types";
-import { shortTemplateId } from "./apiKeyTemplatePickerModel";
 
 interface Props {
   templates: readonly WorkspaceTemplate[];
@@ -81,9 +80,7 @@ export function ApiKeyTemplatePicker({
           placeholder={selectedOptions.length > 0 ? translate("chooseMoreTemplates") : translate("chooseTemplate")}
           onOptionSelect={(_, data) => onSelectedChange(data.selectedOptions)}
         >
-          {templates.map((template) => <Option key={template.id} value={template.id} text={template.name}>
-            {template.name} · {shortTemplateId(template.id)}
-          </Option>)}
+          {templates.map((template) => <Option key={template.id} value={template.id} text={template.name}>{template.name}</Option>)}
         </Combobox>
         {selectedOptions.length > 0 && <div className={classes.selection} aria-label={translate("selectedTemplates")}>
           {templates.filter((template) => selectedOptions.includes(template.id)).map((template) => (

@@ -12,10 +12,11 @@ import {
 import type { MessageKey } from "../i18n";
 import { API_KEY_SCOPES } from "../apiKeyScopes";
 import { getApiKeyStatus } from "../apiKeyStatus";
-import type { ApiKeySummary } from "../types";
+import type { ApiKeySummary, WorkspaceTemplate } from "../types";
 
 interface Props {
   keys: readonly ApiKeySummary[];
+  templates: readonly WorkspaceTemplate[];
   locale: string;
   onRevoke: (key: ApiKeySummary) => void;
   translate: (key: MessageKey) => string;
@@ -96,7 +97,7 @@ const useStyles = makeStyles({
   },
 });
 
-export function ApiKeyList({ keys, locale, onRevoke, translate }: Props) {
+export function ApiKeyList({ keys, templates, locale, onRevoke, translate }: Props) {
   const classes = useStyles();
   if (keys.length === 0) return <Card className={classes.empty}>{translate("noApiKeys")}</Card>;
 
@@ -116,7 +117,7 @@ export function ApiKeyList({ keys, locale, onRevoke, translate }: Props) {
           <div className={classes.fact}><dt className={classes.factLabel}>{translate("createdAt")}</dt><dd className={classes.factValue}>{formatTime(key.created_at, locale)}</dd></div>
           <div className={classes.fact}><dt className={classes.factLabel}>{translate("lastUsedAt")}</dt><dd className={classes.factValue}>{key.last_used_at ? formatTime(key.last_used_at, locale) : translate("never")}</dd></div>
           <div className={classes.fact}><dt className={classes.factLabel}>{translate("apiKeyExpires")}</dt><dd className={classes.factValue}>{formatExpiry(key, locale, translate)}</dd></div>
-          <div className={classes.fact}><dt className={classes.factLabel}>{translate("apiKeyTemplates")}</dt><dd className={classes.factValue}>{formatTemplateRestriction(key, translate)}</dd></div>
+          <div className={classes.fact}><dt className={classes.factLabel}>{translate("apiKeyTemplates")}</dt><dd className={classes.factValue}>{formatTemplateRestriction(key, templates, translate)}</dd></div>
         </dl>
         <Button className={classes.revoke} appearance="secondary" disabled={status === "revoked"} onClick={() => onRevoke(key)}>
           {translate("revokeApiKey")}
@@ -126,10 +127,11 @@ export function ApiKeyList({ keys, locale, onRevoke, translate }: Props) {
   </div>;
 }
 
-function formatTemplateRestriction(key: ApiKeySummary, translate: (key: MessageKey) => string): string {
+function formatTemplateRestriction(key: ApiKeySummary, templates: readonly WorkspaceTemplate[], translate: (key: MessageKey) => string): string {
   if (key.allowed_template_ids === null) return translate("allTemplates");
   if (key.allowed_template_ids.length === 0) return translate("noTemplates");
-  return key.allowed_template_ids.join(" · ");
+  const names = new Map(templates.map((template) => [template.id, template.name]));
+  return key.allowed_template_ids.map((id) => names.get(id) ?? id.slice(-8)).join(" · ");
 }
 
 function formatTime(value: number, locale: string) {

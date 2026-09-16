@@ -6,9 +6,9 @@ import { auditActionLabel, auditStateLabel, hasKnownAuditAction } from "./auditP
 
 const useStyles = makeStyles({
   cell: { minWidth: 0 },
-  stack: { display: "grid", gap: tokens.spacingVerticalXXS, minWidth: 0 },
-  primary: { overflowWrap: "anywhere" },
-  technical: { color: tokens.colorNeutralForeground3, fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase100, overflowWrap: "anywhere" },
+  stack: { display: "grid", gap: tokens.spacingVerticalXS, minWidth: 0 },
+  primary: { overflowWrap: "break-word", hyphens: "auto" },
+  technical: { color: tokens.colorNeutralForeground3, fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase100, overflowWrap: "anywhere", width: "fit-content" },
   subtle: { color: tokens.colorNeutralForeground2, fontSize: tokens.fontSizeBase200 },
   state: { width: "fit-content" },
   detailButton: { width: "fit-content", justifySelf: "start", paddingInline: tokens.spacingHorizontalXS },

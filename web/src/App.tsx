@@ -169,11 +169,12 @@ export default function App() {
   }, [refresh, view]);
 
   useEffect(() => {
+    if (!principal) return;
     const allowed = view === "administration" ? canOpenAdministration : canManageGlobalState || canManageOrganizationState;
     if ((view === "administration" || view === "audit" || view === "plugins") && !allowed) {
       navigate("workspaces");
     }
-  }, [canManageGlobalState, canManageOrganizationState, canOpenAdministration, navigate, view]);
+  }, [canManageGlobalState, canManageOrganizationState, canOpenAdministration, navigate, principal, view]);
 
   function login(event: FormEvent) {
     event.preventDefault();

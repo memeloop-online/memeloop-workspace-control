@@ -118,6 +118,13 @@ const useStyles = makeStyles({
     flexWrap: "wrap",
     gap: tokens.spacingHorizontalS,
   },
+  templatePicker: {
+    display: "grid",
+    gridTemplateColumns: "minmax(0, 1fr) auto",
+    alignItems: "center",
+    gap: tokens.spacingHorizontalS,
+    [`@media (max-width: 560px)`]: { gridTemplateColumns: "1fr" },
+  },
 });
 
 export function InjectionEditorForm({
@@ -331,7 +338,7 @@ function TemplateSelectorAutocomplete({ draft, update, templates }: { draft: Inj
 
   return (
     <Field className={styles.wide} label={<FieldLabel label={t("templateSelector")} help={t("templateSelectorHelp")} />}>
-      <Combobox
+      <div className={styles.templatePicker}><Combobox
         freeform
         clearable
         value={query}
@@ -354,11 +361,16 @@ function TemplateSelectorAutocomplete({ draft, update, templates }: { draft: Inj
           choose(match ?? null);
         }}
         onBlur={settle}
-        onOpenChange={(_, data) => { if (!data.open) settle(); }}
+        onOpenChange={(_, data) => {
+          if (data.open && selectedRef.current && !editingRef.current) {
+            editingRef.current = true;
+            setQuery("");
+          } else if (!data.open) settle();
+        }}
         aria-label={t("templateSelector")}
       >
         {matches.map((template) => <Option key={template.id} value={template.id} text={templateLabel(template)}>{template.name}</Option>)}
-      </Combobox>
+      </Combobox>{selected && <Button type="button" appearance="subtle" icon={<DismissRegular aria-hidden="true" />} onClick={() => choose(null)}>{t("removeTemplateSelection")}</Button>}</div>
     </Field>
   );
 }

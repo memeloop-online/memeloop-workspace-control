@@ -44,13 +44,17 @@ export function TemplateEditor({ api, organizationId, templates, canGrantCluster
   const [mode, setMode] = useState<"form" | "yaml">("form");
   const [draft, setDraft] = useState<TemplateDraft>(emptyTemplateDraft);
   const [yamlText, setYamlText] = useState(() => templateDraftToYaml(emptyTemplateDraft()));
+  const [baselineYaml, setBaselineYaml] = useState(() => templateDraftToYaml(emptyTemplateDraft()));
   const [saving, setSaving] = useState(false);
   const [managingInjections, setManagingInjections] = useState(false);
   const [pendingSave, setPendingSave] = useState<{ candidate: TemplateDraft; yaml: string } | null>(null);
   const [pendingAction, setPendingAction] = useState<{ kind: "disable" | "delete"; template: WorkspaceTemplate } | null>(null);
+  const [pendingNavigation, setPendingNavigation] = useState<WorkspaceTemplate | "new" | null>(null);
   const [nodePools, setNodePools] = useState<AvailableNodePool[]>([]);
   const [nodePoolsError, setNodePoolsError] = useState(false);
   const selected = useMemo(() => templates.find((item) => item.id === selectedId) ?? null, [templates, selectedId]);
+  const currentYaml = mode === "yaml" ? yamlText : templateDraftToYaml(draft);
+  const dirty = currentYaml !== baselineYaml;
 
   useEffect(() => {
     let active = true;
@@ -65,7 +69,9 @@ export function TemplateEditor({ api, organizationId, templates, canGrantCluster
     const next = emptyTemplateDraft();
     setSelectedId(null);
     setDraft(next);
-    setYamlText(templateDraftToYaml(next));
+    const yaml = templateDraftToYaml(next);
+    setYamlText(yaml);
+    setBaselineYaml(yaml);
     setMode("form");
     setManagingInjections(false);
   }
@@ -75,12 +81,29 @@ export function TemplateEditor({ api, organizationId, templates, canGrantCluster
       const next = templateDraftFromTemplate(template);
       setSelectedId(template.id);
       setDraft(next);
-      setYamlText(templateDraftToYaml(next));
+      const yaml = templateDraftToYaml(next);
+      setYamlText(yaml);
+      setBaselineYaml(yaml);
       setMode("form");
       setManagingInjections(false);
     } catch (error) {
       onError(errorMessage(error, t));
     }
+  }
+
+  function requestNavigation(target: WorkspaceTemplate | "new") {
+    if (dirty) {
+      setPendingNavigation(target);
+      return;
+    }
+    target === "new" ? startNew() : selectTemplate(target);
+  }
+
+  function discardAndNavigate() {
+    const target = pendingNavigation;
+    setPendingNavigation(null);
+    if (!target) return;
+    target === "new" ? startNew() : selectTemplate(target);
   }
 
   function switchMode(next: "form" | "yaml") {
@@ -118,7 +141,9 @@ export function TemplateEditor({ api, organizationId, templates, canGrantCluster
       const savedDraft = templateDraftFromTemplate(saved);
       setSelectedId(saved.id);
       setDraft(savedDraft);
-      setYamlText(templateDraftToYaml(savedDraft));
+      const savedYaml = templateDraftToYaml(savedDraft);
+      setYamlText(savedYaml);
+      setBaselineYaml(savedYaml);
       setPendingSave(null);
       await onRefresh();
     } catch (error) {
@@ -164,11 +189,8 @@ export function TemplateEditor({ api, organizationId, templates, canGrantCluster
   }
 
   return <div className={styles.stack}>
-    <AdminToolbar action={<Button icon={<AddRegular />} onClick={startNew}>{t("newTemplate")}</Button>}>
-      <div className={styles.stack}>
-        <Text weight="semibold" size={500}>{t("templates")}</Text>
-        <Text size={300} className={styles.muted}>{selected ? `${t("editingTemplate")} · ${selected.name}` : t("newTemplate")}</Text>
-      </div>
+    <AdminToolbar action={<Button icon={<AddRegular />} onClick={() => requestNavigation("new")}>{t("newTemplate")}</Button>}>
+      <Text size={300} className={styles.muted}>{selected ? `${t("editingTemplate")} · ${selected.name}` : t("newTemplate")}</Text>
     </AdminToolbar>
     <div className={styles.formGrid}>
       <Card appearance="outline" className={styles.list}>
@@ -177,7 +199,7 @@ export function TemplateEditor({ api, organizationId, templates, canGrantCluster
           appearance={selectedId === template.id ? "primary" : "subtle"}
           aria-pressed={selectedId === template.id}
           className={styles.listButton}
-          onClick={() => selectedId === template.id ? startNew() : selectTemplate(template)}
+          onClick={() => selectedId === template.id ? requestNavigation("new") : requestNavigation(template)}
         >
           <span className={styles.stack}><Text weight="semibold">{template.name}</Text><Text className={styles.code} size={200}>{template.image}</Text></span>
           <Text size={200}>{template.enabled ? t("enabled") : t("disabled")}</Text>
@@ -195,6 +217,7 @@ export function TemplateEditor({ api, organizationId, templates, canGrantCluster
           </Field> : <TemplateForm draft={draft} setDraft={setDraft} canGrantClusterAccess={canGrantClusterAccess} nodePools={nodePools} nodePoolsError={nodePoolsError} saving={saving} t={t} styles={styles} />}
           <AdminToolbar action={<div className={styles.actions}>
             <Button ref={manageButtonRef} type="button" disabled={!selected || saving} onClick={() => setManagingInjections(true)}>{t("manageTemplateInjections")}</Button>
+            {selected && <Button type="button" appearance="secondary" disabled={saving} onClick={startNew}>{t("cancel")}</Button>}
             <SaveButton type="submit" icon={<SaveRegular />} disabled={saving}>{saving ? t("saving") : selectedId ? t("saveChanges") : t("createTemplate")}</SaveButton>
             {selected && <Button type="button" appearance="secondary" disabled={saving} onClick={() => void toggle(selected)}>{selected.enabled ? t("disable") : t("enable")}</Button>}
             {selected && !selected.enabled && <Button type="button" appearance="subtle" icon={<DeleteRegular />} disabled={saving} onClick={() => setPendingAction({ kind: "delete", template: selected })}>{t("deleteTemplate")}</Button>}
@@ -207,6 +230,7 @@ export function TemplateEditor({ api, organizationId, templates, canGrantCluster
     {selected && <TemplateInjectionsDialog api={api} organizationId={organizationId} template={selected} open={managingInjections} returnFocusRef={manageButtonRef} onClose={() => setManagingInjections(false)} onError={onError} />}
     <ConfirmDialog open={pendingSave !== null} title={selectedId ? t("saveChanges") : t("createTemplate")} description={t("templateHighRiskConfirm")} confirmLabel={selectedId ? t("saveChanges") : t("createTemplate")} cancelLabel={t("cancel")} busy={saving} danger details={<strong>{pendingSave?.candidate.name}</strong>} onClose={() => setPendingSave(null)} onConfirm={() => pendingSave && void persist(pendingSave.candidate, pendingSave.yaml)} />
     <ConfirmDialog open={pendingAction !== null} title={pendingAction?.kind === "delete" ? t("deleteTemplate") : t("disable")} description={pendingAction?.kind === "delete" ? t("deleteTemplateConfirm") : t("disableTemplateConfirm")} confirmLabel={pendingAction?.kind === "delete" ? t("deleteTemplate") : t("disable")} cancelLabel={t("cancel")} busy={saving} danger details={<strong>{pendingAction?.template.name}</strong>} onClose={() => setPendingAction(null)} onConfirm={() => pendingAction && void (pendingAction.kind === "delete" ? remove(pendingAction.template) : setTemplateEnabled(pendingAction.template, false))} />
+    <ConfirmDialog open={pendingNavigation !== null} title={t("unsavedChanges")} description={t("unsavedChangesConfirm")} confirmLabel={t("discardChanges")} cancelLabel={t("cancel")} danger onClose={() => setPendingNavigation(null)} onConfirm={discardAndNavigate} />
   </div>;
 }
 

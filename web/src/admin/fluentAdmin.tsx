@@ -64,6 +64,26 @@ export const useAdminStyles = makeStyles({
     display: "grid",
     rowGap: tokens.spacingVerticalS,
   },
+  definitionList: {
+    display: "grid",
+    rowGap: tokens.spacingVerticalM,
+    minWidth: 0,
+    ...shorthands.margin("0"),
+  },
+  definitionItem: {
+    display: "grid",
+    rowGap: tokens.spacingVerticalXXS,
+    minWidth: 0,
+  },
+  definitionTerm: {
+    color: tokens.colorNeutralForeground3,
+    fontSize: tokens.fontSizeBase200,
+  },
+  definitionValue: {
+    ...shorthands.margin("0"),
+    minWidth: 0,
+    overflowWrap: "break-word",
+  },
   muted: {
     color: tokens.colorNeutralForeground3,
   },
@@ -79,6 +99,12 @@ export const useAdminStyles = makeStyles({
     overflow: "auto",
     maxHeight: "min(62vh, 560px)",
     minWidth: 0,
+    ...shorthands.border("1px", "solid", tokens.colorNeutralStroke2),
+    ...shorthands.borderRadius(tokens.borderRadiusMedium),
+  },
+  staticTable: {
+    minWidth: 0,
+    overflowX: "auto",
     ...shorthands.border("1px", "solid", tokens.colorNeutralStroke2),
     ...shorthands.borderRadius(tokens.borderRadiusMedium),
   },

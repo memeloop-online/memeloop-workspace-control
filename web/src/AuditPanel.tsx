@@ -26,7 +26,7 @@ import {
   tokens,
 } from "@fluentui/react-components";
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
-import type { FormEvent, ReactNode } from "react";
+import type { FormEvent } from "react";
 import type { ApiClient } from "./api";
 import { AuditRow } from "./audit/AuditRow";
 import { Page } from "./design-system/Page";
@@ -131,18 +131,11 @@ export function AuditPanel({ api, organizationId, systemAdmin, onError }: { api:
   }
 
   const columns = useMemo(() => [
-    createTableColumn<AuditRecord>({ columnId: "action", renderHeaderCell: () => t("auditAction"), renderCell: () => null }),
-    createTableColumn<AuditRecord>({ columnId: "actor", renderHeaderCell: () => t("auditActor"), renderCell: () => null }),
-    createTableColumn<AuditRecord>({ columnId: "target", renderHeaderCell: () => t("auditScopeObject"), renderCell: () => null }),
-    createTableColumn<AuditRecord>({ columnId: "time", renderHeaderCell: () => t("auditTime"), renderCell: () => null }),
-  ], [t]);
-
-  const rowCells = useMemo<readonly ((record: AuditRecord) => ReactNode)[]>(() => [
-    (record) => <AuditRow.Action record={record} />,
-    (record) => <AuditRow.Actor record={record} />,
-    (record) => <AuditRow.Target record={record} />,
-    (record) => <AuditRow.Time record={record} locale={locale} onDetails={() => setDetails(record)} />,
-  ], [locale]);
+    createTableColumn<AuditRecord>({ columnId: "action", renderHeaderCell: () => t("auditAction"), renderCell: (record) => <AuditRow.Action record={record} /> }),
+    createTableColumn<AuditRecord>({ columnId: "actor", renderHeaderCell: () => t("auditActor"), renderCell: (record) => <AuditRow.Actor record={record} /> }),
+    createTableColumn<AuditRecord>({ columnId: "target", renderHeaderCell: () => t("auditScopeObject"), renderCell: (record) => <AuditRow.Target record={record} /> }),
+    createTableColumn<AuditRecord>({ columnId: "time", renderHeaderCell: () => t("auditTime"), renderCell: (record) => <AuditRow.Time record={record} locale={locale} onDetails={() => setDetails(record)} /> }),
+  ], [locale, t]);
 
   return <Page title={t("auditTitle")}>
       <form className={styles.filters} onSubmit={applyFilters}>
@@ -177,7 +170,7 @@ export function AuditPanel({ api, organizationId, systemAdmin, onError }: { api:
           <DataGridHeader>
             <DataGridRow>{({ renderHeaderCell }) => <DataGridHeaderCell>{renderHeaderCell()}</DataGridHeaderCell>}</DataGridRow>
           </DataGridHeader>
-          <DataGridBody<AuditRecord>>{({ item, rowId }) => <DataGridRow<AuditRecord> key={rowId}>{() => rowCells.map((renderCell, index) => <AuditRow.Cell key={index}>{renderCell(item)}</AuditRow.Cell>)}</DataGridRow>}</DataGridBody>
+          <DataGridBody<AuditRecord>>{({ item, rowId }) => <DataGridRow<AuditRecord> key={rowId}>{({ renderCell }) => <AuditRow.Cell>{renderCell(item)}</AuditRow.Cell>}</DataGridRow>}</DataGridBody>
         </DataGrid>
         <div className={styles.pagination}>
           <Field label={t("rowsPerPage")} orientation="horizontal">

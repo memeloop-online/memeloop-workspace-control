@@ -257,12 +257,12 @@ export function InjectionPanel(props: Props) {
   }
 
   return (
-    <Page title={t("credentialsTitle")} actions={<Button type="button" appearance="secondary" icon={<EyeRegular aria-hidden="true" />} onClick={() => void runPreview()}>{t("credentialsPreview")}</Button>}>
+    <Page title={t("credentialsTitle")} actions={<Button type="button" appearance="secondary" icon={<EyeRegular aria-hidden="true" />} disabled={!workspaceId} onClick={() => void runPreview()}>{t("credentialsPreview")}</Button>}>
       <div className={styles.controls}>
         <TabList className={styles.scope} selectedValue={scope} onTabSelect={(_, data) => changeScope(data.value as InjectionScope)} aria-label={t("credentials")}>
           {scopeValues.map((value) => <Tab key={value} value={value}>{value === "organization" ? t("scopeOrganization") : value === "user" ? t("scopeUser") : t("scopeWorkspace")}</Tab>)}
         </TabList>
-        {scope === "workspace" && <div className={styles.workspace}><WorkspaceCombobox key={props.organizationId} items={workspaceItems} loadItems={searchWorkspaces} selectedId={workspaceId} onChange={(id) => { workspaceSelectionTouchedRef.current = id === ""; setWorkspaceId(id); }} /></div>}
+        <div className={styles.workspace}><WorkspaceCombobox key={props.organizationId} items={workspaceItems} loadItems={searchWorkspaces} selectedId={workspaceId} onChange={(id) => { workspaceSelectionTouchedRef.current = id === ""; setWorkspaceId(id); }} /></div>
       </div>
       <TabList className={styles.mobileTabs} selectedValue={mobilePane} onTabSelect={(_, data) => data.value === "editor" ? (selectedKey ? setMobilePane("editor") : startNew()) : setMobilePane("list")} aria-label={t("credentials")}>
         <Tab value="list">{t("savedCredentials")}</Tab>
