@@ -498,7 +498,7 @@ async fn workspace_page_summary_covers_every_matching_workspace_not_only_the_cur
             "memory_mib": 6_144,
             "gpu_count": 0,
             "disk_gib": 60,
-            "temporary_storage_gib": 66,
+            "temporary_storage_gib": 30,
         })
     );
     assert_eq!(first_page["summary"]["state_counts"]["provisioning"], 3);
@@ -687,7 +687,7 @@ async fn workspace_usage_summary_aggregates_in_sql_and_honors_template_scope() {
             memory_mib: 4_648,
             gpu_count: 3,
             disk_gib: 46,
-            temporary_storage_gib: 66,
+            temporary_storage_gib: 30,
         }
     );
     assert_eq!(summary.state_counts.get("stopped"), Some(&1));
@@ -834,7 +834,7 @@ async fn organization_usage_summary_is_organization_wide_and_template_scoped() {
     assert_eq!(unrestricted["total_count"], 2);
     assert_eq!(
         unrestricted["requested"],
-        json!({"cpu_millis": 1300, "memory_mib": 2448, "gpu_count": 2, "disk_gib": 25, "temporary_storage_gib": 44})
+        json!({"cpu_millis": 1300, "memory_mib": 2448, "gpu_count": 2, "disk_gib": 25, "temporary_storage_gib": 20})
     );
     assert_eq!(unrestricted["state_counts"], json!({"provisioning": 2}));
     assert_eq!(
@@ -1022,7 +1022,7 @@ async fn postgres_workspace_page_summary_matches_the_filtered_collection() {
             memory_mib: 4_096,
             gpu_count: 0,
             disk_gib: 40,
-            temporary_storage_gib: 44,
+            temporary_storage_gib: 20,
         }
     );
     assert_eq!(page.state_counts.get("provisioning"), Some(&2));
@@ -1040,7 +1040,7 @@ async fn postgres_workspace_page_summary_matches_the_filtered_collection() {
             memory_mib: 6_144,
             gpu_count: 0,
             disk_gib: 60,
-            temporary_storage_gib: 66,
+            temporary_storage_gib: 30,
         }
     );
     assert_eq!(summary.state_counts.get("provisioning"), Some(&3));

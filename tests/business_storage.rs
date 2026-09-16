@@ -826,7 +826,7 @@ async fn workspace_creation_enforces_quota_and_enqueues_lifecycle_actions() {
                 memory_mib: 2_048,
                 gpu_count: 0,
                 disk_gib: 20,
-                temporary_storage_gib: 22,
+                temporary_storage_gib: 10,
             },
             102,
         )
@@ -893,8 +893,8 @@ async fn workspace_creation_enforces_quota_and_enqueues_lifecycle_actions() {
         Err(StorageError::Quota(
             memeloop_workspace_control::quota::QuotaError::Exceeded {
                 resource: "temporary_storage_gib",
-                requested: 44,
-                limit: 22,
+                requested: 20,
+                limit: 10,
             }
         ))
     ));
