@@ -12,7 +12,7 @@ for (const width of [360, 768, 1440]) {
   const page = await browser.newPage({ viewport: { width, height: 900 }, deviceScaleFactor: 1 });
   await page.goto(`${origin}/tests/usage-summary-fixture.html`, { waitUntil: "networkidle" });
   const state = await page.locator(".workspace-stats").evaluate((stats) => ({ cards: stats.children.length, fullWidth: document.documentElement.scrollWidth <= window.innerWidth, bars: stats.querySelectorAll(".workspace-stat-fill").length }));
-  if (state.cards !== 4 || !state.fullWidth || state.bars !== 3) throw new Error(`Usage summary fixture failed at ${width}px: ${JSON.stringify(state)}`);
+  if (state.cards !== 5 || !state.fullWidth || state.bars !== 4) throw new Error(`Usage summary fixture failed at ${width}px: ${JSON.stringify(state)}`);
   await page.screenshot({ path: `${outputDirectory}/usage-summary-${width}.png`, fullPage: true });
   await page.close();
 }

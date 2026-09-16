@@ -23,8 +23,10 @@ pub(crate) struct OrganizationMetrics {
     pub(crate) cpu_millis: Option<u64>,
     pub(crate) memory_mib: Option<u64>,
     pub(crate) disk_bytes: Option<u64>,
+    pub(crate) temporary_bytes: Option<u64>,
     pub(crate) observed_at: Option<i64>,
     pub(crate) template_labels_complete: bool,
+    pub(crate) temporary_storage_complete: bool,
 }
 
 #[derive(Clone)]

@@ -5,7 +5,7 @@ import { ApiClient } from "./api";
 import { AppShell, EmptyOrganization, LoadingView, LoginScreen, type AppNotice, type AppView } from "./design-system/AppShell";
 import { darkTheme, lightTheme } from "./design-system/theme";
 import { WorkspacePanel } from "./WorkspacePanel";
-import { useI18n } from "./i18n";
+import { useI18n, type MessageKey } from "./i18n";
 import { canManageOrganization as mayManageOrganization, canManageSystem } from "./permissions";
 import type { Organization, Principal, WorkspaceResponse } from "./types";
 
@@ -14,6 +14,16 @@ import type { Organization, Principal, WorkspaceResponse } from "./types";
 // status hint; it must never turn into an unbounded global workspace load.
 const GLOBAL_WORKSPACE_PREVIEW_LIMIT = 30;
 const GLOBAL_ORGANIZATION_PREVIEW_LIMIT = 50;
+const ERROR_NOTICE_DEDUPE_MS = 10_000;
+
+const viewTitles: Record<AppView, MessageKey> = {
+  workspaces: "workspaces",
+  injections: "credentials",
+  plugins: "pluginsTitle",
+  administration: "administration",
+  audit: "audit",
+  settings: "settings",
+};
 
 const AdminPanel = lazy(() => import("./OperationsPanel").then(({ AdminPanel: component }) => ({ default: component })));
 const AuditPanel = lazy(() => import("./AuditPanel").then(({ AuditPanel: component }) => ({ default: component })));
@@ -40,8 +50,16 @@ export default function App() {
   const [loading, setLoading] = useState(Boolean(token));
   const [notice, setNoticeState] = useState<AppNotice | null>(null);
   const noticeSequence = useRef(0);
+  const lastErrorRef = useRef<{ message: string; at: number }>({ message: "", at: 0 });
+  const activeTokenRef = useRef(token);
+  const unauthorizedTokenRef = useRef<string | null>(null);
   const [fatal, setFatal] = useState("");
-  const api = useMemo(() => new ApiClient(token), [token]);
+  const api = useMemo(() => new ApiClient(token, () => {
+    if (!token || activeTokenRef.current !== token || unauthorizedTokenRef.current === token) return;
+    unauthorizedTokenRef.current = token;
+    setFatal(t("loginInvalidToken"));
+    logout();
+  }), [t, token]);
   const organizationRole = principal?.memberships.find((membership) => membership.organization_id === organizationId)?.role;
   const canManageGlobalState = Boolean(principal && canManageSystem(principal));
   const canManageOrganizationState = Boolean(principal && organizationId && mayManageOrganization(principal, organizationId, "manage_organization"));
@@ -55,6 +73,10 @@ export default function App() {
     localStorage.setItem("mwc.theme", theme);
   }, [theme]);
 
+  useEffect(() => {
+    document.title = token && principal ? `${t(viewTitles[view])} · ${t("appName")}` : t("appName");
+  }, [principal, t, token, view]);
+
   // Invalidate an in-flight preview before fetching for the new scope. The
   // scope check below also prevents one render of an old organization from
   // leaking into the newly selected organization.
@@ -67,6 +89,9 @@ export default function App() {
   const reportError = useCallback((errorMessage: string) => {
     const value = errorMessage.trim();
     if (!value) return;
+    const now = Date.now();
+    if (value === lastErrorRef.current.message && now - lastErrorRef.current.at < ERROR_NOTICE_DEDUPE_MS) return;
+    lastErrorRef.current = { message: value, at: now };
     setNoticeState({ id: ++noticeSequence.current, message: value, intent: "error" });
   }, []);
 
@@ -179,6 +204,8 @@ export default function App() {
   function login(event: FormEvent) {
     event.preventDefault();
     const value = tokenDraft.trim();
+    activeTokenRef.current = value;
+    unauthorizedTokenRef.current = null;
     ApiClient.rememberToken(value);
     setToken(value);
     setFatal("");
@@ -186,6 +213,7 @@ export default function App() {
   }
 
   function logout() {
+    activeTokenRef.current = "";
     ApiClient.forgetToken();
     workspaceRequestGeneration.current += 1;
     setToken("");
@@ -249,7 +277,7 @@ function message(error: unknown, fallback: string) {
 }
 
 function isAuthenticationError(error: unknown): boolean {
-  return error instanceof Error && "status" in error && (error.status === 401 || error.status === 403);
+  return error instanceof Error && "status" in error && (error as Error & { status: number }).status === 401;
 }
 
 function viewFromHash(hash: string): AppView {

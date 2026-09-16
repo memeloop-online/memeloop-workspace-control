@@ -213,8 +213,16 @@ export function WorkspacePanel(props: Props) {
   async function create(event: FormEvent) {
     event.preventDefault();
     if (!templateId) return props.onError(t("chooseTemplateError"));
+    const trimmedName = name.trim();
+    if (!trimmedName || [...trimmedName].length > 120) return props.onError(t("workspaceNameInvalid"));
+    if (selectedTemplate && resourceDraft && (
+      resourceDraft.cpu_millis < selectedTemplate.pod_requests.cpu_millis
+      || resourceDraft.memory_mib < selectedTemplate.pod_requests.memory_mib
+      || resourceDraft.disk_gib < 1
+      || resourceDraft.gpu_count < 0
+    )) return props.onError(t("workspaceResourcesInvalid"));
     const command: CreateWorkspace = {
-      organization_id: props.organizationId, owner_id: props.principal.user_id, name, template_id: templateId,
+      organization_id: props.organizationId, owner_id: props.principal.user_id, name: trimmedName, template_id: templateId,
       node_pool: nodePool || null,
       resources: resourceDraft && selectedTemplate && !sameResources(resourceDraft, selectedTemplate.resources) ? resourceDraft : null,
       organization_injection_refs: explicitInjectionRefs ? organizationInjections.filter((item) => item.locked || organizationRefs.includes(item.key)).map((item) => item.key) : null,
@@ -296,7 +304,7 @@ export function WorkspacePanel(props: Props) {
   }
 
   async function openShell(workspaceId: string) {
-    const target = reserveWebShellWindow();
+    const target = reserveWebShellWindow(undefined, t("connectionPreparing"));
     try {
       const ticket = await props.api.issueWebShellTicket(workspaceId);
       if (target) target.location.href = ticket.web_shell_url; else window.location.href = ticket.web_shell_url;

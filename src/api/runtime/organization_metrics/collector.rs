@@ -64,6 +64,13 @@ impl MetricScope {
             self.matcher,
         )
     }
+
+    fn temporary_pvc_labels(&self) -> String {
+        format!(
+            "max by(namespace,persistentvolumeclaim) (kube_persistentvolumeclaim_labels{{{},label_workspace_memeloop_dev_storage_role=\"temporary\"}})",
+            self.matcher,
+        )
+    }
 }
 
 struct QueryExpressions {
@@ -75,6 +82,8 @@ struct QueryExpressions {
     memory_containers: String,
     disk: String,
     pvcs: String,
+    temporary: String,
+    temporary_pvcs: String,
 }
 
 impl QueryExpressions {
@@ -107,6 +116,13 @@ impl QueryExpressions {
         let pvcs = format!(
             "count({pvc_usage} * on(namespace,persistentvolumeclaim) group_left() {pvc_labels})"
         );
+        let temporary_pvc_labels = scope.temporary_pvc_labels();
+        let temporary = format!(
+            "sum({pvc_usage} * on(namespace,persistentvolumeclaim) group_left() {temporary_pvc_labels})"
+        );
+        let temporary_pvcs = format!(
+            "count({pvc_usage} * on(namespace,persistentvolumeclaim) group_left() {temporary_pvc_labels})"
+        );
         Self {
             cpu,
             memory,
@@ -116,6 +132,8 @@ impl QueryExpressions {
             memory_containers,
             disk,
             pvcs,
+            temporary,
+            temporary_pvcs,
         }
     }
 }
@@ -149,6 +167,8 @@ pub(super) async fn collect(
         memory_containers,
         disk,
         pvcs,
+        temporary,
+        temporary_pvcs,
     ) = tokio::join!(
         query_scalar(&client, base_url, &queries.cpu, observability),
         query_scalar(&client, base_url, &queries.memory, observability),
@@ -163,6 +183,8 @@ pub(super) async fn collect(
         query_scalar(&client, base_url, &queries.memory_containers, observability),
         query_scalar(&client, base_url, &queries.disk, observability),
         query_scalar(&client, base_url, &queries.pvcs, observability),
+        query_scalar(&client, base_url, &queries.temporary, observability),
+        query_scalar(&client, base_url, &queries.temporary_pvcs, observability,),
     );
 
     assemble_metrics(
@@ -175,6 +197,8 @@ pub(super) async fn collect(
         memory_containers,
         disk,
         pvcs,
+        temporary,
+        temporary_pvcs,
         expected_active,
         expected_pvcs,
     )
@@ -220,6 +244,8 @@ fn assemble_metrics(
     memory_containers: Option<ScalarSample>,
     disk: Option<ScalarSample>,
     pvcs: Option<ScalarSample>,
+    temporary: Option<ScalarSample>,
+    temporary_pvcs: Option<ScalarSample>,
     expected_active: u64,
     expected_pvcs: u64,
 ) -> OrganizationMetrics {
@@ -239,17 +265,27 @@ fn assemble_metrics(
         .as_ref()
         .and_then(sample_count)
         .is_some_and(|count| count == expected_pvcs);
+    let temporary_pvc_count_complete = active_complete
+        && temporary_pvcs
+            .as_ref()
+            .and_then(sample_count)
+            .is_some_and(|count| count == expected_active);
     let template_labels_complete = if restricted {
         active_complete && pvc_count_complete
     } else {
         true
     };
     let metrics_complete = active_complete && containers_complete;
-    let observed_at = [cpu.as_ref(), memory.as_ref(), disk.as_ref()]
-        .into_iter()
-        .flatten()
-        .map(|sample| sample.observed_at)
-        .min();
+    let observed_at = [
+        cpu.as_ref(),
+        memory.as_ref(),
+        disk.as_ref(),
+        temporary.as_ref(),
+    ]
+    .into_iter()
+    .flatten()
+    .map(|sample| sample.observed_at)
+    .min();
     OrganizationMetrics {
         cpu_millis: metrics_complete
             .then(|| cpu.as_ref().and_then(sample_value))
@@ -260,8 +296,12 @@ fn assemble_metrics(
         disk_bytes: pvc_count_complete
             .then(|| disk.as_ref().and_then(sample_value))
             .flatten(),
+        temporary_bytes: temporary_pvc_count_complete
+            .then(|| temporary.as_ref().and_then(sample_value))
+            .flatten(),
         observed_at,
         template_labels_complete,
+        temporary_storage_complete: temporary_pvc_count_complete,
     }
 }
 
@@ -305,6 +345,11 @@ mod tests {
                 .disk
                 .contains("label_workspace_memeloop_dev_storage_role=\"home\"")
         );
+        assert!(
+            queries
+                .temporary
+                .contains("label_workspace_memeloop_dev_storage_role=\"temporary\"")
+        );
     }
 
     fn sample(value: f64) -> Option<ScalarSample> {
@@ -326,12 +371,16 @@ mod tests {
             sample(2.0),
             sample(123.0),
             sample(1.0),
+            sample(456.0),
+            sample(1.0),
             2,
             1,
         );
         assert_eq!(metrics.cpu_millis, None);
         assert_eq!(metrics.memory_mib, None);
         assert_eq!(metrics.disk_bytes, Some(123));
+        assert_eq!(metrics.temporary_bytes, None);
+        assert!(!metrics.temporary_storage_complete);
         assert!(!metrics.template_labels_complete);
     }
 
@@ -347,12 +396,16 @@ mod tests {
             sample(2.0),
             sample(123.0),
             sample(0.0),
+            sample(456.0),
+            sample(1.0),
             1,
             1,
         );
         assert_eq!(metrics.cpu_millis, Some(1000));
         assert_eq!(metrics.memory_mib, Some(2));
         assert_eq!(metrics.disk_bytes, None);
+        assert_eq!(metrics.temporary_bytes, Some(456));
+        assert!(metrics.temporary_storage_complete);
         assert!(metrics.template_labels_complete);
     }
 
@@ -368,10 +421,33 @@ mod tests {
             sample(2.0),
             sample(123.0),
             sample(1.0),
+            sample(456.0),
+            sample(1.0),
             1,
             1,
         );
         assert_eq!(metrics.cpu_millis, None);
         assert_eq!(metrics.memory_mib, None);
+    }
+
+    #[test]
+    fn temporary_storage_requires_complete_active_pod_scope() {
+        let metrics = assemble_metrics(
+            false,
+            sample(1000.0),
+            sample(2.0),
+            sample(0.0),
+            sample(2.0),
+            sample(2.0),
+            sample(2.0),
+            sample(123.0),
+            sample(1.0),
+            sample(456.0),
+            sample(1.0),
+            1,
+            1,
+        );
+        assert_eq!(metrics.temporary_bytes, None);
+        assert!(!metrics.temporary_storage_complete);
     }
 }

@@ -18,7 +18,7 @@ export function WorkspaceStats({ summary, quota, stale = false }: Props) {
     : t("usageLoading");
   return <section className={styles.statsGrid} aria-label={t("actualUsage")}>
     <Tooltip content={totalDetail} relationship="description">
-      <Card className={styles.stat} appearance="filled-alternative">
+      <Card className={styles.stat} appearance="filled-alternative" tabIndex={0}>
         <Text className={styles.statLabel}>{t("workspaces")}</Text>
         <Title3 className={styles.statValue}>{summary ? summary.total_count : "—"}</Title3>
         <Caption1 className={styles.statHint}>{summary ? `${summary.state_counts.ready ?? 0} ${t("stateReady")}` : t("usageLoading")}</Caption1>
@@ -37,7 +37,7 @@ function UsageStat({ kind, summary, quota, observed, stale }: { kind: ResourceKi
   const requested = summary?.requested ?? EMPTY_RESOURCES;
   const actual = summary ? actualFor(kind, summary) : null;
   const requestedValue = requestedFor(kind, requested);
-  const availability: UsageAvailability = kind === "temporary" ? "unknown" : summary?.availability[kind] ?? "unknown";
+  const availability: UsageAvailability = summary?.availability[kind] ?? "unknown";
   const percentage = usagePercentage(actual, requestedValue);
   const value = actual === null ? "—" : format(kind, actual, t("cores"));
   const requestedDisplay = format(kind, requestedValue, t("cores"));
@@ -47,7 +47,7 @@ function UsageStat({ kind, summary, quota, observed, stale }: { kind: ResourceKi
   const footnote = summary === null ? t("usageLoading") : actual === null ? `${t("usageRequested")}: ${requestedDisplay} · ${availabilityText}` : percentage === null ? t("usageNoRequested") : `${percentage}% ${t("usageOfOrganizationRequested")}${stale ? ` · ${t("usageStale")}` : ""}`;
   const fill = usageBarPercentage(percentage);
   return <Tooltip content={detail} relationship="description">
-    <Card className={styles.stat} appearance="filled-alternative">
+    <Card className={styles.stat} appearance="filled-alternative" tabIndex={0}>
       {fill !== null && <span className={styles.statFill} style={{ width: `${fill}%` }} aria-hidden="true" />}
       <Text className={styles.statLabel}>{kind === "cpu" ? "CPU" : kind === "memory" ? t("memory") : kind === "disk" ? t("persistentDisk") : t("temporaryStorage")}</Text>
       <Title3 className={styles.statValue}>{value}</Title3>
@@ -57,7 +57,7 @@ function UsageStat({ kind, summary, quota, observed, stale }: { kind: ResourceKi
 }
 
 const EMPTY_RESOURCES: QuotaResources = { cpu_millis: 0, memory_mib: 0, disk_gib: 0, gpu_count: 0, temporary_storage_gib: 0 };
-function actualFor(kind: ResourceKind, summary: OrganizationUsageSummary): number | null { return kind === "cpu" ? summary.actual.cpu_millis : kind === "memory" ? summary.actual.memory_mib : kind === "disk" ? summary.actual.disk_bytes : null; }
+function actualFor(kind: ResourceKind, summary: OrganizationUsageSummary): number | null { return kind === "cpu" ? summary.actual.cpu_millis : kind === "memory" ? summary.actual.memory_mib : kind === "disk" ? summary.actual.disk_bytes : summary.actual.temporary_bytes; }
 function requestedFor(kind: ResourceKind, resources: QuotaResources): number { return kind === "cpu" ? resources.cpu_millis : kind === "memory" ? resources.memory_mib : kind === "disk" ? resources.disk_gib * 1024 ** 3 : resources.temporary_storage_gib * 1024 ** 3; }
 function format(kind: ResourceKind, value: number, cores: string): string { return kind === "cpu" ? `${formatCores(value)} ${cores}` : kind === "memory" ? `${formatGiB(value)} GiB` : `${formatBytesAsGiB(value)} GiB`; }
 function availabilityMessageKey(value: UsageAvailability): "usageAvailable" | "usageUnavailable" | "usageUnknown" {

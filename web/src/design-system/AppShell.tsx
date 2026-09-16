@@ -307,10 +307,10 @@ export function AppShell(props: AppShellProps) {
 
   useEffect(() => {
     if (!props.notice) return;
-    const toastId = `mwc-notice-${props.notice.id}`;
+    const toastId = `mwc-notice-${props.notice.intent}-${props.notice.message}`;
     dispatchToast(
       <Toast><ToastTitle action={<Button appearance="subtle" size="small" icon={<DismissRegular />} aria-label={props.t("close")} onClick={() => dismissToast(toastId)} />}>{props.notice.message}</ToastTitle></Toast>,
-      { toastId, intent: props.notice.intent, timeout: props.notice.intent === "error" ? -1 : 5000 },
+      { toastId, intent: props.notice.intent, timeout: props.notice.intent === "error" ? 8000 : 5000 },
     );
   }, [dispatchToast, dismissToast, props.notice, props.t]);
 
@@ -328,7 +328,7 @@ export function AppShell(props: AppShellProps) {
 
   return (
     <div className={classes.app}>
-      <aside className={classes.sidebar} aria-label="Memeloop Workspace Control">
+      <aside className={classes.sidebar} aria-label={props.t("appName")}>
         <Brand classes={classes} />
         {nav}
       </aside>

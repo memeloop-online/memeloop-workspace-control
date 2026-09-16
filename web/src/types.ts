@@ -153,9 +153,9 @@ export interface OrganizationUsageSummary {
   total_count: number;
   state_counts: Partial<Record<WorkspaceState, number>>;
   requested: QuotaResources;
-  actual: { cpu_millis: number | null; memory_mib: number | null; disk_bytes: number | null };
+  actual: { cpu_millis: number | null; memory_mib: number | null; disk_bytes: number | null; temporary_bytes: number | null };
   observed_at: number | null;
-  availability: { cpu: UsageAvailability; memory: UsageAvailability; disk: UsageAvailability };
+  availability: { cpu: UsageAvailability; memory: UsageAvailability; disk: UsageAvailability; temporary: UsageAvailability };
   coverage: { total_workspaces: number; eligible_workspaces: number; template_label_coverage: "complete" | "incomplete" };
 }
 

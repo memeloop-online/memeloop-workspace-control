@@ -714,5 +714,17 @@
   "addOrganizationMember": "加入当前组织",
   "removeOrganizationMember": "移出当前组织",
   "membershipSaved": "成员关系已保存。",
-  "membershipRemoved": "成员关系已移除。"
+  "membershipRemoved": "成员关系已移除。",
+  "appName": "Memeloop Workspace Control",
+  "clearCredentialSearch": "清除搜索",
+  "connectionPreparing": "正在准备连接…",
+  "credentialsPreviewEmpty": "该工作区当前没有生效的凭据。",
+  "credentialsPreviewLoading": "正在解析…",
+  "imageAllowlistEmpty": "尚未配置允许的镜像。",
+  "memberRemoveConfirm": "将该成员移出当前组织？对方将失去组织资源的访问权限。",
+  "memberRemoveSelfConfirm": "您正在将自己移出当前组织，移出后将立即失去访问权限。确定继续？",
+  "userSaved": "用户信息已保存。",
+  "workspaceNameInvalid": "请输入不超过 120 个字符的工作区名称。",
+  "workspaceNameRequired": "请输入工作区名称。",
+  "workspaceResourcesInvalid": "资源不能低于模板的最低请求值。"
 }

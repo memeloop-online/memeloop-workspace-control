@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Button, Card, Dialog, DialogBody, DialogContent, DialogSurface, DialogTitle, Text, makeStyles, tokens } from "@fluentui/react-components";
+import { DismissRegular } from "@fluentui/react-icons";
 import { useI18n } from "../i18n";
 import type { PluginApi } from "./api";
 import { currentPluginTheme, parsePluginApiBridgeRequest, parsePluginBridgeRequest, safePluginSessionPath } from "./surfaceBridge";
@@ -69,5 +70,5 @@ function PluginSurfaceDialog({ api, plugin, surface, organizationId, onClose }: 
     frame.current.contentWindow.postMessage({ type: "mwc:connect", nonce: session.channel_nonce, methods: allowed.filter((method) => method === "theme.read" || method === "plugin_api.request") }, "*", [channel.port2]);
   }
 
-  return <Dialog open onOpenChange={(_, data) => !data.open && onClose()}><DialogSurface><DialogBody><DialogTitle action={<Button appearance="subtle" aria-label={t("pluginCloseDialog")} onClick={onClose}>×</Button>}>{surface.title}</DialogTitle><DialogContent>{error ? <Text role="alert">{error}</Text> : launchPath ? <iframe ref={frame} className={styles.frame} src={launchPath} title={`${plugin.name}: ${surface.title}`} sandbox="allow-forms allow-scripts" referrerPolicy="no-referrer" onLoad={connect} /> : <Text role="status">{t("pluginsLoading")}</Text>}</DialogContent></DialogBody></DialogSurface></Dialog>;
+  return <Dialog open onOpenChange={(_, data) => !data.open && onClose()}><DialogSurface><DialogBody><DialogTitle action={<Button appearance="subtle" icon={<DismissRegular />} aria-label={t("pluginCloseDialog")} onClick={onClose} />}>{surface.title}</DialogTitle><DialogContent>{error ? <Text role="alert">{error}</Text> : launchPath ? <iframe ref={frame} className={styles.frame} src={launchPath} title={`${plugin.name}: ${surface.title}`} sandbox="allow-forms allow-scripts" referrerPolicy="no-referrer" onLoad={connect} /> : <Text role="status">{t("pluginsLoading")}</Text>}</DialogContent></DialogBody></DialogSurface></Dialog>;
 }

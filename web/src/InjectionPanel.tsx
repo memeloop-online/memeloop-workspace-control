@@ -125,6 +125,8 @@ export function InjectionPanel(props: Props) {
   const [draft, setDraft] = useState(emptyInjectionDraft);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [preview, setPreview] = useState<ResolvedInjection[]>([]);
+  const [previewBusy, setPreviewBusy] = useState(false);
+  const [previewRan, setPreviewRan] = useState(false);
   const [saving, setSaving] = useState(false);
   const [search, setSearch] = useState("");
   const [mobilePane, setMobilePane] = useState<"list" | "editor">("list");
@@ -169,6 +171,7 @@ export function InjectionPanel(props: Props) {
     setDraft(emptyInjectionDraft());
     setSelectedKey(null);
     setPreview([]);
+    setPreviewRan(false);
     setSearch("");
     setMobilePane("list");
   }, [props.organizationId]);
@@ -198,6 +201,7 @@ export function InjectionPanel(props: Props) {
     setScope(value);
     resetDraft();
     setPreview([]);
+    setPreviewRan(false);
     setSearch("");
   }
 
@@ -248,21 +252,26 @@ export function InjectionPanel(props: Props) {
   }
 
   async function runPreview() {
+    if (previewBusy) return;
+    setPreviewBusy(true);
     try {
       const inline = draft.key && scope === "workspace" ? [injectionDraftForSave(draft)] : [];
       setPreview(await props.api.previewInjections({ organization_id: props.organizationId, user_id: props.principal.user_id, workspace_id: workspaceId || null, inline_workspace_injections: inline }));
+      setPreviewRan(true);
     } catch (error) {
       props.onError(message(error, t("operationFailed")));
+    } finally {
+      setPreviewBusy(false);
     }
   }
 
   return (
-    <Page title={t("credentialsTitle")} actions={<Button type="button" appearance="secondary" icon={<EyeRegular aria-hidden="true" />} disabled={!workspaceId} onClick={() => void runPreview()}>{t("credentialsPreview")}</Button>}>
+    <Page title={t("credentialsTitle")} actions={<Button type="button" appearance="secondary" icon={previewBusy ? undefined : <EyeRegular aria-hidden="true" />} disabled={!workspaceId || previewBusy} onClick={() => void runPreview()}>{previewBusy ? t("credentialsPreviewLoading") : t("credentialsPreview")}</Button>}>
       <div className={styles.controls}>
         <TabList className={styles.scope} selectedValue={scope} onTabSelect={(_, data) => changeScope(data.value as InjectionScope)} aria-label={t("credentials")}>
           {scopeValues.map((value) => <Tab key={value} value={value}>{value === "organization" ? t("scopeOrganization") : value === "user" ? t("scopeUser") : t("scopeWorkspace")}</Tab>)}
         </TabList>
-        <div className={styles.workspace}><WorkspaceCombobox key={props.organizationId} items={workspaceItems} loadItems={searchWorkspaces} selectedId={workspaceId} onChange={(id) => { workspaceSelectionTouchedRef.current = id === ""; setWorkspaceId(id); }} /></div>
+        <div className={styles.workspace}><WorkspaceCombobox key={props.organizationId} items={workspaceItems} loadItems={searchWorkspaces} selectedId={workspaceId} onChange={(id) => { workspaceSelectionTouchedRef.current = id === ""; setWorkspaceId(id); setPreview([]); setPreviewRan(false); }} /></div>
       </div>
       <TabList className={styles.mobileTabs} selectedValue={mobilePane} onTabSelect={(_, data) => data.value === "editor" ? (selectedKey ? setMobilePane("editor") : startNew()) : setMobilePane("list")} aria-label={t("credentials")}>
         <Tab value="list">{t("savedCredentials")}</Tab>
@@ -276,13 +285,13 @@ export function InjectionPanel(props: Props) {
           <InjectionEditorForm draft={draft} update={setDraft} scope={scope} templates={templates} selectedKey={selectedKey} saving={saving} disabled={!scopeId} onReset={resetDraft} onSubmit={save} onDelete={() => setConfirmDelete(true)} />
         </Card>
       </div>
-      {preview.length > 0 && (
+      {(preview.length > 0 || previewRan) && (
         <Card className={styles.preview} appearance="outline">
           <CardHeader header={<Text weight="semibold">{t("resolvedSources")}</Text>} description={<Badge appearance="tint">{preview.length}</Badge>} />
           <Divider />
-          <div className={styles.previewGrid}>
+          {preview.length === 0 ? <Text className={styles.previewMeta} role="status">{t("credentialsPreviewEmpty")}</Text> : <div className={styles.previewGrid}>
             {preview.map((item) => <div className={styles.previewItem} key={item.key}><Text weight="semibold">{item.key}</Text><Text className={styles.previewMeta}>{item.source === "organization" ? t("fromOrganization") : item.source === "user" ? t("fromUser") : t("fromWorkspace")}</Text><Text className={styles.previewMeta}>{item.target}{item.locked ? ` · ${t("locked")}` : ""}</Text></div>)}
-          </div>
+          </div>}
         </Card>
       )}
       <ConfirmDialog open={confirmDelete} title={t("delete")} description={t("deleteCredentialConfirm")} confirmLabel={t("delete")} cancelLabel={t("cancel")} busy={saving} danger details={selectedKey && <code>{selectedKey}</code>} onClose={() => setConfirmDelete(false)} onConfirm={() => void remove()} />

@@ -62,9 +62,11 @@ function queryString(values: object): string {
 
 export class ApiClient {
   readonly token: string;
+  private readonly onUnauthorized?: () => void;
 
-  constructor(token: string) {
+  constructor(token: string, onUnauthorized?: () => void) {
     this.token = token;
+    this.onUnauthorized = onUnauthorized;
   }
 
   static savedToken(): string {
@@ -395,6 +397,7 @@ export class ApiClient {
     if (init.idempotent) headers.set("Idempotency-Key", crypto.randomUUID());
     const response = await fetch(path, { ...init, headers });
     if (!response.ok) {
+      if (response.status === 401) this.onUnauthorized?.();
       let failure: ApiFailure = {};
       try {
         failure = (await response.json()) as ApiFailure;

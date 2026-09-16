@@ -15,6 +15,7 @@ import {
   shorthands,
   tokens,
 } from "@fluentui/react-components";
+import { DismissRegular } from "@fluentui/react-icons";
 import { useI18n } from "../i18n";
 import type { PluginApi } from "./api";
 import type { PluginContribution, PluginInspection, PluginManifest } from "./types";
@@ -63,7 +64,7 @@ export function PluginAuthorizationDialog({ api, inspection, onInstalled, onClos
   return <Dialog open onOpenChange={(_, data) => !data.open && onClose()}>
     <DialogSurface>
       <DialogBody>
-        <DialogTitle action={<Button appearance="subtle" aria-label={t("pluginCloseDialog")} onClick={onClose}>×</Button>}>{updating ? t("pluginAuthorizeUpdate") : t("pluginAuthorizeInstall")}</DialogTitle>
+        <DialogTitle action={<Button appearance="subtle" icon={<DismissRegular />} aria-label={t("pluginCloseDialog")} disabled={busy} onClick={onClose} />}>{updating ? t("pluginAuthorizeUpdate") : t("pluginAuthorizeInstall")}</DialogTitle>
         <DialogContent className={styles.content}>
           {error && <MessageBar intent="error"><MessageBarBody>{error}</MessageBarBody></MessageBar>}
           {expired && <MessageBar intent="warning"><MessageBarBody>{t("pluginInspectionExpired")}</MessageBarBody></MessageBar>}

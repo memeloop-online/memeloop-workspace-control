@@ -51,7 +51,7 @@ export function StorageMeter({ label, telemetry, configuredGiB, locale }: Props)
   const detail = `${label}: ${used === null ? "—" : formatBytes(used)} / ${capacityText}. ${statusText}.${pressureText ? ` ${pressureText}.` : ""} ${observed}.`;
   return (
     <Tooltip content={detail} relationship="description">
-      <div className={styles.meter}>
+      <div tabIndex={0} className={styles.meter}>
         <div className={styles.meterHeader}>
           <Text>{label}</Text>
           <Text className={styles.meterValue}>{used === null ? "—" : formatBytes(used)} <Caption1>/ {capacityText}</Caption1></Text>

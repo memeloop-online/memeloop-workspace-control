@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { Badge, Button, Caption1, Dialog, DialogBody, DialogContent, DialogSurface, DialogTitle, Field, Input, Text } from "@fluentui/react-components";
 import { AddRegular, ArrowSyncRegular, CopyRegular, DeleteRegular, DismissRegular, OpenRegular } from "@fluentui/react-icons";
+import { ConfirmDialog } from "./components/ConfirmDialog";
 import { useI18n } from "./i18n";
 import type { MessageKey } from "./i18n";
 import { reserveWebShellWindow } from "./workspaceShell";
@@ -129,15 +130,18 @@ export function WorkspacePortMappings({ api, workspaceId, workspaceReady, onErro
         </DialogBody>
       </DialogSurface>
     </Dialog>
-    <Dialog open={pendingDelete !== null} onOpenChange={(_, data) => !deleting && !data.open && setPendingDelete(null)}>
-      <DialogSurface>
-        <DialogBody className={styles.dialogBody}>
-          <DialogTitle>{t("delete")}</DialogTitle>
-          <DialogContent className={styles.dialogBody}><Text>{t("portMappingDeleteConfirm")}</Text>{pendingDelete && <Text className={styles.code}>{pendingDelete.display_name || String(pendingDelete.internal_port)}</Text>}</DialogContent>
-          <div className={styles.dialogActions}><Button appearance="secondary" disabled={deleting !== null} onClick={() => setPendingDelete(null)}>{t("cancel")}</Button><Button appearance="primary" className={styles.dangerButton} disabled={deleting !== null} onClick={() => void remove()}>{deleting !== null ? t("deleting") : t("delete")}</Button></div>
-        </DialogBody>
-      </DialogSurface>
-    </Dialog>
+    <ConfirmDialog
+      open={pendingDelete !== null}
+      title={t("delete")}
+      description={t("portMappingDeleteConfirm")}
+      confirmLabel={deleting !== null ? t("deleting") : t("delete")}
+      cancelLabel={t("cancel")}
+      busy={deleting !== null}
+      danger
+      details={pendingDelete && <code>{pendingDelete.display_name || String(pendingDelete.internal_port)}</code>}
+      onClose={() => setPendingDelete(null)}
+      onConfirm={() => void remove()}
+    />
   </>;
 }
 
@@ -154,7 +158,7 @@ function PortMappingRow({ api, workspaceId, workspaceReady, item, deleting, onDe
   }
   async function open() {
     if (!workspaceReady || !url || item.status !== "ready" || opening) return;
-    const target = reserveWebShellWindow();
+    const target = reserveWebShellWindow(undefined, t("connectionPreparing"));
     setOpening(true);
     try {
       const bootstrap = await api.bootstrapPortMapping(workspaceId, item.id);

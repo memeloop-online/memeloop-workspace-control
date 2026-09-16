@@ -73,6 +73,8 @@ export function AdminPanel({ api, principal, organizationId, onError, onOrganiza
   const [scaling, setScaling] = useState<ScalingStatus | null>(null);
   const [quota, setQuota] = useState<QuotaResources | null>(null);
   const [image, setImage] = useState("");
+  const [addingImage, setAddingImage] = useState(false);
+  const [imageBusy, setImageBusy] = useState<string | null>(null);
   const [organizationName, setOrganizationName] = useState("");
   const [newOrganizationName, setNewOrganizationName] = useState("");
   const [editingQuota, setEditingQuota] = useState(false);
@@ -130,12 +132,30 @@ export function AdminPanel({ api, principal, organizationId, onError, onOrganiza
   }, [currentOrganization?.id, currentOrganization?.name]);
 
   async function allowImage() {
+    const value = image.trim();
+    if (!value || addingImage) return;
+    setAddingImage(true);
     try {
-      await api.putImage(image.trim());
+      await api.putImage(value);
       setImage("");
       await refresh();
     } catch (error) {
       onError(message(error, t("requestFailed")));
+    } finally {
+      setAddingImage(false);
+    }
+  }
+
+  async function toggleImage(policy: ImagePolicy) {
+    if (imageBusy) return;
+    setImageBusy(policy.image);
+    try {
+      await api.putImage(policy.image, !policy.enabled);
+      await refresh();
+    } catch (error) {
+      onError(message(error, t("requestFailed")));
+    } finally {
+      setImageBusy(null);
     }
   }
 
@@ -236,7 +256,7 @@ export function AdminPanel({ api, principal, organizationId, onError, onOrganiza
       <OrganizationManager organization={currentOrganization} organizationName={organizationName} newOrganizationName={newOrganizationName} canCreate={canManageGlobalState} canEdit={canManageQuota} canDelete={canManageGlobalState} onOrganizationNameChange={setOrganizationName} onNewOrganizationNameChange={setNewOrganizationName} onSave={() => void saveOrganization()} onDelete={() => setConfirmOrganizationDelete(true)} onCreate={() => void createOrganization()} />
 
       {canManageMembers && <div className={styles.wide}><AdminCard title={t("usersRoles")} action={canManageGlobalState ? <Button icon={<AddRegular />} aria-expanded={showCreateUser} onClick={() => setShowCreateUser((visible) => !visible)}>{t("createUser")}</Button> : undefined}>{canManageGlobalState && showCreateUser && <CreateUserForm api={api} principal={principal} organizationId={organizationId} onCancel={() => setShowCreateUser(false)} onError={onError} onCreated={async () => { setShowCreateUser(false); setDirectoryVersion((value) => value + 1); await refresh(); }} />}<UsersDirectory api={api} organizationId={organizationId} principal={principal} canManageUsers={canManageGlobalState} canEditQuota={canManageGlobalState} refreshVersion={directoryVersion} onError={onError} onEditQuota={(userId) => void editUserQuota(userId)} /></AdminCard></div>}
-      {canManageGlobalState && <div className={styles.wide}><ImageAllowlist images={images} image={image} onImageChange={setImage} onAllow={() => void allowImage()} /></div>}
+      {canManageGlobalState && <div className={styles.wide}><ImageAllowlist images={images} image={image} adding={addingImage} busyImage={imageBusy} onImageChange={setImage} onAllow={() => void allowImage()} onToggle={(policy) => void toggleImage(policy)} /></div>}
       {canManageQuota && <div className={styles.wide}><AdminCard title={t("templates")}><TemplateEditor api={api} organizationId={organizationId} templates={templates} canGrantClusterAccess={canManageGlobalState} onRefresh={refresh} onError={onError} /></AdminCard></div>}
       {canManageQuota && <div className={styles.wide}><AdminCard title={t("webhook")} action={<Button icon={<AddRegular />} onClick={() => setShowWebhookForm(true)}>{t("addWebhook")}</Button>}><DataGrid items={webhooks} columns={webhookColumns(t)}><DataGridHeader><DataGridRow<WebhookSubscription>>{(column) => <DataGridHeaderCell>{column.renderHeaderCell()}</DataGridHeaderCell>}</DataGridRow></DataGridHeader><DataGridBody<WebhookSubscription>>{({ item }) => <DataGridRow<WebhookSubscription>>{(column) => <DataGridCell>{column.renderCell(item)}</DataGridCell>}</DataGridRow>}</DataGridBody></DataGrid>{webhooks.length === 0 && <Text>{t("noWebhooks")}</Text>}</AdminCard></div>}
     </div>
@@ -257,10 +277,10 @@ function ResourceInput({ label, value, min, step, onChange }: { label: string; v
   return <Field label={label} required><Input type="number" inputMode="numeric" min={min} step={step} value={value} onChange={(event) => onChange(event.target.value)} /></Field>;
 }
 
-function ImageAllowlist({ images, image, onImageChange, onAllow }: { images: ImagePolicy[]; image: string; onImageChange: (value: string) => void; onAllow: () => void }) {
+function ImageAllowlist({ images, image, adding, busyImage, onImageChange, onAllow, onToggle }: { images: ImagePolicy[]; image: string; adding: boolean; busyImage: string | null; onImageChange: (value: string) => void; onAllow: () => void; onToggle: (policy: ImagePolicy) => void }) {
   const { t } = useI18n();
   const styles = useAdminStyles();
-  return <AdminCard title={t("imageAllowlist")} action={<SaveButton icon={<SaveRegular />} disabled={!image.trim()} onClick={onAllow}>{t("allowImage")}</SaveButton>}><Field label={t("ociImage")}><Input value={image} onChange={(event) => onImageChange(event.target.value)} placeholder={t("imagePlaceholder")} /></Field><div className={styles.staticTable}><DataGrid items={images} columns={imageColumns(t)}><DataGridHeader><DataGridRow<ImagePolicy>>{(column) => <DataGridHeaderCell>{column.renderHeaderCell()}</DataGridHeaderCell>}</DataGridRow></DataGridHeader><DataGridBody<ImagePolicy>>{({ item }) => <DataGridRow<ImagePolicy>>{(column) => <DataGridCell>{column.renderCell(item)}</DataGridCell>}</DataGridRow>}</DataGridBody></DataGrid></div></AdminCard>;
+  return <AdminCard title={t("imageAllowlist")} action={<SaveButton icon={<SaveRegular />} disabled={!image.trim() || adding || busyImage !== null} onClick={onAllow}>{adding ? t("saving") : t("allowImage")}</SaveButton>}><Field label={t("ociImage")}><Input value={image} onChange={(event) => onImageChange(event.target.value)} placeholder={t("imagePlaceholder")} /></Field>{images.length === 0 ? <Text className={styles.empty}>{t("imageAllowlistEmpty")}</Text> : <div className={styles.staticTable} aria-busy={busyImage !== null}><DataGrid items={images} columns={imageColumns(t, busyImage, onToggle)}><DataGridHeader><DataGridRow<ImagePolicy>>{(column) => <DataGridHeaderCell>{column.renderHeaderCell()}</DataGridHeaderCell>}</DataGridRow></DataGridHeader><DataGridBody<ImagePolicy>>{({ item }) => <DataGridRow<ImagePolicy>>{(column) => <DataGridCell>{column.renderCell(item)}</DataGridCell>}</DataGridRow>}</DataGridBody></DataGrid></div>}</AdminCard>;
 }
 
 function stateColumns(t: ReturnType<typeof useI18n>["t"]): TableColumnDefinition<[string, number]>[] {
@@ -277,10 +297,11 @@ function webhookColumns(t: ReturnType<typeof useI18n>["t"]): TableColumnDefiniti
   ];
 }
 
-function imageColumns(t: ReturnType<typeof useI18n>["t"]): TableColumnDefinition<ImagePolicy>[] {
+function imageColumns(t: ReturnType<typeof useI18n>["t"], busyImage: string | null, onToggle: (policy: ImagePolicy) => void): TableColumnDefinition<ImagePolicy>[] {
   return [
     { columnId: "image", compare: (a, b) => a.image.localeCompare(b.image), renderHeaderCell: () => t("ociImage"), renderCell: (item) => item.image },
     { columnId: "enabled", compare: (a, b) => Number(a.enabled) - Number(b.enabled), renderHeaderCell: () => t("enabled"), renderCell: (item) => item.enabled ? t("enabled") : t("disabled") },
+    { columnId: "actions", compare: () => 0, renderHeaderCell: () => t("actions"), renderCell: (item) => <Button size="small" disabled={busyImage !== null} icon={busyImage === item.image ? <Spinner size="tiny" /> : undefined} onClick={() => onToggle(item)}>{item.enabled ? t("pluginDisable") : t("pluginEnable")}</Button> },
   ];
 }
 

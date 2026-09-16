@@ -156,7 +156,7 @@ export function CredentialReferencePicker({
               placeholder={t("searchCredentialReferences")}
               aria-label={t("searchCredentialReferences")}
               contentBefore={<SearchRegular aria-hidden="true" />}
-              contentAfter={search ? <Button appearance="transparent" size="small" icon={<DismissRegular aria-hidden="true" />} aria-label={t("clearSelectedReferences")} onClick={() => setSearch("")} /> : undefined}
+              contentAfter={search ? <Button appearance="transparent" size="small" icon={<DismissRegular aria-hidden="true" />} aria-label={t("clearCredentialSearch")} onClick={() => setSearch("")} /> : undefined}
             />
             <Button type="button" appearance="subtle" onClick={clearAll}>{t("clearSelectedReferences")}</Button>
           </div>

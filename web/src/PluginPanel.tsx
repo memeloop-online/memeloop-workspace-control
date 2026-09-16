@@ -20,7 +20,8 @@ import {
   shorthands,
   tokens,
 } from "@fluentui/react-components";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { DismissRegular } from "@fluentui/react-icons";
 import { useI18n } from "./i18n";
 import { ConfirmDialog } from "./components/ConfirmDialog";
 import { Page } from "./design-system/Page";
@@ -52,6 +53,13 @@ const useStyles = makeStyles({
   packageDetails: { color: tokens.colorNeutralForeground2, fontSize: tokens.fontSizeBase200 },
   packageList: { display: "grid", gridTemplateColumns: "auto minmax(0, 1fr)", gap: tokens.spacingVerticalXS, margin: tokens.spacingVerticalS, overflowWrap: "anywhere" },
   actions: { display: "flex", flexWrap: "wrap", gap: tokens.spacingHorizontalS, marginTop: "auto" },
+  dangerButton: {
+    backgroundColor: tokens.colorStatusDangerBackground3,
+    color: tokens.colorNeutralForegroundOnBrand,
+    ":hover": { backgroundColor: tokens.colorStatusDangerBackground3Hover, color: tokens.colorNeutralForegroundOnBrand },
+    ":active": { backgroundColor: tokens.colorStatusDangerBackground3Pressed, color: tokens.colorNeutralForegroundOnBrand },
+    ":disabled": { backgroundColor: tokens.colorStatusDangerBackground3, color: tokens.colorNeutralForegroundOnBrand },
+  },
   empty: { display: "grid", placeItems: "center", gap: tokens.spacingVerticalS, minHeight: "180px", padding: tokens.spacingVerticalL, color: tokens.colorNeutralForeground2 },
   dialogContent: { display: "grid", gap: tokens.spacingVerticalM, minWidth: 0 },
   rjsf: {
@@ -81,6 +89,8 @@ export function PluginPanel({ token, organizationId, systemAdmin, onOpenCredenti
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [pendingUninstall, setPendingUninstall] = useState<PluginManifest | null>(null);
+  const busyPluginsRef = useRef(new Set<string>());
+  const [busyPluginIds, setBusyPluginIds] = useState<ReadonlySet<string>>(() => new Set());
   const catalogState = pluginCatalogState(loading, error, plugins.length);
 
   const load = useCallback(async () => {
@@ -98,20 +108,36 @@ export function PluginPanel({ token, organizationId, systemAdmin, onOpenCredenti
   useEffect(() => { void load(); }, [load]);
 
   async function setEnabled(plugin: PluginManifest) {
+    if (!markPluginBusy(plugin.id)) return;
     try {
       const updated = await api.setEnabled(plugin.id, !plugin.enabled, plugin.package_version);
       setPlugins((values) => values.map((value) => value.id === updated.id ? updated : value));
       setError("");
     } catch (reason) { setError(pluginErrorMessage(reason, t)); }
+    finally { clearPluginBusy(plugin.id); }
   }
 
   async function uninstall(plugin: PluginManifest) {
+    if (!markPluginBusy(plugin.id)) return;
     try {
       await api.uninstall(plugin.id, plugin.package_version);
       setPlugins((values) => values.filter((value) => value.id !== plugin.id));
       setPendingUninstall(null);
       setError("");
     } catch (reason) { setError(pluginErrorMessage(reason, t)); }
+    finally { clearPluginBusy(plugin.id); }
+  }
+
+  function markPluginBusy(pluginId: string) {
+    if (busyPluginsRef.current.has(pluginId)) return false;
+    busyPluginsRef.current.add(pluginId);
+    setBusyPluginIds(new Set(busyPluginsRef.current));
+    return true;
+  }
+
+  function clearPluginBusy(pluginId: string) {
+    busyPluginsRef.current.delete(pluginId);
+    setBusyPluginIds(new Set(busyPluginsRef.current));
   }
 
   function installed(plugin: PluginManifest) {
@@ -124,21 +150,21 @@ export function PluginPanel({ token, organizationId, systemAdmin, onOpenCredenti
       {catalogState === "error" && <MessageBar intent="error"><MessageBarBody>{error}<Button appearance="subtle" onClick={() => void load()}>{t("pluginRetry")}</Button></MessageBarBody></MessageBar>}
       {catalogState === "loading" && <Card><div className={styles.empty} role="status"><Spinner size="small" label={t("pluginsLoading")} /></div></Card>}
       {catalogState === "empty" && <Card><div className={styles.empty}><Text weight="semibold">{t("pluginsEmpty")}</Text><Text>{systemAdmin ? t("pluginsEmptyHint") : t("pluginsEmptyMemberHint")}</Text></div></Card>}
-      {catalogState === "ready" && <div className={styles.grid}>{plugins.map((plugin) => <PluginCard key={plugin.id} plugin={plugin} systemAdmin={systemAdmin} onConfigure={() => setSelected(plugin)} onUpdate={() => setInstallerTarget(plugin)} onToggle={() => void setEnabled(plugin)} onUninstall={() => setPendingUninstall(plugin)} />)}</div>}
+      {catalogState === "ready" && <div className={styles.grid}>{plugins.map((plugin) => <PluginCard key={plugin.id} plugin={plugin} systemAdmin={systemAdmin} busy={busyPluginIds.has(plugin.id)} onConfigure={() => setSelected(plugin)} onUpdate={() => setInstallerTarget(plugin)} onToggle={() => void setEnabled(plugin)} onUninstall={() => setPendingUninstall(plugin)} />)}</div>}
       <PluginSurfaceHost api={api} plugins={plugins} placement="admin_tab" organizationId={organizationId} />
       {selected && <ConfigurationDialog api={api} plugin={selected} organizationId={organizationId} systemAdmin={systemAdmin} onClose={() => setSelected(null)} onOpenCredentials={onOpenCredentials} />}
       {installerTarget !== undefined && <PluginInstaller api={api} updateTarget={installerTarget} onClose={() => setInstallerTarget(undefined)} onInspected={(value) => { setInstallerTarget(undefined); setInspection(value); }} />}
       {inspection && <PluginAuthorizationDialog api={api} inspection={inspection} onClose={() => setInspection(null)} onInstalled={installed} />}
-      <ConfirmDialog open={pendingUninstall !== null} title={t("pluginUninstall")} description={t("pluginUninstallConfirm")} confirmLabel={t("pluginUninstall")} cancelLabel={t("cancel")} danger details={pendingUninstall && <strong>{pendingUninstall.name || pendingUninstall.id}</strong>} onClose={() => setPendingUninstall(null)} onConfirm={() => pendingUninstall && void uninstall(pendingUninstall)} />
+      <ConfirmDialog open={pendingUninstall !== null} title={t("pluginUninstall")} description={t("pluginUninstallConfirm")} confirmLabel={t("pluginUninstall")} cancelLabel={t("cancel")} busy={pendingUninstall !== null && busyPluginIds.has(pendingUninstall.id)} danger details={pendingUninstall && <strong>{pendingUninstall.name || pendingUninstall.id}</strong>} onClose={() => setPendingUninstall(null)} onConfirm={() => pendingUninstall && void uninstall(pendingUninstall)} />
     </Page>;
 }
 
-function PluginCard({ plugin, systemAdmin, onConfigure, onUpdate, onToggle, onUninstall }: { plugin: PluginManifest; systemAdmin: boolean; onConfigure: () => void; onUpdate: () => void; onToggle: () => void; onUninstall: () => void }) {
+function PluginCard({ plugin, systemAdmin, busy = false, onConfigure, onUpdate, onToggle, onUninstall }: { plugin: PluginManifest; systemAdmin: boolean; busy?: boolean; onConfigure: () => void; onUpdate: () => void; onToggle: () => void; onUninstall: () => void }) {
   const styles = useStyles();
   const { t } = useI18n();
   const configurable = Boolean(plugin.configuration_schema) && plugin.approved_contributions.includes("configuration");
   const healthy = plugin.runtime_status !== "error";
-  return <Card className={styles.card} appearance="filled-alternative">
+  return <Card className={styles.card} appearance="filled-alternative" aria-busy={busy}>
     <div className={styles.cardHeader}><div className={styles.cardTitle}><Text size={500} weight="semibold">{plugin.name || plugin.id}</Text><code className={styles.id}>{plugin.id}</code></div><Badge className={styles.status} appearance="tint" color={statusColor(plugin.runtime_status)}>{t(runtimeStatusKey(plugin.runtime_status))}</Badge></div>
     {plugin.description && <p className={styles.description}>{plugin.description}</p>}
     <dl className={styles.facts}>
@@ -152,8 +178,8 @@ function PluginCard({ plugin, systemAdmin, onConfigure, onUpdate, onToggle, onUn
     {plugin.runtime_error_code && <div className={styles.failure} role="status"><code>{plugin.runtime_error_code}</code><Text>{t(runtimeErrorKey(plugin.runtime_error_code))}</Text></div>}
     <details className={styles.packageDetails}><summary>{t("pluginPackageDetails")}</summary><dl className={styles.packageList}><dt>{t("pluginPackageVersion")}</dt><dd>#{plugin.package_version}</dd><dt>SHA-256</dt><dd><code>{plugin.package_digest}</code></dd></dl></details>
     <CardFooter className={styles.actions}>
-      <Button disabled={!healthy || !configurable} onClick={onConfigure}>{configurable ? t("pluginConfigure") : t("pluginNoConfiguration")}</Button>
-      {systemAdmin && <><Button onClick={onUpdate}>{t("pluginUpdate")}</Button><Button onClick={onToggle}>{plugin.enabled ? t("pluginDisable") : t("pluginEnable")}</Button><Button appearance="primary" onClick={onUninstall}>{t("pluginUninstall")}</Button></>}
+      <Button disabled={busy || !healthy || !configurable} onClick={onConfigure}>{configurable ? t("pluginConfigure") : t("pluginNoConfiguration")}</Button>
+      {systemAdmin && <><Button disabled={busy} onClick={onUpdate}>{t("pluginUpdate")}</Button><Button disabled={busy} icon={busy ? <Spinner size="tiny" /> : undefined} onClick={onToggle}>{plugin.enabled ? t("pluginDisable") : t("pluginEnable")}</Button><Button appearance="primary" className={styles.dangerButton} disabled={busy} onClick={onUninstall}>{t("pluginUninstall")}</Button></>}
     </CardFooter>
   </Card>;
 }
@@ -241,7 +267,7 @@ function ConfigurationDialog({ api, plugin, organizationId, systemAdmin, onClose
   return <Dialog open onOpenChange={(_, data) => !data.open && onClose()}>
     <DialogSurface>
       <DialogBody>
-        <DialogTitle action={<Button appearance="subtle" aria-label={t("pluginCloseDialog")} onClick={onClose}>×</Button>}>{t("pluginConfigurationTitle")}</DialogTitle>
+        <DialogTitle action={<Button appearance="subtle" icon={<DismissRegular />} aria-label={t("pluginCloseDialog")} onClick={onClose} />}>{t("pluginConfigurationTitle")}</DialogTitle>
         <DialogContent className={styles.dialogContent}>
           <TabList selectedValue={scope} onTabSelect={(_, data) => setScope(data.value as PluginConfigurationScope)} aria-label={t("pluginConfigurationScope")}>
             {systemAdmin && <Tab value="installation">{t("pluginScopeGlobal")}</Tab>}

@@ -714,5 +714,17 @@
   "addOrganizationMember": "Add to organization",
   "removeOrganizationMember": "Remove from organization",
   "membershipSaved": "Membership saved.",
-  "membershipRemoved": "Membership removed."
+  "membershipRemoved": "Membership removed.",
+  "appName": "Memeloop Workspace Control",
+  "clearCredentialSearch": "Clear search",
+  "connectionPreparing": "Preparing connection…",
+  "credentialsPreviewEmpty": "No credentials currently apply to this workspace.",
+  "credentialsPreviewLoading": "Resolving…",
+  "imageAllowlistEmpty": "No allowed images configured yet.",
+  "memberRemoveConfirm": "Remove this member from the organization? They will lose access to organization resources.",
+  "memberRemoveSelfConfirm": "You are removing yourself from this organization and will lose access immediately. Continue?",
+  "userSaved": "User saved.",
+  "workspaceNameInvalid": "Enter a workspace name of up to 120 characters.",
+  "workspaceNameRequired": "Enter a workspace name.",
+  "workspaceResourcesInvalid": "Resources cannot be below the template's minimum requests."
 }

@@ -17,6 +17,7 @@ import {
   shorthands,
   tokens,
 } from "@fluentui/react-components";
+import { DismissRegular } from "@fluentui/react-icons";
 import { useI18n } from "../i18n";
 import type { PluginApi } from "./api";
 import type { PluginInspection, PluginManifest, PluginSourceKind } from "./types";
@@ -74,7 +75,7 @@ export function PluginInstaller({ api, updateTarget, onInspected, onClose }: { a
   return <Dialog open onOpenChange={(_, data) => !data.open && onClose()}>
     <DialogSurface>
       <DialogBody>
-        <DialogTitle action={<Button appearance="subtle" aria-label={t("pluginCloseDialog")} onClick={onClose}>×</Button>}>{updateTarget ? t("pluginUpdateTitle") : t("pluginInstallTitle")}</DialogTitle>
+        <DialogTitle action={<Button appearance="subtle" icon={<DismissRegular />} aria-label={t("pluginCloseDialog")} disabled={busy} onClick={onClose} />}>{updateTarget ? t("pluginUpdateTitle") : t("pluginInstallTitle")}</DialogTitle>
         <DialogContent className={styles.content}>
           <TabList selectedValue={method} onTabSelect={(_, data) => setMethod(data.value as InstallMethod)} aria-label={t("pluginInstallMethod")}>
             <Tab value="file">{t("pluginInstallFile")}</Tab><Tab value="url">{t("pluginInstallUrl")}</Tab><Tab value="github_release">{t("pluginInstallGithub")}</Tab>

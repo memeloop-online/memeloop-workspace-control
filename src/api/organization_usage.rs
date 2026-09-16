@@ -29,6 +29,7 @@ struct ActualUsage {
     cpu_millis: Option<u64>,
     memory_mib: Option<u64>,
     disk_bytes: Option<u64>,
+    temporary_bytes: Option<u64>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -36,6 +37,7 @@ struct UsageAvailability {
     cpu: Availability,
     memory: Availability,
     disk: Availability,
+    temporary: Availability,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -105,6 +107,13 @@ pub(super) async fn get(
             Availability::Unavailable
         }
     };
+    let temporary_availability = if metrics.temporary_bytes.is_some() {
+        Availability::Available
+    } else if metrics.temporary_storage_complete {
+        Availability::Unavailable
+    } else {
+        Availability::Unknown
+    };
     Ok(Json(OrganizationUsageSummary {
         total_count: summary.total_count,
         requested: summary.requested,
@@ -113,12 +122,14 @@ pub(super) async fn get(
             cpu_millis: metrics.cpu_millis,
             memory_mib: metrics.memory_mib,
             disk_bytes: metrics.disk_bytes,
+            temporary_bytes: metrics.temporary_bytes,
         },
         observed_at: metrics.observed_at,
         availability: UsageAvailability {
             cpu: availability(metrics.cpu_millis),
             memory: availability(metrics.memory_mib),
             disk: availability(metrics.disk_bytes),
+            temporary: temporary_availability,
         },
         coverage: UsageCoverage {
             total_workspaces: summary.total_count,

@@ -61,8 +61,8 @@ export function WorkspaceCard({ api, item, runtime, nodePools, busyAction, onAct
       <Text>{workspace.workspace_user}</Text>
       <Text>{workspace.access_mode === "public" ? t("public") : t("internal")}</Text>
       {templateName && <Text>{t("template")}: {templateName}</Text>}
-      <Tooltip content={workspace.image} relationship="description"><Text className={styles.metadataCode}>{t("image")}: {shortImage(workspace.image)}</Text></Tooltip>
-      <Tooltip content={running ? t("locationChangeAfterStop") : t("changeLocation")} relationship="description"><Text>{t("nodePool")}: {nodePoolDisplayName(nodePools, workspace.node_pool)}</Text></Tooltip>
+      <Tooltip content={workspace.image} relationship="description"><Text tabIndex={0} className={styles.metadataCode}>{t("image")}: {shortImage(workspace.image)}</Text></Tooltip>
+      <Tooltip content={running ? t("locationChangeAfterStop") : t("changeLocation")} relationship="description"><Text tabIndex={0}>{t("nodePool")}: {nodePoolDisplayName(nodePools, workspace.node_pool)}</Text></Tooltip>
       {workspace.resources.gpu_count > 0 && <Text>{workspace.resources.gpu_count} GPU</Text>}
     </div>
     <ResourceOverview item={item} runtime={runtime} locale={locale} />
@@ -91,7 +91,7 @@ export function WorkspaceCard({ api, item, runtime, nodePools, busyAction, onAct
 }
 
 async function openDesktop(api: ApiClient, workspaceId: string, mappingId: string, setOpening: (value: boolean) => void, onError: (message: string) => void, t: ReturnType<typeof useI18n>["t"]) {
-  const target = reserveWebShellWindow();
+  const target = reserveWebShellWindow(undefined, t("connectionPreparing"));
   setOpening(true);
   try {
     const bootstrap = await api.bootstrapPortMapping(workspaceId, mappingId);
@@ -123,7 +123,7 @@ function ResourceMeter({ label, actual, requested, percent }: { label: string; a
   const { t } = useI18n();
   const styles = useWorkspaceStyles();
   const valueText = percent === null ? `${label}: ${t("metricsUnavailable")}` : `${actual} / ${requested}, ${formatPercent(percent)}`;
-  return <Tooltip content={valueText} relationship="description"><div className={styles.meter}><div className={styles.meterHeader}><Text>{label}</Text><Text className={styles.meterValue}>{actual} <Caption1>/ {requested}</Caption1></Text></div><ProgressBar value={percent === null ? undefined : percent / 100} aria-label={`${label} ${t("usageOfLimit")}`} /><Caption1 className={styles.meterHint}>{t("usageOfLimit")} · {formatPercent(percent)}</Caption1></div></Tooltip>;
+  return <Tooltip content={valueText} relationship="description"><div tabIndex={0} className={styles.meter}><div className={styles.meterHeader}><Text>{label}</Text><Text className={styles.meterValue}>{actual} <Caption1>/ {requested}</Caption1></Text></div><ProgressBar value={percent === null ? undefined : percent / 100} aria-label={`${label} ${t("usageOfLimit")}`} /><Caption1 className={styles.meterHint}>{t("usageOfLimit")} · {formatPercent(percent)}</Caption1></div></Tooltip>;
 }
 
 function RuntimeStatus({ id, runtime }: { id: string; runtime: WorkspaceRuntime }) {

@@ -16,6 +16,8 @@ import {
   DialogTitle,
   Field,
   Input,
+  MessageBar,
+  MessageBarBody,
   Option,
   Select,
   Spinner,
@@ -185,6 +187,7 @@ function UserEditDialog({ user, api, organizationId, principal, canManageUsers, 
   const [role, setRole] = useState<Role>(user.membershipRole ?? "member");
   const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState("");
+  const [confirmRemove, setConfirmRemove] = useState(false);
   const isCurrentUser = user.id === principal.user_id;
 
   async function save() {
@@ -194,8 +197,7 @@ function UserEditDialog({ user, api, organizationId, principal, canManageUsers, 
       if (canManageUsers) onUpdated(await api.updateUser(user.id, { display_name: displayName.trim(), system_admin: systemAdmin, disabled }));
       await api.setMembership(organizationId, user.id, role);
       onMembershipChanged(user.id, role);
-      setStatus(t("membershipSaved"));
-      onClose();
+      setStatus(t("userSaved"));
     } catch (error) {
       onError(message(error, t("requestFailed")));
     } finally {
@@ -207,6 +209,7 @@ function UserEditDialog({ user, api, organizationId, principal, canManageUsers, 
     setSaving(true);
     try {
       await api.removeMembership(organizationId, user.id);
+      setConfirmRemove(false);
       onMembershipChanged(user.id, null);
       onClose();
     } catch (error) {
@@ -216,11 +219,24 @@ function UserEditDialog({ user, api, organizationId, principal, canManageUsers, 
     }
   }
 
-  return <Dialog open onOpenChange={(_, data) => { if (!data.open && !saving) onClose(); }}><DialogSurface><DialogBody><DialogTitle>{t("saveUser")} · {user.display_name}</DialogTitle><DialogContent className={styles.dialogBody}>
-    {canManageUsers && <><Field label={t("displayName")} required><Input value={displayName} onChange={(event) => setDisplayName(event.target.value)} /></Field><Checkbox checked={systemAdmin} disabled={isCurrentUser} onChange={(_, data) => setSystemAdmin(Boolean(data.checked))} label={t("systemAdmin")} /><Checkbox checked={disabled} disabled={isCurrentUser} onChange={(_, data) => setDisabled(Boolean(data.checked))} label={disabled ? t("enableUser") : t("disableUser")} /></>}
+  return <><Dialog open onOpenChange={(_, data) => { if (!data.open && !saving) onClose(); }}><DialogSurface><DialogBody><DialogTitle>{t("saveUser")} · {user.display_name}</DialogTitle><DialogContent className={styles.dialogBody}>
+    {canManageUsers && <><Field label={t("displayName")} required><Input value={displayName} onChange={(event) => setDisplayName(event.target.value)} /></Field><Checkbox checked={systemAdmin} disabled={isCurrentUser} onChange={(_, data) => setSystemAdmin(Boolean(data.checked))} label={t("systemAdmin")} /><Checkbox checked={disabled} disabled={isCurrentUser} onChange={(_, data) => setDisabled(Boolean(data.checked))} label={t("disableUser")} /></>}
     <Field label={t("role")}><Select value={role} disabled={saving} onChange={(event) => setRole(event.target.value as Role)}><Option value="member">{t("roleMember")}</Option><Option value="organization_admin">{t("roleOrganizationAdmin")}</Option></Select></Field>
-    {status && <Text>{status}</Text>}
-  </DialogContent><DialogActions><Button appearance="secondary" disabled={saving} onClick={onClose}>{t("cancel")}</Button>{user.membershipRole && <Button disabled={saving} onClick={() => void removeMember()}>{t("removeOrganizationMember")}</Button>}<SaveButton icon={<SaveRegular />} disabled={saving || !displayName.trim()} onClick={() => void save()}>{saving ? t("saving") : t("saveUser")}</SaveButton></DialogActions></DialogBody></DialogSurface></Dialog>;
+    {status && <MessageBar intent="success"><MessageBarBody>{status}</MessageBarBody></MessageBar>}
+  </DialogContent><DialogActions><Button appearance="secondary" disabled={saving} onClick={onClose}>{t("close")}</Button>{user.membershipRole && <Button disabled={saving} onClick={() => setConfirmRemove(true)}>{t("removeOrganizationMember")}</Button>}<SaveButton icon={<SaveRegular />} disabled={saving || !displayName.trim()} onClick={() => void save()}>{saving ? t("saving") : t("saveUser")}</SaveButton></DialogActions></DialogBody></DialogSurface></Dialog>
+  <ConfirmDialog
+    open={confirmRemove}
+    title={t("removeOrganizationMember")}
+    description={isCurrentUser ? t("memberRemoveSelfConfirm") : t("memberRemoveConfirm")}
+    confirmLabel={t("removeOrganizationMember")}
+    cancelLabel={t("cancel")}
+    busy={saving}
+    danger
+    details={<strong>{user.display_name}</strong>}
+    onClose={() => setConfirmRemove(false)}
+    onConfirm={() => void removeMember()}
+  />
+  </>;
 }
 
 function AdminUserApiKeysDialog({ api, userId, userDisplayName, onClose, onError }: { api: ApiClient; userId: string; userDisplayName: string; onClose: () => void; onError: (message: string) => void }) {

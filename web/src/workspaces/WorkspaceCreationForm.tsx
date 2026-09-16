@@ -1,4 +1,4 @@
-import type { FormEvent } from "react";
+import { useState, type FormEvent } from "react";
 import { Button, Card, Caption1, Dropdown, Field, InfoLabel, Input, Option, Text } from "@fluentui/react-components";
 import { AddRegular } from "@fluentui/react-icons";
 import { CredentialReferencePicker } from "../forms/CredentialReferencePicker";
@@ -34,9 +34,11 @@ export function WorkspaceCreationForm(props: Props) {
   const { t } = useI18n();
   const styles = useWorkspaceStyles();
   const selectedTemplate = props.templates.find((template) => template.id === props.templateId);
+  const [attempted, setAttempted] = useState(false);
+  const nameError = attempted && !props.name.trim() ? t("workspaceNameRequired") : undefined;
   return <Card className={styles.createCard} appearance="filled-alternative">
-    <form className={styles.formGrid} onSubmit={props.onSubmit}>
-    <Field label={t("name")} required><Input value={props.name} onChange={(_, data) => props.onNameChange(data.value)} /></Field>
+    <form className={styles.formGrid} onSubmit={(event) => { setAttempted(true); props.onSubmit(event); }}>
+    <Field label={t("name")} required validationState={nameError ? "error" : undefined} validationMessage={nameError}><Input value={props.name} maxLength={120} onChange={(_, data) => props.onNameChange(data.value)} /></Field>
     <Field label={<InfoLabel info={t("templatePersistenceHelp")}>{t("template")}</InfoLabel>} required>
       <Dropdown value={selectedTemplate?.name ?? ""} selectedOptions={props.templateId ? [props.templateId] : []} placeholder={t("chooseTemplate")} onOptionSelect={(_, data) => props.onTemplateChange(data.optionValue ?? "")}>
         {props.templates.map((template) => <Option key={template.id} value={template.id}>{template.name}</Option>)}
@@ -81,9 +83,9 @@ function ResourceEditor({ template, resources, onChange }: { template: Workspace
   const { t } = useI18n();
   const styles = useWorkspaceStyles();
   return <div className={styles.formWide}><Field label={<InfoLabel info={t("workspaceResourcesHelp")}>{t("workspaceResources")}</InfoLabel>}><div className={styles.formGrid}>
-    <Field label={t("cpuLimitMillis")}><Input type="number" min={template.pod_requests.cpu_millis} step={100} required value={String(resources.cpu_millis)} onChange={(event) => onChange("cpu_millis", event.currentTarget.value)} /></Field>
-    <Field label={t("memoryLimitMib")}><Input type="number" min={template.pod_requests.memory_mib} step={256} required value={String(resources.memory_mib)} onChange={(event) => onChange("memory_mib", event.currentTarget.value)} /></Field>
-    <Field label={t("diskSizeGib")}><Input type="number" min={1} step={1} required value={String(resources.disk_gib)} onChange={(event) => onChange("disk_gib", event.currentTarget.value)} /></Field>
-    <Field label={t("gpuCount")}><Input type="number" min={0} step={1} required value={String(resources.gpu_count)} onChange={(event) => onChange("gpu_count", event.currentTarget.value)} /></Field>
+    <Field label={t("cpuLimitMillis")} validationState={resources.cpu_millis < template.pod_requests.cpu_millis ? "error" : undefined} validationMessage={resources.cpu_millis < template.pod_requests.cpu_millis ? t("workspaceResourcesInvalid") : undefined}><Input type="number" min={template.pod_requests.cpu_millis} step={100} required value={String(resources.cpu_millis)} onChange={(event) => onChange("cpu_millis", event.currentTarget.value)} /></Field>
+    <Field label={t("memoryLimitMib")} validationState={resources.memory_mib < template.pod_requests.memory_mib ? "error" : undefined} validationMessage={resources.memory_mib < template.pod_requests.memory_mib ? t("workspaceResourcesInvalid") : undefined}><Input type="number" min={template.pod_requests.memory_mib} step={256} required value={String(resources.memory_mib)} onChange={(event) => onChange("memory_mib", event.currentTarget.value)} /></Field>
+    <Field label={t("diskSizeGib")} validationState={resources.disk_gib < 1 ? "error" : undefined} validationMessage={resources.disk_gib < 1 ? t("workspaceResourcesInvalid") : undefined}><Input type="number" min={1} step={1} required value={String(resources.disk_gib)} onChange={(event) => onChange("disk_gib", event.currentTarget.value)} /></Field>
+    <Field label={t("gpuCount")} validationState={resources.gpu_count < 0 ? "error" : undefined} validationMessage={resources.gpu_count < 0 ? t("workspaceResourcesInvalid") : undefined}><Input type="number" min={0} step={1} required value={String(resources.gpu_count)} onChange={(event) => onChange("gpu_count", event.currentTarget.value)} /></Field>
   </div></Field></div>;
 }

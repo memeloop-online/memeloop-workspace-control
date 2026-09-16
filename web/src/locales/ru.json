@@ -714,5 +714,17 @@
   "addOrganizationMember": "Добавить в организацию",
   "removeOrganizationMember": "Удалить из организации",
   "membershipSaved": "Участие сохранено.",
-  "membershipRemoved": "Участие удалено."
+  "membershipRemoved": "Участие удалено.",
+  "appName": "Memeloop Workspace Control",
+  "clearCredentialSearch": "Очистить поиск",
+  "connectionPreparing": "Подготовка подключения…",
+  "credentialsPreviewEmpty": "Для этого рабочего пространства нет действующих учётных данных.",
+  "credentialsPreviewLoading": "Определение…",
+  "imageAllowlistEmpty": "Разрешённые образы ещё не настроены.",
+  "memberRemoveConfirm": "Удалить участника из организации? Он потеряет доступ к ресурсам организации.",
+  "memberRemoveSelfConfirm": "Вы удаляете себя из организации и сразу потеряете доступ. Продолжить?",
+  "userSaved": "Пользователь сохранён.",
+  "workspaceNameInvalid": "Введите имя рабочего пространства длиной до 120 символов.",
+  "workspaceNameRequired": "Введите имя рабочего пространства.",
+  "workspaceResourcesInvalid": "Ресурсы не могут быть ниже минимальных запросов шаблона."
 }

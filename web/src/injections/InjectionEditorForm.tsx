@@ -7,6 +7,7 @@ import {
   Combobox,
   Divider,
   Field,
+  InfoLabel,
   Input,
   Option,
   Select,
@@ -67,14 +68,10 @@ const useStyles = makeStyles({
   wide: {
     gridColumn: "1 / -1",
   },
-  label: {
+  labelHint: {
     display: "inline-flex",
     alignItems: "center",
     gap: tokens.spacingHorizontalXS,
-  },
-  info: {
-    color: tokens.colorNeutralForeground3,
-    cursor: "help",
   },
   note: {
     color: tokens.colorNeutralForeground2,
@@ -238,8 +235,8 @@ export function InjectionEditorForm({
         </Field>
       </div>
       <div className={styles.checks}>
-        <Checkbox checked={draft.sensitive} onChange={(_, data) => update({ ...draft, sensitive: data.checked === true })} label={<FieldLabel label={t("sensitiveValue")} help={t("sensitiveHelp")} />} />
-        {scope === "organization" && <Checkbox checked={draft.locked} onChange={(_, data) => update({ ...draft, locked: data.checked === true })} label={<FieldLabel label={t("locked")} help={t("lockedHelp")} />} />}
+        <Checkbox checked={draft.sensitive} onChange={(_, data) => update({ ...draft, sensitive: data.checked === true })} label={<LabelHint label={t("sensitiveValue")} help={t("sensitiveHelp")} />} />
+        {scope === "organization" && <Checkbox checked={draft.locked} onChange={(_, data) => update({ ...draft, locked: data.checked === true })} label={<LabelHint label={t("locked")} help={t("lockedHelp")} />} />}
       </div>
       <div className={styles.actions}>
         <Button type="submit" appearance="primary" icon={<SaveRegular aria-hidden="true" />} disabled={saving || disabled}>{saving ? t("savingEncrypted") : selectedKey ? t("replaceEncrypted") : t("createEncrypted")}</Button>
@@ -407,5 +404,10 @@ function removeSelector(draft: InjectionEditorDraft, update: Dispatch<SetStateAc
 }
 
 function FieldLabel({ label, help }: { label: string; help?: string }) {
-  return <span>{label}{help && <Tooltip content={help} relationship="description"><InfoRegular aria-label={help} /></Tooltip>}</span>;
+  return help ? <InfoLabel info={help}>{label}</InfoLabel> : <>{label}</>;
+}
+
+function LabelHint({ label, help }: { label: string; help?: string }) {
+  const styles = useStyles();
+  return <span className={styles.labelHint}>{label}{help && <Tooltip content={help} relationship="description"><InfoRegular tabIndex={0} aria-label={help} /></Tooltip>}</span>;
 }
