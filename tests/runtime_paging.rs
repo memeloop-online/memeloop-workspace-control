@@ -885,11 +885,11 @@ async fn organization_usage_summary_is_organization_wide_and_template_scoped() {
     assert_eq!(restricted["state_counts"], json!({"provisioning": 1}));
     assert_eq!(
         restricted["actual"],
-        json!({"cpu_millis": null, "memory_mib": null, "disk_bytes": null})
+        json!({"cpu_millis": null, "memory_mib": null, "disk_bytes": null, "temporary_bytes": null})
     );
     assert_eq!(
         restricted["availability"],
-        json!({"cpu": "unknown", "memory": "unknown", "disk": "unknown"})
+        json!({"cpu": "unknown", "memory": "unknown", "disk": "unknown", "temporary": "unknown"})
     );
     assert_eq!(restricted["coverage"]["total_workspaces"], 1);
     assert_eq!(restricted["coverage"]["eligible_workspaces"], 1);
