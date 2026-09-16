@@ -245,8 +245,7 @@ impl KubernetesCoordinator {
                 .as_ref()
                 .and_then(|spec| spec.volume_claim_templates.as_ref())
                 .and_then(|claims| claims.first())
-                .and_then(|claim| claim.metadata.as_ref())
-                .and_then(|metadata| metadata.labels.as_ref());
+                .and_then(|claim| claim.metadata.labels.as_ref());
             persistent_volume_claims
                 .patch(
                     &pvc_name,
