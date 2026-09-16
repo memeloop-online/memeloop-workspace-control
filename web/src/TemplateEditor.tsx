@@ -177,9 +177,9 @@ export function TemplateEditor({ api, organizationId, templates, canGrantCluster
           appearance={selectedId === template.id ? "primary" : "subtle"}
           aria-pressed={selectedId === template.id}
           className={styles.listButton}
-          onClick={() => selectTemplate(template)}
+          onClick={() => selectedId === template.id ? startNew() : selectTemplate(template)}
         >
-          <span className={styles.stack}><Text weight="semibold">{template.name}</Text><Text size={200}>{template.image}</Text></span>
+          <span className={styles.stack}><Text weight="semibold">{template.name}</Text><Text className={styles.code} size={200}>{template.image}</Text></span>
           <Text size={200}>{template.enabled ? t("enabled") : t("disabled")}</Text>
         </Button>)}
         {templates.length === 0 && <Text className={styles.empty}>{t("noTemplates")}</Text>}

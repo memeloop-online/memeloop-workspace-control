@@ -32,9 +32,10 @@ interface Props {
   canChangeState: boolean;
   canDelete: boolean;
   canChangePlacement: boolean;
+  templateName?: string;
 }
 
-export function WorkspaceCard({ api, item, runtime, nodePools, busyAction, onAction, onOpenShell, onRequestRuntime, onChangePlacement, onError, canConnect, canChangeState, canDelete, canChangePlacement }: Props) {
+export function WorkspaceCard({ api, item, runtime, nodePools, busyAction, onAction, onOpenShell, onRequestRuntime, onChangePlacement, onError, canConnect, canChangeState, canDelete, canChangePlacement, templateName }: Props) {
   const { locale, t } = useI18n();
   const styles = useWorkspaceStyles();
   const [detailView, setDetailView] = useState<DetailView | null>(null);
@@ -53,12 +54,18 @@ export function WorkspaceCard({ api, item, runtime, nodePools, busyAction, onAct
 
   return <Card className={styles.card} appearance="filled-alternative">
     <div className={styles.cardHeader}>
-      <div className={styles.cardTitle}><Title3 id={titleId} className={styles.titleText}>{workspace.name}</Title3><Caption1 className={styles.idText}>{workspace.short_id}</Caption1></div>
+      <div className={styles.cardTitle}><Title3 as="h2" id={titleId} className={styles.titleText}>{workspace.name}</Title3><Caption1 className={styles.idText}>{workspace.short_id}</Caption1></div>
       <StateBadge state={workspace.state} />
     </div>
-    <div className={styles.metadata}><Text>{workspace.workspace_user}</Text><Text>{workspace.access_mode === "public" ? t("public") : t("internal")}</Text><Text className={styles.metadataCode}>{item.namespace}</Text><Text>{t("nodePool")}: {nodePoolDisplayName(nodePools, workspace.node_pool)}</Text>{workspace.resources.gpu_count > 0 && <Text>{workspace.resources.gpu_count} GPU</Text>}</div>
+    <div className={styles.metadata}>
+      <Text>{workspace.workspace_user}</Text>
+      <Text>{workspace.access_mode === "public" ? t("public") : t("internal")}</Text>
+      {templateName && <Text>{t("template")}: {templateName}</Text>}
+      <Tooltip content={workspace.image} relationship="description"><Text className={styles.metadataCode}>{t("image")}: {shortImage(workspace.image)}</Text></Tooltip>
+      <Tooltip content={running ? t("locationChangeAfterStop") : t("changeLocation")} relationship="description"><Text>{t("nodePool")}: {nodePoolDisplayName(nodePools, workspace.node_pool)}</Text></Tooltip>
+      {workspace.resources.gpu_count > 0 && <Text>{workspace.resources.gpu_count} GPU</Text>}
+    </div>
     <ResourceOverview item={item} runtime={runtime} locale={locale} />
-    {canChangePlacement && running && <Caption1 className={styles.meterHint}>{t("locationChangeAfterStop")}</Caption1>}
     <div className={styles.toolbar} role="group" aria-labelledby={titleId} aria-busy={transition ? "true" : "false"}>
       <div className={styles.toolbarGroup}>
         {transition ? <Button appearance="subtle" disabled icon={<Spinner size="tiny" />} aria-busy="true">{t(transition.label)}</Button> : <>
@@ -75,7 +82,7 @@ export function WorkspaceCard({ api, item, runtime, nodePools, busyAction, onAct
       <div className={styles.toolbarGroupEnd}>
         {runtime && workspace.state !== "stopped" && <Button appearance={detailView === "status" ? "secondary" : "subtle"} icon={detailView === "status" ? <ChevronUpRegular /> : <ChevronDownRegular />} aria-expanded={detailView === "status"} aria-controls={statusId} onClick={() => toggleDetail("status")}>{t("runtimeStatus")}</Button>}
         {runtime && <Button appearance={detailView === "events" ? "secondary" : "subtle"} icon={detailView === "events" ? <ChevronUpRegular /> : <ChevronDownRegular />} aria-expanded={detailView === "events"} aria-controls={eventsId} onClick={() => toggleDetail("events")}>{t("eventLog")}</Button>}
-        {canDelete && !(workspace.state === "deleting" || workspace.state === "deleted") && <Button appearance="subtle" className={styles.dangerButton} icon={<DeleteRegular />} onClick={() => onAction(item, "delete")}>{t("delete")}</Button>}
+        {canDelete && !transition && !(workspace.state === "deleting" || workspace.state === "deleted") && <Button appearance="subtle" className={styles.dangerButton} icon={<DeleteRegular />} onClick={() => onAction(item, "delete")}>{t("delete")}</Button>}
       </div>
     </div>
     {runtime && workspace.state !== "stopped" && detailView === "status" && <RuntimeStatus id={statusId} runtime={runtime} />}
@@ -122,13 +129,13 @@ function ResourceMeter({ label, actual, requested, percent }: { label: string; a
 function RuntimeStatus({ id, runtime }: { id: string; runtime: WorkspaceRuntime }) {
   const { t } = useI18n();
   const styles = useWorkspaceStyles();
-  return <section id={id} className={styles.statusPanel} aria-label={t("runtimeStatus")}><div className={styles.panelHeading}><Title3>{t("containers")}</Title3><Caption1>{runtime.metrics_available ? t("usageAvailable") : t("metricsUnavailable")}</Caption1></div>{runtime.pods.length === 0 && runtime.metrics.length === 0 && <Text>{t("noRuntimeData")}</Text>}<div className={styles.podGrid}>{runtime.pods.map((pod) => <div className={styles.podRow} key={pod.name}><Text className={styles.code}>{pod.name}</Text><Text>{pod.phase ?? "unknown"}</Text><Badge appearance="tint" color={pod.ready ? "success" : "danger"}>{pod.ready ? t("ready") : t("notReady")}</Badge><Caption1>{pod.restarts} {t("restarts")}</Caption1></div>)}</div>{runtime.metrics.length > 0 && <Divider />}{runtime.metrics.length > 0 && <div className={styles.podGrid}>{runtime.metrics.map((metric) => <div className={styles.podRow} key={`${metric.pod}-${metric.container}`}><Text className={styles.code}>{metric.container}</Text><Text>CPU {formatCpuMillis(parseCpuMillis(metric.cpu))}</Text><Text>{t("memory")} {formatMemoryMiB(parseMemoryMiB(metric.memory))}</Text></div>)}</div>}</section>;
+  return <section id={id} className={styles.statusPanel} aria-label={t("runtimeStatus")}><div className={styles.panelHeading}><Title3 as="h3">{t("containers")}</Title3><Caption1>{runtime.metrics_available ? t("usageAvailable") : t("metricsUnavailable")}</Caption1></div>{runtime.pods.length === 0 && runtime.metrics.length === 0 && <Text>{t("noRuntimeData")}</Text>}<div className={styles.podGrid}>{runtime.pods.map((pod) => <div className={styles.podRow} key={pod.name}><Text className={styles.code}>{pod.name}</Text><Text>{pod.phase ?? "unknown"}</Text><Badge appearance="tint" color={pod.ready ? "success" : "danger"}>{pod.ready ? t("ready") : t("notReady")}</Badge><Caption1>{pod.restarts} {t("restarts")}</Caption1></div>)}</div>{runtime.metrics.length > 0 && <Divider />}{runtime.metrics.length > 0 && <div className={styles.podGrid}>{runtime.metrics.map((metric) => <div className={styles.podRow} key={`${metric.pod}-${metric.container}`}><Text className={styles.code}>{metric.container}</Text><Text>CPU {formatCpuMillis(parseCpuMillis(metric.cpu))}</Text><Text>{t("memory")} {formatMemoryMiB(parseMemoryMiB(metric.memory))}</Text></div>)}</div>}</section>;
 }
 
 function EventLog({ id, runtime, locale }: { id: string; runtime: WorkspaceRuntime; locale: Locale }) {
   const { t } = useI18n();
   const styles = useWorkspaceStyles();
-  return <section id={id} className={styles.statusPanel} aria-label={t("eventLog")}><Title3>{t("eventLog")}</Title3>{runtime.events.length === 0 && <Text>{t("noEvents")}</Text>}<div className={styles.eventList}>{runtime.events.slice(0, 12).map((event, index) => <article className={styles.event} key={`${event.observed_at}-${event.category}-${index}`}><Text weight="semibold">{t(eventCategoryKeys[event.category].label)}</Text><Text>{t(eventCategoryKeys[event.category].description)}</Text><Caption1 className={styles.eventMeta}>{t("observedAt")} {formatTimestamp(event.observed_at, locale)} · {t("eventCount")} {event.count ?? 1}</Caption1></article>)}</div></section>;
+  return <section id={id} className={styles.statusPanel} aria-label={t("eventLog")}><Title3 as="h3">{t("eventLog")}</Title3>{runtime.events.length === 0 && <Text>{t("noEvents")}</Text>}<div className={styles.eventList}>{runtime.events.slice(0, 12).map((event, index) => <article className={styles.event} key={`${event.observed_at}-${event.category}-${index}`}><Text weight="semibold">{t(eventCategoryKeys[event.category].label)}</Text><Text>{t(eventCategoryKeys[event.category].description)}</Text><Caption1 className={styles.eventMeta}>{t("observedAt")} {formatTimestamp(event.observed_at, locale)} · {t("eventCount")} {event.count ?? 1}</Caption1></article>)}</div></section>;
 }
 
 const eventCategoryKeys: Record<WorkspaceRuntimeEvent["category"], { label: MessageKey; description: MessageKey }> = {
@@ -169,3 +176,8 @@ function StateBadge({ state }: { state: string }) {
 }
 
 function formatTimestamp(value: string | null, locale: Locale): string { if (!value) return "—"; const parsed = new Date(value); return Number.isNaN(parsed.valueOf()) ? value : parsed.toLocaleString(locale); }
+function shortImage(value: string): string {
+  const withoutDigest = value.split("@", 1)[0] ?? value;
+  const segments = withoutDigest.split("/");
+  return segments.at(-1) || value;
+}

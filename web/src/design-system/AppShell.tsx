@@ -250,7 +250,7 @@ export function LoginScreen(props: LoginScreenProps) {
           </Field>
           <Button type="submit" appearance="primary" size="large" disabled={props.loading}>{props.loading ? props.t("signingIn") : props.t("signIn")}</Button>
         </form>
-        {props.fatal && <CardFooter><MessageBar className={classes.loginError} intent="error"><MessageBarBody>{props.fatal}</MessageBarBody></MessageBar></CardFooter>}
+        {props.fatal && <CardFooter><MessageBar className={classes.loginError} intent="error" role="alert"><MessageBarBody>{props.fatal}</MessageBarBody></MessageBar></CardFooter>}
       </Card>
     </main>
   );
@@ -311,7 +311,7 @@ export function AppShell(props: AppShellProps) {
       <div className={classes.content}>
         <header className={classes.topbar}>
           <Tooltip content={props.t("menu")} relationship="label"><Button className={classes.mobileMenu} appearance="subtle" icon={<PanelLeftRegular />} aria-label={props.t("menu")} onClick={() => setMobileOpen(true)} /></Tooltip>
-          <div className={classes.org}><span className={classes.orgLabel}>{props.t("currentOrganization")}</span><Body1Strong className={classes.orgName}>{props.currentOrganization?.name ?? props.t("notEnabled")}</Body1Strong></div>
+          <div className={classes.org}><span className={classes.orgLabel}>{props.t("currentOrganization")}</span><Body1Strong className={classes.orgName}>{props.currentOrganization?.name ?? props.t("noOrganization")}</Body1Strong></div>
           <div className={classes.topbarActions}>
             <div className={classes.desktopOnly}><LanguagePicker locale={props.locale} setLocale={props.setLocale} t={props.t} compact /></div>
             <Tooltip content={props.themeMode === "dark" ? props.t("themeLight") : props.t("themeDark")} relationship="label"><Button appearance="subtle" icon={props.themeMode === "dark" ? <WeatherSunnyRegular /> : <DarkThemeRegular />} aria-label={props.themeMode === "dark" ? props.t("themeLight") : props.t("themeDark")} onClick={props.onToggleTheme} /></Tooltip>

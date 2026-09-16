@@ -239,12 +239,20 @@ impl KubernetesCoordinator {
         if let Some(existing) = persistent_volume_claims.get_opt(&pvc_name).await? {
             self.builder
                 .verify_delete_ownership(&existing.metadata, workspace_id)?;
+            let claim_labels = desired
+                .stateful_set
+                .spec
+                .as_ref()
+                .and_then(|spec| spec.volume_claim_templates.as_ref())
+                .and_then(|claims| claims.first())
+                .and_then(|claim| claim.metadata.as_ref())
+                .and_then(|metadata| metadata.labels.as_ref());
             persistent_volume_claims
                 .patch(
                     &pvc_name,
                     &PatchParams::default(),
                     &Patch::Merge(&serde_json::json!({
-                        "metadata": {"labels": desired.stateful_set.metadata.labels}
+                        "metadata": {"labels": claim_labels}
                     })),
                 )
                 .await?;

@@ -62,7 +62,7 @@ export function Page({ title, description, actions, wide = false, children }: Pa
     <section className={mergeClasses(styles.page, wide && styles.pageWide)} aria-labelledby={titleId}>
       <header className={styles.header}>
         <div className={styles.headerText}>
-          <Title2 id={titleId} className={styles.title}>{title}</Title2>
+          <Title2 as="h1" id={titleId} className={styles.title}>{title}</Title2>
           {description ? <Body1 className={styles.description}>{description}</Body1> : null}
         </div>
         {actions ? <div className={styles.headerActions}>{actions}</div> : null}

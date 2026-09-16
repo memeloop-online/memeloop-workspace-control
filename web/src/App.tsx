@@ -36,7 +36,7 @@ export default function App() {
   const [workspaces, setWorkspaces] = useState<WorkspaceResponse[]>([]);
   const [workspaceScope, setWorkspaceScope] = useState<{ api: ApiClient; organizationId: string } | null>(null);
   const workspaceRequestGeneration = useRef(0);
-  const [view, setView] = useState<AppView>("workspaces");
+  const [view, setView] = useState<AppView>(() => viewFromHash(window.location.hash));
   const [loading, setLoading] = useState(Boolean(token));
   const [notice, setNoticeState] = useState<AppNotice | null>(null);
   const noticeSequence = useRef(0);
@@ -68,6 +68,25 @@ export default function App() {
     const value = errorMessage.trim();
     if (!value) return;
     setNoticeState({ id: ++noticeSequence.current, message: value, intent: "error" });
+  }, []);
+
+  const navigate = useCallback((next: AppView) => {
+    if (next === viewFromHash(window.location.hash)) {
+      setView(next);
+      return;
+    }
+    window.history.pushState(null, "", `#${next}`);
+    setView(next);
+  }, []);
+
+  useEffect(() => {
+    const restoreView = () => setView(viewFromHash(window.location.hash));
+    window.addEventListener("popstate", restoreView);
+    window.addEventListener("hashchange", restoreView);
+    return () => {
+      window.removeEventListener("popstate", restoreView);
+      window.removeEventListener("hashchange", restoreView);
+    };
   }, []);
 
   const refresh = useCallback(async () => {
@@ -131,7 +150,7 @@ export default function App() {
       })
       .catch((error) => {
         if (!active) return;
-        setFatal(message(error, t("requestFailed")));
+        setFatal(isAuthenticationError(error) ? t("loginInvalidToken") : message(error, t("requestFailed")));
         setPrincipal(null);
       })
       .finally(() => active && setLoading(false));
@@ -139,19 +158,22 @@ export default function App() {
   }, [api, token]);
 
   useEffect(() => {
+    // WorkspacePanel owns the workspace page's paginated list and runtime
+    // polling. The small preview exists only to seed the credential picker.
+    if (view !== "injections") return;
     void refresh();
     const timer = window.setInterval(() => {
       if (document.visibilityState === "visible") void refresh();
     }, 10000);
     return () => window.clearInterval(timer);
-  }, [refresh]);
+  }, [refresh, view]);
 
   useEffect(() => {
     const allowed = view === "administration" ? canOpenAdministration : canManageGlobalState || canManageOrganizationState;
     if ((view === "administration" || view === "audit" || view === "plugins") && !allowed) {
-      setView("workspaces");
+      navigate("workspaces");
     }
-  }, [canManageGlobalState, canManageOrganizationState, canOpenAdministration, view]);
+  }, [canManageGlobalState, canManageOrganizationState, canOpenAdministration, navigate, view]);
 
   function login(event: FormEvent) {
     event.preventDefault();
@@ -200,7 +222,7 @@ export default function App() {
 
   return (
     <FluentProvider theme={theme === "dark" ? darkTheme : lightTheme} style={{ minHeight: "100vh" }}>
-      <AppShell view={view} onViewChange={setView} locale={locale} setLocale={setLocale} themeMode={theme} onToggleTheme={() => setTheme(theme === "dark" ? "light" : "dark")} principal={principal} currentOrganization={currentOrganization} organizationRole={organizationRole} canOpenAdministration={canOpenAdministration} canManageGlobalState={canManageGlobalState} canManageOrganizationState={canManageOrganizationState} onLogout={logout} notice={notice} t={t}>
+      <AppShell view={view} onViewChange={navigate} locale={locale} setLocale={setLocale} themeMode={theme} onToggleTheme={() => setTheme(theme === "dark" ? "light" : "dark")} principal={principal} currentOrganization={currentOrganization} organizationRole={organizationRole} canOpenAdministration={canOpenAdministration} canManageGlobalState={canManageGlobalState} canManageOrganizationState={canManageOrganizationState} onLogout={logout} notice={notice} t={t}>
         <Suspense fallback={<LoadingView label={t("loading")} />}>
           {view === "settings" ? (
             <SettingsPanel api={api} principal={principal} organizations={organizations} organizationId={organizationId} onOrganizationChange={selectOrganization} onProfileChanged={(profile) => setPrincipal((current) => current ? { ...current, ...profile } : current)} onError={reportError} />
@@ -211,7 +233,7 @@ export default function App() {
           ) : view === "injections" ? (
             <InjectionPanel api={api} principal={principal} organizationId={organizationId} workspaces={scopedWorkspaces} onError={reportError} />
           ) : view === "plugins" ? (
-            <PluginPanel token={token} organizationId={organizationId} systemAdmin={canManageGlobalState} onOpenCredentials={() => setView("injections")} />
+            <PluginPanel token={token} organizationId={organizationId} systemAdmin={canManageGlobalState} onOpenCredentials={() => navigate("injections")} />
           ) : (
             <AdminPanel api={api} principal={principal} organizationId={organizationId} onError={reportError} onOrganizationsChanged={refreshOrganizations} />
           )}
@@ -223,4 +245,15 @@ export default function App() {
 
 function message(error: unknown, fallback: string) {
   return error instanceof Error ? error.message : fallback;
+}
+
+function isAuthenticationError(error: unknown): boolean {
+  return error instanceof Error && "status" in error && (error.status === 401 || error.status === 403);
+}
+
+function viewFromHash(hash: string): AppView {
+  const candidate = hash.replace(/^#/, "") as AppView;
+  return ["workspaces", "injections", "plugins", "administration", "audit", "settings"].includes(candidate)
+    ? candidate
+    : "workspaces";
 }

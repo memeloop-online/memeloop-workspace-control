@@ -1,7 +1,6 @@
 import {
   Body2,
   Checkbox,
-  Field,
   Text,
   makeStyles,
   tokens,
@@ -29,6 +28,9 @@ const useStyles = makeStyles({
   root: {
     display: "grid",
     gap: tokens.spacingVerticalS,
+    margin: 0,
+    padding: 0,
+    border: 0,
   },
   label: {
     color: tokens.colorNeutralForeground1,
@@ -83,12 +85,15 @@ export function ApiKeyScopePicker({ scopes, selected, onChange, legend, translat
       : [...selected, scope]);
   }
 
-  return <Field className={classes.root} label={legend} required>
+  return <fieldset className={classes.root} aria-required="true">
+    <legend className={classes.label}>{legend}</legend>
     <div className={classes.grid}>
       {scopes.map(({ scope, label, description, risk }) => {
         const checked = selected.includes(scope);
-        return <div className={`${classes.option} ${checked ? classes.selected : ""} ${risk === "high" ? classes.risk : ""}`} key={scope}>
+        const id = `api-key-scope-${scope}`;
+        return <div className={`${classes.option} ${checked ? classes.selected : ""} ${risk === "high" && checked ? classes.risk : ""}`} key={scope}>
           <Checkbox
+            id={id}
             checked={checked}
             label={translate(label)}
             onChange={() => toggle(scope)}
@@ -98,5 +103,5 @@ export function ApiKeyScopePicker({ scopes, selected, onChange, legend, translat
       })}
       {scopes.length === 0 && <Text>{translate("scopeUnknown")}</Text>}
     </div>
-  </Field>;
+  </fieldset>;
 }

@@ -67,13 +67,17 @@ export const useAdminStyles = makeStyles({
   muted: {
     color: tokens.colorNeutralForeground3,
   },
+  cardTitle: {
+    margin: 0,
+  },
   code: {
     fontFamily: tokens.fontFamilyMonospace,
     fontSize: tokens.fontSizeBase200,
     overflowWrap: "anywhere",
   },
   table: {
-    overflowX: "auto",
+    overflow: "auto",
+    maxHeight: "min(62vh, 560px)",
     minWidth: 0,
     ...shorthands.border("1px", "solid", tokens.colorNeutralStroke2),
     ...shorthands.borderRadius(tokens.borderRadiusMedium),
@@ -157,7 +161,7 @@ export function AdminCard({
   const styles = useAdminStyles();
   return <Card appearance="outline" className={`${styles.card}${className ? ` ${className}` : ""}`}>
     <CardHeader
-      header={<Text weight="semibold" size={400}>{title}</Text>}
+      header={<Text as="h2" className={styles.cardTitle} weight="semibold" size={400}>{title}</Text>}
       description={description ? <Caption1 className={styles.muted}>{description}</Caption1> : undefined}
       action={action}
     />

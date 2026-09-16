@@ -37,7 +37,9 @@ export function StorageMeter({ label, telemetry, configuredGiB, locale }: Props)
       ? t("storageTelemetryDisabled")
       : coverage === "exact"
         ? t("storageTelemetryAvailable")
-        : t("storageTelemetryUnavailable");
+        : telemetry?.backing === "node_local"
+          ? t("nodeLocalStorageTelemetryUnavailable")
+          : t("storageTelemetryUnavailable");
   const pressureText = telemetry?.pressure === "critical"
     ? t("storagePressureCritical")
     : telemetry?.pressure === "warning"

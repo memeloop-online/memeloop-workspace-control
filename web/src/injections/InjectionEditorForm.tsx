@@ -370,9 +370,11 @@ function addSelector(draft: InjectionEditorDraft, update: Dispatch<SetStateActio
 function renameSelector(draft: InjectionEditorDraft, update: Dispatch<SetStateAction<InjectionEditorDraft>>, previous: string, next: string) {
   if (previous === next || next in draft.labels) return;
   const labels = { ...draft.labels };
-  const value = labels[previous];
   delete labels[previous];
-  labels[next] = next === "access_mode" ? "internal" : value;
+  // Selector values belong to their field. Carrying an access mode such as
+  // "internal" into an image or workspace selector silently creates an
+  // invalid rule, so changing the field always starts with the right default.
+  labels[next] = next === "access_mode" ? "internal" : "";
   update({ ...draft, labels });
 }
 
