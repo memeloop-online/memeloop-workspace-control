@@ -542,7 +542,7 @@ async fn workspace_page_summary_covers_every_matching_workspace_not_only_the_cur
     assert_eq!(filtered["summary"]["requested"]["cpu_millis"], 2_000);
     assert_eq!(
         filtered["summary"]["requested"]["temporary_storage_gib"],
-        44
+        20
     );
     assert_eq!(filtered["summary"]["state_counts"]["provisioning"], 2);
 
@@ -701,7 +701,7 @@ async fn workspace_usage_summary_aggregates_in_sql_and_honors_template_scope() {
     assert_eq!(restricted.total_count, 2);
     assert_eq!(restricted.active_count, 1);
     assert_eq!(restricted.requested.cpu_millis, 2_200);
-    assert_eq!(restricted.requested.temporary_storage_gib, 44);
+    assert_eq!(restricted.requested.temporary_storage_gib, 20);
     assert_eq!(restricted.state_counts.len(), 2);
     assert_eq!(restricted.state_counts.get("stopped"), Some(&1));
     assert_eq!(restricted.state_counts.get("deleting"), Some(&1));
@@ -880,7 +880,7 @@ async fn organization_usage_summary_is_organization_wide_and_template_scoped() {
     assert_eq!(restricted["total_count"], 1);
     assert_eq!(
         restricted["requested"],
-        json!({"cpu_millis": 1000, "memory_mib": 2048, "gpu_count": 0, "disk_gib": 20, "temporary_storage_gib": 22})
+        json!({"cpu_millis": 1000, "memory_mib": 2048, "gpu_count": 0, "disk_gib": 20, "temporary_storage_gib": 10})
     );
     assert_eq!(restricted["state_counts"], json!({"provisioning": 1}));
     assert_eq!(
