@@ -425,44 +425,37 @@ fn immutable_stateful_set_update(error: &kube::Error) -> bool {
     let kube::Error::Api(response) = error else {
         return false;
     };
-    let message = response.message.to_ascii_lowercase();
-    response.code == 422
-        && response.reason == "Invalid"
+    immutable_stateful_set_status(response.code, &response.reason, &response.message)
+}
+
+fn immutable_stateful_set_status(code: u16, reason: &str, message: &str) -> bool {
+    let message = message.to_ascii_lowercase();
+    code == 422
+        && reason == "Invalid"
         && message.contains("updates to statefulset spec")
         && message.contains("forbidden")
 }
 
 #[cfg(test)]
 mod immutable_stateful_set_tests {
-    use kube::error::ErrorResponse;
-
-    use super::immutable_stateful_set_update;
-
-    fn api_error(code: u16, reason: &str, message: &str) -> kube::Error {
-        kube::Error::Api(ErrorResponse {
-            status: "Failure".to_owned(),
-            message: message.to_owned(),
-            reason: reason.to_owned(),
-            code,
-        })
-    }
+    use super::immutable_stateful_set_status;
 
     #[test]
     fn recognizes_only_immutable_stateful_set_updates() {
-        assert!(immutable_stateful_set_update(&api_error(
+        assert!(immutable_stateful_set_status(
             422,
             "Invalid",
             "StatefulSet.apps example is invalid: spec: Forbidden: updates to statefulset spec are forbidden",
-        )));
-        assert!(!immutable_stateful_set_update(&api_error(
+        ));
+        assert!(!immutable_stateful_set_status(
             422,
             "Invalid",
             "StatefulSet.apps example has an invalid selector",
-        )));
-        assert!(!immutable_stateful_set_update(&api_error(
+        ));
+        assert!(!immutable_stateful_set_status(
             409,
             "Conflict",
             "updates to statefulset spec are forbidden",
-        )));
+        ));
     }
 }
