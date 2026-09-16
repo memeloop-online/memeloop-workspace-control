@@ -17,6 +17,10 @@ pub use webhook::{ControlPlaneJobHandler, WebhookDeliveryHandler};
 #[allow(async_fn_in_trait)]
 pub trait JobHandler: Send + Sync + 'static {
     async fn handle(&self, job: &ClaimedJob) -> Result<(), JobHandlerError>;
+
+    async fn on_terminal_failure(&self, _job: &ClaimedJob, _now: i64) -> Result<(), StorageError> {
+        Ok(())
+    }
 }
 
 pub struct JobWorker<H> {
@@ -122,6 +126,7 @@ impl<H: JobHandler> JobWorker<H> {
         tracing::warn!(job_id = %job.id, attempts = job.attempts, error = %error, "job execution failed");
         if job.attempts >= MAX_JOB_ATTEMPTS {
             tracing::error!(job_id = %job.id, attempts = job.attempts, "job reached the retry limit");
+            self.handler.on_terminal_failure(job, now).await?;
             self.database.fail_job(job.id, &self.lease_owner, now).await
         } else {
             let delay = retry_delay(job.attempts);

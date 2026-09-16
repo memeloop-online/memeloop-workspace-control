@@ -41,6 +41,87 @@ impl Database {
         .await
     }
 
+    pub async fn mark_workspace_failed_if_generation(
+        &self,
+        workspace_id: Uuid,
+        expected_generation: u64,
+        now: i64,
+    ) -> Result<bool, StorageError> {
+        match self {
+            Self::Sqlite {
+                pool,
+                installation_id,
+            } => {
+                let mut transaction = pool.begin().await?;
+                let Some(row) = sqlx::query(&select_workspace_sql("?1", "?2"))
+                    .bind(installation_id.as_str())
+                    .bind(workspace_id.to_string())
+                    .fetch_optional(&mut *transaction)
+                    .await?
+                else {
+                    return Ok(false);
+                };
+                let mut workspace = decode_sqlite(row, installation_id)?;
+                if workspace.generation != expected_generation
+                    || workspace
+                        .state
+                        .observe(WorkspaceObservation::Failed)
+                        .is_err()
+                {
+                    return Ok(false);
+                }
+                let actor_user_id = workspace.owner_id;
+                apply_sqlite(
+                    &mut transaction,
+                    installation_id.as_str(),
+                    &mut workspace,
+                    StoredTransition::Observation(WorkspaceObservation::Failed),
+                    actor_user_id,
+                    now,
+                )
+                .await?;
+                transaction.commit().await?;
+                Ok(true)
+            }
+            Self::Postgres {
+                pool,
+                installation_id,
+            } => {
+                let mut transaction = pool.begin().await?;
+                let Some(row) =
+                    sqlx::query(&format!("{} FOR UPDATE", select_workspace_sql("$1", "$2")))
+                        .bind(installation_id.as_str())
+                        .bind(workspace_id.to_string())
+                        .fetch_optional(&mut *transaction)
+                        .await?
+                else {
+                    return Ok(false);
+                };
+                let mut workspace = decode_postgres(row, installation_id)?;
+                if workspace.generation != expected_generation
+                    || workspace
+                        .state
+                        .observe(WorkspaceObservation::Failed)
+                        .is_err()
+                {
+                    return Ok(false);
+                }
+                let actor_user_id = workspace.owner_id;
+                apply_postgres(
+                    &mut transaction,
+                    installation_id.as_str(),
+                    &mut workspace,
+                    StoredTransition::Observation(WorkspaceObservation::Failed),
+                    actor_user_id,
+                    now,
+                )
+                .await?;
+                transaction.commit().await?;
+                Ok(true)
+            }
+        }
+    }
+
     async fn transition_workspace(
         &self,
         workspace_id: Uuid,

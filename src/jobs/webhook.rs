@@ -9,7 +9,7 @@ use uuid::Uuid;
 use crate::{
     crypto::EnvelopeCipher,
     observability::{Observability, UpstreamKind},
-    storage::{ClaimedJob, Database},
+    storage::{ClaimedJob, Database, StorageError},
 };
 
 use super::{JobHandler, JobHandlerError, WorkspaceReconcileHandler};
@@ -112,6 +112,15 @@ impl JobHandler for ControlPlaneJobHandler {
                 job.kind
             ))),
         }
+    }
+
+    async fn on_terminal_failure(&self, job: &ClaimedJob, now: i64) -> Result<(), StorageError> {
+        if job.kind == "reconcile_workspace" {
+            if let Some(workspace) = self.workspace.as_ref() {
+                workspace.on_terminal_failure(job, now).await?;
+            }
+        }
+        Ok(())
     }
 }
 

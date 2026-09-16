@@ -339,6 +339,36 @@ impl JobHandler for WorkspaceReconcileHandler {
         };
         self.reconcile_workspace(&workspace).await
     }
+
+    async fn on_terminal_failure(&self, job: &ClaimedJob, now: i64) -> Result<(), StorageError> {
+        if job.kind != "reconcile_workspace" {
+            return Ok(());
+        }
+        let Some(workspace_id) = job.workspace_id else {
+            return Ok(());
+        };
+        let Some(expected_generation) = job
+            .payload
+            .get("generation")
+            .and_then(|value| value.as_u64())
+        else {
+            tracing::debug!(job_id = %job.id, "terminal reconcile job has no generation guard");
+            return Ok(());
+        };
+        if !self
+            .database
+            .mark_workspace_failed_if_generation(workspace_id, expected_generation, now)
+            .await?
+        {
+            tracing::debug!(
+                job_id = %job.id,
+                %workspace_id,
+                expected_generation,
+                "ignoring terminal failure for a stale workspace reconcile generation"
+            );
+        }
+        Ok(())
+    }
 }
 
 fn job_error(error: impl std::fmt::Display) -> JobHandlerError {
