@@ -96,8 +96,8 @@ const useStyles = makeStyles({
     backgroundColor: tokens.colorPaletteGreenBackground1,
   },
   iconKey: {
-    color: tokens.colorPalettePurpleForeground1,
-    backgroundColor: tokens.colorPalettePurpleBackground1,
+    color: tokens.colorPalettePurpleForeground2,
+    backgroundColor: tokens.colorPalettePurpleBackground2,
   },
   iconSensitive: {
     color: tokens.colorPaletteYellowForeground1,
