@@ -43,7 +43,7 @@
   "mobileTabNew": "新建",
   "mobileTabEdit": "编辑",
   "key": "名称",
-  "keyHint": "取一个方便识别的名称，允许中文，例如“Windows 游戏电脑公钥”",
+  "keyHint": "名称便于识别，支持中文，如“游戏本公钥”",
   "type": "类型",
   "encoding": "编码",
   "encodingHelp": "文本使用 UTF-8；二进制文件请先编码为 Base64。",
