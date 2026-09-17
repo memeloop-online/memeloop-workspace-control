@@ -9,17 +9,19 @@ use super::query::{ScalarSample, client, promql_label_value, query_scalar};
 #[derive(Debug, Clone)]
 struct MetricScope {
     matcher: String,
+    installation_matcher: String,
     restricted: bool,
     impossible: bool,
 }
 
 impl MetricScope {
     fn new(installation_id: &str, organization_id: Uuid, template_ids: Option<&[Uuid]>) -> Self {
+        let installation_matcher = format!(
+            "label_workspace_memeloop_dev_owner_installation=\"{}\"",
+            promql_label_value(installation_id),
+        );
         let mut labels = vec![
-            format!(
-                "label_workspace_memeloop_dev_owner_installation=\"{}\"",
-                promql_label_value(installation_id),
-            ),
+            installation_matcher.clone(),
             format!("label_workspace_memeloop_dev_organization_id=\"{organization_id}\""),
         ];
         let (restricted, impossible) = match template_ids {
@@ -39,6 +41,7 @@ impl MetricScope {
         };
         Self {
             matcher: labels.join(","),
+            installation_matcher,
             restricted,
             impossible,
         }
@@ -66,10 +69,15 @@ impl MetricScope {
     }
 
     fn temporary_pvc_labels(&self) -> String {
-        format!(
-            "max by(namespace,persistentvolumeclaim) (kube_persistentvolumeclaim_labels{{{},label_workspace_memeloop_dev_storage_role=\"temporary\"}})",
+        let claims = format!(
+            "max by(namespace,persistentvolumeclaim,label_workspace_memeloop_dev_workspace_id) (kube_persistentvolumeclaim_labels{{{},label_workspace_memeloop_dev_storage_role=\"temporary\"}})",
+            self.installation_matcher,
+        );
+        let visible_workspaces = format!(
+            "max by(label_workspace_memeloop_dev_workspace_id) (kube_pod_labels{{{}}})",
             self.matcher,
-        )
+        );
+        format!("({claims} and on(label_workspace_memeloop_dev_workspace_id) {visible_workspaces})",)
     }
 }
 
@@ -349,6 +357,11 @@ mod tests {
             queries
                 .temporary
                 .contains("label_workspace_memeloop_dev_storage_role=\"temporary\"")
+        );
+        assert!(
+            queries
+                .temporary
+                .contains("and on(label_workspace_memeloop_dev_workspace_id)")
         );
     }
 
