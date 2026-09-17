@@ -11,6 +11,12 @@ A workspace is an isolated, per-user Kubernetes workload created from a
 reviewed template. The control plane owns its full lifecycle: provisioning,
 credential injection, state transitions, reconciliation, and teardown.
 
+![Workspace list with live resource usage](/img/screenshots/workspaces-desktop.png)
+
+The same resource summary and lifecycle actions adapt to narrow screens:
+
+![Responsive workspace view](/img/screenshots/workspaces-mobile.png)
+
 ## Lifecycle
 
 Workspaces support four actions, in the console or through

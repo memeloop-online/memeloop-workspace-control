@@ -80,8 +80,11 @@ async function capture(viewport, hash, filename, { fullPage = false, fitFirstCar
   const { context, page } = await openProduct(viewport, hash);
   await sanitize(page);
   if (fitFirstCard) {
-    const firstCard = page.locator(".fui-Card").first();
-    await firstCard.waitFor({ state: "visible", timeout: 30_000 });
+    const firstTitle = page.locator('h2[id^="workspace-"][id$="-title"]').first();
+    await firstTitle.waitFor({ state: "visible", timeout: 30_000 });
+    const firstCard = firstTitle.locator(
+      'xpath=ancestor::*[contains(concat(" ", normalize-space(@class), " "), " fui-Card ")][1]',
+    );
     for (let attempt = 0; attempt < 3; attempt++) {
       const box = await firstCard.boundingBox();
       const size = page.viewportSize();
