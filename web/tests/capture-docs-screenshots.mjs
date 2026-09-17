@@ -76,16 +76,29 @@ async function sanitize(page) {
   });
 }
 
-async function capture(viewport, hash, filename, fullPage = false) {
+async function capture(viewport, hash, filename, { fullPage = false, fitFirstCard = false } = {}) {
   const { context, page } = await openProduct(viewport, hash);
   await sanitize(page);
+  if (fitFirstCard) {
+    const firstCard = page.locator(".fui-Card").first();
+    await firstCard.waitFor({ state: "visible", timeout: 30_000 });
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const box = await firstCard.boundingBox();
+      const size = page.viewportSize();
+      if (!box || !size) break;
+      const requiredHeight = Math.ceil(box.y + box.height) + 24;
+      if (requiredHeight <= size.height) break;
+      await page.setViewportSize({ width: size.width, height: requiredHeight });
+      await page.waitForTimeout(300);
+    }
+  }
   await page.screenshot({ path: path.join(output, filename), fullPage });
   await context.close();
 }
 
 try {
   await capture({ width: 1440, height: 1000 }, "workspaces", "workspaces-desktop.png");
-  await capture({ width: 390, height: 844 }, "workspaces", "workspaces-mobile.png");
+  await capture({ width: 390, height: 844 }, "workspaces", "workspaces-mobile.png", { fitFirstCard: true });
   await capture({ width: 1440, height: 1000 }, "injections", "credentials-desktop.png");
 } finally {
   await browser.close();
