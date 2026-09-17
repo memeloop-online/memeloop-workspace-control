@@ -1,4 +1,4 @@
-use super::{ResourceBuilder, WorkspacePod};
+use super::super::{ResourceBuilder, workspace_pod::WorkspacePod};
 use crate::kubernetes::resource_helpers::mount;
 use k8s_openapi::{
     api::core::v1::{Container, ContainerPort, ResourceRequirements},

@@ -355,6 +355,10 @@ export class ApiClient {
     return this.request(`/api/v1/injections/${scope}/${scopeId}`);
   }
 
+  injectionValue(scope: InjectionScope, scopeId: string, key: string): Promise<{ encoding: "utf8" | "base64"; value: string }> {
+    return this.request(`/api/v1/injections/${scope}/${scopeId}/${encodeURIComponent(key)}/value`);
+  }
+
   replaceInjection(
     scope: InjectionScope,
     scopeId: string,

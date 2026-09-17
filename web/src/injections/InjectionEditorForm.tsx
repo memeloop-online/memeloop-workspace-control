@@ -17,7 +17,7 @@ import {
   makeStyles,
   tokens,
 } from "@fluentui/react-components";
-import { AddRegular, DeleteRegular, DismissRegular, InfoRegular, SaveRegular } from "@fluentui/react-icons";
+import { AddRegular, CheckmarkRegular, CopyRegular, DeleteRegular, DismissRegular, InfoRegular, SaveRegular } from "@fluentui/react-icons";
 
 import { useI18n } from "../i18n";
 import type { MessageKey } from "../i18n";
@@ -105,6 +105,14 @@ const useStyles = makeStyles({
     minHeight: "12rem",
     fontFamily: tokens.fontFamilyMonospace,
   },
+  valueArea: {
+    display: "grid",
+    gap: tokens.spacingVerticalXS,
+  },
+  valueActions: {
+    display: "flex",
+    justifyContent: "flex-end",
+  },
   checks: {
     display: "flex",
     flexWrap: "wrap",
@@ -140,18 +148,42 @@ export function InjectionEditorForm({
 }: Props) {
   const { t } = useI18n();
   const styles = useStyles();
+  const [copied, setCopied] = useState(false);
+  const copyTimer = useRef<number | undefined>(undefined);
+
+  useEffect(() => () => window.clearTimeout(copyTimer.current), []);
+  useEffect(() => setCopied(false), [draft.value.value, selectedKey]);
 
   function submit(event: FormEvent) {
     event.preventDefault();
     void onSubmit();
   }
 
+  async function copyValue() {
+    if (!draft.value.value) return;
+    try {
+      await navigator.clipboard.writeText(draft.value.value);
+    } catch {
+      // Clipboard permissions are optional; the value stays selectable in the editor.
+      return;
+    }
+    setCopied(true);
+    window.clearTimeout(copyTimer.current);
+    copyTimer.current = window.setTimeout(() => setCopied(false), 1500);
+  }
+
+  const headingNote = !selectedKey
+    ? null
+    : draft.storedValueAvailable
+      ? t("credentialStoredValue")
+      : t("credentialWriteOnly");
+
   return (
     <form className={`${styles.form} ${className ?? ""}`} onSubmit={submit}>
       <div className={styles.heading}>
         <div className={styles.headingTitle}>
           <Text size={500} weight="semibold">{selectedKey ? t("editingCredential") : t("newCredential")}</Text>
-          {selectedKey && <Text size={200} className={styles.note}>{t("credentialWriteOnly")}</Text>}
+          {headingNote && <Text size={200} className={styles.note}>{headingNote}</Text>}
         </div>
         {selectedKey && <Button type="button" appearance="subtle" icon={<DismissRegular aria-hidden="true" />} onClick={onReset}>{t("cancel")}</Button>}
       </div>
@@ -223,19 +255,33 @@ export function InjectionEditorForm({
         ) : <TemplateSelectorAutocomplete draft={draft} update={update} templates={templates} />}
         <SelectorEditor draft={draft} update={update} fixedTemplate={fixedTemplate} />
         <Field className={styles.wide} label={draft.value.encoding === "base64" ? t("valueBase64") : t("valueMultiline")}>
-          <Textarea
-            className={styles.textarea}
-            rows={12}
-            resize="vertical"
-            spellCheck={false}
-            value={draft.value.value}
-            onChange={(event) => update({ ...draft, value: { ...draft.value, value: event.currentTarget.value } })}
-            placeholder={draft.value.encoding === "base64" ? t("base64Hint") : t("multilineHint")}
-          />
+          <div className={styles.valueArea}>
+            <Textarea
+              className={styles.textarea}
+              rows={12}
+              resize="vertical"
+              spellCheck={false}
+              value={draft.value.value}
+              onChange={(event) => update({ ...draft, value: { ...draft.value, value: event.currentTarget.value } })}
+              placeholder={draft.value.encoding === "base64" ? t("base64Hint") : t("multilineHint")}
+            />
+            <div className={styles.valueActions}>
+              <Button
+                type="button"
+                appearance="secondary"
+                size="small"
+                icon={copied ? <CheckmarkRegular aria-hidden="true" /> : <CopyRegular aria-hidden="true" />}
+                disabled={!draft.value.value}
+                onClick={() => void copyValue()}
+              >
+                {copied ? t("copied") : t("copyValue")}
+              </Button>
+            </div>
+          </div>
         </Field>
       </div>
       <div className={styles.checks}>
-        <Checkbox checked={draft.sensitive} onChange={(_, data) => update({ ...draft, sensitive: data.checked === true })} label={<LabelHint label={t("sensitiveValue")} help={t("sensitiveHelp")} />} />
+        <Checkbox checked={draft.sensitive} disabled={draft.kind === "secret_file"} onChange={(_, data) => update({ ...draft, sensitive: data.checked === true })} label={<LabelHint label={t("sensitiveValue")} help={t("sensitiveHelp")} />} />
         {scope === "organization" && <Checkbox checked={draft.locked} onChange={(_, data) => update({ ...draft, locked: data.checked === true })} label={<LabelHint label={t("locked")} help={t("lockedHelp")} />} />}
       </div>
       <div className={styles.actions}>

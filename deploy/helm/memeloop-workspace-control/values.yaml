@@ -34,6 +34,7 @@ workspace:
   # bounded node-local disk emptyDir as a compatibility fallback.
   scratchStorageClassName: ""
   ttydImage: ""
+  buildkitImage: "moby/buildkit:v0.33.0-rootless@sha256:80b15f0735e87bab7bf59ec4d695dfb4a7cfb25521cf56dc75d6f256285b63ef"
   ttydMtls:
     # Existing cert-manager-managed server Secret in the product namespace. It
     # contains ttyd's `tls.crt` and `tls.key`; it is mounted only by ttyd.

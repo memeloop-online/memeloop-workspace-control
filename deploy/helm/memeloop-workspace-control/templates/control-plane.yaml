@@ -65,6 +65,8 @@ spec:
             {{- end }}
             - name: MWC_TTYD_IMAGE
               value: {{ .Values.workspace.ttydImage | quote }}
+            - name: MWC_BUILDKIT_IMAGE
+              value: {{ .Values.workspace.buildkitImage | quote }}
             {{- if .Values.workspace.ttydMtls.serverTlsSecretName }}
             - name: MWC_TTYD_MTLS_SERVER_SECRET
               value: {{ .Values.workspace.ttydMtls.serverTlsSecretName | quote }}

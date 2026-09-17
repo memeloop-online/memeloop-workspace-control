@@ -5,10 +5,18 @@ import {
   CardHeader,
   Input,
   Text,
+  Tooltip,
   makeStyles,
   tokens,
 } from "@fluentui/react-components";
-import { DismissRegular, KeyRegular, SearchRegular } from "@fluentui/react-icons";
+import {
+  CodeRegular,
+  DismissRegular,
+  DocumentTextRegular,
+  FingerprintRegular,
+  LockClosedRegular,
+  SearchRegular,
+} from "@fluentui/react-icons";
 
 import { useI18n } from "../i18n";
 import type { StoredInjection } from "../types";
@@ -78,8 +86,22 @@ const useStyles = makeStyles({
     width: "2rem",
     height: "2rem",
     borderRadius: tokens.borderRadiusMedium,
+  },
+  iconFile: {
     color: tokens.colorBrandForeground1,
     backgroundColor: tokens.colorBrandBackground2,
+  },
+  iconVariable: {
+    color: tokens.colorPaletteGreenForeground1,
+    backgroundColor: tokens.colorPaletteGreenBackground1,
+  },
+  iconKey: {
+    color: tokens.colorPalettePurpleForeground2,
+    backgroundColor: tokens.colorPalettePurpleBackground2,
+  },
+  iconSensitive: {
+    color: tokens.colorPaletteYellowForeground1,
+    backgroundColor: tokens.colorPaletteYellowBackground1,
   },
   details: {
     display: "grid",
@@ -101,6 +123,7 @@ const useStyles = makeStyles({
   },
   version: {
     whiteSpace: "nowrap",
+    flexShrink: 0,
   },
   empty: {
     display: "grid",
@@ -160,6 +183,7 @@ export function InjectionList({
         {!loading && filteredItems.length === 0 && <Text className={styles.empty}>{emptyLabel}</Text>}
         {!loading && filteredItems.map((item) => {
           const selected = selectedKey === item.key;
+          const kindDescription = `${injectionKindLabel(item, t)} · ${item.sensitive || item.kind === "secret_file" ? t("sensitiveValue") : t("visibleConfiguration")}`;
           return (
             <Button
               key={item.key}
@@ -169,10 +193,14 @@ export function InjectionList({
               className={`${styles.row} ${selected ? styles.selected : ""}`}
               onClick={() => onSelect(item)}
             >
-              <span className={styles.icon} aria-hidden="true"><KeyRegular /></span>
+              <Tooltip content={kindDescription} relationship="description">
+                <span className={`${styles.icon} ${kindIconStyle(item, styles)}`} aria-hidden="true">{kindIcon(item)}</span>
+              </Tooltip>
               <span className={styles.details}>
                 <span className={styles.key}>{item.key}</span>
-                <span className={styles.target}>{item.target} · {injectionKindLabel(item, t)}</span>
+                <Tooltip content={item.target} relationship="description">
+                  <span className={styles.target}>{item.target}</span>
+                </Tooltip>
               </span>
               <Badge className={styles.version} appearance="tint" color={item.locked ? "warning" : "informative"}>
                 v{item.version}{item.locked ? ` · ${t("locked")}` : ""}
@@ -183,4 +211,19 @@ export function InjectionList({
       </div>
     </Card>
   );
+}
+
+function kindIcon(item: StoredInjection) {
+  if (item.sensitive) return <LockClosedRegular />;
+  if (item.kind === "environment_variable") return <CodeRegular />;
+  if (item.kind === "ssh_public_key") return <FingerprintRegular />;
+  if (item.kind === "secret_file") return <LockClosedRegular />;
+  return <DocumentTextRegular />;
+}
+
+function kindIconStyle(item: StoredInjection, styles: Record<"iconFile" | "iconVariable" | "iconKey" | "iconSensitive", string>) {
+  if (item.sensitive) return styles.iconSensitive;
+  if (item.kind === "environment_variable") return styles.iconVariable;
+  if (item.kind === "ssh_public_key") return styles.iconKey;
+  return styles.iconFile;
 }

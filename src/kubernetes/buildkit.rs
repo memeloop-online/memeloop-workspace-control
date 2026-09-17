@@ -8,15 +8,14 @@ use k8s_openapi::{
     apimachinery::pkg::api::resource::Quantity,
 };
 
-pub(super) const IMAGE: &str = "harbor.k3s.onetwo.website/docker-io/moby/buildkit:v0.33.0-rootless@sha256:80b15f0735e87bab7bf59ec4d695dfb4a7cfb25521cf56dc75d6f256285b63ef";
 pub(super) const ENDPOINT: &str = "tcp://127.0.0.1:1234";
 pub(super) const SCRATCH_VOLUME: &str = "workspace-scratch";
 pub(super) const CACHE_SUB_PATH: &str = "build-cache";
 
-pub(super) fn bootstrap_container(enabled: bool) -> Option<Container> {
+pub(super) fn bootstrap_container(enabled: bool, image: &str) -> Option<Container> {
     enabled.then(|| Container {
         name: "buildkit-bootstrap".to_owned(),
-        image: Some(IMAGE.to_owned()),
+        image: Some(image.to_owned()),
         command: Some(vec!["sh".to_owned(), "-c".to_owned()]),
         args: Some(vec![setup_script().to_owned()]),
         resources: Some(ResourceRequirements {
@@ -34,7 +33,7 @@ fn buildkit_tmp_mount() -> VolumeMount {
     cache_mount("/tmp", "build-cache/tmp")
 }
 
-pub(super) fn container(enabled: bool) -> Option<Container> {
+pub(super) fn container(enabled: bool, image: &str) -> Option<Container> {
     if !enabled {
         return None;
     }
@@ -52,7 +51,7 @@ pub(super) fn container(enabled: bool) -> Option<Container> {
     };
     Some(Container {
         name: "buildkitd".to_owned(),
-        image: Some(IMAGE.to_owned()),
+        image: Some(image.to_owned()),
         // Keep the rootless image entrypoint. It starts buildkitd through RootlessKit and creates
         // the user namespace required by the OCI worker.
         args: Some(vec![

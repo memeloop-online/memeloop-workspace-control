@@ -1,172 +1,121 @@
-# Helm deployment
+# Memeloop Workspace Control Helm chart
 
-The chart supports exactly two runtime shapes:
+This chart installs the MWC control plane, workspace reconciler, optional SSH
+jump host, access routes, and monitoring resources.
 
-- `mode=sqlite`: one StatefulSet replica and one RWO PVC.
-- `mode=postgresql`: a Deployment plus an optional HPA. PostgreSQL is external
-  and its URL comes from a Kubernetes Secret.
+## Requirements
 
-SQLite claim templates are retained when the StatefulSet is deleted or scaled down. To mount a
-pre-created claim in the release Namespace instead, set `sqlite.existingClaim`; the chart then
-omits `volumeClaimTemplates`. This option is valid only in SQLite mode and cannot be combined with
-`sqlite.storageClassName`. Retention does not protect a PVC from direct deletion, Namespace
-deletion, Argo CD prune, or its PV reclaim policy.
+- Kubernetes with a default StorageClass or an explicitly selected class
+- the `memeloop-workspace-control` release namespace
+- an immutable installation ID
+- existing Secrets for the envelope-encryption key and internal-auth token
+- a persistent OpenSSH host-key Secret when the jump host is enabled
+- pinned MWC, ttyd, BuildKit, and jump-host images for reproducible deployments
 
-`sqlite.existingClaim` may be used directly on a new installation. An existing StatefulSet cannot
-be patched from `volumeClaimTemplates` to an explicit claim because that field is immutable. First
-roll out and verify the Retain policy while leaving `sqlite.existingClaim` empty. In a separately
-controlled window, stop the only database writer, check SQLite integrity, delete/recreate the
-StatefulSet without deleting its retained PVC, and set `sqlite.existingClaim` to that exact claim
-name. Verify the recreated Pod mounts the recorded PVC/PV/CSI handle before allowing writes.
+The chart supports two database modes:
 
-Install the chart with `--namespace memeloop-workspace-control`. Rendering fails for every other
-release Namespace. The control plane and every workspace use this Namespace; workspace-ID-prefixed
-resource names and ownership labels isolate their StatefulSets, Services, claims, configuration,
-NetworkPolicies and routes without creating per-workspace Namespaces.
+- `sqlite`: one StatefulSet replica with one RWO control-plane PVC
+- `postgresql`: a Deployment backed by an external PostgreSQL database, with
+  optional horizontal autoscaling
 
-`workspace.storageClassName` is the durable Home class. Configure
-`workspace.scratchStorageClassName` independently to place regenerable temporary data on a local
-high-performance CSI class with hard capacity enforcement and
-`volumeBindingMode: WaitForFirstConsumer`, such as a TopoLVM or local LVM/ZFS class. Each workspace
-Pod then receives one RWO generic ephemeral PVC at the template's total temporary-storage size.
-Workspace cache, optional BuildKit cache, and Codex/session scratch use isolated subpaths while
-sharing that hard total quota. Kubernetes owns and deletes the claim with the Pod. Do not point
-this value at the durable replicated Home class merely as a default: network and replica overhead
-are normally undesirable for regenerable data. Leaving the value empty uses one bounded node-local
-disk `emptyDir` as a compatibility fallback.
+## Install
 
-The internal listener on port `8081` exposes OpenMetrics at `/metrics`, including HTTP
-latency/errors, active streams, upstream calls, durable queues, process/allocator memory, plugin
-state, and platform/per-user workspace aggregates. The business listener on port `8080` does not
-serve `/metrics`; anonymous public requests receive `404`. Set
-`monitoring.serviceMonitor.enabled=true` when the Prometheus Operator is installed; it scrapes the
-existing internal Service and the chart permits its configured monitoring namespace through
-NetworkPolicy. After a metrics adapter maps
-`rate(mwc_http_requests_total)` to `mwc_http_requests_per_second` and publishes
-`mwc_jobs_pending`, PostgreSQL installations can enable `autoscaling.customMetrics` so the HPA
-uses request rate and task backlog in addition to CPU and memory.
-CPU and memory requests are set by default because utilization-based HPA metrics have no valid
-denominator without them. The chart rejects a PostgreSQL autoscaling deployment if either request
-is removed.
+Create the namespace and required Secrets through your preferred secret
+management workflow, then prepare a values file:
 
-Set `monitoring.diagnostics.enabled=true` only during an incident to activate release CPU and
-jemalloc heap pprof capture on the existing internal listener. These endpoints require the internal
-Bearer token and are never added to Higress. See `docs/OBSERVABILITY.md` for endpoint contracts,
-overhead, port-forward commands and retention guidance.
+```yaml
+installationId: example
+mode: sqlite
 
-Set `monitoring.prometheusRule.enabled=true` to install the storage and queue alerts. The rule
-covers Home PVC and node ephemeral-storage request bands at 80% (warning) and 90% (critical),
-failed jobs after 10 minutes, and a pending-job age above 15 minutes. The rule also records the
-workspace Home usage and node ephemeral-storage request percentages for Grafana. Alert duration
-for the storage bands follows `monitoring.prometheusRule.warningFor` and
-`monitoring.prometheusRule.criticalFor`. Workspace selection uses the bounded
-`workspace.memeloop.dev/owner-installation` and `workspace.memeloop.dev/workspace-id` Pod labels
-from kube-state-metrics and joins matching Pods to
-`kube_pod_spec_volumes_persistentvolumeclaims_info`. The workspace UUID is only a filter and is not
-copied into recording or alert labels. This covers all workspace-ID-prefixed resources in
-`memeloop-workspace-control` while their Pod object exists. Stopped workspaces have no Pod,
-so they intentionally have no Home-usage series or capacity alert; inspect their PVC/storage volume
-directly during stopped maintenance. Before enabling these rules, use a known running workspace to
-verify both allowlisted Pod labels and the Pod/PVC relationship metric are present and the join
-selects exactly its Home claim.
+image:
+  repository: ghcr.io/memeloop-online/memeloop-workspace-control
+  digest: sha256:<verified-digest>
 
-Set `monitoring.prometheusUrl` to an in-cluster Prometheus base URL to show PVC usage,
-capacity, and available bytes. The URL is optional; the control plane uses bounded,
-fixed queries and needs neither Kubernetes node proxy nor Pod exec permissions.
+secrets:
+  encryptionSecretName: mwc-encryption
+  internalAuthSecretName: mwc-internal-auth
 
-The API-key and profile endpoints are available at `/api/v1/me/api-keys` and
-`/api/v1/me/profile`. New API keys carry explicit scopes and an expiry within 365 days; the
-plaintext token is returned once at creation. Profile avatars are local PNG, JPEG, or WebP
-uploads capped at 512 KiB. Workspace, organization, user, and membership list endpoints use
-`limit`, `cursor`, and `search` parameters and return `items` with an optional `next_cursor`, so
-administrative screens can load large installations incrementally.
+workspace:
+  storageClassName: longhorn
+  ttydImage: ghcr.io/example/ttyd@sha256:<verified-digest>
+  buildkitImage: moby/buildkit@sha256:<verified-digest>
 
-Every install requires an immutable `installationId`, a 32-byte envelope key,
-an independent internal-auth token, a pinned ttyd image, and a persistent
-OpenSSH host-key Secret. The chart never generates or stores those values in a
-rendered manifest.
+jumpHost:
+  enabled: false
+```
 
-Higress prerequisites are intentionally explicit. Gateway API CRDs and a referenced Gateway are
-needed only for the fixed public API HTTPRoute and public SSH TCPRoute; the Gateway must allow
-routes from this namespace and public SSH additionally needs listener and Service port 22. Web
-Shell instead uses a built-in `networking.k8s.io/v1` Ingress in the Namespace containing each
-workspace, with `ingressClassName: nginx`, and therefore needs neither Gateway API CRDs nor
-ReferenceGrant. Set
-`higress.extAuthPluginUrl` to the pinned official Higress ext-auth plugin OCI URL. When either
-public Web Shell or HTTP port mappings is enabled, the chart creates one `<installation>-access-auth`
-WasmPlugin. Its ordered match rules put the exact Web Shell host first and the full-label port
-mapping wildcard second; each rule keeps its own fail-closed policy, inner blacklist, authorization
-endpoint, and response-header policy. The example pins the official ext-auth 1.0.0 artifact by
-digest; mirror that OCI artifact into Harbor only if gateway nodes cannot reach the official
-registry, then update the value to the verified mirror digest.
-The chart refuses to render a Web Shell domain without that plugin and an exact
-`https://<webShellDomain>` public origin.
-Set `higress.podLabels` to the labels actually present on the K3S Higress gateway Pods. The same
-selector is used by both the control-plane and workspace NetworkPolicies.
+Install or update the release:
 
-### Internet-only workspace egress
+```bash
+helm upgrade --install memeloop-workspace-control \
+  deploy/helm/memeloop-workspace-control \
+  --namespace memeloop-workspace-control \
+  --create-namespace \
+  --values values.production.yaml
+```
 
-Templates may set `egress_policy: internet_only`. This adds a Pod NetworkPolicy that permits only
-UDP/TCP 53 to the configured DNS Pods and public IPv4/IPv6 destinations, excluding private,
-loopback, link-local, CGNAT, multicast, and other reserved ranges. Configure the DNS workload with
-`workspace.egress.dnsNamespace` and `workspace.egress.dnsPodLabels`; these values must identify
-the actual in-cluster resolver, not merely its Service name. Add public node addresses and any
-nonstandard Pod or Service CIDRs to `workspace.egress.additionalBlockedCidrs`.
+Use image digests in production. A configured digest takes precedence over its
+tag.
 
-The chart always supplies this configuration. Non-Helm installations may omit it while all
-templates are `unrestricted`; attempting to build an `internet_only` workspace without both DNS
-namespace and Pod-label settings fails closed.
+## Storage
 
-NetworkPolicy does not govern host/node traffic and cannot remove the interval before a newly
-created policy is enforced. Validate DNS and egress behavior against the installed CNI before
-enabling this policy for production templates.
+`workspace.storageClassName` stores durable workspace home volumes.
+`workspace.scratchStorageClassName` can select a local, capacity-enforced CSI
+class for regenerable build and cache data. When it is empty, workspace
+temporary storage uses a bounded node-local `emptyDir`.
 
-### Workspace HTTP port mappings
+SQLite uses the `sqlite.size` and `sqlite.storageClassName` settings. Set
+`sqlite.existingClaim` on a fresh installation to mount a pre-created claim;
+it cannot be combined with `sqlite.storageClassName`.
 
-Set `public.portMappingDomain` to a DNS suffix dedicated to workspace applications, such as
-`ports.example.com`. The deployment then uses `p-<mapping-id>.ports.example.com` hostnames. A
-wildcard DNS record and matching wildcard TLS certificate for `*.ports.example.com` are required.
-Configure the wildcard in Higress `credentialConfig` without an ACME issuer and enable
-`fallbackForInvalidSecret`; the generated Ingress uses an intentionally absent placeholder Secret
-so Higress resolves the certificate centrally instead of copying private keys into workspace
-resources.
-Higress attaches fail-closed external authentication through the shared `access-auth` plugin and
-the valid full-label wildcard route match, then the port-mapping rule selects only `p-*` mapping
-hosts with its inner blacklist. This two-stage match is required because Higress route matching
-does not accept a partial-label wildcard such as `p-*.example.com`. The workspace application is
-reached through a ClusterIP Service; NodePort and hostPort are outside this path.
+## Access
 
-The API returns a stable HTTPS URL for each mapping. The `open` action creates a one-use bootstrap
-URL valid for 60 seconds. Requesting that URL reaches the mapping Ingress and invokes the internal
-port-mapping authorization endpoint in the same access-auth pass. On success, the endpoint returns
-`303 See Other` with `Location` and `Set-Cookie`; the browser follows the redirect and receives the
-`__Host-mwc-port-session` `HttpOnly`, `Secure`, `SameSite=Lax` cookie in one exchange. Its session
-lifetime is eight hours. There is no per-mapping public bootstrap backend. Deleting a mapping
-revokes its tickets and sessions and queues reconciliation of the owned Ingress, Services, and
-NetworkPolicy. The mapping domain is passed to the control plane as `MWC_PORT_MAPPING_PUBLIC_DOMAIN`.
+Access features appear in the console when their values and template settings
+are present:
 
-For reproducible deployments set `image.digest` and `jumpHost.image.digest` to
-the verified `sha256:...` values published by CI. A digest takes precedence over
-the corresponding tag, and the chart rejects malformed digest values.
+| Feature | Main values |
+| --- | --- |
+| Internal SSH | `workspace.internalSshHost` |
+| Public SSH | `public.sshHost`, `jumpHost.*`, `higress.*` |
+| Web terminal | `public.webShellDomain`, `public.webShellOrigin`, `workspace.ttydMtls.*`, `higress.ttydMtls.*` |
+| Port mappings | `public.portMappingDomain`, `higress.extAuthPluginUrl` |
 
-Public PostgreSQL example values are in `values.example.yaml`; the internal SQLite shape is in
-`values.internal.example.yaml`. A cluster runs one installation in the canonical Namespace and
-uses its own database, Secrets, ServiceAccount, PVC and domains.
+Public routes use the configured Higress Gateway. Web terminal and port
+mapping domains require matching DNS and TLS configuration. Port mappings use
+ClusterIP Services and authenticated HTTPS URLs.
 
-Before installing on K3S, run `scripts/k3s/preflight.sh`. After rollout, run
-`scripts/k3s/verify-installation.sh`; both scripts are read-only and require explicit environment
-variables so they cannot silently target a default installation.
+## Workspace networking
 
-## WASM plugins
+Templates can select the `internet_only` egress policy. Configure
+`workspace.egress.dnsNamespace` and `workspace.egress.dnsPodLabels` to match
+the cluster DNS Pods. Add cluster- or provider-specific address ranges to
+`workspace.egress.additionalBlockedCidrs` and public hostnames to
+`workspace.egress.dynamicBlockedHosts`.
 
-Plugin packages may be supplied through the administrator-only inspection and confirmation API;
-their bytes, assets, approvals, enabled state, and optimistic version are persisted in the
-authoritative database and hot-reloaded. An optional operator-controlled startup source can also be
-mounted by setting exactly one of `plugins.existingConfigMap` or `plugins.existingClaim`; changes to
-that read-only startup mount require a Pod restart. ConfigMap users must map each package below its
-own first-level directory with `plugins.configMapItems`.
+Keep `networkPolicy.enabled` enabled for installations that host untrusted
+workloads, and validate policy enforcement with the installed CNI.
 
-Mounting a startup package is its GitOps approval. Any visible malformed,
-incompatible, duplicated, symlinked, escaping, or oversized package makes startup fail closed.
-Runtime policy traps and limits reject only that workspace creation; existing workspaces and cleanup
-actions remain available.
+## Monitoring
+
+The internal Service exposes `/metrics`. The chart can create:
+
+- a `ServiceMonitor` with `monitoring.serviceMonitor.enabled`
+- storage and queue alerts with `monitoring.prometheusRule.enabled`
+- PostgreSQL HPA metrics with `autoscaling.customMetrics.enabled`
+
+Set `monitoring.prometheusUrl` when the console should display PVC usage.
+Runtime diagnostics are opt-in through `monitoring.diagnostics.enabled` and
+remain on the authenticated internal listener.
+
+## Plugins
+
+Administrators can install and configure plugin packages through the product.
+For operator-managed startup packages, set one of
+`plugins.existingConfigMap` or `plugins.existingClaim`. The two sources are
+mutually exclusive.
+
+## Example values
+
+- `values.example.yaml`: PostgreSQL installation with public access settings
+
+Review `values.yaml` for the complete value reference.

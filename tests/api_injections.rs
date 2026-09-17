@@ -179,6 +179,7 @@ async fn user_injection_writes_require_a_workspace_write_scope() {
     assert_eq!(allowed.status(), StatusCode::OK);
 
     let listed = app
+        .clone()
         .oneshot(request(
             Method::GET,
             &format!("/api/v1/injections/user/{user_id}"),
@@ -191,7 +192,7 @@ async fn user_injection_writes_require_a_workspace_write_scope() {
 }
 
 #[tokio::test]
-async fn injection_api_is_write_only_versioned_and_idempotent() {
+async fn sensitive_injection_api_is_write_only_versioned_and_idempotent() {
     let (app, _, user_id) = app(true).await;
     let secret = "line one\n\n  line two\n";
     let item = json!({
@@ -329,6 +330,139 @@ async fn injection_api_is_write_only_versioned_and_idempotent() {
     let preview_json: Value = serde_json::from_slice(&preview_body).unwrap();
     assert_eq!(preview_json[0]["source"], "workspace");
     assert!(!String::from_utf8_lossy(&preview_body).contains("inline-secret"));
+}
+
+#[tokio::test]
+async fn non_sensitive_configuration_can_be_read_and_copied() {
+    let (app, _, user_id) = app(true).await;
+    let value = "model = \"kimi-k3-256k\"\n";
+    let item = json!({
+        "key": "personal-codex-agent-kimi",
+        "kind": "config_file",
+        "target": "/home/user/.codex/agents/kimi.toml",
+        "value": {"encoding": "utf8", "value": value},
+        "sensitive": false,
+        "locked": false,
+        "version": 0,
+        "file_mode": 420,
+        "owner": "user",
+        "group": "user",
+        "template_selector": null,
+        "labels": {}
+    });
+    let uri = format!("/api/v1/injections/user/{user_id}/personal-codex-agent-kimi");
+    let replaced = app
+        .clone()
+        .oneshot(request(
+            Method::PUT,
+            &uri,
+            Some("visible-configuration-write"),
+            Some(item),
+        ))
+        .await
+        .unwrap();
+    let (status, body) = response_body(replaced).await;
+    assert_eq!(status, StatusCode::OK);
+    let response: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(response["value"]["encoding"], "utf8");
+    assert_eq!(response["value"]["value"], value);
+
+    let listed = app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            &format!("/api/v1/injections/user/{user_id}"),
+            None,
+            None,
+        ))
+        .await
+        .unwrap();
+    let (status, body) = response_body(listed).await;
+    assert_eq!(status, StatusCode::OK);
+    let response: Value = serde_json::from_slice(&body).unwrap();
+    assert!(response[0].get("value").is_none());
+
+    let readable = app
+        .oneshot(request(
+            Method::GET,
+            &format!("/api/v1/injections/user/{user_id}/personal-codex-agent-kimi/value"),
+            None,
+            None,
+        ))
+        .await
+        .unwrap();
+    let (status, body) = response_body(readable).await;
+    assert_eq!(status, StatusCode::OK);
+    let response: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(response["encoding"], "utf8");
+    assert_eq!(response["value"], value);
+}
+
+#[tokio::test]
+async fn secret_files_remain_write_only_even_when_marked_non_sensitive() {
+    let (app, _, user_id) = app(true).await;
+    let item = json!({
+        "key": "protected-file",
+        "kind": "secret_file",
+        "target": "/run/secrets/protected-file",
+        "value": {"encoding": "utf8", "value": "protected-content"},
+        "sensitive": false,
+        "locked": false,
+        "version": 0,
+        "file_mode": 384,
+        "owner": "user",
+        "group": "user",
+        "template_selector": null,
+        "labels": {}
+    });
+    let uri = format!("/api/v1/injections/user/{user_id}/protected-file");
+    let replaced = app
+        .clone()
+        .oneshot(request(
+            Method::PUT,
+            &uri,
+            Some("protected-file-write"),
+            Some(item),
+        ))
+        .await
+        .unwrap();
+    let (status, body) = response_body(replaced).await;
+    assert_eq!(status, StatusCode::OK);
+    let response: Value = serde_json::from_slice(&body).unwrap();
+    assert!(response.get("value").is_none());
+    assert_eq!(response["sensitive"], true);
+
+    let listed = app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            &format!("/api/v1/injections/user/{user_id}"),
+            None,
+            None,
+        ))
+        .await
+        .unwrap();
+    let (status, body) = response_body(listed).await;
+    assert_eq!(status, StatusCode::OK);
+    let response: Value = serde_json::from_slice(&body).unwrap();
+    let stored = response
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["key"] == "protected-file")
+        .unwrap();
+    assert!(stored.get("value").is_none());
+
+    let readable = app
+        .oneshot(request(
+            Method::GET,
+            &format!("/api/v1/injections/user/{user_id}/protected-file/value"),
+            None,
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(readable.status(), StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]

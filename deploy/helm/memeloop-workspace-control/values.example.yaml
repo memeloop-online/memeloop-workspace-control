@@ -19,6 +19,7 @@ workspace:
   # Topology-aware local CSI class used by the single Pod-owned temporary-storage claim.
   scratchStorageClassName: local-nvme-scratch
   ttydImage: tsl0922/ttyd:1.7.7
+  buildkitImage: moby/buildkit:v0.33.0-rootless@sha256:80b15f0735e87bab7bf59ec4d695dfb4a7cfb25521cf56dc75d6f256285b63ef
 
 public:
   sshHost: ssh.example.com

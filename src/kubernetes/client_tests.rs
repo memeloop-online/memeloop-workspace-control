@@ -398,6 +398,7 @@ mod coordinator_tests {
             ResourceBuilder {
                 installation_id: "public-a".parse().unwrap(),
                 ttyd_image: "example/ttyd:1".to_owned(),
+                buildkit_image: "moby/buildkit:test".to_owned(),
                 ttyd_mtls: None,
                 higress_namespace: "higress-system".to_owned(),
                 higress_pod_labels: BTreeMap::new(),

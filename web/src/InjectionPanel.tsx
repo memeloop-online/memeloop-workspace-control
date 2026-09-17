@@ -205,14 +205,24 @@ export function InjectionPanel(props: Props) {
     setSearch("");
   }
 
-  function selectItem(item: StoredInjection) {
+  async function selectItem(item: StoredInjection) {
     if (selectedKey === item.key) {
       resetDraft();
       return;
     }
     setSelectedKey(item.key);
-    setDraft(draftFromStored(item));
+    const selected = draftFromStored(item);
+    setDraft(selected);
     setMobilePane("editor");
+    if (item.sensitive || item.kind === "secret_file" || !scopeId) return;
+    try {
+      const value = await props.api.injectionValue(scope, scopeId, item.key);
+      setDraft((current) => current.key === item.key
+        ? { ...current, value, storedValueAvailable: true }
+        : current);
+    } catch (error) {
+      props.onError(message(error, t("operationFailed")));
+    }
   }
 
   function startNew() {

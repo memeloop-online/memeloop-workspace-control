@@ -18,6 +18,12 @@ pub(super) fn encrypted_sql(i: &str, s: &str, id: &str) -> String {
     )
 }
 
+pub(super) fn readable_item_sql(i: &str, s: &str, id: &str, key: &str) -> String {
+    format!(
+        "SELECT scope, scope_id, key, kind, target, value_encoding, ciphertext, value_nonce, wrapped_data_key, key_nonce, sensitive, locked, version, file_mode, owner_name, group_name, template_selector, labels_json, updated_at FROM injection_items WHERE installation_id = {i} AND scope = {s} AND scope_id = {id} AND key = {key} AND sensitive = 0 AND kind <> 'secret_file'"
+    )
+}
+
 pub(super) fn summary_sql(i: &str, s: &str, id: &str) -> String {
     encrypted_sql(i, s, id)
 }
@@ -41,15 +47,16 @@ where
     let scope: String = row.try_get("scope")?;
     let scope_id: String = row.try_get("scope_id")?;
     let kind: String = row.try_get("kind")?;
+    let kind =
+        InjectionKind::from_database(&kind).ok_or(StorageError::UnknownInjectionKind(kind))?;
     Ok(StoredInjectionSummary {
         key: row.try_get("key")?,
-        kind: InjectionKind::from_database(&kind)
-            .ok_or(StorageError::UnknownInjectionKind(kind))?,
+        kind,
         target: row.try_get("target")?,
         scope: InjectionScope::from_database(&scope)
             .ok_or(StorageError::UnknownInjectionScope(scope))?,
         scope_id: Uuid::parse_str(&scope_id)?,
-        sensitive: row.try_get::<i64, _>("sensitive")? != 0,
+        sensitive: row.try_get::<i64, _>("sensitive")? != 0 || kind == InjectionKind::SecretFile,
         locked: row.try_get::<i64, _>("locked")? != 0,
         version: as_u64(row.try_get("version")?)?,
         file_mode: row
@@ -61,6 +68,7 @@ where
         template_selector: row.try_get("template_selector")?,
         labels: serde_json::from_str(&row.try_get::<String, _>("labels_json")?)?,
         updated_at: row.try_get("updated_at")?,
+        value: None,
     })
 }
 
@@ -112,13 +120,14 @@ where
         _ => return Err(StorageError::InvalidEncryptedInjection),
     };
     let kind: String = row.try_get("kind")?;
+    let kind =
+        InjectionKind::from_database(&kind).ok_or(StorageError::UnknownInjectionKind(kind))?;
     Ok(InjectionItem {
         key,
-        kind: InjectionKind::from_database(&kind)
-            .ok_or(StorageError::UnknownInjectionKind(kind))?,
+        kind,
         target: row.try_get("target")?,
         value,
-        sensitive: row.try_get::<i64, _>("sensitive")? != 0,
+        sensitive: row.try_get::<i64, _>("sensitive")? != 0 || kind == InjectionKind::SecretFile,
         locked: row.try_get::<i64, _>("locked")? != 0,
         version,
         file_mode: row
@@ -176,5 +185,7 @@ pub(super) fn summary(
         template_selector: item.template_selector.clone(),
         labels: item.labels.clone(),
         updated_at: now,
+        value: (!item.sensitive && item.kind != InjectionKind::SecretFile)
+            .then(|| item.value.clone()),
     }
 }

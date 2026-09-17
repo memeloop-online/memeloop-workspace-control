@@ -64,6 +64,10 @@ fn system_and_identity_routes(router: ApiRouter) -> ApiRouter {
             "/api/v1/injections/{scope}/{scope_id}/{key}",
             axum::routing::put(injections::replace).delete(injections::delete),
         )
+        .route(
+            "/api/v1/injections/{scope}/{scope_id}/{key}/value",
+            get(injections::value),
+        )
         .route("/api/v1/injections/preview", post(injections::preview))
 }
 

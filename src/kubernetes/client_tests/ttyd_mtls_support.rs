@@ -137,6 +137,7 @@ pub(super) fn builder(mtls_enabled: bool, web_shell_domain: Option<&str>) -> Res
     ResourceBuilder {
         installation_id: INSTALLATION_ID.parse().unwrap(),
         ttyd_image: "example/ttyd:1".to_owned(),
+        buildkit_image: "moby/buildkit:test".to_owned(),
         ttyd_mtls: mtls_enabled.then(|| {
             TtydMtlsConfig::new(
                 SERVER_SECRET_NAME.to_owned(),
