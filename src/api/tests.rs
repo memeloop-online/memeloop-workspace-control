@@ -1,5 +1,7 @@
 use std::{net::SocketAddr, str::FromStr, sync::Arc};
 
+use crate::config::InstallationId;
+
 use axum::{
     Router,
     body::Body,
