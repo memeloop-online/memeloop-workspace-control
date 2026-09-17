@@ -1,16 +1,11 @@
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 
-use axum::{Json, Router, extract::State, http::StatusCode};
-use serde::Serialize;
+use axum::Router;
 use sha2::{Digest, Sha256};
-use utoipa::{OpenApi, ToSchema};
 
 use crate::{
-    config::{AppConfig, DatabaseMode, InstallationId},
-    crypto::EnvelopeCipher,
-    observability::Observability,
-    plugins::PluginRuntime,
-    storage::Database,
+    config::AppConfig, crypto::EnvelopeCipher, observability::Observability,
+    plugins::PluginRuntime, storage::Database,
 };
 
 mod admin;
@@ -23,6 +18,7 @@ mod idempotency;
 mod injections;
 mod metrics;
 mod node_pools;
+mod openapi;
 mod organization_usage;
 mod organizations;
 mod plugins;
@@ -30,6 +26,7 @@ mod port_mappings;
 mod routes;
 mod runtime;
 mod ssh;
+mod system;
 mod ui;
 mod user_quota;
 mod web_shell;
@@ -42,6 +39,8 @@ mod workspace_response;
 mod workspaces;
 
 pub use error::{ApiError, ErrorBody, ErrorEnvelope};
+use openapi::openapi;
+use system::{health, ready, system_info};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -156,228 +155,6 @@ pub fn router(state: Arc<AppState>) -> Router {
 
 pub fn internal_router(state: Arc<AppState>) -> Router {
     routes::internal_router(state)
-}
-
-#[derive(Debug, Serialize, ToSchema)]
-struct HealthResponse {
-    status: &'static str,
-}
-
-#[utoipa::path(
-    get,
-    path = "/livez",
-    responses((status = 200, description = "Process can serve HTTP", body = HealthResponse))
-)]
-async fn health() -> Json<HealthResponse> {
-    Json(HealthResponse { status: "ok" })
-}
-
-#[utoipa::path(
-    get,
-    path = "/readyz",
-    responses(
-        (status = 200, description = "Authoritative database is reachable", body = HealthResponse),
-        (status = 503, description = "Authoritative database is unavailable")
-    )
-)]
-async fn ready(State(state): State<Arc<AppState>>) -> Result<Json<HealthResponse>, StatusCode> {
-    tokio::time::timeout(Duration::from_secs(2), state.database.ping())
-        .await
-        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?
-        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
-    Ok(Json(HealthResponse { status: "ok" }))
-}
-
-#[derive(Debug, Serialize, ToSchema)]
-struct SystemInfoResponse {
-    installation_id: InstallationId,
-    api_version: &'static str,
-    database_mode: DatabaseMode,
-}
-
-#[utoipa::path(
-    get,
-    path = "/api/v1/system/info",
-    responses((status = 200, description = "Non-sensitive installation metadata", body = SystemInfoResponse))
-)]
-async fn system_info(State(state): State<Arc<AppState>>) -> Json<SystemInfoResponse> {
-    Json(SystemInfoResponse {
-        installation_id: state.config.installation_id.clone(),
-        api_version: "v1",
-        database_mode: state.database.mode(),
-    })
-}
-
-#[derive(OpenApi)]
-#[openapi(
-    paths(
-        health,
-        ready,
-        system_info,
-        auth::me,
-        admin::get_profile,
-        admin::update_profile,
-        admin::list_api_keys,
-        admin::create_api_key,
-        admin::delete_api_key,
-        events::stream,
-        injections::list,
-        injections::replace,
-        injections::delete,
-        injections::batch_delete,
-        injections::preview,
-        organizations::create,
-        organizations::list_page,
-        organizations::update,
-        organizations::delete,
-        admin::list_users_page,
-        admin::create_user,
-        admin::update_user,
-        admin::list_user_api_keys,
-        admin::admin_revoke_api_key,
-        admin::list_members,
-        admin::upsert_membership,
-        admin::remove_membership,
-        admin::get_quota,
-        admin::set_quota,
-        user_quota::get,
-        user_quota::set,
-        admin::audit,
-        admin::scaling,
-        admin::list_node_pools,
-        admin::put_node_pool,
-        admin::delete_node_pool,
-        plugins::lifecycle::list_packages,
-        plugins::get_configuration,
-        plugins::put_configuration,
-        plugins::delete_configuration,
-        catalog::list_images,
-        catalog::put_image,
-        catalog::list_templates,
-        catalog::create_template,
-        catalog::replace_template,
-        catalog::delete_template,
-        catalog::set_template_enabled,
-        workspaces::create,
-        workspaces::list,
-        workspaces::get,
-        node_pools::list_available,
-        workspace_client_key::get,
-        runtime::list,
-        runtime::get,
-        organization_usage::get,
-        workspaces::action,
-        workspace_image_update::update,
-        workspace_placement::update,
-        port_mappings::list,
-        port_mappings::create,
-        port_mappings::open,
-        port_mappings::delete,
-        web_shell::issue,
-        web_shell::authorize,
-        webhooks::list,
-        webhooks::create,
-        ssh::authorized_key,
-        ssh::login_users
-    ),
-    components(schemas(
-        HealthResponse,
-        SystemInfoResponse,
-        InstallationId,
-        DatabaseMode,
-        crate::storage::Principal,
-        crate::storage::Organization,
-        crate::storage::OrganizationPage,
-        crate::storage::UserSummary,
-        crate::storage::UserPage,
-        crate::storage::MembershipPage,
-        crate::storage::MembershipSummary,
-        crate::storage::AuditRecord,
-        crate::storage::AuditPage,
-        crate::storage::ApiKeySummary,
-        crate::storage::ApiKeyPage,
-        crate::storage::JobCounts,
-        crate::storage::AvailableNodePool,
-        crate::storage::NodePool,
-        crate::storage::PutNodePool,
-        crate::storage::PortMapping,
-        crate::storage::ImagePolicy,
-        crate::storage::WorkspaceTemplate,
-        crate::storage::WorkspaceSshPublicIdentity,
-        crate::storage::CreateWorkspaceTemplate,
-        crate::storage::CreateOrganization,
-        crate::storage::CreateWorkspace,
-        workspaces::CreateWorkspaceRequest,
-        workspace_image_update::UpdateWorkspaceImageRequest,
-        workspace_placement::UpdateWorkspacePlacementRequest,
-        crate::workspaces::Workspace,
-        crate::workspaces::WorkspaceState,
-        crate::workspaces::AccessMode,
-        crate::workspaces::ResolvedPlacement,
-        crate::templates::WorkspaceTemplateDocument,
-        crate::templates::WorkspaceTemplateSpec,
-        crate::templates::WorkspaceStoragePolicy,
-        crate::templates::WorkspacePlacement,
-        crate::templates::PodResourceRequest,
-        crate::quota::Resources,
-        crate::quota::QuotaResources,
-        crate::injections::InjectionItem,
-        crate::injections::InjectionValue,
-        crate::injections::InjectionKind,
-        crate::injections::InjectionScope,
-        crate::storage::InjectionScopeRef,
-        crate::storage::StoredInjectionSummary,
-        crate::storage::EventRecord,
-        crate::storage::IssuedWebShellTicket,
-        crate::storage::CreateWebhookSubscription,
-        crate::storage::WebhookSubscriptionSummary,
-        crate::injections::ResolvedInjectionSummary,
-        injections::PreviewRequest,
-        injections::BatchDeleteRequest,
-        workspaces::WorkspaceResponse,
-        workspaces::WorkspaceResponsePage,
-        workspaces::WorkspaceSshConnection,
-        workspace_client_key::WorkspaceClientPublicKey,
-        workspaces::WorkspaceAppSshConnection,
-        workspaces::SshPortStrategy,
-        runtime::WorkspaceRuntimeResponse,
-        runtime::WorkspaceRuntimeEntry,
-        organization_usage::OrganizationUsageSummary,
-        runtime::StorageTelemetry,
-        runtime::StorageTelemetryCoverage,
-        runtime::StorageBacking,
-        runtime::StoragePressure,
-        runtime::RuntimeEventCategory,
-        runtime::PodRuntime,
-        runtime::PodMetric,
-        runtime::PodEvent,
-        web_shell::WebShellTicketResponse,
-        admin::CreateUserRequest,
-        admin::UpdateUserRequest,
-        admin::UserProfileResponse,
-        admin::UpdateUserProfileRequest,
-        admin::CreateApiKeyRequest,
-        admin::CreatedApiKeyResponse,
-        admin::AdminRevokeApiKeyRequest,
-        admin::MembershipRequest,
-        organizations::UpdateOrganizationRequest,
-        admin::ScalingResponse,
-        plugins::PluginManifestView,
-        plugins::PluginConfigurationView,
-        plugins::PutPluginConfigurationRequest,
-        plugins::DeletePluginConfigurationRequest,
-        catalog::PutImageRequest,
-        catalog::ReplaceTemplateRequest,
-        catalog::SetTemplateEnabledRequest,
-        ErrorEnvelope,
-        ErrorBody
-    )),
-    tags((name = "system", description = "Control plane health and metadata"))
-)]
-struct ApiDoc;
-
-async fn openapi() -> Json<utoipa::openapi::OpenApi> {
-    Json(ApiDoc::openapi())
 }
 
 #[cfg(test)]

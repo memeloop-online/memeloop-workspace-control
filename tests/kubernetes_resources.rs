@@ -17,13 +17,14 @@ fn builder() -> ResourceBuilder {
     ResourceBuilder {
         installation_id: "public-a".parse().unwrap(),
         ttyd_image: "tsl0922/ttyd:1.7.7".to_owned(),
+        buildkit_image: "moby/buildkit:test".to_owned(),
         ttyd_mtls: None,
         higress_namespace: "higress-system".to_owned(),
         higress_pod_labels: std::collections::BTreeMap::from([(
             "app.kubernetes.io/name".to_owned(),
             "higress-gateway".to_owned(),
         )]),
-        higress_source_cidrs: vec!["100.64.0.6/31".to_owned()],
+        higress_source_cidrs: vec!["192.0.2.6/31".to_owned()],
         internet_egress: Some(
             InternetEgressConfig::new(
                 "kube-system".to_owned(),
@@ -274,8 +275,8 @@ fn ttyd_mtls_requires_the_configured_gateway_namespace_and_selector() {
 
 fn node_template(image: &str, resources: Resources) -> WorkspaceTemplateSpec {
     let mut template = WorkspaceTemplateSpec::standard(image, AccessMode::Public, resources);
-    template.workspace_user = "node-dev".to_owned();
-    template.workspace_home = "/home/node-dev".to_owned();
+    template.workspace_user = "user".to_owned();
+    template.workspace_home = "/home/user".to_owned();
     template.buildkit = true;
     template.pod_requests.cpu_millis = 1_000;
     template.pod_requests.memory_mib = 1_024;
@@ -284,8 +285,8 @@ fn node_template(image: &str, resources: Resources) -> WorkspaceTemplateSpec {
 
 fn rust_template(image: &str, resources: Resources) -> WorkspaceTemplateSpec {
     let mut template = WorkspaceTemplateSpec::standard(image, AccessMode::Public, resources);
-    template.workspace_user = "rust-dev".to_owned();
-    template.workspace_home = "/home/rust-dev".to_owned();
+    template.workspace_user = "user".to_owned();
+    template.workspace_home = "/home/user".to_owned();
     template.buildkit = true;
     template.pod_requests.cpu_millis = 2_000;
     template.pod_requests.memory_mib = 4_096;
@@ -856,7 +857,7 @@ fn web_shell_allows_configured_host_network_gateway_sources() {
     assert!(ttyd.from.as_ref().unwrap().iter().any(|peer| {
         peer.ip_block
             .as_ref()
-            .is_some_and(|block| block.cidr == "100.64.0.6/31")
+            .is_some_and(|block| block.cidr == "192.0.2.6/31")
     }));
 }
 
@@ -934,8 +935,8 @@ fn tailnet_node_port_is_not_created_for_public_workspaces() {
 fn only_templates_requesting_cluster_access_receive_an_owned_cluster_admin_identity() {
     let mut workspace = workspace(WorkspaceState::Ready);
     workspace.template.cluster_access = true;
-    workspace.template.workspace_user = "cluster-admin".to_owned();
-    workspace.template.workspace_home = "/home/cluster-admin".to_owned();
+    workspace.template.workspace_user = "user".to_owned();
+    workspace.template.workspace_home = "/home/user".to_owned();
     let workspace_id = workspace.id;
     let resources = builder().build(&workspace).unwrap();
     let names = runtime_names(&workspace);
@@ -1268,7 +1269,7 @@ fn gpu_workspaces_request_the_standard_extended_resource() {
 fn node_template_reuses_the_existing_image_with_platform_bootstrap() {
     let mut workspace = workspace(WorkspaceState::Ready);
     workspace.template = node_template(
-        "harbor.k3s.onetwo.website/library/node-dev:fixed@sha256:abc",
+        "registry.example.invalid/library/node-dev:fixed@sha256:abc",
         Resources {
             cpu_millis: 6_000,
             memory_mib: 4_096,
@@ -1317,7 +1318,7 @@ fn node_template_reuses_the_existing_image_with_platform_bootstrap() {
     );
     assert_eq!(readiness.period_seconds, Some(10));
     assert!(dev.volume_mounts.as_ref().unwrap().iter().any(|mount| {
-        mount.name == names.resources.data_claim_template && mount.mount_path == "/home/node-dev"
+        mount.name == names.resources.data_claim_template && mount.mount_path == "/home/user"
     }));
     let quantities = dev.resources.as_ref().unwrap();
     assert_eq!(quantities.requests.as_ref().unwrap()["cpu"].0, "1000m");
@@ -1327,7 +1328,7 @@ fn node_template_reuses_the_existing_image_with_platform_bootstrap() {
     assert!(pod.containers.iter().any(|container| {
         container.name == "buildkitd"
             && container.image.as_deref().is_some_and(|image| {
-                image.starts_with("harbor.k3s.onetwo.website/") && image.contains("@sha256:")
+                image.starts_with("registry.example.invalid/") && image.contains("@sha256:")
             })
     }));
     let buildkit = pod
@@ -1367,7 +1368,7 @@ fn node_template_reuses_the_existing_image_with_platform_bootstrap() {
     );
     assert!(
         resources.workspace_config.data.as_ref().unwrap()["sshd_config"]
-            .contains("AllowUsers node-dev")
+            .contains("AllowUsers user")
     );
     assert!(
         resources.workspace_config.data.as_ref().unwrap()["sshd_config"]
@@ -1376,7 +1377,7 @@ fn node_template_reuses_the_existing_image_with_platform_bootstrap() {
     let sshd_config = &resources.workspace_config.data.as_ref().unwrap()["sshd_config"];
     assert_eq!(sshd_config.matches("SetEnv ").count(), 1);
     assert!(sshd_config.contains(
-        "\"PATH=/run/mwc-buildkit/bin:/home/node-dev/.local/bin:/home/node-dev/.local/share/pnpm:/home/node-dev/.cargo/bin:/usr/local/cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\""
+        "\"PATH=/run/mwc-buildkit/bin:/home/user/.local/bin:/home/user/.local/share/pnpm:/home/user/.cargo/bin:/usr/local/cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\""
     ));
     assert!(sshd_config.contains("\"RUSTUP_HOME=/usr/local/rustup\""));
     assert!(sshd_config.contains("\"BUILDKIT_HOST=tcp://127.0.0.1:1234\""));
@@ -1762,12 +1763,14 @@ fn rust_template_uses_the_single_canonical_rust_home() {
         .volume_mounts
         .unwrap();
     assert!(mounts.iter().any(|mount| {
-        mount.name == names.resources.data_claim_template && mount.mount_path == "/home/rust-dev"
+        mount.name == names.resources.data_claim_template && mount.mount_path == "/home/user"
     }));
-    assert!(!mounts.iter().any(|mount| {
-        mount.name == names.resources.data_claim_template
-            && mount.mount_path == "/home/token-center-dev"
-    }));
+    assert!(
+        mounts
+            .iter()
+            .filter(|mount| mount.name == names.resources.data_claim_template)
+            .all(|mount| mount.mount_path == "/home/user")
+    );
 }
 
 #[test]

@@ -189,12 +189,12 @@ impl<'a> WorkspacePod<'a> {
         }
     }
 
-    pub fn buildkit_container(&self) -> Option<Container> {
-        buildkit::container(self.has_buildkit())
+    pub fn buildkit_container(&self, image: &str) -> Option<Container> {
+        buildkit::container(self.has_buildkit(), image)
     }
 
-    pub fn buildkit_bootstrap_container(&self) -> Option<Container> {
-        buildkit::bootstrap_container(self.has_buildkit())
+    pub fn buildkit_bootstrap_container(&self, image: &str) -> Option<Container> {
+        buildkit::bootstrap_container(self.has_buildkit(), image)
     }
 
     pub fn pod_security_context(&self) -> Option<k8s_openapi::api::core::v1::PodSecurityContext> {

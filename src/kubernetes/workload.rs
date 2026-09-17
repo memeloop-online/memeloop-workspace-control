@@ -97,7 +97,7 @@ fn containers(
         workspace_resources(pod, workspace),
         names,
     )];
-    if let Some(buildkit) = pod.buildkit_container() {
+    if let Some(buildkit) = pod.buildkit_container(&builder.buildkit_image) {
         containers.push(buildkit);
     }
     containers.push(ttyd::container(builder, pod, route_key));
@@ -121,7 +121,7 @@ fn pod_spec(
             names,
         ),
     ];
-    if let Some(buildkit_bootstrap) = pod.buildkit_bootstrap_container() {
+    if let Some(buildkit_bootstrap) = pod.buildkit_bootstrap_container(&builder.buildkit_image) {
         init_containers.push(buildkit_bootstrap);
     }
     let cluster_access = workspace.template.cluster_access;

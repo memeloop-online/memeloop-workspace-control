@@ -1,0 +1,9 @@
+{
+  "title": { "message": "MWC", "description": "The title in the navbar" },
+  "item.label.Home": { "message": "首页", "description": "Navbar item with label Home" },
+  "item.label.Features": { "message": "功能", "description": "Navbar item with label Features" },
+  "item.label.Documentation": { "message": "文档", "description": "Navbar item with label Documentation" },
+  "item.label.API": { "message": "API", "description": "Navbar item with label API" },
+  "item.label.Plugins": { "message": "插件", "description": "Navbar item with label Plugins" },
+  "item.label.GitHub": { "message": "GitHub", "description": "Navbar item with label GitHub" }
+}

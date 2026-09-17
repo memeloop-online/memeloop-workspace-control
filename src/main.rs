@@ -7,16 +7,13 @@ use memeloop_workspace_control::{
     config::AppConfig,
     crypto::EnvelopeCipher,
     jobs::{ControlPlaneJobHandler, JobWorker, WebhookDeliveryHandler, WorkspaceReconcileHandler},
-    kubernetes::KubernetesCoordinator,
+    kubernetes::{KubernetesCoordinator, config as kubernetes_config},
     plugins::PluginRuntime,
     storage::Database,
 };
 use tokio::net::TcpListener;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
-
-#[path = "main/kubernetes_config.rs"]
-mod kubernetes_config;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

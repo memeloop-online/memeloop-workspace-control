@@ -370,6 +370,8 @@ export interface StoredInjection {
   template_selector: string | null;
   labels: Record<string, string>;
   updated_at: number;
+  /** Present only for non-sensitive items; sensitive items return null or omit it. */
+  value?: { encoding: "utf8" | "base64"; value: string } | null;
 }
 
 export interface InjectionDraft {

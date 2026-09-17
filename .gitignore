@@ -7,4 +7,5 @@
 *.sqlite-wal
 /web/node_modules/
 /web/artifacts/
+/web/dist/
 /web/*.tsbuildinfo

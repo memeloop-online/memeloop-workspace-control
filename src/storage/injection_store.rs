@@ -7,7 +7,7 @@ use uuid::Uuid;
 
 use crate::{
     crypto::EnvelopeCipher,
-    injections::{InjectionItem, InjectionKind, InjectionScope},
+    injections::{InjectionItem, InjectionKind, InjectionScope, InjectionValue},
 };
 
 use super::{Database, StorageError};
@@ -18,7 +18,7 @@ mod write;
 
 use persistence::{
     decode_summary_postgres, decode_summary_sqlite, decrypt_postgres, decrypt_sqlite,
-    encrypted_sql, summary, summary_sql,
+    encrypted_sql, readable_item_sql, summary, summary_sql,
 };
 pub(super) use write::{
     insert_initial_workspace_injection_postgres, insert_initial_workspace_injection_sqlite,
@@ -46,6 +46,10 @@ pub struct StoredInjectionSummary {
     pub template_selector: Option<String>,
     pub labels: BTreeMap<String, String>,
     pub updated_at: i64,
+    /// Plaintext is returned only for entries explicitly marked non-sensitive.
+    /// Sensitive values remain write-only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub value: Option<InjectionValue>,
 }
 
 impl Database {
@@ -184,6 +188,50 @@ impl Database {
                 rows.into_iter()
                     .map(|row| decrypt_postgres(cipher, installation_id.as_str(), scope_ref, row))
                     .collect()
+            }
+        }
+    }
+
+    pub async fn load_readable_injection(
+        &self,
+        cipher: &EnvelopeCipher,
+        scope_ref: InjectionScopeRef,
+        key: &str,
+    ) -> Result<Option<InjectionValue>, StorageError> {
+        match self {
+            Self::Sqlite {
+                pool,
+                installation_id,
+            } => {
+                let row = sqlx::query(&readable_item_sql("?1", "?2", "?3", "?4"))
+                    .bind(installation_id.as_str())
+                    .bind(scope_ref.scope.as_str())
+                    .bind(scope_ref.scope_id.to_string())
+                    .bind(key)
+                    .fetch_optional(pool)
+                    .await?;
+                row.map(|row| {
+                    decrypt_sqlite(cipher, installation_id.as_str(), scope_ref, row)
+                        .map(|item| item.value)
+                })
+                .transpose()
+            }
+            Self::Postgres {
+                pool,
+                installation_id,
+            } => {
+                let row = sqlx::query(&readable_item_sql("$1", "$2", "$3", "$4"))
+                    .bind(installation_id.as_str())
+                    .bind(scope_ref.scope.as_str())
+                    .bind(scope_ref.scope_id.to_string())
+                    .bind(key)
+                    .fetch_optional(pool)
+                    .await?;
+                row.map(|row| {
+                    decrypt_postgres(cipher, installation_id.as_str(), scope_ref, row)
+                        .map(|item| item.value)
+                })
+                .transpose()
             }
         }
     }

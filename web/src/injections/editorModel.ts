@@ -2,6 +2,7 @@ import type { InjectionDraft, InjectionKind, StoredInjection } from "../types";
 
 export interface InjectionEditorDraft extends Omit<InjectionDraft, "file_mode"> {
   fileMode: string;
+  storedValueAvailable: boolean;
 }
 
 export const FILE_MODE_PATTERN = "(?:0)?[0-7]{3}";
@@ -16,6 +17,7 @@ export function emptyInjectionDraft(templateSelector: string | null = null): Inj
     locked: false,
     version: 0,
     fileMode: "644",
+    storedValueAvailable: false,
     owner: null,
     group: null,
     template_selector: templateSelector,
@@ -29,10 +31,12 @@ export function draftFromStored(item: StoredInjection): InjectionEditorDraft {
     key: item.key,
     kind: item.kind,
     target: item.target,
+    value: item.value ? { ...item.value } : { encoding: "utf8", value: "" },
     sensitive: item.sensitive,
     locked: item.locked,
     version: item.version,
     fileMode: item.file_mode === null ? "" : item.file_mode.toString(8).padStart(3, "0"),
+    storedValueAvailable: item.value !== null && item.value !== undefined,
     owner: item.owner,
     group: item.group,
     labels: { ...item.labels },
@@ -77,7 +81,7 @@ export function injectionDraftForSave(
   fixedTemplateSelector?: string,
 ): InjectionDraft {
   const fileMode = parseFileMode(draft.kind, draft.fileMode);
-  const { fileMode: _fileMode, ...item } = draft;
+  const { fileMode: _fileMode, storedValueAvailable: _storedValueAvailable, ...item } = draft;
   return {
     ...item,
     file_mode: fileMode,

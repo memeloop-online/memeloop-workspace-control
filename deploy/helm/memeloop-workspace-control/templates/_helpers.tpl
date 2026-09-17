@@ -77,6 +77,9 @@ app.kubernetes.io/instance: {{ include "mwc.name" . }}
 {{- if not .Values.workspace.ttydImage -}}
 {{- fail "workspace.ttydImage must be an explicitly pinned image" -}}
 {{- end -}}
+{{- if not .Values.workspace.buildkitImage -}}
+{{- fail "workspace.buildkitImage must be an explicitly pinned image" -}}
+{{- end -}}
 {{- $ttydMtls := .Values.workspace.ttydMtls.serverTlsSecretName -}}
 {{- $ttydMtlsClientCa := .Values.workspace.ttydMtls.clientCaSecretName -}}
 {{- $higressMtlsNamespace := .Values.higress.ttydMtls.clientSecretNamespace -}}

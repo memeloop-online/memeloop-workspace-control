@@ -8,7 +8,7 @@ ln -s server.crt "${tmp_dir}/tls.crt"
 ln -s server.key "${tmp_dir}/tls.key"
 ln -s client-ca.crt "${tmp_dir}/ca.crt"
 mkdir "${tmp_dir}/routes"
-mapping_host='p-01a08abaed7f7060980a15e381716145.k3s.onetwo.website'
+mapping_host='p-00000000000000000000000000000000.ports.example.invalid'
 printf '%s\n' 'localhost 3000;' "\"${mapping_host}\" 3000;" > "${tmp_dir}/routes/ports.conf"
 printf '%s\n' \
     'pid /tmp/mwc-origin.pid;' \

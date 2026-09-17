@@ -13,8 +13,9 @@ use uuid::Uuid;
 use crate::{
     auth::Permission,
     injections::{
-        InjectionItem, InjectionScope, InjectionSelection, ResolvedInjectionSummary,
-        filter_injection_refs, resolve_injections, select_injections, validate_injection_item,
+        InjectionItem, InjectionKind, InjectionScope, InjectionSelection, InjectionValue,
+        ResolvedInjectionSummary, filter_injection_refs, resolve_injections, select_injections,
+        validate_injection_item,
     },
     storage::{IdempotencyDecision, InjectionScopeRef, Principal, StoredInjectionSummary},
 };
@@ -58,7 +59,7 @@ use super::{
         ("scope_id" = Uuid, Path)
     ),
     responses(
-        (status = 200, description = "Write-only injection metadata", body = [StoredInjectionSummary]),
+        (status = 200, description = "Injection metadata", body = [StoredInjectionSummary]),
         (status = 401, body = super::ErrorEnvelope),
         (status = 403, body = super::ErrorEnvelope)
     )
@@ -77,6 +78,41 @@ pub(super) async fn list(
 }
 
 #[utoipa::path(
+    get,
+    path = "/api/v1/injections/{scope}/{scope_id}/{key}/value",
+    params(
+        ("scope" = String, Path),
+        ("scope_id" = Uuid, Path),
+        ("key" = String, Path)
+    ),
+    responses(
+        (status = 200, description = "Plaintext value for a viewable configuration item", body = InjectionValue),
+        (status = 404, description = "The item is sensitive or does not exist"),
+        (status = 401, body = super::ErrorEnvelope),
+        (status = 403, body = super::ErrorEnvelope),
+        (status = 503, body = super::ErrorEnvelope)
+    )
+)]
+pub(super) async fn value(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path((scope, scope_id, key)): Path<(String, Uuid, String)>,
+) -> Result<Option<Json<InjectionValue>>, ApiError> {
+    let actor = principal(&state, &headers).await?;
+    let scope_ref = parse_scope(&scope, scope_id)?;
+    authorize(&state, &actor, scope_ref, true, false).await?;
+    let cipher = state
+        .cipher
+        .as_ref()
+        .ok_or(ApiError::EncryptionUnavailable)?;
+    Ok(state
+        .database
+        .load_readable_injection(cipher, scope_ref, &key)
+        .await?
+        .map(Json))
+}
+
+#[utoipa::path(
     put,
     path = "/api/v1/injections/{scope}/{scope_id}/{key}",
     params(
@@ -87,7 +123,7 @@ pub(super) async fn list(
     ),
     request_body = InjectionItem,
     responses(
-        (status = 200, description = "Injection replaced; value is never returned", body = StoredInjectionSummary),
+        (status = 200, description = "Injection replaced; non-sensitive plaintext is returned", body = StoredInjectionSummary),
         (status = 401, body = super::ErrorEnvelope),
         (status = 403, body = super::ErrorEnvelope),
         (status = 409, body = super::ErrorEnvelope),
@@ -104,6 +140,9 @@ pub(super) async fn replace(
         return Err(ApiError::BadRequest(
             "path key must exactly match the injection body key",
         ));
+    }
+    if item.kind == InjectionKind::SecretFile {
+        item.sensitive = true;
     }
     validate_injection_item(&item)?;
     item.version = 0;

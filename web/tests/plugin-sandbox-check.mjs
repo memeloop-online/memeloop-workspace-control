@@ -67,7 +67,6 @@ async function findChromium() {
     "/usr/bin/google-chrome",
     "/usr/bin/chromium",
     "/usr/bin/chromium-browser",
-    "/home/token-center-dev/.cache/ms-playwright/chromium-1234/chrome-linux64/chrome",
   ].filter(Boolean);
   for (const candidate of candidates) {
     try {
