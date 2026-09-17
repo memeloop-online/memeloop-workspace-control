@@ -28,7 +28,7 @@ jobs:
         uses: tailscale/github-action@v4
         with:
           authkey: ${{ secrets.MWC_DOCS_TAILSCALE_AUTHKEY }}
-          args: --login-server=https://headscale.onetwo.website:8080 --accept-routes
+          args: --login-server=https://headscale.onetwo.website:8080
           hostname: mwc-docs-${{ github.run_id }}
           use-cache: 'false'
 
