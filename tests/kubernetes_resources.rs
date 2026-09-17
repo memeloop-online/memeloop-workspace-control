@@ -1326,10 +1326,7 @@ fn node_template_reuses_the_existing_image_with_platform_bootstrap() {
     assert_eq!(quantities.limits.as_ref().unwrap()["cpu"].0, "6000m");
     assert_eq!(quantities.limits.as_ref().unwrap()["memory"].0, "4096Mi");
     assert!(pod.containers.iter().any(|container| {
-        container.name == "buildkitd"
-            && container.image.as_deref().is_some_and(|image| {
-                image.starts_with("registry.example.invalid/") && image.contains("@sha256:")
-            })
+        container.name == "buildkitd" && container.image.as_deref() == Some("moby/buildkit:test")
     }));
     let buildkit = pod
         .containers
