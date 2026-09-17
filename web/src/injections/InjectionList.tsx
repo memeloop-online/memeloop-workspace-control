@@ -180,7 +180,7 @@ export function InjectionList({
       </div>
       <div className={styles.results} aria-busy={loading}>
         {loading && <Text className={styles.empty}>{t("loading")}</Text>}
-        {!loading && filteredItems.length === 0 && <Text className={styles.empty}>{emptyLabel}</Text>}
+        {!loading && filteredItems.length === 0 && <Text className={styles.empty}>{search.trim() ? t("noCredentialsFiltered") : emptyLabel}</Text>}
         {!loading && filteredItems.map((item) => {
           const selected = selectedKey === item.key;
           const kindDescription = `${injectionKindLabel(item, t)} · ${item.sensitive || item.kind === "secret_file" ? t("sensitiveValue") : t("visibleConfiguration")}`;
@@ -203,7 +203,7 @@ export function InjectionList({
                 </Tooltip>
               </span>
               <Badge className={styles.version} appearance="tint" color={item.locked ? "warning" : "informative"}>
-                v{item.version}{item.locked ? ` · ${t("locked")}` : ""}
+                v{item.version}{item.locked ? ` · ${t("lockedState")}` : ""}
               </Badge>
             </Button>
           );

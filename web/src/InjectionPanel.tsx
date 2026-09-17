@@ -100,9 +100,13 @@ const useStyles = makeStyles({
   previewItem: {
     display: "grid",
     gap: tokens.spacingVerticalXXS,
+    minWidth: 0,
     padding: tokens.spacingHorizontalM,
     borderRadius: tokens.borderRadiusMedium,
     backgroundColor: tokens.colorNeutralBackground2,
+  },
+  previewWrap: {
+    overflowWrap: "anywhere",
   },
   previewMeta: {
     color: tokens.colorNeutralForeground2,
@@ -284,8 +288,8 @@ export function InjectionPanel(props: Props) {
         <div className={styles.workspace}><WorkspaceCombobox key={props.organizationId} items={workspaceItems} loadItems={searchWorkspaces} selectedId={workspaceId} onChange={(id) => { workspaceSelectionTouchedRef.current = id === ""; setWorkspaceId(id); setPreview([]); setPreviewRan(false); }} /></div>
       </div>
       <TabList className={styles.mobileTabs} selectedValue={mobilePane} onTabSelect={(_, data) => data.value === "editor" ? (selectedKey ? setMobilePane("editor") : startNew()) : setMobilePane("list")} aria-label={t("credentials")}>
-        <Tab value="list">{t("savedCredentials")}</Tab>
-        <Tab value="editor">{selectedKey ? t("editingCredential") : t("newCredential")}</Tab>
+        <Tab value="list">{t("mobileTabList")}</Tab>
+        <Tab value="editor">{selectedKey ? t("mobileTabEdit") : t("mobileTabNew")}</Tab>
       </TabList>
       <div className={styles.layout}>
         <div className={`${styles.list} ${mobilePane === "editor" ? styles.mobileHidden : ""}`}>
@@ -300,7 +304,7 @@ export function InjectionPanel(props: Props) {
           <CardHeader header={<Text weight="semibold">{t("resolvedSources")}</Text>} description={<Badge appearance="tint">{preview.length}</Badge>} />
           <Divider />
           {preview.length === 0 ? <Text className={styles.previewMeta} role="status">{t("credentialsPreviewEmpty")}</Text> : <div className={styles.previewGrid}>
-            {preview.map((item) => <div className={styles.previewItem} key={item.key}><Text weight="semibold">{item.key}</Text><Text className={styles.previewMeta}>{item.source === "organization" ? t("fromOrganization") : item.source === "user" ? t("fromUser") : t("fromWorkspace")}</Text><Text className={styles.previewMeta}>{item.target}{item.locked ? ` · ${t("locked")}` : ""}</Text></div>)}
+            {preview.map((item) => <div className={styles.previewItem} key={item.key}><Text className={styles.previewWrap} weight="semibold">{item.key}</Text><Text className={styles.previewMeta}>{item.source === "organization" ? t("fromOrganization") : item.source === "user" ? t("fromUser") : t("fromWorkspace")}</Text><Text className={`${styles.previewMeta} ${styles.previewWrap}`}>{item.target}{item.locked ? ` · ${t("lockedState")}` : ""}</Text></div>)}
           </div>}
         </Card>
       )}
