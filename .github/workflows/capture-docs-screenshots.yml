@@ -24,6 +24,14 @@ jobs:
           cache: npm
           cache-dependency-path: web/package-lock.json
 
+      - name: Connect to the private test network
+        uses: tailscale/github-action@v4
+        with:
+          authkey: ${{ secrets.MWC_DOCS_TAILSCALE_AUTHKEY }}
+          args: --login-server=https://headscale.onetwo.website:8080 --accept-routes
+          hostname: mwc-docs-${{ github.run_id }}
+          use-cache: 'false'
+
       - name: Install browser runtime
         working-directory: web
         run: |
