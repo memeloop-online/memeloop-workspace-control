@@ -104,13 +104,22 @@ export function TemplateInjectionsDialog({
     setDraft(emptyInjectionDraft(template.id));
   }
 
-  function selectItem(item: StoredInjection) {
+  async function selectItem(item: StoredInjection) {
     if (selectedKey === item.key) {
       resetDraft();
       return;
     }
     setSelectedKey(item.key);
     setDraft(draftFromStored(item));
+    if (item.sensitive || item.kind === "secret_file") return;
+    try {
+      const value = await api.injectionValue("organization", organizationId, item.key);
+      setDraft((current) => current.key === item.key
+        ? { ...current, value, storedValueAvailable: true }
+        : current);
+    } catch (error) {
+      onError(message(error, t("requestFailed")));
+    }
   }
 
   async function save() {
