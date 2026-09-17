@@ -11,6 +11,8 @@ MWC injects credentials and files into workspaces through **injection items**.
 Items are defined once and resolved into every matching workspace at start
 time, so rotating a secret does not require recreating workspaces.
 
+![Credential and file editor](/img/screenshots/credentials-desktop.png)
+
 ## Scopes and cascade
 
 Items exist at three scopes, applied in cascade order:

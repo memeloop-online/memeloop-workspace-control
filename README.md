@@ -2,6 +2,15 @@
 
 [中文](#中文) | [English](#english)
 
+![Workspace resource overview](docs-site/static/img/screenshots/workspaces-desktop.png)
+
+<details>
+<summary>Mobile workspace view / 移动端工作区</summary>
+
+![Responsive workspace view](docs-site/static/img/screenshots/workspaces-mobile.png)
+
+</details>
+
 ## 中文
 
 Memeloop Workspace Control（MWC）是一个 Kubernetes 工作区控制面：通过经过评审的
@@ -20,6 +29,10 @@ SSH、网页终端和带鉴权的端口映射提供访问。
   OpenAPI 契约。
 - **WebAssembly 插件** —— 创建策略、API 中间件、自定义路由与控制台界面，
   基于版本化 WIT 接口。
+
+凭据编辑器区分普通配置与敏感值，支持组织、用户和工作区三级作用域：
+
+![凭据与文件编辑器](docs-site/static/img/screenshots/credentials-desktop.png)
 
 ## 文档
 
@@ -71,6 +84,9 @@ mappings — plus scoped API keys and sandboxed WebAssembly plugins.
   and an OpenAPI contract.
 - **WebAssembly plugins** — creation policies, API middleware, custom routes,
   and console surfaces through a versioned WIT interface.
+
+The credential editor separates regular configuration from protected values
+across organization, user, and workspace scopes.
 
 ## Documentation
 
