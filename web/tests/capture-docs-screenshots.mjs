@@ -35,6 +35,7 @@ async function sanitize(page) {
     const replacements = [
       [/\b[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}\b/g, "user@example.com"],
       [/\bw-[a-f0-9]{16}\b/gi, "w-example000000000"],
+      [/\b[a-f0-9]{16}\b/gi, "example000000000"],
       [/\b01[a-z0-9]{6,}\b/gi, "01example"],
       [/\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/gi, "00000000-0000-4000-8000-000000000000"],
       [/\blindongwu11\b/gi, "示例用户"],
@@ -43,15 +44,27 @@ async function sanitize(page) {
       [/\bgame-forking\b/gi, "node-dev-demo"],
       [/\btiddlywiki-dev\b/gi, "web-dev-demo"],
       [/\brust-dev-test\b/gi, "rust-dev-test"],
+      [/personal-codex-agent-codex53/gi, "example-agent-profile"],
+      [/personal-codex-agent-kimi/gi, "example-model-profile"],
+      [/personal-codex-agent-luna/gi, "example-worker-profile"],
+      [/personal-codex-auth/gi, "example-service-token"],
+      [/personal-codex-config/gi, "example-tool-config"],
+      [/personal-codex-env/gi, "example-environment"],
+      [/personal-gh-config/gi, "example-git-config"],
+      [/personal-gh-device-id/gi, "example-device-profile"],
     ];
+    const replace = (input) => {
+      let value = input;
+      for (const [pattern, replacement] of replacements) value = value.replace(pattern, replacement);
+      return value;
+    };
     const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
     for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-      let value = node.textContent ?? "";
-      for (const [pattern, replacement] of replacements) value = value.replace(pattern, replacement);
-      node.textContent = value;
+      node.textContent = replace(node.textContent ?? "");
     }
     document.querySelectorAll("input, textarea").forEach((element) => {
       if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) {
+        element.value = replace(element.value);
         if (/token|密钥|凭据|value|值/i.test(`${element.name} ${element.placeholder} ${element.getAttribute("aria-label") ?? ""}`)) {
           element.value = "";
         }
@@ -63,7 +76,7 @@ async function sanitize(page) {
   });
 }
 
-async function capture(viewport, hash, filename, fullPage = true) {
+async function capture(viewport, hash, filename, fullPage = false) {
   const { context, page } = await openProduct(viewport, hash);
   await sanitize(page);
   await page.screenshot({ path: path.join(output, filename), fullPage });
