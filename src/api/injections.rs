@@ -4,7 +4,7 @@ use axum::{
     Json,
     extract::{Path, State},
     http::{HeaderMap, StatusCode},
-    response::Response,
+    response::{IntoResponse, Response},
 };
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -97,7 +97,7 @@ pub(super) async fn value(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Path((scope, scope_id, key)): Path<(String, Uuid, String)>,
-) -> Result<Option<Json<InjectionValue>>, ApiError> {
+) -> Result<Response, ApiError> {
     let actor = principal(&state, &headers).await?;
     let scope_ref = parse_scope(&scope, scope_id)?;
     authorize(&state, &actor, scope_ref, true, false).await?;
@@ -105,11 +105,16 @@ pub(super) async fn value(
         .cipher
         .as_ref()
         .ok_or(ApiError::EncryptionUnavailable)?;
-    Ok(state
-        .database
-        .load_readable_injection(cipher, scope_ref, &key)
-        .await?
-        .map(Json))
+    Ok(
+        match state
+            .database
+            .load_readable_injection(cipher, scope_ref, &key)
+            .await?
+        {
+            Some(value) => Json(value).into_response(),
+            None => StatusCode::NOT_FOUND.into_response(),
+        },
+    )
 }
 
 #[utoipa::path(

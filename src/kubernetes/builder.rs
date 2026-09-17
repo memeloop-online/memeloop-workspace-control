@@ -332,7 +332,7 @@ impl ResourceBuilder {
         Ok(Some((service, ingress, network_policy)))
     }
 
-    fn labels(&self, workspace_id: Uuid) -> BTreeMap<String, String> {
+    pub(super) fn labels(&self, workspace_id: Uuid) -> BTreeMap<String, String> {
         let mut labels = self.installation_labels();
         labels.insert(WORKSPACE_ID_LABEL.to_owned(), workspace_id.to_string());
         labels
@@ -351,7 +351,7 @@ impl ResourceBuilder {
         ])
     }
 
-    fn workspace_labels(&self, workspace: &Workspace) -> BTreeMap<String, String> {
+    pub(super) fn workspace_labels(&self, workspace: &Workspace) -> BTreeMap<String, String> {
         let mut labels = self.labels(workspace.id);
         labels.insert(
             ORGANIZATION_ID_LABEL.to_owned(),
