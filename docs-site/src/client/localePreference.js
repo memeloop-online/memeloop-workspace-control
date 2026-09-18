@@ -6,6 +6,25 @@
 const STORAGE_KEY = 'mwc-locale';
 const LOCALES = ['en', 'zh']; // en is default and lives at the unprefixed path
 const DEFAULT_LOCALE = 'en';
+// Visible labels from docusaurus.config.js locale configs; used to recognize
+// actual locale selector links on both desktop dropdown and mobile sidebar.
+const LOCALE_LABELS = { en: 'English', zh: '简体中文' };
+
+function readSavedLocale() {
+  try {
+    return localStorage.getItem(STORAGE_KEY);
+  } catch {
+    return null; // storage blocked (private mode, policy): treat as unsaved
+  }
+}
+
+function writeSavedLocale(locale) {
+  try {
+    localStorage.setItem(STORAGE_KEY, locale);
+  } catch {
+    // storage blocked: persistence is best-effort only
+  }
+}
 
 function isCrawler() {
   if (navigator.webdriver) return true;
@@ -38,15 +57,18 @@ function targetUrl(locale) {
 }
 
 function pickInitialLocale() {
-  const saved = localStorage.getItem(STORAGE_KEY);
+  const saved = readSavedLocale();
   if (saved) return null; // explicit choice: never override
   const primary = (navigator.languages && navigator.languages[0]) || navigator.language || '';
   if (primary.toLowerCase().startsWith('zh')) return 'zh';
   return null; // unsupported languages stay on English
 }
 
-// Persist a locale picked through the Docusaurus locale dropdown. Event
-// delegation catches clicks on dropdown links before navigation happens.
+// Persist a locale picked through the Docusaurus locale selector. Event
+// delegation catches clicks on selector links before navigation happens.
+// Only links whose visible label matches the configured locale labels are
+// treated as explicit picks, so ordinary cross-locale content links do not
+// count as a user choice.
 function watchLocaleDropdown() {
   document.addEventListener('click', (event) => {
     const anchor = event.target.closest && event.target.closest('a[href]');
@@ -55,9 +77,10 @@ function watchLocaleDropdown() {
       const url = new URL(anchor.href, window.location.href);
       if (url.origin !== window.location.origin) return;
       const locale = localeOf(stripBaseUrl(url.pathname));
-      if (LOCALES.includes(locale) && locale !== localeOf(stripBaseUrl(window.location.pathname))) {
-        localStorage.setItem(STORAGE_KEY, locale);
-      }
+      if (!LOCALES.includes(locale)) return;
+      if (locale === localeOf(stripBaseUrl(window.location.pathname))) return;
+      if (anchor.textContent.trim() !== LOCALE_LABELS[locale]) return;
+      writeSavedLocale(locale);
     } catch {
       // ignore malformed hrefs
     }
@@ -72,7 +95,7 @@ function main() {
   if (!target) return;
   const current = localeOf(stripBaseUrl(window.location.pathname));
   if (current === target) return; // already localized: no redirect loop
-  localStorage.setItem(STORAGE_KEY, target); // remember the auto-pick so it never loops
+  writeSavedLocale(target); // remember the auto-pick so it never loops
   window.location.replace(targetUrl(target));
 }
 
