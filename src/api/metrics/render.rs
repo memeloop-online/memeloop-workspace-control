@@ -305,7 +305,10 @@ fn append_workspace_metrics(body: &mut String, metrics: &crate::storage::Workspa
     );
     append_resources(body, "mwc_resource_requested", "", &total);
     body.push_str("# HELP mwc_temporary_storage_requested_gibibytes Active node-local temporary capacity requested by running workspace runtimes.\n# TYPE mwc_temporary_storage_requested_gibibytes gauge\n");
-    let _ = writeln!(body, "mwc_temporary_storage_requested_gibibytes {temporary_total}");
+    let _ = writeln!(
+        body,
+        "mwc_temporary_storage_requested_gibibytes {temporary_total}"
+    );
     body.push_str("# HELP mwc_user_workspaces Workspaces per owner and lifecycle state.\n# TYPE mwc_user_workspaces gauge\n# HELP mwc_user_resource_requested Requested quota resources per workspace owner.\n# TYPE mwc_user_resource_requested gauge\n# HELP mwc_user_temporary_storage_requested_gibibytes Active node-local temporary capacity requested per workspace owner.\n# TYPE mwc_user_temporary_storage_requested_gibibytes gauge\n");
     for user in &metrics.users {
         let labels = format!("user_id=\"{}\"", user.user_id);
