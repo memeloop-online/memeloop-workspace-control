@@ -120,6 +120,7 @@ const config = {
             items: [
               { label: 'Security model', to: '/docs/security-model' },
               { label: 'FAQ', to: '/docs/faq' },
+              { label: 'Preview', to: '/preview' },
               {
                 label: 'GitHub',
                 href: 'https://github.com/memeloop-online/memeloop-workspace-control',
