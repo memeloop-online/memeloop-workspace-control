@@ -109,6 +109,7 @@ impl Database {
             next_cursor,
             total_count: summary.total_count,
             requested: summary.requested,
+            temporary_requested_gib: summary.requested.temporary_storage_gib,
             state_counts: summary.state_counts,
         })
     }

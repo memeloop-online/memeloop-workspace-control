@@ -144,13 +144,18 @@ where
         };
         let state: String = row.try_get("state")?;
         let count = read_u64("workspace_count")?;
+        let active_runtime = usage_state_has_live_runtime(&state);
         let requested = QuotaResources {
             cpu_millis: read_u64("cpu_millis")?,
             memory_mib: read_u64("memory_mib")?,
             gpu_count: u32::try_from(row.try_get::<i64, _>("gpu_count")?)
                 .map_err(|_| StorageError::InvalidWorkspace)?,
             disk_gib: read_u64("disk_gib")?,
-            temporary_storage_gib: read_u64("temporary_storage_gib")?,
+            temporary_storage_gib: if active_runtime {
+                read_u64("temporary_storage_gib")?
+            } else {
+                0
+            },
         };
         summary.total_count = summary
             .total_count
@@ -160,7 +165,7 @@ where
             .requested
             .checked_add(requested)
             .map_err(|_| StorageError::InvalidWorkspace)?;
-        if usage_state_has_live_runtime(&state) {
+        if active_runtime {
             summary.active_count = summary
                 .active_count
                 .checked_add(count)
@@ -191,7 +196,7 @@ pub(super) async fn workspace_page_summary(
         COALESCE(SUM(memory_mib), 0) AS memory_mib, \
         COALESCE(SUM(gpu_count), 0) AS gpu_count, \
         COALESCE(SUM(disk_gib), 0) AS disk_gib, \
-        COALESCE(SUM(temporary_storage_gib), 0) AS temporary_storage_gib \
+        COALESCE(SUM(CASE WHEN state IN ('provisioning', 'ready', 'starting', 'restarting', 'stopping', 'deleting') THEN temporary_storage_gib ELSE 0 END), 0) AS temporary_storage_gib \
         FROM workspaces WHERE {sqlite_filter}"
     );
     let postgres_filter = workspace_filter_sql("$1", "$2", "$3", "$4");
@@ -201,7 +206,7 @@ pub(super) async fn workspace_page_summary(
         CAST(COALESCE(SUM(memory_mib), 0) AS BIGINT) AS memory_mib, \
         CAST(COALESCE(SUM(gpu_count), 0) AS BIGINT) AS gpu_count, \
         CAST(COALESCE(SUM(disk_gib), 0) AS BIGINT) AS disk_gib, \
-        CAST(COALESCE(SUM(temporary_storage_gib), 0) AS BIGINT) AS temporary_storage_gib \
+        CAST(COALESCE(SUM(CASE WHEN state IN ('provisioning', 'ready', 'starting', 'restarting', 'stopping', 'deleting') THEN temporary_storage_gib ELSE 0 END), 0) AS BIGINT) AS temporary_storage_gib \
         FROM workspaces WHERE {postgres_filter}"
     );
     let aggregate = match database {

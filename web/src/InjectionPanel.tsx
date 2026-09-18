@@ -19,6 +19,7 @@ import { Page } from "./design-system/Page";
 import { WorkspaceCombobox } from "./forms/WorkspaceCombobox";
 import { useI18n } from "./i18n";
 import { canManageOrganization as mayManageOrganization } from "./permissions";
+import { CredentialScopeTabs } from "./shared";
 import type {
   InjectionScope,
   Principal,
@@ -44,10 +45,6 @@ const useStyles = makeStyles({
     display: "grid",
     gap: tokens.spacingVerticalS,
     justifyItems: "start",
-  },
-  scope: {
-    width: "fit-content",
-    maxWidth: "100%",
   },
   workspace: {
     width: "100%",
@@ -282,9 +279,13 @@ export function InjectionPanel(props: Props) {
   return (
     <Page title={t("credentialsTitle")} actions={<Button type="button" appearance="secondary" icon={previewBusy ? undefined : <EyeRegular aria-hidden="true" />} disabled={!workspaceId || previewBusy} onClick={() => void runPreview()}>{previewBusy ? t("credentialsPreviewLoading") : t("credentialsPreview")}</Button>}>
       <div className={styles.controls}>
-        <TabList className={styles.scope} selectedValue={scope} onTabSelect={(_, data) => changeScope(data.value as InjectionScope)} aria-label={t("credentials")}>
-          {scopeValues.map((value) => <Tab key={value} value={value}>{value === "organization" ? t("scopeOrganization") : value === "user" ? t("scopeUser") : t("scopeWorkspace")}</Tab>)}
-        </TabList>
+        <CredentialScopeTabs
+          scopes={scopeValues}
+          selected={scope}
+          labels={{ organization: t("scopeOrganization"), user: t("scopeUser"), workspace: t("scopeWorkspace") }}
+          ariaLabel={t("credentials")}
+          onChange={changeScope}
+        />
         <div className={styles.workspace}><WorkspaceCombobox key={props.organizationId} items={workspaceItems} loadItems={searchWorkspaces} selectedId={workspaceId} onChange={(id) => { workspaceSelectionTouchedRef.current = id === ""; setWorkspaceId(id); setPreview([]); setPreviewRan(false); }} /></div>
       </div>
       <TabList className={styles.mobileTabs} selectedValue={mobilePane} onTabSelect={(_, data) => data.value === "editor" ? (selectedKey ? setMobilePane("editor") : startNew()) : setMobilePane("list")} aria-label={t("credentials")}>

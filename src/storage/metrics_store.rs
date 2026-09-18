@@ -51,7 +51,7 @@ impl Database {
             CAST(SUM(w.memory_mib) AS BIGINT) AS memory_mib, \
             CAST(SUM(w.gpu_count) AS BIGINT) AS gpu_count, \
             CAST(SUM(w.disk_gib) AS BIGINT) AS disk_gib, \
-            CAST(SUM(w.temporary_storage_gib) AS BIGINT) AS temporary_storage_gib \
+            CAST(SUM(CASE WHEN w.state IN ('provisioning', 'ready', 'starting', 'restarting', 'stopping', 'deleting') THEN w.temporary_storage_gib ELSE 0 END) AS BIGINT) AS temporary_storage_gib \
             FROM workspaces w \
             WHERE w.installation_id = {install} AND w.state <> 'deleted' \
             GROUP BY w.owner_id, w.state ORDER BY w.owner_id, w.state";

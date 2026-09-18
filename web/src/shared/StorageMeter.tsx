@@ -27,10 +27,12 @@ export interface StorageMeterProps {
   /** Locale used to format the observation timestamp. */
   locale: string;
   labels: StorageMeterLabels;
+  /** Product-owned lifecycle text, such as a released stopped-runtime volume. */
+  statusOverride?: string;
 }
 
 /** Consistent capacity/usage meter for workspace storage, persistent or temporary. */
-export function StorageMeter({ label, telemetry, configuredGiB, locale, labels }: StorageMeterProps) {
+export function StorageMeter({ label, telemetry, configuredGiB, locale, labels, statusOverride }: StorageMeterProps) {
   const styles = useSharedStyles();
   const coverage = telemetry?.coverage ?? "unavailable";
   const usable = coverage === "exact" || coverage === "stale";
@@ -44,7 +46,7 @@ export function StorageMeter({ label, telemetry, configuredGiB, locale, labels }
     : telemetry
       ? formatBytes(telemetry.configured_bytes)
       : `${configuredGiB} GiB`;
-  const statusText = coverage === "stale"
+  const telemetryStatus = coverage === "stale"
     ? labels.telemetryStale
     : coverage === "disabled"
       ? labels.telemetryDisabled
@@ -53,6 +55,7 @@ export function StorageMeter({ label, telemetry, configuredGiB, locale, labels }
         : telemetry?.backing === "node_local"
           ? labels.nodeLocalTelemetryUnavailable
           : labels.telemetryUnavailable;
+  const statusText = statusOverride ?? telemetryStatus;
   const pressureText = telemetry?.pressure === "critical"
     ? labels.pressureCritical
     : telemetry?.pressure === "warning"

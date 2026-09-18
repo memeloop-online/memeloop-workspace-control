@@ -2,8 +2,7 @@ import React from 'react';
 import Layout from '@theme/Layout';
 import Link from '@docusaurus/Link';
 import Translate, { translate } from '@docusaurus/Translate';
-import WorkspaceStatus from '@site/src/components/preview/WorkspaceStatus';
-import CredentialScopes from '@site/src/components/preview/CredentialScopes';
+import { CredentialPreview, WorkspacePreview } from '@site/src/components/preview/adapters';
 import styles from '@site/src/components/preview/preview.module.css';
 
 export default function Preview() {
@@ -41,7 +40,7 @@ export default function Preview() {
               usage against template limits.
             </Translate>
           </p>
-          <WorkspaceStatus />
+          <WorkspacePreview />
         </section>
         <section aria-labelledby="preview-scopes-heading">
           <h2 className={styles.sectionHeading} id="preview-scopes-heading">
@@ -53,7 +52,7 @@ export default function Preview() {
               each level provides.
             </Translate>
           </p>
-          <CredentialScopes />
+          <CredentialPreview />
         </section>
         <section aria-labelledby="preview-next-heading">
           <h2 className={styles.sectionHeading} id="preview-next-heading">

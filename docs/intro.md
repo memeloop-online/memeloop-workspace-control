@@ -34,3 +34,9 @@ Cross-cutting topics:
 
 The authoritative machine-readable API contract is served by each deployment at
 `GET /api/v1/openapi.json`.
+
+## License
+
+Memeloop Workspace Control is available under the
+[Apache License 2.0](https://github.com/memeloop-online/memeloop-workspace-control/blob/main/LICENSE).
+Attribution details are listed in the repository [NOTICE](https://github.com/memeloop-online/memeloop-workspace-control/blob/main/NOTICE).

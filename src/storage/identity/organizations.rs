@@ -67,14 +67,14 @@ impl Database {
             } => {
                 sqlx::query(
                 "INSERT INTO organization_quotas (installation_id, organization_id, cpu_millis, \
-                memory_mib, gpu_count, disk_gib, temporary_storage_gib, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) \
+                memory_mib, gpu_count, disk_gib, temporary_storage_gib, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0, ?7) \
                 ON CONFLICT (installation_id, organization_id) DO UPDATE SET cpu_millis = excluded.cpu_millis, \
                 memory_mib = excluded.memory_mib, gpu_count = excluded.gpu_count, \
-                disk_gib = excluded.disk_gib, temporary_storage_gib = excluded.temporary_storage_gib, updated_at = excluded.updated_at",
+                disk_gib = excluded.disk_gib, temporary_storage_gib = 0, updated_at = excluded.updated_at",
             )
             .bind(installation_id.as_str()).bind(organization_id.to_string())
             .bind(as_i64(resources.cpu_millis)?).bind(as_i64(resources.memory_mib)?)
-            .bind(i64::from(resources.gpu_count)).bind(as_i64(resources.disk_gib)?).bind(as_i64(resources.temporary_storage_gib)?).bind(now)
+            .bind(i64::from(resources.gpu_count)).bind(as_i64(resources.disk_gib)?).bind(now)
             .execute(pool).await?;
             }
             Self::Postgres {
@@ -83,14 +83,14 @@ impl Database {
             } => {
                 sqlx::query(
                 "INSERT INTO organization_quotas (installation_id, organization_id, cpu_millis, \
-                memory_mib, gpu_count, disk_gib, temporary_storage_gib, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
+                memory_mib, gpu_count, disk_gib, temporary_storage_gib, updated_at) VALUES ($1, $2, $3, $4, $5, $6, 0, $7) \
                 ON CONFLICT (installation_id, organization_id) DO UPDATE SET cpu_millis = excluded.cpu_millis, \
                 memory_mib = excluded.memory_mib, gpu_count = excluded.gpu_count, \
-                disk_gib = excluded.disk_gib, temporary_storage_gib = excluded.temporary_storage_gib, updated_at = excluded.updated_at",
+                disk_gib = excluded.disk_gib, temporary_storage_gib = 0, updated_at = excluded.updated_at",
             )
             .bind(installation_id.as_str()).bind(organization_id.to_string())
             .bind(as_i64(resources.cpu_millis)?).bind(as_i64(resources.memory_mib)?)
-            .bind(i64::from(resources.gpu_count)).bind(as_i64(resources.disk_gib)?).bind(as_i64(resources.temporary_storage_gib)?).bind(now)
+            .bind(i64::from(resources.gpu_count)).bind(as_i64(resources.disk_gib)?).bind(now)
             .execute(pool).await?;
             }
         };

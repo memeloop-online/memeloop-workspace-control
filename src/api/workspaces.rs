@@ -124,6 +124,7 @@ pub(super) struct WorkspaceResponsePage {
 pub(super) struct WorkspaceListSummary {
     pub total_count: u64,
     pub requested: QuotaResources,
+    pub temporary_requested_gib: u64,
     pub state_counts: BTreeMap<String, u64>,
 }
 
@@ -252,6 +253,7 @@ pub(super) async fn list(
         summary: WorkspaceListSummary {
             total_count: workspaces.total_count,
             requested: workspaces.requested,
+            temporary_requested_gib: workspaces.temporary_requested_gib,
             state_counts: workspaces.state_counts,
         },
     }))

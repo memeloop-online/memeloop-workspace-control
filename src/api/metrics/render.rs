@@ -290,21 +290,23 @@ fn append_workspace_metrics(body: &mut String, metrics: &crate::storage::Workspa
         let _ = writeln!(body, "mwc_workspaces{{state=\"{}\"}} {count}", label(state));
     }
     body.push_str("# HELP mwc_resource_requested Requested resources across all non-deleted workspaces.\n# TYPE mwc_resource_requested gauge\n");
-    let total = metrics.users.iter().fold(
-        crate::quota::QuotaResources::default(),
-        |mut total, user| {
+    let (total, temporary_total) = metrics.users.iter().fold(
+        (crate::quota::QuotaResources::default(), 0_u64),
+        |(mut total, temporary_total), user| {
             total.cpu_millis = total.cpu_millis.saturating_add(user.resources.cpu_millis);
             total.memory_mib = total.memory_mib.saturating_add(user.resources.memory_mib);
             total.gpu_count = total.gpu_count.saturating_add(user.resources.gpu_count);
             total.disk_gib = total.disk_gib.saturating_add(user.resources.disk_gib);
-            total.temporary_storage_gib = total
-                .temporary_storage_gib
-                .saturating_add(user.resources.temporary_storage_gib);
-            total
+            (
+                total,
+                temporary_total.saturating_add(user.resources.temporary_storage_gib),
+            )
         },
     );
     append_resources(body, "mwc_resource_requested", "", &total);
-    body.push_str("# HELP mwc_user_workspaces Workspaces per owner and lifecycle state.\n# TYPE mwc_user_workspaces gauge\n# HELP mwc_user_resource_requested Requested resources per workspace owner.\n# TYPE mwc_user_resource_requested gauge\n");
+    body.push_str("# HELP mwc_temporary_storage_requested_gibibytes Active node-local temporary capacity requested by running workspace runtimes.\n# TYPE mwc_temporary_storage_requested_gibibytes gauge\n");
+    let _ = writeln!(body, "mwc_temporary_storage_requested_gibibytes {temporary_total}");
+    body.push_str("# HELP mwc_user_workspaces Workspaces per owner and lifecycle state.\n# TYPE mwc_user_workspaces gauge\n# HELP mwc_user_resource_requested Requested quota resources per workspace owner.\n# TYPE mwc_user_resource_requested gauge\n# HELP mwc_user_temporary_storage_requested_gibibytes Active node-local temporary capacity requested per workspace owner.\n# TYPE mwc_user_temporary_storage_requested_gibibytes gauge\n");
     for user in &metrics.users {
         let labels = format!("user_id=\"{}\"", user.user_id);
         for (state, count) in &user.states {
@@ -319,6 +321,11 @@ fn append_workspace_metrics(body: &mut String, metrics: &crate::storage::Workspa
             "mwc_user_resource_requested",
             &labels,
             &user.resources,
+        );
+        let _ = writeln!(
+            body,
+            "mwc_user_temporary_storage_requested_gibibytes{{{labels}}} {}",
+            user.resources.temporary_storage_gib
         );
     }
 }
@@ -335,11 +342,6 @@ fn append_resources(
         ("memory", "mebibytes", resources.memory_mib),
         ("gpu", "devices", u64::from(resources.gpu_count)),
         ("disk", "gibibytes", resources.disk_gib),
-        (
-            "temporary_storage",
-            "gibibytes",
-            resources.temporary_storage_gib,
-        ),
     ] {
         let _ = writeln!(
             body,

@@ -63,4 +63,5 @@ Full bilingual documentation is published at
 
 ## License
 
-See [LICENSE](LICENSE).
+This project is licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE)
+and [NOTICE](NOTICE).
