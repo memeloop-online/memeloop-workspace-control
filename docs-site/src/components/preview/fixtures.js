@@ -44,7 +44,7 @@ export const WORKSPACES = [
       { key: 'cpu', used: '0 m', limit: '1000 m', percent: 0 },
       { key: 'memory', used: '0 MiB', limit: '1 GiB', percent: 0 },
       { key: 'disk', used: '1.2 GiB', limit: '1.9 GiB', percent: 63 },
-      { key: 'ephemeral', used: '0 MiB', limit: '5 GiB', percent: 0 },
+      { key: 'ephemeral', released: true },
     ],
   },
 ];

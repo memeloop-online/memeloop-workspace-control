@@ -100,7 +100,7 @@ const STORIES = [
       }),
       translate({
         id: 'home.story.credentials.point.3',
-        message: 'Version history on every item, with effective-source previews',
+        message: 'Versioned updates on change, with effective-source previews',
       }),
     ],
     image: 'img/screenshots/credentials-desktop.png',
@@ -201,7 +201,7 @@ export default function Home() {
             <Link className="button button--secondary button--lg" to="/preview">
               <Translate id="home.hero.cta.preview">Try the preview</Translate>
             </Link>
-            <Link className="button button--outline button--lg" to="/docs/intro">
+            <Link className="button button--outline button--lg" to="/docs/">
               <Translate id="home.hero.cta.docs">Read the docs</Translate>
             </Link>
           </div>

@@ -69,7 +69,7 @@ export default function Preview() {
             <Link className="button button--primary" to="/docs/quickstart">
               <Translate id="home.hero.cta.quickstart">Quick start</Translate>
             </Link>{' '}
-            <Link className="button button--secondary" to="/docs/intro">
+            <Link className="button button--secondary" to="/docs/">
               <Translate id="home.hero.cta.docs">Read the docs</Translate>
             </Link>
           </p>

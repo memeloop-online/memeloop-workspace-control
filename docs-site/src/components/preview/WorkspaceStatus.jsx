@@ -59,9 +59,24 @@ export default function WorkspaceStatus() {
           </span>
         </div>
         <div className={styles.meterGrid}>
-          {selected.meters.map((meter) => (
-            <ResourceMeter key={meter.key} meter={meter} />
-          ))}
+          {selected.meters.map((meter) =>
+            meter.released ? (
+              <div key={meter.key} className={styles.meter}>
+                <div className={styles.meterHeader}>
+                  <span className={styles.meterLabel}>
+                    <Translate id="preview.meters.ephemeral">Ephemeral storage</Translate>
+                  </span>
+                  <span className={styles.meterValue}>
+                    <Translate id="preview.meters.ephemeral.released">
+                      Released on stop
+                    </Translate>
+                  </span>
+                </div>
+              </div>
+            ) : (
+              <ResourceMeter key={meter.key} meter={meter} />
+            ),
+          )}
         </div>
       </div>
     </div>
