@@ -160,7 +160,7 @@ async fn management_api_enforces_system_and_organization_boundaries() {
             .header("content-type", "application/json")
             .header("idempotency-key", "set-created-user-quota")
             .body(Body::from(
-                json!({"cpu_millis":2000,"memory_mib":4096,"gpu_count":0,"disk_gib":50,"temporary_storage_gib":75})
+                json!({"cpu_millis":2000,"memory_mib":4096,"gpu_count":0,"disk_gib":50})
                     .to_string(),
             ))
             .unwrap(),
@@ -182,7 +182,7 @@ async fn management_api_enforces_system_and_organization_boundaries() {
         .unwrap();
     let user_quota = body_json(get_user_quota).await;
     assert_eq!(user_quota["disk_gib"], 50);
-    assert_eq!(user_quota["temporary_storage_gib"], 75);
+    assert!(user_quota.get("temporary_storage_gib").is_none());
 
     let membership = app
         .clone()
@@ -203,7 +203,7 @@ async fn management_api_enforces_system_and_organization_boundaries() {
         .unwrap();
     assert_eq!(membership.status(), StatusCode::NO_CONTENT);
 
-    let quota = json!({"cpu_millis":4000,"memory_mib":8192,"gpu_count":1,"disk_gib":100,"temporary_storage_gib":200});
+    let quota = json!({"cpu_millis":4000,"memory_mib":8192,"gpu_count":1,"disk_gib":100});
     let set_quota = app
         .clone()
         .oneshot(

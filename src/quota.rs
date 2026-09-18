@@ -16,6 +16,10 @@ pub struct QuotaResources {
     pub memory_mib: u64,
     pub gpu_count: u32,
     pub disk_gib: u64,
+    /// Internal aggregate for active runtime scratch capacity. This field is
+    /// excluded from the quota API and is never checked against a quota.
+    #[serde(skip)]
+    #[schema(ignore)]
     pub temporary_storage_gib: u64,
 }
 
@@ -103,11 +107,6 @@ impl ResourceQuota {
             u64::from(self.limit.gpu_count),
         )?;
         check_limit("disk_gib", proposed.disk_gib, self.limit.disk_gib)?;
-        check_limit(
-            "temporary_storage_gib",
-            proposed.temporary_storage_gib,
-            self.limit.temporary_storage_gib,
-        )?;
         Ok(proposed)
     }
 }
@@ -147,7 +146,7 @@ mod tests {
                 memory_mib: 8_192,
                 gpu_count: 1,
                 disk_gib: 100,
-                temporary_storage_gib: 30,
+                ..QuotaResources::default()
             },
         };
         let proposed = quota
@@ -166,29 +165,5 @@ mod tests {
             .unwrap();
         assert_eq!(proposed.cpu_millis, 3_000);
         assert_eq!(proposed.temporary_storage_gib, 10);
-    }
-
-    #[test]
-    fn reports_exact_exceeded_resource() {
-        let quota = ResourceQuota {
-            limit: QuotaResources {
-                temporary_storage_gib: 10,
-                ..QuotaResources::default()
-            },
-        };
-        assert_eq!(
-            quota.admit(
-                QuotaResources::default(),
-                QuotaResources {
-                    temporary_storage_gib: 11,
-                    ..QuotaResources::default()
-                }
-            ),
-            Err(QuotaError::Exceeded {
-                resource: "temporary_storage_gib",
-                requested: 11,
-                limit: 10,
-            })
-        );
     }
 }

@@ -498,9 +498,9 @@ async fn workspace_page_summary_covers_every_matching_workspace_not_only_the_cur
             "memory_mib": 6_144,
             "gpu_count": 0,
             "disk_gib": 60,
-            "temporary_storage_gib": 30,
         })
     );
+    assert_eq!(first_page["summary"]["temporary_requested_gib"], 30);
     assert_eq!(first_page["summary"]["state_counts"]["provisioning"], 3);
 
     let cursor = first_page["next_cursor"].as_str().unwrap();
@@ -540,10 +540,7 @@ async fn workspace_page_summary_covers_every_matching_workspace_not_only_the_cur
     assert_eq!(filtered["items"].as_array().unwrap().len(), 1);
     assert_eq!(filtered["summary"]["total_count"], 2);
     assert_eq!(filtered["summary"]["requested"]["cpu_millis"], 2_000);
-    assert_eq!(
-        filtered["summary"]["requested"]["temporary_storage_gib"],
-        20
-    );
+    assert_eq!(filtered["summary"]["temporary_requested_gib"], 20);
     assert_eq!(filtered["summary"]["state_counts"]["provisioning"], 2);
 
     let empty = app
@@ -567,9 +564,9 @@ async fn workspace_page_summary_covers_every_matching_workspace_not_only_the_cur
             "memory_mib": 0,
             "gpu_count": 0,
             "disk_gib": 0,
-            "temporary_storage_gib": 0,
         })
     );
+    assert_eq!(empty["summary"]["temporary_requested_gib"], 0);
     assert_eq!(empty["summary"]["state_counts"], json!({}));
 }
 
@@ -687,7 +684,7 @@ async fn workspace_usage_summary_aggregates_in_sql_and_honors_template_scope() {
             memory_mib: 4_648,
             gpu_count: 3,
             disk_gib: 46,
-            temporary_storage_gib: 30,
+            temporary_storage_gib: 20,
         }
     );
     assert_eq!(summary.state_counts.get("stopped"), Some(&1));
@@ -701,7 +698,7 @@ async fn workspace_usage_summary_aggregates_in_sql_and_honors_template_scope() {
     assert_eq!(restricted.total_count, 2);
     assert_eq!(restricted.active_count, 1);
     assert_eq!(restricted.requested.cpu_millis, 2_200);
-    assert_eq!(restricted.requested.temporary_storage_gib, 20);
+    assert_eq!(restricted.requested.temporary_storage_gib, 10);
     assert_eq!(restricted.state_counts.len(), 2);
     assert_eq!(restricted.state_counts.get("stopped"), Some(&1));
     assert_eq!(restricted.state_counts.get("deleting"), Some(&1));
@@ -834,8 +831,9 @@ async fn organization_usage_summary_is_organization_wide_and_template_scoped() {
     assert_eq!(unrestricted["total_count"], 2);
     assert_eq!(
         unrestricted["requested"],
-        json!({"cpu_millis": 1300, "memory_mib": 2448, "gpu_count": 2, "disk_gib": 25, "temporary_storage_gib": 20})
+        json!({"cpu_millis": 1300, "memory_mib": 2448, "gpu_count": 2, "disk_gib": 25})
     );
+    assert_eq!(unrestricted["temporary_requested_gib"], 20);
     assert_eq!(unrestricted["state_counts"], json!({"provisioning": 2}));
     assert_eq!(
         unrestricted["actual"],
@@ -880,8 +878,9 @@ async fn organization_usage_summary_is_organization_wide_and_template_scoped() {
     assert_eq!(restricted["total_count"], 1);
     assert_eq!(
         restricted["requested"],
-        json!({"cpu_millis": 1000, "memory_mib": 2048, "gpu_count": 0, "disk_gib": 20, "temporary_storage_gib": 10})
+        json!({"cpu_millis": 1000, "memory_mib": 2048, "gpu_count": 0, "disk_gib": 20})
     );
+    assert_eq!(restricted["temporary_requested_gib"], 10);
     assert_eq!(restricted["state_counts"], json!({"provisioning": 1}));
     assert_eq!(
         restricted["actual"],

@@ -17,6 +17,7 @@ use super::{ApiError, AppState, auth::principal};
 pub(super) struct OrganizationUsageSummary {
     total_count: u64,
     requested: QuotaResources,
+    temporary_requested_gib: u64,
     state_counts: BTreeMap<String, u64>,
     actual: ActualUsage,
     observed_at: Option<i64>,
@@ -117,6 +118,7 @@ pub(super) async fn get(
     Ok(Json(OrganizationUsageSummary {
         total_count: summary.total_count,
         requested: summary.requested,
+        temporary_requested_gib: summary.requested.temporary_storage_gib,
         state_counts: summary.state_counts,
         actual: ActualUsage {
             cpu_millis: metrics.cpu_millis,

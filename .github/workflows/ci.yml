@@ -2,6 +2,10 @@ name: ci
 
 on:
   push:
+    branches:
+      - '**'
+    tags:
+      - 'v*'
   pull_request:
   workflow_dispatch:
 
@@ -31,14 +35,24 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+      - name: Verify release tag matches package version
+        if: github.ref_type == 'tag'
+        run: |
+          expected="${GITHUB_REF_NAME#v}"
+          actual="$(awk -F ' = ' '/^version = / { gsub(/\"/, "", $2); print $2; exit }' Cargo.toml)"
+          test -n "${actual}"
+          test "${expected}" = "${actual}"
       - id: image-inputs
         name: Detect container image input changes
         env:
           EVENT_NAME: ${{ github.event_name }}
+          REF_TYPE: ${{ github.ref_type }}
           BEFORE_SHA: ${{ github.event.before }}
           CURRENT_SHA: ${{ github.sha }}
         run: |
-          if [ "${EVENT_NAME}" = "workflow_dispatch" ]; then
+          if [ "${REF_TYPE}" = "tag" ]; then
+            changed=true
+          elif [ "${EVENT_NAME}" = "workflow_dispatch" ]; then
             changed=true
           elif [ "${EVENT_NAME}" != "push" ]; then
             changed=false
@@ -439,7 +453,7 @@ jobs:
   publish-images:
     needs: verify
     if: >-
-      github.ref == 'refs/heads/main' &&
+      (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) &&
       (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
       needs.verify.outputs.image-inputs-changed == 'true'
     runs-on: ubuntu-latest
@@ -489,7 +503,9 @@ jobs:
           images: ${{ env.IMAGE_NAME }}
           tags: |
             type=sha,prefix=sha-
-            type=raw,value=latest
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+            type=ref,event=tag
+            type=semver,pattern={{version}}
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.description=${{ matrix.description }}
@@ -551,3 +567,56 @@ jobs:
           subject-name: ${{ env.IMAGE_NAME }}
           subject-digest: ${{ steps.push.outputs.digest }}
           push-to-registry: true
+      - name: Extract release binary from the published control-plane image
+        if: github.ref_type == 'tag' && matrix.suffix == ''
+        env:
+          PUBLISHED_DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          archive="memeloop-workspace-control-${GITHUB_REF_NAME}-linux-amd64.tar.gz"
+          mkdir -p release/bin
+          docker pull "${IMAGE_NAME}@${PUBLISHED_DIGEST}"
+          container_id="$(docker create "${IMAGE_NAME}@${PUBLISHED_DIGEST}")"
+          trap 'docker rm -f "${container_id}" >/dev/null 2>&1 || true' EXIT
+          docker cp "${container_id}:/usr/local/bin/memeloop-workspace-control" \
+            release/bin/memeloop-workspace-control
+          chmod 0755 release/bin/memeloop-workspace-control
+          cp LICENSE NOTICE release/
+          tar -C release -czf "release/${archive}" \
+            bin/memeloop-workspace-control LICENSE NOTICE
+          (cd release && sha256sum "${archive}" > "${archive}.sha256")
+      - name: Upload release binary
+        if: github.ref_type == 'tag' && matrix.suffix == ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: control-plane-release
+          path: |
+            release/*.tar.gz
+            release/*.sha256
+          if-no-files-found: error
+
+  publish-release:
+    needs: publish-images
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download release assets
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: control-plane-release
+          path: release-assets
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            gh release upload "${GITHUB_REF_NAME}" release-assets/* \
+              --repo "${GITHUB_REPOSITORY}" --clobber
+          else
+            gh release create "${GITHUB_REF_NAME}" release-assets/* \
+              --repo "${GITHUB_REPOSITORY}" \
+              --verify-tag \
+              --generate-notes \
+              --title "Memeloop Workspace Control ${GITHUB_REF_NAME}"
+          fi

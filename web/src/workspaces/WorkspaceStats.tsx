@@ -27,7 +27,7 @@ export function WorkspaceStats({ summary, quota, stale = false }: Props) {
     <UsageStat kind="cpu" summary={summary} quota={quota?.cpu_millis ?? null} observed={observed} stale={stale} />
     <UsageStat kind="memory" summary={summary} quota={quota?.memory_mib ?? null} observed={observed} stale={stale} />
     <UsageStat kind="disk" summary={summary} quota={quota?.disk_gib ?? null} observed={observed} stale={stale} />
-    <UsageStat kind="temporary" summary={summary} quota={quota?.temporary_storage_gib ?? null} observed={observed} stale={stale} />
+    <UsageStat kind="temporary" summary={summary} quota={null} observed={observed} stale={stale} />
   </section>;
 }
 
@@ -36,7 +36,7 @@ function UsageStat({ kind, summary, quota, observed, stale }: { kind: ResourceKi
   const styles = useWorkspaceStyles();
   const requested = summary?.requested ?? EMPTY_RESOURCES;
   const actual = summary ? actualFor(kind, summary) : null;
-  const requestedValue = requestedFor(kind, requested);
+  const requestedValue = requestedFor(kind, requested, summary?.temporary_requested_gib ?? 0);
   const availability: UsageAvailability = summary?.availability[kind] ?? "unknown";
   const percentage = usagePercentage(actual, requestedValue);
   const value = actual === null ? "—" : format(kind, actual, t("cores"));
@@ -56,9 +56,9 @@ function UsageStat({ kind, summary, quota, observed, stale }: { kind: ResourceKi
   </Tooltip>;
 }
 
-const EMPTY_RESOURCES: QuotaResources = { cpu_millis: 0, memory_mib: 0, disk_gib: 0, gpu_count: 0, temporary_storage_gib: 0 };
+const EMPTY_RESOURCES: QuotaResources = { cpu_millis: 0, memory_mib: 0, disk_gib: 0, gpu_count: 0 };
 function actualFor(kind: ResourceKind, summary: OrganizationUsageSummary): number | null { return kind === "cpu" ? summary.actual.cpu_millis : kind === "memory" ? summary.actual.memory_mib : kind === "disk" ? summary.actual.disk_bytes : summary.actual.temporary_bytes; }
-function requestedFor(kind: ResourceKind, resources: QuotaResources): number { return kind === "cpu" ? resources.cpu_millis : kind === "memory" ? resources.memory_mib : kind === "disk" ? resources.disk_gib * 1024 ** 3 : resources.temporary_storage_gib * 1024 ** 3; }
+function requestedFor(kind: ResourceKind, resources: QuotaResources, temporaryRequestedGiB: number): number { return kind === "cpu" ? resources.cpu_millis : kind === "memory" ? resources.memory_mib : kind === "disk" ? resources.disk_gib * 1024 ** 3 : temporaryRequestedGiB * 1024 ** 3; }
 function format(kind: ResourceKind, value: number, cores: string): string { return kind === "cpu" ? `${formatCores(value)} ${cores}` : kind === "memory" ? `${formatGiB(value)} GiB` : `${formatBytesAsGiB(value)} GiB`; }
 function availabilityMessageKey(value: UsageAvailability): "usageAvailable" | "usageUnavailable" | "usageUnknown" {
   return value === "available" ? "usageAvailable" : value === "unavailable" ? "usageUnavailable" : "usageUnknown";

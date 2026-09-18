@@ -35,8 +35,6 @@ import type {
 import i18next from "i18next";
 import type { CreatePortMappingInput, PortMapping } from "./portMappings";
 
-const TOKEN_KEY = "mwc.api-token";
-
 /** Options shared by the keyset-paginated list endpoints. */
 export interface PageOptions {
   limit?: number;
@@ -67,18 +65,6 @@ export class ApiClient {
   constructor(token: string, onUnauthorized?: () => void) {
     this.token = token;
     this.onUnauthorized = onUnauthorized;
-  }
-
-  static savedToken(): string {
-    return sessionStorage.getItem(TOKEN_KEY) ?? "";
-  }
-
-  static rememberToken(token: string): void {
-    sessionStorage.setItem(TOKEN_KEY, token);
-  }
-
-  static forgetToken(): void {
-    sessionStorage.removeItem(TOKEN_KEY);
   }
 
   me(): Promise<Principal> {

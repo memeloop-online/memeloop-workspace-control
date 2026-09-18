@@ -58,4 +58,5 @@ Helm Chart。加密注入与 Webhook 需要 `MWC_ENCRYPTION_KEY` 和
 
 ## 许可证
 
-见 [LICENSE](LICENSE)。
+本项目采用 Apache License 2.0 许可协议，详见 [LICENSE](LICENSE) 和
+[NOTICE](NOTICE)。

@@ -69,6 +69,7 @@ pub struct WorkspacePage {
     /// This deliberately ignores the pagination cursor.
     pub total_count: u64,
     pub requested: crate::quota::QuotaResources,
+    pub temporary_requested_gib: u64,
     pub state_counts: BTreeMap<String, u64>,
 }
 

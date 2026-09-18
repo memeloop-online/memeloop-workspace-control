@@ -125,6 +125,7 @@ export interface WorkspacePage {
 export interface WorkspaceSummary {
   total_count: number;
   requested: QuotaResources;
+  temporary_requested_gib: number;
   state_counts: Partial<Record<WorkspaceState, number>>;
 }
 
@@ -133,7 +134,6 @@ export interface QuotaResources {
   memory_mib: number;
   gpu_count: number;
   disk_gib: number;
-  temporary_storage_gib: number;
 }
 
 export interface AvailableNodePool {
@@ -153,6 +153,7 @@ export interface OrganizationUsageSummary {
   total_count: number;
   state_counts: Partial<Record<WorkspaceState, number>>;
   requested: QuotaResources;
+  temporary_requested_gib: number;
   actual: { cpu_millis: number | null; memory_mib: number | null; disk_bytes: number | null; temporary_bytes: number | null };
   observed_at: number | null;
   availability: { cpu: UsageAvailability; memory: UsageAvailability; disk: UsageAvailability; temporary: UsageAvailability };

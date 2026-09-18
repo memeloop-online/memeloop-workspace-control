@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Badge, Button, Caption1, Card, Divider, ProgressBar, Spinner, Text, Tooltip, Title3 } from "@fluentui/react-components";
+import { Badge, Button, Caption1, Divider, Spinner, Text, Title3, Tooltip } from "@fluentui/react-components";
 import { ArrowClockwiseRegular, ChevronDownRegular, ChevronUpRegular, DeleteRegular, DesktopRegular, LocationRegular, PlayRegular, StopRegular, WindowConsoleRegular } from "@fluentui/react-icons";
 import { useI18n } from "./i18n";
 import type { Locale, MessageKey } from "./i18n";
@@ -10,7 +10,8 @@ import type { ApiClient } from "./api";
 import { nodePoolDisplayName } from "./forms/NodePoolPicker";
 import { safeBootstrapUrl } from "./portMappings";
 import { reserveWebShellWindow } from "./workspaceShell";
-import { aggregateRuntimeUsage, formatCpuMillis, formatMemoryMiB, formatPercent, parseCpuMillis, parseMemoryMiB, usagePercent } from "./workspaceMetrics";
+import { ResourceMeter, WorkspaceStatusCard } from "./shared";
+import { aggregateRuntimeUsage, formatCpuMillis, formatMemoryMiB, parseCpuMillis, parseMemoryMiB, usagePercent } from "./workspaceMetrics";
 import { StorageMeter } from "./workspaces/StorageMeter";
 import { useWorkspaceStyles } from "./workspaces/workspaceStyles";
 
@@ -51,21 +52,35 @@ export function WorkspaceCard({ api, item, runtime, nodePools, busyAction, onAct
   const running = workspace.state === "ready";
   const stopped = workspace.state === "stopped";
   const transition = busyAction ? { action: busyAction, label: actionProgressLabel(busyAction) } : workspaceTransition(workspace.state);
+  const stateLabels = {
+    provisioning: t("stateProvisioning"),
+    ready: t("stateReady"),
+    stopping: t("stateStopping"),
+    stopped: t("stateStopped"),
+    starting: t("stateStarting"),
+    restarting: t("stateRestarting"),
+    deleting: t("stateDeleting"),
+    deleted: t("stateDeleted"),
+    failed: t("stateFailed"),
+  };
 
-  return <Card className={styles.card} appearance="filled-alternative">
-    <div className={styles.cardHeader}>
-      <div className={styles.cardTitle}><Title3 as="h2" id={titleId} className={styles.titleText}>{workspace.name}</Title3><Caption1 className={styles.idText}>{workspace.short_id}</Caption1></div>
-      <StateBadge state={workspace.state} />
-    </div>
-    <div className={styles.metadata}>
-      <Text>{workspace.workspace_user}</Text>
-      <Text>{workspace.access_mode === "public" ? t("public") : t("internal")}</Text>
-      {templateName && <Text>{t("template")}: {templateName}</Text>}
-      <Tooltip content={workspace.image} relationship="description"><Text tabIndex={0} className={styles.metadataCode}>{t("image")}: {shortImage(workspace.image)}</Text></Tooltip>
-      <Tooltip content={running ? t("locationChangeAfterStop") : t("changeLocation")} relationship="description"><Text tabIndex={0}>{t("nodePool")}: {nodePoolDisplayName(nodePools, workspace.node_pool)}</Text></Tooltip>
-      {workspace.resources.gpu_count > 0 && <Text>{workspace.resources.gpu_count} GPU</Text>}
-    </div>
-    <ResourceOverview item={item} runtime={runtime} locale={locale} />
+  return <WorkspaceStatusCard
+    title={workspace.name}
+    titleId={titleId}
+    shortId={workspace.short_id}
+    state={workspace.state}
+    stateLabels={stateLabels}
+    metadata={[
+      workspace.workspace_user,
+      workspace.access_mode === "public" ? t("public") : t("internal"),
+      ...(templateName ? [`${t("template")}: ${templateName}`] : []),
+      <Tooltip key="image" content={workspace.image} relationship="description"><Text tabIndex={0} className={styles.metadataCode}>{t("image")}: {shortImage(workspace.image)}</Text></Tooltip>,
+      <Tooltip key="node-pool" content={running ? t("locationChangeAfterStop") : t("changeLocation")} relationship="description"><Text tabIndex={0}>{t("nodePool")}: {nodePoolDisplayName(nodePools, workspace.node_pool)}</Text></Tooltip>,
+      ...(workspace.resources.gpu_count > 0 ? [`${workspace.resources.gpu_count} GPU`] : []),
+    ]}
+    meters={[]}
+    resources={<ResourceOverview item={item} runtime={runtime} locale={locale} />}
+  >
     <div className={styles.toolbar} role="group" aria-labelledby={titleId} aria-busy={transition ? "true" : "false"}>
       <div className={styles.toolbarGroup}>
         {transition ? <Button appearance="subtle" disabled icon={<Spinner size="tiny" />} aria-busy="true">{t(transition.label)}</Button> : <>
@@ -87,7 +102,7 @@ export function WorkspaceCard({ api, item, runtime, nodePools, busyAction, onAct
     </div>
     {runtime && workspace.state !== "stopped" && detailView === "status" && <RuntimeStatus id={statusId} runtime={runtime} />}
     {runtime && detailView === "events" && <EventLog id={eventsId} runtime={runtime} locale={locale} />}
-  </Card>;
+  </WorkspaceStatusCard>;
 }
 
 async function openDesktop(api: ApiClient, workspaceId: string, mappingId: string, setOpening: (value: boolean) => void, onError: (message: string) => void, t: ReturnType<typeof useI18n>["t"]) {
@@ -111,19 +126,12 @@ function ResourceOverview({ item, runtime, locale }: { item: WorkspaceResponse; 
   const persistent = isStopped ? undefined : runtime?.persistent_storage;
   const temporary = isStopped ? undefined : runtime?.temporary_storage;
   return <div className={styles.resourceGrid}>
-    <ResourceMeter label="CPU" actual={formatCpuMillis(usage.cpuMillis)} requested={`${resources.cpu_millis}m`} percent={usagePercent(usage.cpuMillis, resources.cpu_millis)} />
-    <ResourceMeter label={t("memory")} actual={formatMemoryMiB(usage.memoryMiB)} requested={`${formatMemoryMiB(resources.memory_mib)}`} percent={usagePercent(usage.memoryMiB, resources.memory_mib)} />
+    <ResourceMeter label="CPU" actual={formatCpuMillis(usage.cpuMillis)} requested={`${resources.cpu_millis}m`} percent={usagePercent(usage.cpuMillis, resources.cpu_millis)} unavailableLabel={t("metricsUnavailable")} usageOfLimitLabel={t("usageOfLimit")} />
+    <ResourceMeter label={t("memory")} actual={formatMemoryMiB(usage.memoryMiB)} requested={`${formatMemoryMiB(resources.memory_mib)}`} percent={usagePercent(usage.memoryMiB, resources.memory_mib)} unavailableLabel={t("metricsUnavailable")} usageOfLimitLabel={t("usageOfLimit")} />
     <StorageMeter label={t("persistentDisk")} telemetry={persistent} configuredGiB={resources.disk_gib} locale={locale} />
-    <StorageMeter label={t("temporaryStorage")} telemetry={temporary} configuredGiB={item.workspace.storage_policy.temporary_storage_gib} locale={locale} />
+    <StorageMeter label={t("temporaryStorage")} telemetry={temporary} configuredGiB={item.workspace.storage_policy.temporary_storage_gib} locale={locale} statusOverride={isStopped ? t("temporaryStorageReleased") : undefined} />
     {resources.gpu_count > 0 && <div className={styles.meter}><div className={styles.meterHeader}><Text>GPU</Text><Text className={styles.meterValue}>{resources.gpu_count} GPU</Text></div><Caption1 className={styles.meterHint}>{t("configuredAllocation")} · {t("gpuTelemetryUnavailable")}</Caption1></div>}
   </div>;
-}
-
-function ResourceMeter({ label, actual, requested, percent }: { label: string; actual: string; requested: string; percent: number | null }) {
-  const { t } = useI18n();
-  const styles = useWorkspaceStyles();
-  const valueText = percent === null ? `${label}: ${t("metricsUnavailable")}` : `${actual} / ${requested}, ${formatPercent(percent)}`;
-  return <Tooltip content={valueText} relationship="description"><div tabIndex={0} className={styles.meter}><div className={styles.meterHeader}><Text>{label}</Text><Text className={styles.meterValue}>{actual} <Caption1>/ {requested}</Caption1></Text></div><ProgressBar value={percent === null ? undefined : percent / 100} aria-label={`${label} ${t("usageOfLimit")}`} /><Caption1 className={styles.meterHint}>{t("usageOfLimit")} · {formatPercent(percent)}</Caption1></div></Tooltip>;
 }
 
 function RuntimeStatus({ id, runtime }: { id: string; runtime: WorkspaceRuntime }) {
@@ -169,13 +177,6 @@ function actionProgressLabel(action: WorkspaceAction): MessageKey {
     delete: "stateDeleting",
   };
   return labels[action];
-}
-
-function StateBadge({ state }: { state: string }) {
-  const { t } = useI18n();
-  const labels = { provisioning: "stateProvisioning", ready: "stateReady", stopping: "stateStopping", stopped: "stateStopped", starting: "stateStarting", restarting: "stateRestarting", deleting: "stateDeleting", deleted: "stateDeleted", failed: "stateFailed" } as const;
-  const color = state === "ready" ? "success" : state === "failed" || state === "deleting" ? "danger" : state === "stopped" || state === "deleted" ? "informative" : "warning";
-  return <Badge appearance="tint" color={color}>{state in labels ? t(labels[state as keyof typeof labels]) : state}</Badge>;
 }
 
 function formatTimestamp(value: string | null, locale: Locale): string { if (!value) return "—"; const parsed = new Date(value); return Number.isNaN(parsed.valueOf()) ? value : parsed.toLocaleString(locale); }

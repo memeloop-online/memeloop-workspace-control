@@ -1,5 +1,43 @@
 // @ts-check
 
+const path = require('node:path');
+const productSource = path.resolve(__dirname, '../web/src');
+const sharedSource = path.resolve(__dirname, '../web/src/shared');
+const docsNodeModules = path.resolve(__dirname, 'node_modules');
+
+function sharedProductUiPlugin() {
+  return {
+    name: 'shared-product-ui',
+    configureWebpack() {
+      return {
+        resolve: {
+          alias: {
+            '@mwc/shared': sharedSource,
+          },
+          extensions: ['.tsx', '.ts', '.jsx', '.js', '.json'],
+          modules: [docsNodeModules, 'node_modules'],
+        },
+        module: {
+          rules: [
+            {
+              test: /\.(ts|tsx)$/,
+              include: [productSource],
+              use: [
+                {
+                  loader: require.resolve('babel-loader'),
+                  options: {
+                    presets: [require.resolve('@docusaurus/core/lib/babel/preset')],
+                  },
+                },
+              ],
+            },
+          ],
+        },
+      };
+    },
+  };
+}
+
 /** @type {import('@docusaurus/types').Config} */
 const config = {
   title: 'Memeloop Workspace Control',
@@ -10,6 +48,9 @@ const config = {
   projectName: 'memeloop-workspace-control',
   deploymentBranch: 'gh-pages',
   trailingSlash: true,
+
+  // The preview renders the product's stateless Fluent components directly.
+  plugins: [sharedProductUiPlugin],
 
   onBrokenLinks: 'throw',
   markdown: {

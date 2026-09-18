@@ -7,13 +7,10 @@ import { darkTheme, lightTheme } from "./design-system/theme";
 import { WorkspacePanel } from "./WorkspacePanel";
 import { useI18n, type MessageKey } from "./i18n";
 import { canManageOrganization as mayManageOrganization, canManageSystem } from "./permissions";
-import type { Organization, Principal, WorkspaceResponse } from "./types";
+import { principalQueryKey, useOrganizationsQuery, usePrincipalQuery, useWorkspacePreviewQuery } from "./state/appQueries";
+import { queryClient, useAppStore } from "./state";
+import type { Principal } from "./types";
 
-// The workspace list is owned by WorkspacePanel. App only keeps a small first
-// page as a preview for views that need a selected workspace or a lightweight
-// status hint; it must never turn into an unbounded global workspace load.
-const GLOBAL_WORKSPACE_PREVIEW_LIMIT = 30;
-const GLOBAL_ORGANIZATION_PREVIEW_LIMIT = 50;
 const ERROR_NOTICE_DEDUPE_MS = 10_000;
 
 const viewTitles: Record<AppView, MessageKey> = {
@@ -33,33 +30,55 @@ const SettingsPanel = lazy(() => import("./SettingsPanel").then(({ SettingsPanel
 
 export default function App() {
   const { locale, setLocale, t } = useI18n();
-  const [theme, setTheme] = useState<"light" | "dark">(() => {
-    const saved = localStorage.getItem("mwc.theme");
-    if (saved === "light" || saved === "dark") return saved;
-    return matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
-  });
-  const [token, setToken] = useState(ApiClient.savedToken());
+  const token = useAppStore((state) => state.token);
+  const organizationId = useAppStore((state) => state.organizationId);
+  const theme = useAppStore((state) => state.theme);
+  const view = useAppStore((state) => state.view);
+  const setToken = useAppStore((state) => state.setToken);
+  const setOrganizationId = useAppStore((state) => state.setOrganizationId);
+  const setTheme = useAppStore((state) => state.setTheme);
+  const setView = useAppStore((state) => state.setView);
   const [tokenDraft, setTokenDraft] = useState(token);
-  const [principal, setPrincipal] = useState<Principal | null>(null);
-  const [organizationId, setOrganizationId] = useState("");
-  const [organizations, setOrganizations] = useState<Organization[]>([]);
-  const [workspaces, setWorkspaces] = useState<WorkspaceResponse[]>([]);
-  const [workspaceScope, setWorkspaceScope] = useState<{ api: ApiClient; organizationId: string } | null>(null);
-  const workspaceRequestGeneration = useRef(0);
-  const [view, setView] = useState<AppView>(() => viewFromHash(window.location.hash));
-  const [loading, setLoading] = useState(Boolean(token));
   const [notice, setNoticeState] = useState<AppNotice | null>(null);
   const noticeSequence = useRef(0);
   const lastErrorRef = useRef<{ message: string; at: number }>({ message: "", at: 0 });
   const activeTokenRef = useRef(token);
   const unauthorizedTokenRef = useRef<string | null>(null);
   const [fatal, setFatal] = useState("");
+  activeTokenRef.current = token;
+
+  const logout = useCallback(() => {
+    activeTokenRef.current = "";
+    queryClient.clear();
+    setToken("");
+    setOrganizationId("");
+    setView("workspaces");
+    setTokenDraft("");
+    setNoticeState(null);
+  }, [setOrganizationId, setToken, setView]);
+
   const api = useMemo(() => new ApiClient(token, () => {
     if (!token || activeTokenRef.current !== token || unauthorizedTokenRef.current === token) return;
     unauthorizedTokenRef.current = token;
     setFatal(t("loginInvalidToken"));
     logout();
-  }), [t, token]);
+  }), [logout, t, token]);
+
+  const principalQuery = usePrincipalQuery(api, Boolean(token));
+  const organizationsQuery = useOrganizationsQuery(api, Boolean(token));
+  const principal = principalQuery.data ?? null;
+  const organizations = organizationsQuery.data?.items ?? [];
+  const workspacePreviewQuery = useWorkspacePreviewQuery(
+    api,
+    organizationId,
+    Boolean(token && organizationId && view === "injections"),
+  );
+  const { data: workspacePreview, error: workspacePreviewError, refetch: refetchWorkspacePreview } = workspacePreviewQuery;
+  const { error: principalError, refetch: refetchPrincipal } = principalQuery;
+  const { error: organizationsError, refetch: refetchOrganizations } = organizationsQuery;
+  const loading = Boolean(token && (principalQuery.isPending || organizationsQuery.isPending));
+  const authError = principalError ?? organizationsError;
+
   const organizationRole = principal?.memberships.find((membership) => membership.organization_id === organizationId)?.role;
   const canManageGlobalState = Boolean(principal && canManageSystem(principal));
   const canManageOrganizationState = Boolean(principal && organizationId && mayManageOrganization(principal, organizationId, "manage_organization"));
@@ -70,21 +89,15 @@ export default function App() {
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
     document.documentElement.style.colorScheme = theme;
-    localStorage.setItem("mwc.theme", theme);
   }, [theme]);
 
   useEffect(() => {
     document.title = token && principal ? `${t(viewTitles[view])} · ${t("appName")}` : t("appName");
   }, [principal, t, token, view]);
 
-  // Invalidate an in-flight preview before fetching for the new scope. The
-  // scope check below also prevents one render of an old organization from
-  // leaking into the newly selected organization.
   useEffect(() => {
-    workspaceRequestGeneration.current += 1;
-    setWorkspaceScope(null);
-    setWorkspaces([]);
-  }, [api, organizationId]);
+    if (window.location.hash) setView(viewFromHash(window.location.hash));
+  }, [setView]);
 
   const reportError = useCallback((errorMessage: string) => {
     const value = errorMessage.trim();
@@ -115,83 +128,48 @@ export default function App() {
   }, []);
 
   const refresh = useCallback(async () => {
-    const requestedOrganizationId = organizationId;
-    const requestGeneration = ++workspaceRequestGeneration.current;
-    if (!requestedOrganizationId) {
-      setWorkspaceScope(null);
-      setWorkspaces([]);
-      return;
-    }
-    setLoading(true);
-    try {
-      const page = await api.workspacesPage(requestedOrganizationId, { limit: GLOBAL_WORKSPACE_PREVIEW_LIMIT });
-      if (requestGeneration !== workspaceRequestGeneration.current) return;
-      setWorkspaces(page.items);
-      setWorkspaceScope({ api, organizationId: requestedOrganizationId });
-    } catch (error) {
-      if (requestGeneration === workspaceRequestGeneration.current) reportError(message(error, t("requestFailed")));
-    } finally {
-      if (requestGeneration === workspaceRequestGeneration.current) setLoading(false);
-    }
-  }, [api, organizationId, reportError, t]);
+    const result = await refetchWorkspacePreview();
+    if (result.error) reportError(message(result.error, t("requestFailed")));
+  }, [refetchWorkspacePreview, reportError, t]);
 
   const refreshOrganizations = useCallback(async (preferredOrganizationId?: string) => {
     const [nextPrincipal, organizationPage] = await Promise.all([
-      api.me(),
-      api.organizationsPage({ limit: GLOBAL_ORGANIZATION_PREVIEW_LIMIT }),
+      refetchPrincipal(),
+      refetchOrganizations(),
     ]);
-    const visibleOrganizations = organizationPage.items;
-    setPrincipal(nextPrincipal);
-    setOrganizations(visibleOrganizations);
-    setOrganizationId((current) => {
-      const next = preferredOrganizationId && visibleOrganizations.some((organization) => organization.id === preferredOrganizationId)
-        ? preferredOrganizationId
-        : visibleOrganizations.some((organization) => organization.id === current)
-          ? current
-          : visibleOrganizations[0]?.id ?? "";
-      if (next) localStorage.setItem("mwc.organization-id", next);
-      else localStorage.removeItem("mwc.organization-id");
-      return next;
-    });
-  }, [api]);
+    if (nextPrincipal.error) throw nextPrincipal.error;
+    if (organizationPage.error) throw organizationPage.error;
+    const visibleOrganizations = organizationPage.data?.items ?? [];
+    const next = preferredOrganizationId && visibleOrganizations.some((organization) => organization.id === preferredOrganizationId)
+      ? preferredOrganizationId
+      : visibleOrganizations.some((organization) => organization.id === organizationId)
+        ? organizationId
+        : visibleOrganizations[0]?.id ?? "";
+    setOrganizationId(next);
+  }, [organizationId, refetchOrganizations, refetchPrincipal, setOrganizationId]);
 
   useEffect(() => {
-    if (!token) return;
-    let active = true;
-    setLoading(true);
-    Promise.all([api.me(), api.organizationsPage({ limit: GLOBAL_ORGANIZATION_PREVIEW_LIMIT })])
-      .then(([value, organizationPage]) => {
-        if (!active) return;
-        const visibleOrganizations = organizationPage.items;
-        setPrincipal(value);
-        setOrganizations(visibleOrganizations);
-        setOrganizationId((current) => {
-          const saved = localStorage.getItem("mwc.organization-id") ?? "";
-          if (visibleOrganizations.some((organization) => organization.id === current)) return current;
-          if (visibleOrganizations.some((organization) => organization.id === saved)) return saved;
-          return visibleOrganizations[0]?.id ?? "";
-        });
-        setFatal("");
-      })
-      .catch((error) => {
-        if (!active) return;
-        setFatal(isAuthenticationError(error) ? t("loginInvalidToken") : message(error, t("requestFailed")));
-        setPrincipal(null);
-      })
-      .finally(() => active && setLoading(false));
-    return () => { active = false; };
-  }, [api, token]);
+    if (!token || !authError) {
+      if (token && principal) setFatal("");
+      return;
+    }
+    setFatal(isAuthenticationError(authError) ? t("loginInvalidToken") : message(authError, t("requestFailed")));
+  }, [authError, principal, t, token]);
 
   useEffect(() => {
-    // WorkspacePanel owns the workspace page's paginated list and runtime
-    // polling. The small preview exists only to seed the credential picker.
-    if (view !== "injections") return;
-    void refresh();
-    const timer = window.setInterval(() => {
-      if (document.visibilityState === "visible") void refresh();
-    }, 10000);
-    return () => window.clearInterval(timer);
-  }, [refresh, view]);
+    if (workspacePreviewError) reportError(message(workspacePreviewError, t("requestFailed")));
+  }, [reportError, t, workspacePreviewError]);
+
+  useEffect(() => {
+    if (organizationsQuery.isPending || organizationsQuery.isError) return;
+    if (organizations.length === 0) {
+      if (organizationId) setOrganizationId("");
+      return;
+    }
+    if (!organizations.some((organization) => organization.id === organizationId)) {
+      setOrganizationId(organizations[0].id);
+    }
+  }, [organizationId, organizations, organizationsQuery.isError, organizationsQuery.isPending, setOrganizationId]);
 
   useEffect(() => {
     if (!principal) return;
@@ -206,42 +184,22 @@ export default function App() {
     const value = tokenDraft.trim();
     activeTokenRef.current = value;
     unauthorizedTokenRef.current = null;
-    ApiClient.rememberToken(value);
+    queryClient.clear();
     setToken(value);
     setFatal("");
     setNoticeState(null);
   }
 
-  function logout() {
-    activeTokenRef.current = "";
-    ApiClient.forgetToken();
-    workspaceRequestGeneration.current += 1;
-    setToken("");
-    setTokenDraft("");
-    setPrincipal(null);
-    setOrganizations([]);
-    setOrganizationId("");
-    setWorkspaceScope(null);
-    setWorkspaces([]);
-    setNoticeState(null);
-  }
-
-  const scopedWorkspaces = workspaceScope?.api === api && workspaceScope.organizationId === organizationId
-    ? workspaces
-    : [];
+  const scopedWorkspaces = workspacePreview?.items ?? [];
 
   function selectOrganization(next: string) {
     // Settings may expose a placeholder option; never transition into an
     // organization-less state from an invalid selection.
     if (!organizations.some((organization) => organization.id === next)) return;
-    workspaceRequestGeneration.current += 1;
-    setWorkspaceScope(null);
-    setWorkspaces([]);
     setOrganizationId(next);
-    localStorage.setItem("mwc.organization-id", next);
   }
 
-  if (!token || !principal) {
+  if (!token || !principal || authError) {
     return (
       <FluentProvider theme={theme === "dark" ? darkTheme : lightTheme} style={{ minHeight: "100vh" }}>
         <LoginScreen locale={locale} setLocale={setLocale} themeMode={theme} onToggleTheme={() => setTheme(theme === "dark" ? "light" : "dark")} tokenDraft={tokenDraft} setTokenDraft={setTokenDraft} onSubmit={login} loading={loading} fatal={fatal} t={t} />
@@ -254,7 +212,7 @@ export default function App() {
       <AppShell view={view} onViewChange={navigate} locale={locale} setLocale={setLocale} themeMode={theme} onToggleTheme={() => setTheme(theme === "dark" ? "light" : "dark")} principal={principal} currentOrganization={currentOrganization} organizationRole={organizationRole} canOpenAdministration={canOpenAdministration} canManageGlobalState={canManageGlobalState} canManageOrganizationState={canManageOrganizationState} onLogout={logout} notice={notice} t={t}>
         <Suspense fallback={<LoadingView label={t("loading")} />}>
           {view === "settings" ? (
-            <SettingsPanel api={api} principal={principal} organizations={organizations} organizationId={organizationId} onOrganizationChange={selectOrganization} onProfileChanged={(profile) => setPrincipal((current) => current ? { ...current, ...profile } : current)} onError={reportError} />
+            <SettingsPanel api={api} principal={principal} organizations={organizations} organizationId={organizationId} onOrganizationChange={selectOrganization} onProfileChanged={(profile) => queryClient.setQueryData<Principal>(principalQueryKey(), (current) => current ? { ...current, ...profile } : current)} onError={reportError} />
           ) : view === "audit" ? (
             <AuditPanel api={api} organizationId={organizationId} systemAdmin={canManageGlobalState} onError={reportError} />
           ) : !organizationId ? <EmptyOrganization systemAdmin={canManageGlobalState} t={t} /> : view === "workspaces" ? (
