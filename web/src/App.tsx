@@ -78,7 +78,6 @@ export default function App() {
   const { error: organizationsError, refetch: refetchOrganizations } = organizationsQuery;
   const loading = Boolean(token && (principalQuery.isPending || organizationsQuery.isPending));
   const authError = principalError ?? organizationsError;
-  const authenticated = Boolean(token && principal && !authError);
 
   const organizationRole = principal?.memberships.find((membership) => membership.organization_id === organizationId)?.role;
   const canManageGlobalState = Boolean(principal && canManageSystem(principal));
@@ -200,7 +199,7 @@ export default function App() {
     setOrganizationId(next);
   }
 
-  if (!authenticated) {
+  if (!token || !principal || authError) {
     return (
       <FluentProvider theme={theme === "dark" ? darkTheme : lightTheme} style={{ minHeight: "100vh" }}>
         <LoginScreen locale={locale} setLocale={setLocale} themeMode={theme} onToggleTheme={() => setTheme(theme === "dark" ? "light" : "dark")} tokenDraft={tokenDraft} setTokenDraft={setTokenDraft} onSubmit={login} loading={loading} fatal={fatal} t={t} />
