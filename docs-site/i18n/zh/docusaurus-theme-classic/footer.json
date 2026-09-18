@@ -10,6 +10,7 @@
   "link.item.label.Plugin development": { "message": "插件开发", "description": "Footer link item" },
   "link.item.label.Security model": { "message": "安全模型", "description": "Footer link item" },
   "link.item.label.FAQ": { "message": "常见问题", "description": "Footer link item" },
+  "link.item.label.Preview": { "message": "产品预览", "description": "Footer link item" },
   "link.item.label.GitHub": { "message": "GitHub", "description": "Footer link item" },
   "copyright": { "message": "版权所有 © 2026 Memeloop。由 Docusaurus 构建。", "description": "Footer copyright" }
 }

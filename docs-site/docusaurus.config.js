@@ -18,6 +18,9 @@ const config = {
     },
   },
 
+  // Browser-only modules: locale auto-detection and dropdown persistence.
+  clientModules: ['./src/client/localePreference.js'],
+
   i18n: {
     defaultLocale: 'en',
     locales: ['en', 'zh'],
@@ -56,11 +59,17 @@ const config = {
   themeConfig:
     /** @type {import('@docusaurus/preset-classic').ThemeConfig} */
     ({
+      colorMode: {
+        defaultMode: 'light', // stable light fallback
+        respectPrefersColorScheme: true,
+        disableSwitch: false, // manual light/dark switch stays enabled
+      },
       navbar: {
         title: 'MWC',
         items: [
           { to: '/', label: 'Home', position: 'left' },
           { to: '/features', label: 'Features', position: 'left' },
+          { to: '/preview', label: 'Preview', position: 'left' },
           {
             type: 'doc',
             docId: 'intro',
@@ -111,6 +120,7 @@ const config = {
             items: [
               { label: 'Security model', to: '/docs/security-model' },
               { label: 'FAQ', to: '/docs/faq' },
+              { label: 'Preview', to: '/preview' },
               {
                 label: 'GitHub',
                 href: 'https://github.com/memeloop-online/memeloop-workspace-control',
