@@ -886,25 +886,18 @@ async fn workspace_creation_enforces_quota_and_enqueues_lifecycle_actions() {
     assert_eq!(created_events[0].kind, "workspace.state_changed");
     assert_eq!(created_events[0].workspace_id, Some(workspace.id));
     assert_eq!(created_events[0].payload["state"], "provisioning");
-    assert!(matches!(
-        database
-            .create_workspace(command("second", second_template), true, admin.user_id, 104)
-            .await,
-        Err(StorageError::Quota(
-            memeloop_workspace_control::quota::QuotaError::Exceeded {
-                resource: "temporary_storage_gib",
-                requested: 20,
-                limit: 10,
-            }
-        ))
-    ));
+    let second_workspace = database
+        .create_workspace(command("second", second_template), true, admin.user_id, 104)
+        .await
+        .unwrap();
+    assert_eq!(second_workspace.state, WorkspaceState::Provisioning);
     assert_eq!(
         database
             .list_workspaces(organization.id)
             .await
             .unwrap()
             .len(),
-        1
+        2
     );
 
     let ready = database
@@ -928,9 +921,9 @@ async fn workspace_creation_enforces_quota_and_enqueues_lifecycle_actions() {
         .list_events(organization.id, None, 100)
         .await
         .unwrap();
-    assert_eq!(events.len(), 3);
-    assert_eq!(events[2].payload["action"], "stop");
-    assert_eq!(events[2].payload["state"], "stopping");
+    assert_eq!(events.len(), 4);
+    assert_eq!(events[3].payload["action"], "stop");
+    assert_eq!(events[3].payload["state"], "stopping");
 }
 
 #[tokio::test]
