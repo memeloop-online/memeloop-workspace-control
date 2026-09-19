@@ -17,7 +17,6 @@ interface Props {
   selected: readonly string[];
   restricted: boolean;
   disabled?: boolean;
-  restrictionDisabled?: boolean;
   translate: (key: MessageKey) => string;
   onRestrictedChange: (restricted: boolean) => void;
   onSelectedChange: (selected: string[]) => void;
@@ -30,42 +29,20 @@ const useStyles = makeStyles({
     paddingBlockStart: tokens.spacingVerticalL,
     borderTop: `${tokens.strokeWidthThin} solid ${tokens.colorNeutralStroke2}`,
   },
-  selection: {
-    display: "flex",
-    flexWrap: "wrap",
-    gap: tokens.spacingHorizontalXS,
-  },
-  picker: {
-    display: "grid",
-    gap: tokens.spacingVerticalS,
-  },
-  selectionItem: {
-    maxWidth: "100%",
-  },
-  selectionLabel: {
-    overflow: "hidden",
-    textOverflow: "ellipsis",
-    whiteSpace: "nowrap",
-  },
+  selection: { display: "flex", flexWrap: "wrap", gap: tokens.spacingHorizontalXS },
+  picker: { display: "grid", gap: tokens.spacingVerticalS },
+  selectionItem: { maxWidth: "100%" },
+  selectionLabel: { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
 });
 
-export function ApiKeyTemplatePicker({
-  templates,
-  selected,
-  restricted,
-  disabled = false,
-  restrictionDisabled = false,
-  translate,
-  onRestrictedChange,
-  onSelectedChange,
-}: Props) {
+/** Template restrictions belong to a user-owned API key, so this is rendered in user editing. */
+export function ApiKeyTemplatePicker({ templates, selected, restricted, disabled = false, translate, onRestrictedChange, onSelectedChange }: Props) {
   const classes = useStyles();
   const selectedOptions = templates.filter((template) => selected.includes(template.id)).map((template) => template.id);
 
   return <fieldset className={classes.root} disabled={disabled}>
     <Checkbox
       checked={restricted}
-      disabled={restrictionDisabled}
       label={translate("apiKeyRestrictTemplates")}
       onChange={(_, data) => {
         onRestrictedChange(Boolean(data.checked));
@@ -84,15 +61,7 @@ export function ApiKeyTemplatePicker({
         </Combobox>
         {selectedOptions.length > 0 && <div className={classes.selection} aria-label={translate("selectedTemplates")}>
           {templates.filter((template) => selectedOptions.includes(template.id)).map((template) => (
-            <Button
-              className={classes.selectionItem}
-              key={template.id}
-              appearance="secondary"
-              size="small"
-              type="button"
-              aria-label={`${translate("removeTemplateSelection")} ${template.name}`}
-              onClick={() => onSelectedChange(selectedOptions.filter((id) => id !== template.id))}
-            >
+            <Button className={classes.selectionItem} key={template.id} appearance="secondary" size="small" type="button" aria-label={`${translate("removeTemplateSelection")} ${template.name}`} onClick={() => onSelectedChange(selectedOptions.filter((id) => id !== template.id))}>
               <Text className={classes.selectionLabel}>{template.name}</Text> ×
             </Button>
           ))}

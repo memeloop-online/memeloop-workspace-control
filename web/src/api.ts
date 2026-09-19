@@ -150,7 +150,7 @@ export class ApiClient {
     return this.request(`/api/v1/admin/users/${encodeURIComponent(userId)}/api-keys?${queryString(options)}`);
   }
 
-  createAdminUserApiKey(userId: string, input: { name: string; scopes: ApiKeyScope[]; expires_at: number }): Promise<CreatedApiKey> {
+  createAdminUserApiKey(userId: string, input: { name: string; scopes: ApiKeyScope[]; expires_at: number; allowed_template_ids: string[] | null }): Promise<CreatedApiKey> {
     return this.request(`/api/v1/admin/users/${encodeURIComponent(userId)}/api-keys`, {
       method: "POST", body: JSON.stringify(input),
     });

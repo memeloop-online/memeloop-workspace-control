@@ -18,11 +18,13 @@ use crate::{
 
 use super::{
     require_system_admin,
-    settings::{CreatedApiKeyResponse, actor_may_grant},
+    settings::{
+        CreatedApiKeyResponse, actor_may_grant, actor_may_grant_templates, template_ids_are_unique,
+    },
 };
 
-/// Paginated administrator view of a user's API keys. The result contains
-/// summaries only; plaintext tokens and token hashes are never exposed.
+/// Paginated administrator view of a user's API keys. Copyable keys include
+/// their plaintext token; historical hash-only keys return no token.
 #[derive(Debug, Deserialize, IntoParams)]
 pub(in crate::api) struct AdminApiKeyPageQuery {
     pub limit: Option<u32>,
@@ -41,6 +43,7 @@ pub(in crate::api) struct AdminCreateApiKeyRequest {
     pub name: String,
     pub scopes: Vec<ApiKeyScope>,
     pub expires_at: Option<i64>,
+    pub allowed_template_ids: Option<Vec<Uuid>>,
 }
 
 #[utoipa::path(
@@ -97,8 +100,19 @@ pub(in crate::api) async fn admin_create_api_key(
     Json(request): Json<AdminCreateApiKeyRequest>,
 ) -> Result<(StatusCode, Json<CreatedApiKeyResponse>), ApiError> {
     let actor = require_system_admin(&state, &headers).await?;
-    if !actor.may_manage_api_keys() || !actor_may_grant(&actor.api_key_scopes, &request.scopes) {
+    if !actor.may_manage_api_keys()
+        || !actor_may_grant(&actor.api_key_scopes, &request.scopes)
+        || !actor_may_grant_templates(&actor.allowed_template_ids, &request.allowed_template_ids)
+    {
         return Err(ApiError::Forbidden);
+    }
+    if let Some(template_ids) = &request.allowed_template_ids {
+        if !template_ids_are_unique(template_ids) {
+            return Err(ApiError::BadRequest("allowed_template_ids must be unique"));
+        }
+        for template_id in template_ids {
+            state.database.get_workspace_template(*template_id).await?;
+        }
     }
     let created = state
         .database
@@ -107,7 +121,7 @@ pub(in crate::api) async fn admin_create_api_key(
             &request.name,
             request.scopes,
             request.expires_at,
-            None,
+            request.allowed_template_ids,
             unix_timestamp()?,
         )
         .await?;

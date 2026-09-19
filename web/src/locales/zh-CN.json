@@ -538,6 +538,7 @@
   "apiKeyScopeHelp_delete_workspace": "永久删除工作区及其持久存储。",
   "createApiKey": "创建 API 密钥",
   "noApiKeys": "暂无 API 密钥。",
+  "apiKeyCopyUnavailable": "此历史密钥仅保留了不可逆哈希，无法复制；请先创建替换密钥并更新客户端。",
   "createdAt": "创建时间",
   "lastUsedAt": "最后使用",
   "never": "从未使用",

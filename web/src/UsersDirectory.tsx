@@ -21,11 +21,14 @@ import {
   Option,
   Select,
   Spinner,
+  Tab,
+  TabList,
   Text,
   Textarea,
+  Tooltip,
 } from "@fluentui/react-components";
 import type { TableColumnDefinition } from "@fluentui/react-components";
-import { AddRegular, ArrowLeftRegular, ArrowRightRegular, CopyRegular, EditRegular, KeyRegular, SaveRegular } from "@fluentui/react-icons";
+import { AddRegular, ArrowLeftRegular, ArrowRightRegular, CopyRegular, EditRegular, SaveRegular } from "@fluentui/react-icons";
 
 import {
   formatApiKeyExpiry,
@@ -39,9 +42,10 @@ import { applyLocalRevocations, getApiKeyStatus } from "./apiKeyStatus";
 import { ConfirmDialog } from "./components/ConfirmDialog";
 import { useI18n } from "./i18n";
 import { hasApiKeyScope } from "./permissions";
-import type { AdminApiKey, ApiKeyPage, ApiKeyScope, ApiKeySummary, MembershipSummary, Principal, Role, UserSummary } from "./types";
+import type { AdminApiKey, ApiKeyPage, ApiKeyScope, ApiKeySummary, MembershipSummary, Principal, Role, UserSummary, WorkspaceTemplate } from "./types";
 import { API_KEY_SCOPES } from "./apiKeyScopes";
 import { AdminToolbar, SaveButton, useAdminStyles } from "./admin/fluentAdmin";
+import { ApiKeyTemplatePicker } from "./admin/ApiKeyTemplatePicker";
 
 type DirectoryItem = UserSummary & { membershipRole: Role | null };
 
@@ -69,7 +73,6 @@ export function UsersDirectory({ api, organizationId, principal, canManageUsers,
   const loadingRef = useRef(false);
   const requestRef = useRef(0);
   const [selectedUser, setSelectedUser] = useState<DirectoryItem | null>(null);
-  const [apiKeyUser, setApiKeyUser] = useState<DirectoryItem | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -157,13 +160,12 @@ export function UsersDirectory({ api, organizationId, principal, canManageUsers,
       <Text size={300}>{t("userPageStatus")} {pageNumber} · {items.length}</Text>
     </AdminToolbar>
     {loading && items.length === 0 ? <Spinner label={t("loading")} /> : items.length === 0 ? <Text className={styles.empty}>{t("noUsers")}</Text> : <div className={styles.table} aria-busy={loading}>
-      <DataGrid items={items} columns={userColumns({ t, styles, canManageUsers, canEditQuota, principal, setSelectedUser, setApiKeyUser, onEditQuota })}>
+      <DataGrid items={items} columns={userColumns({ t, styles, canManageUsers, canEditQuota, setSelectedUser, onEditQuota })}>
         <DataGridHeader><DataGridRow<DirectoryItem>>{(column) => <DataGridHeaderCell>{column.renderHeaderCell()}</DataGridHeaderCell>}</DataGridRow></DataGridHeader>
         <DataGridBody<DirectoryItem>>{({ item }) => <DataGridRow<DirectoryItem>>{(column) => <DataGridCell>{column.renderCell(item)}</DataGridCell>}</DataGridRow>}</DataGridBody>
       </DataGrid>
     </div>}
     {selectedUser && <UserEditDialog user={selectedUser} api={api} organizationId={organizationId} principal={principal} canManageUsers={canManageUsers} onClose={() => setSelectedUser(null)} onError={onError} onUpdated={updateUser} onMembershipChanged={updateMembership} />}
-    {apiKeyUser && <AdminUserApiKeysDialog api={api} principal={principal} userId={apiKeyUser.id} userDisplayName={apiKeyUser.display_name} onClose={() => setApiKeyUser(null)} onError={onError} />}
   </div>;
 }
 
@@ -187,9 +189,12 @@ function UserEditDialog({ user, api, organizationId, principal, canManageUsers, 
   const [disabled, setDisabled] = useState(user.disabled);
   const [role, setRole] = useState<Role>(user.membershipRole ?? "member");
   const [saving, setSaving] = useState(false);
+  const [managingKeys, setManagingKeys] = useState(false);
+  const [section, setSection] = useState<"details" | "apiKeys">("details");
   const [status, setStatus] = useState("");
   const [confirmRemove, setConfirmRemove] = useState(false);
   const isCurrentUser = user.id === principal.user_id;
+  const canManageApiKeys = principal.system_admin && hasApiKeyScope(principal, "manage_system") && hasApiKeyScope(principal, "manage_api_keys");
 
   async function save() {
     if (!displayName.trim()) return;
@@ -220,11 +225,17 @@ function UserEditDialog({ user, api, organizationId, principal, canManageUsers, 
     }
   }
 
-  return <><Dialog open onOpenChange={(_, data) => { if (!data.open && !saving) onClose(); }}><DialogSurface className={styles.dialogSurface}><DialogBody><DialogTitle>{t("saveUser")} · {user.display_name}</DialogTitle><DialogContent className={styles.dialogBody}>
-    {canManageUsers && <><Field label={t("displayName")} required><Input value={displayName} onChange={(event) => setDisplayName(event.target.value)} /></Field><Checkbox checked={systemAdmin} disabled={isCurrentUser} onChange={(_, data) => setSystemAdmin(Boolean(data.checked))} label={t("systemAdmin")} /><Checkbox checked={disabled} disabled={isCurrentUser} onChange={(_, data) => setDisabled(Boolean(data.checked))} label={t("disableUser")} /></>}
-    <Field label={t("role")}><Select value={role} disabled={saving} onChange={(event) => setRole(event.target.value as Role)}><Option value="member">{t("roleMember")}</Option><Option value="organization_admin">{t("roleOrganizationAdmin")}</Option></Select></Field>
-    {status && <MessageBar intent="success"><MessageBarBody>{status}</MessageBarBody></MessageBar>}
-  </DialogContent><DialogActions><Button appearance="secondary" disabled={saving} onClick={onClose}>{t("close")}</Button>{user.membershipRole && <Button disabled={saving} onClick={() => setConfirmRemove(true)}>{t("removeOrganizationMember")}</Button>}<SaveButton icon={<SaveRegular />} disabled={saving || !displayName.trim()} onClick={() => void save()}>{saving ? t("saving") : t("saveUser")}</SaveButton></DialogActions></DialogBody></DialogSurface></Dialog>
+  return <><Dialog open onOpenChange={(_, data) => { if (!data.open && !saving && !managingKeys) onClose(); }}><DialogSurface className={styles.dialogSurface}><DialogBody><DialogTitle>{t("saveUser")} · {user.display_name}</DialogTitle><DialogContent className={styles.dialogBody}>
+    <TabList selectedValue={section} onTabSelect={(_, data) => setSection(data.value as "details" | "apiKeys")}>
+      <Tab value="details">{t("user")}</Tab>
+      {canManageApiKeys && <Tab value="apiKeys">{t("apiKeys")}</Tab>}
+    </TabList>
+    {section === "details" ? <>
+      {canManageUsers && <><Field label={t("displayName")} required><Input value={displayName} onChange={(event) => setDisplayName(event.target.value)} /></Field><Checkbox checked={systemAdmin} disabled={isCurrentUser} onChange={(_, data) => setSystemAdmin(Boolean(data.checked))} label={t("systemAdmin")} /><Checkbox checked={disabled} disabled={isCurrentUser} onChange={(_, data) => setDisabled(Boolean(data.checked))} label={t("disableUser")} /></>}
+      <Field label={t("role")}><Select value={role} disabled={saving} onChange={(event) => setRole(event.target.value as Role)}><Option value="member">{t("roleMember")}</Option><Option value="organization_admin">{t("roleOrganizationAdmin")}</Option></Select></Field>
+      {status && <MessageBar intent="success"><MessageBarBody>{status}</MessageBarBody></MessageBar>}
+    </> : <UserApiKeysPanel api={api} organizationId={organizationId} principal={principal} userId={user.id} isCurrentUser={isCurrentUser} onBusyChange={setManagingKeys} onError={onError} />}
+  </DialogContent><DialogActions><Button appearance="secondary" disabled={saving || managingKeys} onClick={onClose}>{t("close")}</Button>{section === "details" && <>{user.membershipRole && <Button disabled={saving} onClick={() => setConfirmRemove(true)}>{t("removeOrganizationMember")}</Button>}<SaveButton icon={<SaveRegular />} disabled={saving || !displayName.trim()} onClick={() => void save()}>{saving ? t("saving") : t("saveUser")}</SaveButton></>}</DialogActions></DialogBody></DialogSurface></Dialog>
   <ConfirmDialog
     open={confirmRemove}
     title={t("removeOrganizationMember")}
@@ -240,7 +251,7 @@ function UserEditDialog({ user, api, organizationId, principal, canManageUsers, 
   </>;
 }
 
-function AdminUserApiKeysDialog({ api, principal, userId, userDisplayName, onClose, onError }: { api: ApiClient; principal: Principal; userId: string; userDisplayName: string; onClose: () => void; onError: (message: string) => void }) {
+function UserApiKeysPanel({ api, organizationId, principal, userId, isCurrentUser, onBusyChange, onError }: { api: ApiClient; organizationId: string; principal: Principal; userId: string; isCurrentUser: boolean; onBusyChange: (busy: boolean) => void; onError: (message: string) => void }) {
   const { locale, t } = useI18n();
   const styles = useAdminStyles();
   const [items, setItems] = useState<AdminApiKey[]>([]);
@@ -256,10 +267,20 @@ function AdminUserApiKeysDialog({ api, principal, userId, userDisplayName, onClo
   const [name, setName] = useState("");
   const [expiresAt, setExpiresAt] = useState(defaultExpiry);
   const [scopes, setScopes] = useState<ApiKeyScope[]>(() => principal.api_key_scopes.includes("read_workspace") ? ["read_workspace"] : principal.api_key_scopes.slice(0, 1));
+  const [templates, setTemplates] = useState<WorkspaceTemplate[]>([]);
+  const [templateRestriction, setTemplateRestriction] = useState(false);
+  const [allowedTemplateIds, setAllowedTemplateIds] = useState<string[]>([]);
   const [copiedKeyId, setCopiedKeyId] = useState<string | null>(null);
   const localRevocationsRef = useRef(new Map<string, number>());
 
   useEffect(() => { void loadPage(null, "reset"); }, [api, userId]);
+  useEffect(() => onBusyChange(revoking || creating), [creating, onBusyChange, revoking]);
+  useEffect(() => () => onBusyChange(false), [onBusyChange]);
+  useEffect(() => {
+    let active = true;
+    void api.templates(organizationId).then((items) => { if (active) setTemplates(items); }).catch((error) => { if (active) onError(message(error, t("requestFailed"))); });
+    return () => { active = false; };
+  }, [api, onError, organizationId, t]);
 
   async function loadPage(cursor: string | null, navigation: "reset" | "next" | "previous" = "reset") {
     setLoading(true);
@@ -279,10 +300,11 @@ function AdminUserApiKeysDialog({ api, principal, userId, userDisplayName, onClo
   }
 
   async function revoke(key: ApiKeySummary) {
-    if (!reason.trim()) return;
+    if (!isCurrentUser && !reason.trim()) return;
     setRevoking(true);
     try {
-      await api.revokeAdminUserApiKey(userId, key.id, reason.trim());
+      if (isCurrentUser) await api.deleteApiKey(key.id);
+      else await api.revokeAdminUserApiKey(userId, key.id, reason.trim());
       const revokedAt = Math.floor(Date.now() / 1_000);
       localRevocationsRef.current.set(key.id, revokedAt);
       setItems((current) => current.map((item) => item.id === key.id ? { ...item, revoked_at: item.revoked_at ?? revokedAt } : item));
@@ -300,9 +322,11 @@ function AdminUserApiKeysDialog({ api, principal, userId, userDisplayName, onClo
     if (!name.trim() || !Number.isFinite(expires) || scopes.length === 0) return;
     setCreating(true);
     try {
-      const created = await api.createAdminUserApiKey(userId, { name: name.trim(), scopes, expires_at: expires });
+      const created = await api.createAdminUserApiKey(userId, { name: name.trim(), scopes, expires_at: expires, allowed_template_ids: templateRestriction ? allowedTemplateIds : null });
       setName("");
       setShowCreate(false);
+      setTemplateRestriction(false);
+      setAllowedTemplateIds([]);
       await loadPage(null, "reset");
       try { await navigator.clipboard.writeText(created.token); setCopiedKeyId(created.id); } catch { /* Value remains visible in the list. */ }
     } catch (error) { onError(message(error, t("requestFailed"))); } finally { setCreating(false); }
@@ -318,11 +342,9 @@ function AdminUserApiKeysDialog({ api, principal, userId, userDisplayName, onClo
   const revokingKey = revokingKeyId ? items.find((item) => item.id === revokingKeyId) ?? null : null;
 
   return <>
-  <Dialog open onOpenChange={(_, data) => { if (!data.open && !revoking && !creating) onClose(); }}><DialogSurface className={styles.dialogSurface}><DialogBody><DialogTitle>{t("manageUserApiKeys")} · {userDisplayName}</DialogTitle><DialogContent className={styles.dialogBody}>
     <AdminToolbar action={<div className={styles.actions}><Button icon={<AddRegular />} onClick={() => setShowCreate((value) => !value)}>{t("createApiKey")}</Button><Button icon={<ArrowLeftRegular />} disabled={pageNumber <= 1 || loading || revoking || creating} onClick={() => void loadPage(cursorHistory[pageNumber - 2] ?? null, "previous")}>{t("previousPage")}</Button><Button icon={<ArrowRightRegular />} iconPosition="after" disabled={!nextCursor || loading || revoking || creating} onClick={() => void loadPage(nextCursor, "next")}>{t("nextPage")}</Button></div>}><Text size={300}>{formatApiKeyPageStatus(locale, pageNumber, items.length, t)}</Text></AdminToolbar>
-    {showCreate && <div className={styles.stack}><div className={styles.formGrid}><Field label={t("apiKeyName")} required><Input value={name} onChange={(event) => setName(event.target.value)} /></Field><Field label={t("apiKeyExpires")} required><Input type="datetime-local" value={expiresAt} onChange={(event) => setExpiresAt(event.target.value)} /></Field></div><Text weight="semibold">{t("apiKeyPermissions")}</Text><div className={styles.formGrid}>{API_KEY_SCOPES.filter(({ scope }) => principal.api_key_scopes.includes(scope)).map(({ scope, label }) => <Checkbox key={scope} checked={scopes.includes(scope)} onChange={() => toggleScope(scope)} label={t(label)} />)}</div><div className={styles.actions}><SaveButton disabled={creating || !name.trim() || scopes.length === 0} onClick={() => void createKey()}>{creating ? t("saving") : t("createApiKey")}</SaveButton></div></div>}
+    {showCreate && <div className={styles.stack}><div className={styles.formGrid}><Field label={t("apiKeyName")} required><Input value={name} onChange={(event) => setName(event.target.value)} /></Field><Field label={t("apiKeyExpires")} required><Input type="datetime-local" value={expiresAt} onChange={(event) => setExpiresAt(event.target.value)} /></Field></div><Text weight="semibold">{t("apiKeyPermissions")}</Text><div className={styles.formGrid}>{API_KEY_SCOPES.filter(({ scope }) => principal.api_key_scopes.includes(scope)).map(({ scope, label }) => <Checkbox key={scope} checked={scopes.includes(scope)} onChange={() => toggleScope(scope)} label={t(label)} />)}</div><ApiKeyTemplatePicker templates={templates} selected={allowedTemplateIds} restricted={templateRestriction} disabled={creating} translate={t} onRestrictedChange={setTemplateRestriction} onSelectedChange={setAllowedTemplateIds} /><div className={styles.actions}><SaveButton disabled={creating || !name.trim() || scopes.length === 0} onClick={() => void createKey()}>{creating ? t("saving") : t("createApiKey")}</SaveButton></div></div>}
     {loading && items.length === 0 ? <Spinner label={t("loading")} /> : items.length === 0 ? <Text className={styles.empty}>{t("noApiKeys")}</Text> : <DataGrid items={items} columns={apiKeyColumns({ t, locale, styles, revokingKeyId, revoking, loading, copiedKeyId, onCopy: copyKey, setRevokingKeyId, setReason })}><DataGridHeader><DataGridRow<AdminApiKey>>{(column) => <DataGridHeaderCell>{column.renderHeaderCell()}</DataGridHeaderCell>}</DataGridRow></DataGridHeader><DataGridBody<AdminApiKey>>{({ item }) => <DataGridRow<AdminApiKey>>{(column) => <DataGridCell>{column.renderCell(item)}</DataGridCell>}</DataGridRow>}</DataGridBody></DataGrid>}
-  </DialogContent><DialogActions><Button appearance="secondary" disabled={revoking} onClick={onClose}>{t("close")}</Button></DialogActions></DialogBody></DialogSurface></Dialog>
   <ConfirmDialog
     open={revokingKey !== null}
     title={t("revokeApiKey")}
@@ -330,21 +352,21 @@ function AdminUserApiKeysDialog({ api, principal, userId, userDisplayName, onClo
     confirmLabel={t("revokeApiKey")}
     cancelLabel={t("cancel")}
     busy={revoking}
-    confirmDisabled={!reason.trim()}
+    confirmDisabled={!isCurrentUser && !reason.trim()}
     danger
-    details={revokingKey && <div className={styles.stack}><strong>{revokingKey.name}</strong><Text size={200}>{revokingKey.prefix}</Text><Field label={t("apiKeyRevocationReason")} required><Textarea value={reason} onChange={(event) => setReason(event.target.value)} placeholder={t("apiKeyRevocationReasonPlaceholder")} /></Field></div>}
+    details={revokingKey && <div className={styles.stack}><strong>{revokingKey.name}</strong><Text size={200}>{revokingKey.prefix}</Text>{!isCurrentUser && <Field label={t("apiKeyRevocationReason")} required><Textarea value={reason} onChange={(event) => setReason(event.target.value)} placeholder={t("apiKeyRevocationReasonPlaceholder")} /></Field>}</div>}
     onClose={() => { if (!revoking) { setRevokingKeyId(null); setReason(""); } }}
     onConfirm={() => { if (revokingKey) void revoke(revokingKey); }}
   />
   </>;
 }
 
-function userColumns({ t, styles, canManageUsers, canEditQuota, principal, setSelectedUser, setApiKeyUser, onEditQuota }: { t: ReturnType<typeof useI18n>["t"]; styles: ReturnType<typeof useAdminStyles>; canManageUsers: boolean; canEditQuota: boolean; principal: Principal; setSelectedUser: (user: DirectoryItem) => void; setApiKeyUser: (user: DirectoryItem) => void; onEditQuota: (userId: string) => void }): TableColumnDefinition<DirectoryItem>[] {
+function userColumns({ t, styles, canManageUsers, canEditQuota, setSelectedUser, onEditQuota }: { t: ReturnType<typeof useI18n>["t"]; styles: ReturnType<typeof useAdminStyles>; canManageUsers: boolean; canEditQuota: boolean; setSelectedUser: (user: DirectoryItem) => void; onEditQuota: (userId: string) => void }): TableColumnDefinition<DirectoryItem>[] {
   return [
     { columnId: "user", compare: (a, b) => a.display_name.localeCompare(b.display_name), renderHeaderCell: () => t("user"), renderCell: (item) => <div className={styles.stack}><Text weight="semibold">{item.display_name}</Text><Text size={200}>{item.id}</Text></div> },
     { columnId: "role", compare: (a, b) => String(a.membershipRole).localeCompare(String(b.membershipRole)), renderHeaderCell: () => t("role"), renderCell: (item) => item.membershipRole === "organization_admin" ? t("roleOrganizationAdmin") : item.membershipRole === "member" ? t("roleMember") : t("notEnabled") },
     { columnId: "status", compare: (a, b) => Number(a.disabled) - Number(b.disabled), renderHeaderCell: () => t("workspaceState"), renderCell: (item) => item.disabled ? t("userStatusDisabled") : t("userStatusActive") },
-    { columnId: "actions", compare: () => 0, renderHeaderCell: () => t("actions"), renderCell: (item) => <div className={styles.actions}>{(canManageUsers || item.membershipRole !== null) && <Button icon={<EditRegular />} onClick={() => setSelectedUser(item)}>{t("editUser")}</Button>}{canEditQuota && <Button onClick={() => onEditQuota(item.id)}>{t("editUserQuota")}</Button>}{principal.system_admin && item.id !== principal.user_id && hasApiKeyScope(principal, "manage_system") && hasApiKeyScope(principal, "manage_api_keys") && <Button icon={<KeyRegular />} onClick={() => setApiKeyUser(item)}>{t("manageUserApiKeys")}</Button>}</div> },
+    { columnId: "actions", compare: () => 0, renderHeaderCell: () => t("actions"), renderCell: (item) => <div className={styles.actions}>{(canManageUsers || item.membershipRole !== null) && <Button icon={<EditRegular />} onClick={() => setSelectedUser(item)}>{t("editUser")}</Button>}{canEditQuota && <Button onClick={() => onEditQuota(item.id)}>{t("editUserQuota")}</Button>}</div> },
   ];
 }
 
@@ -353,7 +375,7 @@ function apiKeyColumns({ t, locale, styles, revokingKeyId, revoking, loading, co
     { columnId: "key", compare: (a, b) => a.name.localeCompare(b.name), renderHeaderCell: () => t("manageUserApiKeys"), renderCell: (item) => <div className={styles.stack}><Text weight="semibold">{item.name}</Text><Text size={200}>{item.prefix}</Text><Text size={200}>{formatApiKeyScopes(item, t)}</Text></div> },
     { columnId: "status", compare: (a, b) => getApiKeyStatus(a).localeCompare(getApiKeyStatus(b)), renderHeaderCell: () => t("apiKeyStatus"), renderCell: (item) => formatApiKeyStatus(item, t) },
     { columnId: "expires", compare: (a, b) => (a.expires_at ?? 0) - (b.expires_at ?? 0), renderHeaderCell: () => t("apiKeyExpires"), renderCell: (item) => formatApiKeyExpiry(item.expires_at, locale, t) },
-    { columnId: "actions", compare: () => 0, renderHeaderCell: () => t("actions"), renderCell: (item) => <div className={styles.actions}>{item.token && <Button appearance="subtle" icon={<CopyRegular />} onClick={() => onCopy(item)}>{copiedKeyId === item.id ? t("copied") : t("copy")}</Button>}{getApiKeyStatus(item) === "active" && <Button disabled={revoking || loading || revokingKeyId !== null} onClick={() => { setRevokingKeyId(item.id); setReason(""); }}>{t("revokeApiKey")}</Button>}</div> },
+    { columnId: "actions", compare: () => 0, renderHeaderCell: () => t("actions"), renderCell: (item) => <div className={styles.actions}>{item.token ? <Button appearance="subtle" icon={<CopyRegular />} onClick={() => onCopy(item)}>{copiedKeyId === item.id ? t("copied") : t("copy")}</Button> : <Tooltip content={t("apiKeyCopyUnavailable")} relationship="description"><span><Button appearance="subtle" icon={<CopyRegular />} disabled>{t("copy")}</Button></span></Tooltip>}{getApiKeyStatus(item) === "active" && <Button disabled={revoking || loading || revokingKeyId !== null} onClick={() => { setRevokingKeyId(item.id); setReason(""); }}>{t("revokeApiKey")}</Button>}</div> },
   ];
 }
 

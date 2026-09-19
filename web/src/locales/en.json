@@ -538,6 +538,7 @@
   "apiKeyScopeHelp_delete_workspace": "Permanently delete workspaces and their persistent storage.",
   "createApiKey": "Create API key",
   "noApiKeys": "No API keys yet.",
+  "apiKeyCopyUnavailable": "This historical key only has an irreversible hash. Create a replacement and update clients before revoking it.",
   "createdAt": "Created",
   "lastUsedAt": "Last used",
   "never": "Never",

@@ -187,7 +187,7 @@ pub(super) fn actor_may_grant(actor_scopes: &[ApiKeyScope], requested: &[ApiKeyS
         .all(|requested_scope| actor_scopes.contains(requested_scope))
 }
 
-fn actor_may_grant_templates(
+pub(super) fn actor_may_grant_templates(
     actor_allowed: &Option<Vec<Uuid>>,
     requested: &Option<Vec<Uuid>>,
 ) -> bool {
@@ -200,7 +200,7 @@ fn actor_may_grant_templates(
     }
 }
 
-fn template_ids_are_unique(template_ids: &[Uuid]) -> bool {
+pub(super) fn template_ids_are_unique(template_ids: &[Uuid]) -> bool {
     let mut sorted = template_ids.to_vec();
     sorted.sort_unstable();
     sorted.windows(2).all(|pair| pair[0] != pair[1])
