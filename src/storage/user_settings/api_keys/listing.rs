@@ -1,6 +1,7 @@
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
+use std::ops::Deref;
 use utoipa::ToSchema;
 use uuid::Uuid;
 
@@ -131,6 +132,16 @@ pub struct ApiKeyWithToken {
     #[serde(flatten)]
     pub summary: ApiKeySummary,
     pub token: Option<String>,
+}
+
+// Keep existing internal callers source-compatible while the administrator response adds the
+// copyable plaintext token alongside the normal key summary.
+impl Deref for ApiKeyWithToken {
+    type Target = ApiKeySummary;
+
+    fn deref(&self) -> &Self::Target {
+        &self.summary
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
