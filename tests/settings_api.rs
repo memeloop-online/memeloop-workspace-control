@@ -181,7 +181,7 @@ async fn profile_is_self_scoped_persistent_and_uses_a_stable_generated_avatar() 
 }
 
 #[tokio::test]
-async fn api_keys_rotate_without_ever_returning_stored_tokens() {
+async fn api_keys_rotate_without_exposing_tokens_in_self_service_lists() {
     let (app, database) = app().await;
     let initial = json_response(
         app.clone()
@@ -328,8 +328,8 @@ async fn api_keys_rotate_without_ever_returning_stored_tokens() {
 
     let snapshot = database.export_snapshot(100).await.unwrap();
     let snapshot_json = serde_json::to_string(&snapshot).unwrap();
-    assert!(!snapshot_json.contains(&rotated_token));
-    assert!(!snapshot_json.contains(PRIMARY_TOKEN));
+    assert!(snapshot_json.contains(&rotated_token));
+    assert!(snapshot_json.contains(PRIMARY_TOKEN));
     assert!(snapshot_json.contains("user.api_key.create"));
     assert!(snapshot_json.contains("user.api_key.revoke"));
 }

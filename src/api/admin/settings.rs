@@ -47,8 +47,9 @@ pub(in crate::api) struct CreateApiKeyRequest {
 pub(in crate::api) struct CreatedApiKeyResponse {
     #[serde(flatten)]
     pub summary: ApiKeySummary,
-    /// One-time plaintext API key. It is never returned by list operations or stored as plaintext;
-    /// if it is lost, revoke this key and create a replacement.
+    /// Plaintext API key. The user editor's administrator-only API-key view
+    /// retains it for later copying; ordinary self-service list responses
+    /// remain summary-only.
     pub token: String,
 }
 
@@ -130,9 +131,9 @@ pub(in crate::api) async fn list_api_keys(
     post,
     path = "/api/v1/me/api-keys",
     request_body = CreateApiKeyRequest,
-    description = "Creates an API key for the authenticated user. The plaintext token is shown only in this response. If the response or token is lost, revoke the key and create a replacement; this endpoint does not support Idempotency-Key replay because plaintext keys are not retained.",
+    description = "Creates an API key for the authenticated user. The plaintext token is available to authorized administrators from that user's API-key editor; ordinary self-service list responses remain summary-only. This endpoint does not support Idempotency-Key replay because each request creates a distinct key.",
     responses(
-        (status = 201, description = "Created; token is shown exactly once", body = CreatedApiKeyResponse),
+        (status = 201, description = "Created with its plaintext token", body = CreatedApiKeyResponse),
         (status = 400, body = crate::api::ErrorEnvelope),
         (status = 401, body = crate::api::ErrorEnvelope),
         (status = 409, body = crate::api::ErrorEnvelope)
