@@ -19,12 +19,15 @@ API consumers authenticate with personal API keys:
 curl "$BASE/api/v1/me" -H "Authorization: Bearer $API_KEY"
 ```
 
-Keys are managed in the console or through `GET`/`POST /api/v1/me/api-keys`
-and `DELETE /api/v1/me/api-keys/{key_id}`. Rules:
+Keys are managed from **Administration → Users and roles → Edit user → API
+keys**, or through `GET`/`POST /api/v1/me/api-keys` and `DELETE
+/api/v1/me/api-keys/{key_id}`. Rules:
 
 - Every key carries at least one fine-grained scope.
 - Expiry is a Unix timestamp at most 365 days in the future.
-- The plaintext key is returned only once, in the creation response.
+- Authorized system administrators with both `manage_system` and
+  `manage_api_keys` can copy a user's retained plaintext key from its editor;
+  self-service list responses remain summary-only.
 - Keys can optionally be restricted to specific template IDs: `null` means no
   additional restriction, `[]` means the key cannot create workspaces from any
   template.

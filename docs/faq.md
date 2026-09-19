@@ -31,8 +31,11 @@ creation time.
 
 ## Is the API key retrievable later?
 
-No. The plaintext key is returned only in the creation response. Store it
-immediately; if lost, revoke it and create a new one.
+Yes, for an administrator with both `manage_system` and `manage_api_keys`.
+Open **Administration → Users and roles**, edit the user, then choose the
+**API keys** tab and use **Copy**. Ordinary self-service API-key lists expose
+summaries only. Historical keys created before plaintext retention cannot be
+reconstructed; create a replacement for those keys.
 
 ## Does the port mapping expose my app publicly?
 

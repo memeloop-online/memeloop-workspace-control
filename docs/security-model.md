@@ -35,8 +35,10 @@ the responsibilities that remain with deployers.
 - **RBAC** — system administrator, organization administrator, and member
   roles with distinct permissions.
 - **Scoped API keys** — keys carry fine-grained scopes, mandatory expiry
-  (≤ 365 days), and optional template restrictions. Plaintext keys are shown
-  once at creation; only hashes are stored.
+  (≤ 365 days), and optional template restrictions. Plaintext values are
+  retained for copying only in the administrator user editor, which requires
+  both `manage_system` and `manage_api_keys`; ordinary self-service lists
+  expose summaries only.
 - **Short-lived tickets** — web terminal and port-mapping sessions are
   established through single-use tickets, then held in `HttpOnly`, `Secure`,
   `SameSite=Lax` session cookies.

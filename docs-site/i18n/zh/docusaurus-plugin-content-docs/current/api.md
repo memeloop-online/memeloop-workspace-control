@@ -18,12 +18,13 @@ API 使用者使用个人 API 密钥认证：
 curl "$BASE/api/v1/me" -H "Authorization: Bearer $API_KEY"
 ```
 
-密钥在控制台管理，或通过 `GET`/`POST /api/v1/me/api-keys` 与
+密钥在 **管理 → 用户与角色 → 编辑用户 → API 密钥** 中管理，或通过 `GET`/`POST /api/v1/me/api-keys` 与
 `DELETE /api/v1/me/api-keys/{key_id}` 管理。规则：
 
 - 每个密钥至少携带一个细粒度 scope。
 - 过期时间是最多 365 天内的 Unix 秒时间戳。
-- 密钥明文只在创建响应中出现一次。
+- 同时具有 `manage_system` 与 `manage_api_keys` 的系统管理员可以在用户编辑页复制
+  已保留的密钥明文；个人密钥列表仍只返回摘要。
 - 密钥可选地限制到特定模板 ID：`null` 表示不额外限制，`[]` 表示该密钥
   不能使用任何模板创建工作区。
 

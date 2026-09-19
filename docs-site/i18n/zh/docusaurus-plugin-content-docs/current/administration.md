@@ -39,7 +39,8 @@ MWC 有三种角色：
 ## 用户与组织
 
 - 用户：`GET /api/v1/admin/users`、`POST /api/v1/admin/users`、
-  `PUT /api/v1/admin/users/{user_id}`。管理员还可列出并吊销用户的 API 密钥。
+  `PUT /api/v1/admin/users/{user_id}`。管理员还可在编辑用户表单的 **API 密钥**
+  标签页中创建、复制、列出和吊销该用户的 API 密钥。
 - 组织：`GET /api/v1/organizations`、`POST /api/v1/organizations`、
   `PUT`/`DELETE /api/v1/organizations/{organization_id}`。
 - 成员：`GET /api/v1/organizations/{organization_id}/members`、

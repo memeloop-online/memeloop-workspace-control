@@ -334,7 +334,7 @@ async fn openapi_document_contains_versioned_api() {
         body["paths"]["/api/v1/me/api-keys"]["post"]["description"]
             .as_str()
             .unwrap()
-            .contains("shown only in this response")
+            .contains("authorized administrators")
     );
     assert!(body["paths"]["/api/v1/audit"]["get"].is_object());
     assert!(body["paths"]["/api/v1/plugins/{plugin_id}/configuration"]["delete"].is_object());
