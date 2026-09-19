@@ -547,6 +547,7 @@
   "manageUserApiKeys": "API 密钥",
   "actions": "操作",
   "manageUserApiKeysHelp": "以下用户的 API 密钥：",
+  "apiKeyManagementHint": "在每位用户的“API 密钥”操作中创建、复制或撤销该用户的密钥。",
   "apiKeyPagination": "API 密钥分页",
   "apiKeyPageStatus": "第",
   "apiKeyPageUnit": " 页",

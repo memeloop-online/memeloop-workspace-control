@@ -547,6 +547,7 @@
   "manageUserApiKeys": "API keys",
   "actions": "Actions",
   "manageUserApiKeysHelp": "API keys for:",
+  "apiKeyManagementHint": "Use each user's API keys action to create, copy, or revoke that user's keys.",
   "apiKeyPagination": "API key pages",
   "apiKeyPageStatus": "Page",
   "apiKeyPageUnit": "",

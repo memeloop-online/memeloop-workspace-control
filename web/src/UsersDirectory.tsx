@@ -28,7 +28,7 @@ import {
   Tooltip,
 } from "@fluentui/react-components";
 import type { TableColumnDefinition } from "@fluentui/react-components";
-import { AddRegular, ArrowLeftRegular, ArrowRightRegular, CopyRegular, EditRegular, SaveRegular } from "@fluentui/react-icons";
+import { AddRegular, ArrowLeftRegular, ArrowRightRegular, CopyRegular, EditRegular, KeyRegular, SaveRegular } from "@fluentui/react-icons";
 
 import {
   formatApiKeyExpiry,
@@ -48,6 +48,7 @@ import { AdminToolbar, SaveButton, useAdminStyles } from "./admin/fluentAdmin";
 import { ApiKeyTemplatePicker } from "./admin/ApiKeyTemplatePicker";
 
 type DirectoryItem = UserSummary & { membershipRole: Role | null };
+type UserEditorSection = "details" | "apiKeys";
 
 export interface UsersDirectoryProps {
   api: ApiClient;
@@ -73,6 +74,8 @@ export function UsersDirectory({ api, organizationId, principal, canManageUsers,
   const loadingRef = useRef(false);
   const requestRef = useRef(0);
   const [selectedUser, setSelectedUser] = useState<DirectoryItem | null>(null);
+  const [selectedSection, setSelectedSection] = useState<UserEditorSection>("details");
+  const canManageApiKeys = principal.system_admin && hasApiKeyScope(principal, "manage_system") && hasApiKeyScope(principal, "manage_api_keys");
 
   useEffect(() => {
     let active = true;
@@ -150,6 +153,11 @@ export function UsersDirectory({ api, organizationId, principal, canManageUsers,
     setSelectedUser((user) => user?.id === userId ? { ...user, membershipRole } : user);
   }
 
+  function openUser(user: DirectoryItem, section: UserEditorSection) {
+    setSelectedSection(section);
+    setSelectedUser(user);
+  }
+
   return <div className={styles.stack}>
     <AdminToolbar action={<div className={styles.actions}>
       <Field label={t("rowsPerPage")}><Select value={String(size)} onChange={(event) => setSize(Number(event.target.value))}><Option value="25">25</Option><Option value="50">50</Option><Option value="100">100</Option></Select></Field>
@@ -157,15 +165,18 @@ export function UsersDirectory({ api, organizationId, principal, canManageUsers,
       <Button icon={<ArrowRightRegular />} iconPosition="after" disabled={!nextCursor || loading} onClick={() => void nextPage()}>{t("nextPage")}</Button>
     </div>}>
       <Field label={t("searchUsers")}><Input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t("searchUsersPlaceholder")} /></Field>
-      <Text size={300}>{t("userPageStatus")} {pageNumber} · {items.length}</Text>
+      <div className={styles.stack}>
+        <Text size={300}>{t("userPageStatus")} {pageNumber} · {items.length}</Text>
+        {canManageApiKeys && <Text size={200} className={styles.muted}>{t("apiKeyManagementHint")}</Text>}
+      </div>
     </AdminToolbar>
     {loading && items.length === 0 ? <Spinner label={t("loading")} /> : items.length === 0 ? <Text className={styles.empty}>{t("noUsers")}</Text> : <div className={styles.table} aria-busy={loading}>
-      <DataGrid items={items} columns={userColumns({ t, styles, canManageUsers, canEditQuota, setSelectedUser, onEditQuota })}>
+      <DataGrid items={items} columns={userColumns({ t, styles, canManageUsers, canEditQuota, canManageApiKeys, openUser, onEditQuota })}>
         <DataGridHeader><DataGridRow<DirectoryItem>>{(column) => <DataGridHeaderCell>{column.renderHeaderCell()}</DataGridHeaderCell>}</DataGridRow></DataGridHeader>
         <DataGridBody<DirectoryItem>>{({ item }) => <DataGridRow<DirectoryItem>>{(column) => <DataGridCell>{column.renderCell(item)}</DataGridCell>}</DataGridRow>}</DataGridBody>
       </DataGrid>
     </div>}
-    {selectedUser && <UserEditDialog user={selectedUser} api={api} organizationId={organizationId} principal={principal} canManageUsers={canManageUsers} onClose={() => setSelectedUser(null)} onError={onError} onUpdated={updateUser} onMembershipChanged={updateMembership} />}
+    {selectedUser && <UserEditDialog user={selectedUser} initialSection={selectedSection} api={api} organizationId={organizationId} principal={principal} canManageUsers={canManageUsers} onClose={() => setSelectedUser(null)} onError={onError} onUpdated={updateUser} onMembershipChanged={updateMembership} />}
   </div>;
 }
 
@@ -181,7 +192,7 @@ async function loadPageData(api: ApiClient, organizationId: string, size: number
 function userToItem(user: UserSummary): DirectoryItem { return { ...user, membershipRole: user.membership_role ?? null }; }
 function memberToItem(membership: MembershipSummary): DirectoryItem { return { ...membership.user, membershipRole: membership.role }; }
 
-function UserEditDialog({ user, api, organizationId, principal, canManageUsers, onClose, onError, onUpdated, onMembershipChanged }: { user: DirectoryItem; api: ApiClient; organizationId: string; principal: Principal; canManageUsers: boolean; onClose: () => void; onError: (message: string) => void; onUpdated: (user: UserSummary) => void; onMembershipChanged: (userId: string, role: Role | null) => void }) {
+function UserEditDialog({ user, initialSection, api, organizationId, principal, canManageUsers, onClose, onError, onUpdated, onMembershipChanged }: { user: DirectoryItem; initialSection: UserEditorSection; api: ApiClient; organizationId: string; principal: Principal; canManageUsers: boolean; onClose: () => void; onError: (message: string) => void; onUpdated: (user: UserSummary) => void; onMembershipChanged: (userId: string, role: Role | null) => void }) {
   const { t } = useI18n();
   const styles = useAdminStyles();
   const [displayName, setDisplayName] = useState(user.display_name);
@@ -190,7 +201,7 @@ function UserEditDialog({ user, api, organizationId, principal, canManageUsers, 
   const [role, setRole] = useState<Role>(user.membershipRole ?? "member");
   const [saving, setSaving] = useState(false);
   const [managingKeys, setManagingKeys] = useState(false);
-  const [section, setSection] = useState<"details" | "apiKeys">("details");
+  const [section, setSection] = useState<UserEditorSection>(initialSection);
   const [status, setStatus] = useState("");
   const [confirmRemove, setConfirmRemove] = useState(false);
   const isCurrentUser = user.id === principal.user_id;
@@ -226,7 +237,7 @@ function UserEditDialog({ user, api, organizationId, principal, canManageUsers, 
   }
 
   return <><Dialog open onOpenChange={(_, data) => { if (!data.open && !saving && !managingKeys) onClose(); }}><DialogSurface className={styles.dialogSurface}><DialogBody><DialogTitle>{t("saveUser")} · {user.display_name}</DialogTitle><DialogContent className={styles.dialogBody}>
-    <TabList selectedValue={section} onTabSelect={(_, data) => setSection(data.value as "details" | "apiKeys")}>
+    <TabList selectedValue={section} onTabSelect={(_, data) => setSection(data.value as UserEditorSection)}>
       <Tab value="details">{t("user")}</Tab>
       {canManageApiKeys && <Tab value="apiKeys">{t("apiKeys")}</Tab>}
     </TabList>
@@ -361,12 +372,12 @@ function UserApiKeysPanel({ api, organizationId, principal, userId, isCurrentUse
   </>;
 }
 
-function userColumns({ t, styles, canManageUsers, canEditQuota, setSelectedUser, onEditQuota }: { t: ReturnType<typeof useI18n>["t"]; styles: ReturnType<typeof useAdminStyles>; canManageUsers: boolean; canEditQuota: boolean; setSelectedUser: (user: DirectoryItem) => void; onEditQuota: (userId: string) => void }): TableColumnDefinition<DirectoryItem>[] {
+function userColumns({ t, styles, canManageUsers, canEditQuota, canManageApiKeys, openUser, onEditQuota }: { t: ReturnType<typeof useI18n>["t"]; styles: ReturnType<typeof useAdminStyles>; canManageUsers: boolean; canEditQuota: boolean; canManageApiKeys: boolean; openUser: (user: DirectoryItem, section: UserEditorSection) => void; onEditQuota: (userId: string) => void }): TableColumnDefinition<DirectoryItem>[] {
   return [
     { columnId: "user", compare: (a, b) => a.display_name.localeCompare(b.display_name), renderHeaderCell: () => t("user"), renderCell: (item) => <div className={styles.stack}><Text weight="semibold">{item.display_name}</Text><Text size={200}>{item.id}</Text></div> },
     { columnId: "role", compare: (a, b) => String(a.membershipRole).localeCompare(String(b.membershipRole)), renderHeaderCell: () => t("role"), renderCell: (item) => item.membershipRole === "organization_admin" ? t("roleOrganizationAdmin") : item.membershipRole === "member" ? t("roleMember") : t("notEnabled") },
     { columnId: "status", compare: (a, b) => Number(a.disabled) - Number(b.disabled), renderHeaderCell: () => t("workspaceState"), renderCell: (item) => item.disabled ? t("userStatusDisabled") : t("userStatusActive") },
-    { columnId: "actions", compare: () => 0, renderHeaderCell: () => t("actions"), renderCell: (item) => <div className={styles.actions}>{(canManageUsers || item.membershipRole !== null) && <Button icon={<EditRegular />} onClick={() => setSelectedUser(item)}>{t("editUser")}</Button>}{canEditQuota && <Button onClick={() => onEditQuota(item.id)}>{t("editUserQuota")}</Button>}</div> },
+    { columnId: "actions", compare: () => 0, renderHeaderCell: () => t("actions"), renderCell: (item) => <div className={styles.actions}>{(canManageUsers || item.membershipRole !== null) && <Button icon={<EditRegular />} onClick={() => openUser(item, "details")}>{t("editUser")}</Button>}{canManageApiKeys && <Button icon={<KeyRegular />} onClick={() => openUser(item, "apiKeys")}>{t("apiKeys")}</Button>}{canEditQuota && <Button onClick={() => onEditQuota(item.id)}>{t("editUserQuota")}</Button>}</div> },
   ];
 }
 

@@ -547,6 +547,7 @@
   "manageUserApiKeys": "Ключи API",
   "actions": "Действия",
   "manageUserApiKeysHelp": "Ключи API пользователя:",
+  "apiKeyManagementHint": "Используйте действие «Ключи API» у каждого пользователя, чтобы создавать, копировать или отзывать его ключи.",
   "apiKeyPagination": "Страницы ключей API",
   "apiKeyPageStatus": "Страница",
   "apiKeyPageUnit": "",
