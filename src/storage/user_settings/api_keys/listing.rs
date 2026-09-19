@@ -74,7 +74,7 @@ impl Database {
                 pool,
                 installation_id,
             } => sqlx::query(
-                "SELECT id, name, token_prefix, last_used_at, created_at, scopes_json, expires_at, allowed_template_ids_json, revoked_at \
+                "SELECT id, name, token_prefix, token, last_used_at, created_at, scopes_json, expires_at, allowed_template_ids_json, revoked_at \
                  FROM user_api_keys WHERE installation_id = ?1 AND user_id = ?2 \
                  AND (?3 = 2 OR (?3 = 0 AND revoked_at IS NULL) OR (?3 = 1 AND revoked_at IS NOT NULL)) \
                  AND (?4 IS NULL OR created_at > ?4 OR (created_at = ?4 AND id > ?5)) \
@@ -89,13 +89,13 @@ impl Database {
             .fetch_all(pool)
             .await?
             .into_iter()
-            .map(decode)
+            .map(decode_with_token)
             .collect::<Result<Vec<_>, _>>()?,
             Self::Postgres {
                 pool,
                 installation_id,
             } => sqlx::query(
-                "SELECT id, name, token_prefix, last_used_at, created_at, scopes_json, expires_at, allowed_template_ids_json, revoked_at \
+                "SELECT id, name, token_prefix, token, last_used_at, created_at, scopes_json, expires_at, allowed_template_ids_json, revoked_at \
                  FROM user_api_keys WHERE installation_id = $1 AND user_id = $2 \
                  AND ($3 = 2 OR ($3 = 0 AND revoked_at IS NULL) OR ($3 = 1 AND revoked_at IS NOT NULL)) \
                  AND ($4 IS NULL OR created_at > $4 OR (created_at = $4 AND id > $5)) \
@@ -110,7 +110,7 @@ impl Database {
             .fetch_all(pool)
             .await?
             .into_iter()
-            .map(decode)
+            .map(decode_with_token)
             .collect::<Result<Vec<_>, _>>()?,
         };
         page(rows, limit, target_user_id, status)
@@ -119,8 +119,18 @@ impl Database {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
 pub struct ApiKeyPage {
-    pub items: Vec<ApiKeySummary>,
+    pub items: Vec<ApiKeyWithToken>,
     pub next_cursor: Option<String>,
+}
+
+/// Plaintext is present only for keys created after schema version 25. Older
+/// hash-only rows return `None`, because their original value cannot be
+/// reconstructed and must be rotated to become copyable.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+pub struct ApiKeyWithToken {
+    #[serde(flatten)]
+    pub summary: ApiKeySummary,
+    pub token: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -151,7 +161,7 @@ pub(super) fn decode_cursor(
 }
 
 pub(super) fn page(
-    mut items: Vec<ApiKeySummary>,
+    mut items: Vec<ApiKeyWithToken>,
     limit: i64,
     target_user_id: Uuid,
     status: ApiKeyListStatus,
@@ -160,8 +170,8 @@ pub(super) fn page(
         items.pop();
         let tail = items.last().expect("page contains at least one entry");
         Some(URL_SAFE_NO_PAD.encode(serde_json::to_vec(&ApiKeyCursor {
-            created_at: tail.created_at,
-            id: tail.id,
+            created_at: tail.summary.created_at,
+            id: tail.summary.id,
             target_user_id,
             status,
         })?))
@@ -169,6 +179,19 @@ pub(super) fn page(
         None
     };
     Ok(ApiKeyPage { items, next_cursor })
+}
+
+fn decode_with_token<R: Row>(row: R) -> Result<ApiKeyWithToken, StorageError>
+where
+    for<'a> &'a str: sqlx::ColumnIndex<R>,
+    String: for<'d> sqlx::Decode<'d, R::Database> + sqlx::Type<R::Database>,
+    i64: for<'d> sqlx::Decode<'d, R::Database> + sqlx::Type<R::Database>,
+{
+    let token = row.try_get("token")?;
+    Ok(ApiKeyWithToken {
+        summary: decode(row)?,
+        token,
+    })
 }
 
 pub(super) fn decode<R: Row>(row: R) -> Result<ApiKeySummary, StorageError>

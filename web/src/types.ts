@@ -52,9 +52,12 @@ export interface ApiKeySummary {
 }
 
 export interface ApiKeyPage {
-  items: ApiKeySummary[];
+  items: AdminApiKey[];
   next_cursor: string | null;
 }
+
+/** Plaintext is deliberately returned only by the administrator key endpoint. */
+export type AdminApiKey = ApiKeySummary & { token: string | null };
 
 export type ApiKeyScope =
   | "manage_api_keys"
@@ -316,6 +319,8 @@ export interface WorkspaceRuntime {
   persistent_storage: WorkspaceStorageTelemetry;
   temporary_storage: WorkspaceStorageTelemetry;
   metrics_available: boolean;
+  /** The Kubernetes node hosting the active workspace Pod, when scheduled. */
+  node_name: string | null;
   pods: { name: string; phase: string | null; ready: boolean; restarts: number }[];
   metrics: { pod: string; container: string; cpu: string | null; memory: string | null }[];
   events: WorkspaceRuntimeEvent[];

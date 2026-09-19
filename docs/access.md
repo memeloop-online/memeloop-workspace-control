@@ -16,13 +16,9 @@ configuration.
 Internal deployments can publish a per-workspace SSH port through
 `workspace.internalSshHost`. Public deployments can route connections through
 the standard OpenSSH jump host in `images/ssh-jump`. Authentication uses the
-caller's key pair:
-
-1. Register or retrieve the per-workspace client key with
-   `GET /api/v1/workspaces/{workspace_id}/ssh-client-public-key`.
-2. Copy the connection details from the workspace page. Public connections use
-   the jump host; internal connections use the configured host and assigned
-   workspace port.
+caller's key pair. Copy the connection details from the workspace page. Public
+connections use the jump host; internal connections use the configured host
+and assigned workspace port.
 
 Inject additional public keys into the workspace with `ssh_public_key`
 injection items (see [Credentials and files](./credentials-and-files.md)).

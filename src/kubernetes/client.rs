@@ -49,7 +49,6 @@ impl KubernetesCoordinator {
         ssh_identity: Secret,
     ) -> Result<(), ReconcileError> {
         let mut desired = self.builder.build_with_placement(workspace, placement)?;
-        let revision = injections.revision()?;
         let workspace_container = desired
             .stateful_set
             .spec
@@ -68,19 +67,9 @@ impl KubernetesCoordinator {
         );
         desired.injections = injections;
         desired.ssh_identity = ssh_identity;
-        let template_metadata = desired
-            .stateful_set
-            .spec
-            .as_mut()
-            .and_then(|spec| spec.template.metadata.as_mut())
-            .ok_or(ReconcileError::MissingPodTemplateMetadata)?;
-        template_metadata
-            .annotations
-            .get_or_insert_with(Default::default)
-            .insert(
-                "workspace.memeloop.dev/injection-revision".to_owned(),
-                revision,
-            );
+        // Injection objects are projected volumes. Updating them must not alter the Pod template:
+        // the workspace bootstrap watches the projection and atomically replaces injected files in
+        // place. Changing this template would restart every matching running workspace.
         self.apply_desired(workspace, &desired).await
     }
 

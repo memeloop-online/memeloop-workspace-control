@@ -14,8 +14,9 @@ mod system;
 mod users;
 
 pub(super) use api_keys::{
-    __path_admin_revoke_api_key, __path_list_user_api_keys, AdminRevokeApiKeyRequest,
-    admin_revoke_api_key, list_user_api_keys,
+    __path_admin_create_api_key, __path_admin_revoke_api_key, __path_list_user_api_keys,
+    AdminCreateApiKeyRequest, AdminRevokeApiKeyRequest, admin_create_api_key, admin_revoke_api_key,
+    list_user_api_keys,
 };
 pub(super) use audit_api::{__path_audit, audit};
 pub(super) use memberships::{

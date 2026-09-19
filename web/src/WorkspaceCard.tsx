@@ -76,6 +76,7 @@ export function WorkspaceCard({ api, item, runtime, nodePools, busyAction, onAct
       ...(templateName ? [`${t("template")}: ${templateName}`] : []),
       <Tooltip key="image" content={workspace.image} relationship="description"><Text tabIndex={0} className={styles.metadataCode}>{t("image")}: {shortImage(workspace.image)}</Text></Tooltip>,
       <Tooltip key="node-pool" content={running ? t("locationChangeAfterStop") : t("changeLocation")} relationship="description"><Text tabIndex={0}>{t("nodePool")}: {nodePoolDisplayName(nodePools, workspace.node_pool)}</Text></Tooltip>,
+      ...(runtime?.node_name ? [<Tooltip key="node-name" content={runtime.node_name} relationship="description"><Text tabIndex={0} className={styles.metadataCode}>{t("nodeName")}: {runtime.node_name}</Text></Tooltip>] : []),
       ...(workspace.resources.gpu_count > 0 ? [`${workspace.resources.gpu_count} GPU`] : []),
     ]}
     meters={[]}
@@ -84,7 +85,7 @@ export function WorkspaceCard({ api, item, runtime, nodePools, busyAction, onAct
     <div className={styles.toolbar} role="group" aria-labelledby={titleId} aria-busy={transition ? "true" : "false"}>
       <div className={styles.toolbarGroup}>
         {transition ? <Button appearance="subtle" disabled icon={<Spinner size="tiny" />} aria-busy="true">{t(transition.label)}</Button> : <>
-          {canConnect && running && item.ssh_connection && <WorkspaceConnectionDialog api={api} workspaceId={workspace.id} connection={item.ssh_connection} />}
+          {canConnect && running && item.ssh_connection && <WorkspaceConnectionDialog connection={item.ssh_connection} />}
           {canConnect && running && <Tooltip content={t("webShellClipboardHelp")} relationship="description"><Button appearance="primary" icon={<WindowConsoleRegular />} onClick={() => void onOpenShell(workspace.id)}>{t("webShell")}</Button></Tooltip>}
           {canConnect && running && item.desktop?.status === "ready" && item.desktop.https_url && <Button appearance="outline" icon={<DesktopRegular />} disabled={openingDesktop} onClick={() => void openDesktop(api, workspace.id, item.desktop!.mapping_id, setOpeningDesktop, onError, t)}>{openingDesktop ? t("desktopOpening") : t("openDesktop")}</Button>}
           {canConnect && running && <WorkspacePortMappings api={api} workspaceId={workspace.id} workspaceReady onError={onError} />}

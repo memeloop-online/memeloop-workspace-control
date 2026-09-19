@@ -3,7 +3,7 @@ mod profile;
 
 pub(crate) use api_keys::validate_api_key_policy;
 pub use api_keys::{
-    ApiKeyListStatus, ApiKeyPage, ApiKeyRevokeResult, ApiKeySummary, CreatedApiKey,
+    ApiKeyListStatus, ApiKeyPage, ApiKeyRevokeResult, ApiKeySummary, ApiKeyWithToken, CreatedApiKey,
 };
 pub use profile::StoredUserProfile;
 

@@ -11,10 +11,10 @@ export function getApiKeyStatus(
   return "active";
 }
 
-export function applyLocalRevocations(
-  items: ApiKeySummary[],
+export function applyLocalRevocations<T extends ApiKeySummary>(
+  items: T[],
   localRevocations: ReadonlyMap<string, number>,
-): ApiKeySummary[] {
+): T[] {
   return items.map((key) => {
     const revokedAt = localRevocations.get(key.id);
     return revokedAt === undefined || key.revoked_at !== null

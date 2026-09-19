@@ -30,7 +30,12 @@ import type {
 } from "./types";
 import { InjectionEditorForm } from "./injections/InjectionEditorForm";
 import { InjectionList } from "./injections/InjectionList";
-import { draftFromStored, emptyInjectionDraft, injectionDraftForSave } from "./injections/editorModel";
+import {
+  draftFromStored,
+  emptyInjectionDraft,
+  hasSubstantiveInjectionChanges,
+  injectionDraftForSave,
+} from "./injections/editorModel";
 
 interface Props {
   api: ApiClient;
@@ -124,6 +129,7 @@ export function InjectionPanel(props: Props) {
   const [items, setItems] = useState<StoredInjection[]>([]);
   const [templates, setTemplates] = useState<WorkspaceTemplate[]>([]);
   const [draft, setDraft] = useState(emptyInjectionDraft);
+  const [baselineDraft, setBaselineDraft] = useState(emptyInjectionDraft);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [preview, setPreview] = useState<ResolvedInjection[]>([]);
   const [previewBusy, setPreviewBusy] = useState(false);
@@ -170,6 +176,7 @@ export function InjectionPanel(props: Props) {
     setItems([]);
     setTemplates([]);
     setDraft(emptyInjectionDraft());
+    setBaselineDraft(emptyInjectionDraft());
     setSelectedKey(null);
     setPreview([]);
     setPreviewRan(false);
@@ -193,8 +200,10 @@ export function InjectionPanel(props: Props) {
   }, [props.api, props.organizationId, props.onError]);
 
   function resetDraft() {
+    const next = emptyInjectionDraft();
     setSelectedKey(null);
-    setDraft(emptyInjectionDraft());
+    setDraft(next);
+    setBaselineDraft(next);
     setMobilePane("list");
   }
 
@@ -214,11 +223,15 @@ export function InjectionPanel(props: Props) {
     setSelectedKey(item.key);
     const selected = draftFromStored(item);
     setDraft(selected);
+    setBaselineDraft(selected);
     setMobilePane("editor");
     if (item.sensitive || item.kind === "secret_file" || !scopeId) return;
     try {
       const value = await props.api.injectionValue(scope, scopeId, item.key);
       setDraft((current) => current.key === item.key
+        ? { ...current, value, storedValueAvailable: true }
+        : current);
+      setBaselineDraft((current) => current.key === item.key
         ? { ...current, value, storedValueAvailable: true }
         : current);
     } catch (error) {
@@ -227,13 +240,15 @@ export function InjectionPanel(props: Props) {
   }
 
   function startNew() {
+    const next = emptyInjectionDraft();
     setSelectedKey(null);
-    setDraft(emptyInjectionDraft());
+    setDraft(next);
+    setBaselineDraft(next);
     setMobilePane("editor");
   }
 
   async function save() {
-    if (!scopeId) return;
+    if (!scopeId || !hasSubstantiveInjectionChanges(draft, baselineDraft)) return;
     setSaving(true);
     try {
       const item = injectionDraftForSave(draft);
@@ -297,7 +312,7 @@ export function InjectionPanel(props: Props) {
           <InjectionList items={items} selectedKey={selectedKey} search={search} title={t("savedCredentials")} emptyLabel={t("noCredentials")} onSearchChange={setSearch} onSelect={selectItem} />
         </div>
         <Card className={`${styles.editor} ${mobilePane === "list" ? styles.mobileHidden : ""}`} appearance="outline">
-          <InjectionEditorForm draft={draft} update={setDraft} scope={scope} templates={templates} selectedKey={selectedKey} saving={saving} disabled={!scopeId} onReset={resetDraft} onSubmit={save} onDelete={() => setConfirmDelete(true)} />
+          <InjectionEditorForm draft={draft} baseline={baselineDraft} update={setDraft} scope={scope} templates={templates} selectedKey={selectedKey} saving={saving} disabled={!scopeId} onReset={resetDraft} onSubmit={save} onDelete={() => setConfirmDelete(true)} />
         </Card>
       </div>
       {(preview.length > 0 || previewRan) && (

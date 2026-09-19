@@ -6,6 +6,8 @@ import {
   changeInjectionKind,
   draftFromStored,
   emptyInjectionDraft,
+  hasSubstantiveInjectionChanges,
+  injectionDraftsEqual,
   injectionDraftForSave,
   parseFileMode,
 } from "./editorModel.ts";
@@ -66,4 +68,32 @@ test("sensitive values stay blank so saving replaces them", () => {
   assert.equal(draft.value.value, "");
   assert.equal(draft.sensitive, true);
   assert.equal(draft.storedValueAvailable, false);
+});
+
+test("a draft is clean when only non-persisted editor state changes", () => {
+  const baseline = draftFromStored(storedInjection());
+  const draft = {
+    ...baseline,
+    version: baseline.version + 1,
+    storedValueAvailable: false,
+  };
+  assert.equal(injectionDraftsEqual(draft, baseline), true);
+  assert.equal(hasSubstantiveInjectionChanges(draft, baseline), false);
+});
+
+test("a draft is dirty for substantive changes and clean after reverting them", () => {
+  const baseline = draftFromStored(storedInjection());
+  const changed = { ...baseline, value: { ...baseline.value, value: "changed" } };
+  assert.equal(hasSubstantiveInjectionChanges(changed, baseline), true);
+  assert.equal(hasSubstantiveInjectionChanges(baseline, baseline), false);
+});
+
+test("equivalent octal modes and label insertion order do not make a draft dirty", () => {
+  const baseline = draftFromStored(storedInjection({ labels: { image: "base", access_mode: "internal" } }));
+  const draft = {
+    ...baseline,
+    fileMode: "0644",
+    labels: { access_mode: "internal", image: "base" },
+  };
+  assert.equal(injectionDraftsEqual(draft, baseline), true);
 });

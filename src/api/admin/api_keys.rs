@@ -12,10 +12,14 @@ use uuid::Uuid;
 
 use crate::{
     api::{ApiError, AppState, ErrorEnvelope, idempotency::unix_timestamp},
+    auth::ApiKeyScope,
     storage::{ApiKeyListStatus, ApiKeyPage},
 };
 
-use super::require_system_admin;
+use super::{
+    require_system_admin,
+    settings::{CreatedApiKeyResponse, actor_may_grant},
+};
 
 /// Paginated administrator view of a user's API keys. The result contains
 /// summaries only; plaintext tokens and token hashes are never exposed.
@@ -30,6 +34,13 @@ pub(in crate::api) struct AdminApiKeyPageQuery {
 pub(in crate::api) struct AdminRevokeApiKeyRequest {
     /// Required operator justification, retained in the audit event metadata.
     pub reason: String,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub(in crate::api) struct AdminCreateApiKeyRequest {
+    pub name: String,
+    pub scopes: Vec<ApiKeyScope>,
+    pub expires_at: Option<i64>,
 }
 
 #[utoipa::path(
@@ -63,6 +74,49 @@ pub(in crate::api) async fn list_user_api_keys(
                 query.cursor.as_deref(),
             )
             .await?,
+    ))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/admin/users/{user_id}/api-keys",
+    request_body = AdminCreateApiKeyRequest,
+    params(("user_id" = Uuid, Path)),
+    responses(
+        (status = 201, body = CreatedApiKeyResponse),
+        (status = 400, body = ErrorEnvelope),
+        (status = 401, body = ErrorEnvelope),
+        (status = 403, body = ErrorEnvelope),
+        (status = 409, body = ErrorEnvelope)
+    )
+)]
+pub(in crate::api) async fn admin_create_api_key(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(user_id): Path<Uuid>,
+    Json(request): Json<AdminCreateApiKeyRequest>,
+) -> Result<(StatusCode, Json<CreatedApiKeyResponse>), ApiError> {
+    let actor = require_system_admin(&state, &headers).await?;
+    if !actor.may_manage_api_keys() || !actor_may_grant(&actor.api_key_scopes, &request.scopes) {
+        return Err(ApiError::Forbidden);
+    }
+    let created = state
+        .database
+        .create_api_key(
+            user_id,
+            &request.name,
+            request.scopes,
+            request.expires_at,
+            None,
+            unix_timestamp()?,
+        )
+        .await?;
+    Ok((
+        StatusCode::CREATED,
+        Json(CreatedApiKeyResponse {
+            summary: created.summary,
+            token: created.token,
+        }),
     ))
 }
 

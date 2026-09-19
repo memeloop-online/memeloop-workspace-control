@@ -174,6 +174,69 @@ EOF
     rm -f "$temporary_kubeconfig"
 }
 
+# Projected Secret and ConfigMap volumes are refreshed by kubelet without restarting a Pod.
+# Keep the durable target file independent from that implementation detail: copy each projected
+# value to a same-directory temporary file and rename it into place, so readers never observe a
+# partial configuration file. This deliberately runs in the workspace rather than through the
+# control plane, which must never exec into a user's container.
+sync_injected_file() {
+    source=$1
+    target=$2
+    numeric_mode=$3
+    owner=$4
+    group=$5
+    target_dir=$(dirname "$target")
+    if ! install -d -m 0750 -o "$owner" -g "$group" "$target_dir"; then
+        : > "$runtime_dir/injection-failed"
+        return 0
+    fi
+    temporary=$(mktemp "$target_dir/.mwc-injection.XXXXXX") || {
+        : > "$runtime_dir/injection-failed"
+        return 0
+    }
+    if ! install -m "$numeric_mode" -o "$owner" -g "$group" "$source" "$temporary" \
+        || ! mv -f "$temporary" "$target"; then
+        rm -f "$temporary"
+        : > "$runtime_dir/injection-failed"
+    fi
+}
+
+sync_injected_files() {
+    temporary_authorized=$(mktemp "$runtime_dir/.authorized_keys.XXXXXX") || return 0
+    cat "$runtime_dir/ttyd_client_key.pub" > "$temporary_authorized"
+    if [ -r "$manifest" ]; then
+        jq -c '.files[]' "$manifest" | while IFS= read -r entry; do
+            object=$(printf '%s' "$entry" | jq -r '.object')
+            data_key=$(printf '%s' "$entry" | jq -r '.data_key')
+            target=$(printf '%s' "$entry" | jq -r '.target')
+            mode=$(printf '%s' "$entry" | jq -r '.mode // empty')
+            owner=$(printf '%s' "$entry" | jq -r '.owner // empty')
+            group=$(printf '%s' "$entry" | jq -r '.group // empty')
+            kind=$(printf '%s' "$entry" | jq -r '.kind')
+            [ -n "$owner" ] || owner=$workspace_user
+            [ -n "$group" ] || group=$workspace_group
+            case "$object" in
+                secret) source=/var/run/workspace-injections/secret/$data_key ;;
+                config_map) source=/var/run/workspace-injections/config/$data_key ;;
+                *) : > "$runtime_dir/injection-failed"; continue ;;
+            esac
+            if [ -z "$mode" ]; then
+                case "$object" in secret) mode=384 ;; config_map) mode=420 ;; esac
+            fi
+            numeric_mode=$(printf '%o' "$mode")
+            if [ "$kind" = ssh_public_key ]; then
+                cat "$source" >> "$temporary_authorized"
+                printf '\n' >> "$temporary_authorized"
+            else
+                sync_injected_file "$source" "$target" "$numeric_mode" "$owner" "$group"
+            fi
+        done
+    fi
+    chown "$workspace_user:$workspace_group" "$temporary_authorized"
+    chmod 0600 "$temporary_authorized"
+    mv -f "$temporary_authorized" "$authorized_keys"
+}
+
 prepare() {
     prepare_layout
     release_reserve_if_critical
@@ -203,48 +266,7 @@ prepare() {
         /etc/ssh/platform/ssh_host_ed25519_key.pub \
         "$runtime_dir/ssh_host_ed25519_key.pub"
 
-    : > "$authorized_keys"
-    cat "$runtime_dir/ttyd_client_key.pub" >> "$authorized_keys"
-    if [ -r "$manifest" ]; then
-        jq -c '.files[]' "$manifest" | while IFS= read -r entry; do
-            object=$(printf '%s' "$entry" | jq -r '.object')
-            data_key=$(printf '%s' "$entry" | jq -r '.data_key')
-            target=$(printf '%s' "$entry" | jq -r '.target')
-            mode=$(printf '%s' "$entry" | jq -r '.mode // empty')
-            owner=$(printf '%s' "$entry" | jq -r '.owner // empty')
-            group=$(printf '%s' "$entry" | jq -r '.group // empty')
-            if [ -z "$owner" ]; then
-                owner=$workspace_user
-            fi
-            if [ -z "$group" ]; then
-                group=$workspace_group
-            fi
-            kind=$(printf '%s' "$entry" | jq -r '.kind')
-            case "$object" in
-                secret) source=/var/run/workspace-injections/secret/$data_key ;;
-                config_map) source=/var/run/workspace-injections/config/$data_key ;;
-                *) echo "invalid injection object" >&2; exit 1 ;;
-            esac
-            if [ -z "$mode" ]; then
-                case "$object" in
-                    secret) mode=384 ;;
-                    config_map) mode=420 ;;
-                esac
-            fi
-            numeric_mode=$(printf '%o' "$mode")
-            if [ "$kind" = ssh_public_key ]; then
-                cat "$source" >> "$authorized_keys"
-                printf '\n' >> "$authorized_keys"
-            fi
-            if ! install -D -m "$numeric_mode" -o "$owner" -g "$group" "$source" "$target"; then
-                : > "$runtime_dir/injection-failed"
-                printf '%s\n' 'Home 存储空间不足：文件注入暂未更新，请先清理持久数据。' \
-                    > "$runtime_dir/storage-banner"
-            fi
-        done
-    fi
-    chown "$workspace_user:$workspace_group" "$authorized_keys"
-    chmod 0600 "$authorized_keys"
+    sync_injected_files
     chmod 0600 "$runtime_dir/ttyd_client_key"
     printf 'localhost,127.0.0.1 ' > "$runtime_dir/known_hosts"
     cat "$runtime_dir/ssh_host_ed25519_key.pub" >> "$runtime_dir/known_hosts"
@@ -300,6 +322,19 @@ storage_pressure_monitor() {
     while :; do
         update_storage_banner
         sleep 60
+    done
+}
+
+injection_sync_monitor() {
+    while :; do
+        sleep 15
+        sync_injected_files
+        # Environment injection cannot alter an existing process environment, but reloading sshd
+        # applies its SetEnv values to subsequent SSH sessions without dropping active ones.
+        prepare_runtime_sshd_config
+        if [ -s "$runtime_dir/sshd.pid" ]; then
+            kill -HUP "$(cat "$runtime_dir/sshd.pid")" 2>/dev/null || true
+        fi
     done
 }
 
@@ -385,6 +420,7 @@ case "${1:-serve}" in
         verify_runtime_dependencies
         prepare
         storage_pressure_monitor &
+        injection_sync_monitor &
         start_browser_desktop
         exec /usr/sbin/sshd -D -e -f "$runtime_sshd_config"
         ;;

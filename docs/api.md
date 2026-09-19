@@ -54,7 +54,7 @@ server-generated and returned verbatim by clients — no offset arithmetic:
 | Workspaces | `GET`/`POST /api/v1/workspaces`, `GET /api/v1/workspaces/{id}`, `POST .../actions/{action}` |
 | Templates | `GET`/`POST /api/v1/templates`, `PUT`/`DELETE .../{id}`, `PUT .../enabled` |
 | Injections | `GET`/`PUT`/`DELETE /api/v1/injections/{scope}/{scope_id}[/{key}]`, `POST .../batch-delete`, `POST /api/v1/injections/preview` |
-| Access | `GET .../ssh-client-public-key`, `POST .../web-shell-tickets`, `GET`/`POST`/`DELETE .../port-mappings[/{id}]`, `POST .../open` |
+| Access | `POST .../web-shell-tickets`, `GET`/`POST`/`DELETE .../port-mappings[/{id}]`, `POST .../open` |
 | Organizations | `GET`/`POST /api/v1/organizations`, `PUT`/`DELETE .../{id}`, members, quota, usage-summary |
 | Admin | `GET`/`POST /api/v1/admin/users`, `GET`/`PUT /api/v1/admin/images`, `GET`/`PUT`/`DELETE /api/v1/admin/node-pools[/{name}]`, `GET /api/v1/audit`, `GET /api/v1/admin/scaling` |
 | Plugins | `GET /api/v1/plugins`, inspections, installs, configuration |

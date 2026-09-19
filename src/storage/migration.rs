@@ -29,6 +29,7 @@ async fn migrate_sqlite(pool: &SqlitePool, applied_at: i64) -> Result<(), Storag
     let version = current_sqlite_version(&mut transaction).await?;
     match version {
         schema::SCHEMA_VERSION => {}
+        24 => upgrade_sqlite_v24_to_v25(&mut transaction, applied_at).await?,
         0 if has_application_tables == 0 => {
             for statement in schema::BASELINE {
                 sqlx::query(statement).execute(&mut *transaction).await?;
@@ -71,6 +72,7 @@ async fn migrate_postgres(
             .await?;
     match version {
         schema::SCHEMA_VERSION => {}
+        24 => upgrade_postgres_v24_to_v25(&mut transaction, applied_at).await?,
         0 if has_application_tables == 0 => {
             for statement in schema::BASELINE {
                 sqlx::query(statement).execute(&mut *transaction).await?;
@@ -84,6 +86,50 @@ async fn migrate_postgres(
         _ => return Err(StorageError::UnsupportedDatabaseVersion),
     }
     transaction.commit().await?;
+    Ok(())
+}
+
+/// Version 24 stored only a non-reversible token hash.  Existing keys remain
+/// usable through that hash, but cannot be made copyable retroactively.
+async fn upgrade_sqlite_v24_to_v25(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    applied_at: i64,
+) -> Result<(), StorageError> {
+    sqlx::query("ALTER TABLE user_api_keys ADD COLUMN token TEXT")
+        .execute(&mut **transaction)
+        .await?;
+    sqlx::query("CREATE UNIQUE INDEX user_api_keys_token_unique_idx ON user_api_keys (installation_id, token)")
+        .execute(&mut **transaction)
+        .await?;
+    sqlx::query("CREATE INDEX user_api_keys_token_auth_idx ON user_api_keys (installation_id, token, revoked_at, expires_at)")
+        .execute(&mut **transaction)
+        .await?;
+    sqlx::query("INSERT INTO schema_migrations (version, applied_at) VALUES (?1, ?2)")
+        .bind(schema::SCHEMA_VERSION)
+        .bind(applied_at)
+        .execute(&mut **transaction)
+        .await?;
+    Ok(())
+}
+
+async fn upgrade_postgres_v24_to_v25(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    applied_at: i64,
+) -> Result<(), StorageError> {
+    sqlx::query("ALTER TABLE user_api_keys ADD COLUMN token TEXT")
+        .execute(&mut **transaction)
+        .await?;
+    sqlx::query("CREATE UNIQUE INDEX user_api_keys_token_unique_idx ON user_api_keys (installation_id, token)")
+        .execute(&mut **transaction)
+        .await?;
+    sqlx::query("CREATE INDEX user_api_keys_token_auth_idx ON user_api_keys (installation_id, token, revoked_at, expires_at)")
+        .execute(&mut **transaction)
+        .await?;
+    sqlx::query("INSERT INTO schema_migrations (version, applied_at) VALUES ($1, $2)")
+        .bind(schema::SCHEMA_VERSION)
+        .bind(applied_at)
+        .execute(&mut **transaction)
+        .await?;
     Ok(())
 }
 
@@ -124,7 +170,7 @@ mod current_tests {
 
     #[tokio::test]
     async fn unsupported_sqlite_versions_are_rejected_without_conversion() {
-        for version in [20, 21, 22, 23, 25] {
+        for version in [20, 21, 22, 23] {
             let installation: InstallationId = "schema-test".parse().unwrap();
             let database = Database::connect("sqlite::memory:", installation)
                 .await
@@ -169,7 +215,7 @@ mod current_tests {
         );
         fresh.migrate().await.unwrap();
         drop(fresh);
-        for version in [20, 21, 22, 23, 25] {
+        for version in [20, 21, 22, 23] {
             let name = format!("mwc_schema_old_{}", uuid::Uuid::now_v7().simple());
             let database = postgres_database(&url, &name, Some(version)).await;
             assert!(matches!(

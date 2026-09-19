@@ -18,7 +18,12 @@ import { useI18n } from "../i18n";
 import type { StoredInjection, WorkspaceTemplate } from "../types";
 import { InjectionEditorForm } from "./InjectionEditorForm";
 import { InjectionList } from "./InjectionList";
-import { draftFromStored, emptyInjectionDraft, injectionDraftForSave } from "./editorModel";
+import {
+  draftFromStored,
+  emptyInjectionDraft,
+  hasSubstantiveInjectionChanges,
+  injectionDraftForSave,
+} from "./editorModel";
 import type { InjectionEditorDraft } from "./editorModel";
 
 interface Props {
@@ -71,6 +76,7 @@ export function TemplateInjectionsDialog({
   const [items, setItems] = useState<StoredInjection[]>([]);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [draft, setDraft] = useState<InjectionEditorDraft>(() => emptyInjectionDraft(template.id));
+  const [baselineDraft, setBaselineDraft] = useState<InjectionEditorDraft>(() => emptyInjectionDraft(template.id));
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState("");
@@ -78,7 +84,9 @@ export function TemplateInjectionsDialog({
 
   useEffect(() => {
     setSelectedKey(null);
-    setDraft(emptyInjectionDraft(template.id));
+    const next = emptyInjectionDraft(template.id);
+    setDraft(next);
+    setBaselineDraft(next);
     setSearch("");
   }, [template.id]);
 
@@ -100,8 +108,10 @@ export function TemplateInjectionsDialog({
   }
 
   function resetDraft() {
+    const next = emptyInjectionDraft(template.id);
     setSelectedKey(null);
-    setDraft(emptyInjectionDraft(template.id));
+    setDraft(next);
+    setBaselineDraft(next);
   }
 
   async function selectItem(item: StoredInjection) {
@@ -110,11 +120,16 @@ export function TemplateInjectionsDialog({
       return;
     }
     setSelectedKey(item.key);
-    setDraft(draftFromStored(item));
+    const selected = draftFromStored(item);
+    setDraft(selected);
+    setBaselineDraft(selected);
     if (item.sensitive || item.kind === "secret_file") return;
     try {
       const value = await api.injectionValue("organization", organizationId, item.key);
       setDraft((current) => current.key === item.key
+        ? { ...current, value, storedValueAvailable: true }
+        : current);
+      setBaselineDraft((current) => current.key === item.key
         ? { ...current, value, storedValueAvailable: true }
         : current);
     } catch (error) {
@@ -123,6 +138,7 @@ export function TemplateInjectionsDialog({
   }
 
   async function save() {
+    if (!hasSubstantiveInjectionChanges(draft, baselineDraft)) return;
     setSaving(true);
     try {
       const item = injectionDraftForSave(draft, template.id);
@@ -171,7 +187,7 @@ export function TemplateInjectionsDialog({
               <div className={styles.layout}>
                 <InjectionList items={items} selectedKey={selectedKey} search={search} loading={loading} title={t("savedCredentials")} emptyLabel={t("noTemplateInjections")} onSearchChange={setSearch} onSelect={selectItem} />
                 <div className={styles.editor}>
-                  <InjectionEditorForm draft={draft} update={setDraft} scope="organization" templates={[template]} fixedTemplate={template} selectedKey={selectedKey} saving={saving} disabled={loading} onReset={resetDraft} onSubmit={save} onDelete={() => setConfirmDelete(true)} />
+                  <InjectionEditorForm draft={draft} baseline={baselineDraft} update={setDraft} scope="organization" templates={[template]} fixedTemplate={template} selectedKey={selectedKey} saving={saving} disabled={loading} onReset={resetDraft} onSubmit={save} onDelete={() => setConfirmDelete(true)} />
                 </div>
               </div>
             </DialogContent>

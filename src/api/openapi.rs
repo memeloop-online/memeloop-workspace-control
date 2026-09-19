@@ -6,8 +6,7 @@ use crate::config::{DatabaseMode, InstallationId};
 use super::{
     ErrorBody, ErrorEnvelope, admin, auth, catalog, events, injections, node_pools,
     organization_usage, organizations, plugins, port_mappings, runtime, ssh, system, user_quota,
-    web_shell, webhooks, workspace_client_key, workspace_image_update, workspace_placement,
-    workspaces,
+    web_shell, webhooks, workspace_image_update, workspace_placement, workspaces,
 };
 
 #[derive(OpenApi)]
@@ -37,6 +36,7 @@ use super::{
         admin::create_user,
         admin::update_user,
         admin::list_user_api_keys,
+        admin::admin_create_api_key,
         admin::admin_revoke_api_key,
         admin::list_members,
         admin::upsert_membership,
@@ -65,7 +65,6 @@ use super::{
         workspaces::list,
         workspaces::get,
         node_pools::list_available,
-        workspace_client_key::get,
         runtime::list,
         runtime::get,
         organization_usage::get,
@@ -140,7 +139,6 @@ use super::{
         workspaces::WorkspaceResponse,
         workspaces::WorkspaceResponsePage,
         workspaces::WorkspaceSshConnection,
-        workspace_client_key::WorkspaceClientPublicKey,
         workspaces::WorkspaceAppSshConnection,
         workspaces::SshPortStrategy,
         runtime::WorkspaceRuntimeResponse,
@@ -162,6 +160,7 @@ use super::{
         admin::CreateApiKeyRequest,
         admin::CreatedApiKeyResponse,
         admin::AdminRevokeApiKeyRequest,
+        admin::AdminCreateApiKeyRequest,
         admin::MembershipRequest,
         organizations::UpdateOrganizationRequest,
         admin::ScalingResponse,

@@ -2,7 +2,7 @@ use serde::Serialize;
 use utoipa::ToSchema;
 use uuid::Uuid;
 
-use super::super::{Database, StorageError, identity::hash_token};
+use super::super::{Database, StorageError};
 use crate::auth::ApiKeyScope;
 
 mod audit;
@@ -15,7 +15,7 @@ use audit::{
     audit_admin_api_key_postgres, audit_admin_api_key_sqlite, audit_api_key_postgres,
     audit_api_key_sqlite,
 };
-pub use listing::{ApiKeyListStatus, ApiKeyPage};
+pub use listing::{ApiKeyListStatus, ApiKeyPage, ApiKeyWithToken};
 use persistence::{
     ensure_key_capacity_postgres, ensure_key_capacity_sqlite, lock_user_postgres, lock_user_sqlite,
 };
@@ -81,7 +81,6 @@ impl Database {
             allowed_template_ids,
             revoked_at: None,
         };
-        let token_hash = hash_token(&token);
         match self {
             Self::Sqlite {
                 pool,
@@ -96,7 +95,7 @@ impl Database {
                     installation_id.as_str(),
                     user_id,
                     &summary,
-                    &token_hash,
+                    &token,
                 )
                 .await?;
                 audit_api_key_sqlite(
@@ -123,7 +122,7 @@ impl Database {
                     installation_id.as_str(),
                     user_id,
                     &summary,
-                    &token_hash,
+                    &token,
                 )
                 .await?;
                 audit_api_key_postgres(

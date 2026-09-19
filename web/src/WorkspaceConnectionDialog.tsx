@@ -1,43 +1,21 @@
 import { useState } from "react";
 import { Button, Caption1, Dialog, DialogBody, DialogContent, DialogSurface, DialogTitle, Divider, Text, Title3 } from "@fluentui/react-components";
 import { CopyRegular, DismissRegular, PlugConnectedRegular } from "@fluentui/react-icons";
-import type { ApiClient } from "./api";
 import { useI18n } from "./i18n";
 import type { WorkspaceSshConnection } from "./types";
 import { useWorkspaceStyles } from "./workspaces/workspaceStyles";
 
 interface Props {
-  api: ApiClient;
-  workspaceId: string;
   connection: WorkspaceSshConnection;
 }
 
-export function WorkspaceConnectionDialog({ api, workspaceId, connection }: Props) {
+export function WorkspaceConnectionDialog({ connection }: Props) {
   const { t } = useI18n();
   const styles = useWorkspaceStyles();
   const [open, setOpen] = useState(false);
-  const [clientPublicKey, setClientPublicKey] = useState<string | null>(null);
-  const [keyLoading, setKeyLoading] = useState(false);
-  const [keyUnavailable, setKeyUnavailable] = useState(false);
-
-  async function loadClientPublicKey() {
-    if (keyLoading) return;
-    setKeyLoading(true);
-    setKeyUnavailable(false);
-    try {
-      const result = await api.workspaceClientPublicKey(workspaceId);
-      setClientPublicKey(result.public_key);
-    } catch {
-      setClientPublicKey(null);
-      setKeyUnavailable(true);
-    } finally {
-      setKeyLoading(false);
-    }
-  }
 
   function openDialog() {
     setOpen(true);
-    if (!clientPublicKey) void loadClientPublicKey();
   }
 
   return <>
@@ -74,13 +52,6 @@ export function WorkspaceConnectionDialog({ api, workspaceId, connection }: Prop
             <section className={styles.dialogSection}>
               <Title3>{t("sshCommand")}</Title3>
               <CopyBlock label={t("copy")} value={connection.command} />
-            </section>
-            <section className={styles.dialogSection}>
-              <Title3>{t("workspacePublicKey")}</Title3>
-              <Caption1>{t("workspaceClientKeyHelp")}</Caption1>
-              {keyLoading && <Text role="status">{t("loadingWorkspacePublicKey")}</Text>}
-              {clientPublicKey && <CopyBlock label={t("copyWorkspacePublicKey")} value={clientPublicKey} />}
-              {keyUnavailable && <div className={styles.notice}><Text>{t("workspacePublicKeyUnavailable")}</Text><Button appearance="subtle" onClick={() => void loadClientPublicKey()}>{t("retry")}</Button></div>}
             </section>
           </DialogContent>
         </DialogBody>

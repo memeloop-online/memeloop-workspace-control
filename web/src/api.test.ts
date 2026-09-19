@@ -51,3 +51,17 @@ test("organization usage summary uses the dedicated aggregate endpoint", async (
     assert.equal(request, "/api/v1/organizations/organization%20%2F%20one/usage-summary");
   } finally { globalThis.fetch = originalFetch; }
 });
+
+test("workspace runtime payload preserves the scheduled Kubernetes node name", async () => {
+  const originalFetch = globalThis.fetch;
+  let request = "";
+  globalThis.fetch = async (input) => {
+    request = String(input);
+    return Response.json([{ workspace_id: "workspace-1", runtime: { node_name: "worker-a" } }]);
+  };
+  try {
+    const entries = await new ApiClient("operator-token").workspaceRuntimes("organization-1", ["workspace-1"]);
+    assert.equal(entries[0]?.runtime.node_name, "worker-a");
+    assert.equal(request, "/api/v1/workspace-runtimes?organization_id=organization-1&workspace_ids=workspace-1");
+  } finally { globalThis.fetch = originalFetch; }
+});

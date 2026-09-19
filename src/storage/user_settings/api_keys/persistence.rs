@@ -84,11 +84,12 @@ pub(in crate::storage) async fn insert_key_sqlite(
     installation: &str,
     user_id: Uuid,
     key: &ApiKeySummary,
-    token_hash: &str,
+    token: &str,
 ) -> Result<(), StorageError> {
-    sqlx::query("INSERT INTO user_api_keys (id, installation_id, user_id, name, token_prefix, token_hash, last_used_at, created_at, revoked_at, scopes_json, expires_at, allowed_template_ids_json) VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, ?7, NULL, ?8, ?9, ?10)")
+    let token_hash = crate::storage::identity::hash_token(token);
+    sqlx::query("INSERT INTO user_api_keys (id, installation_id, user_id, name, token_prefix, token_hash, token, last_used_at, created_at, revoked_at, scopes_json, expires_at, allowed_template_ids_json) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL, ?8, NULL, ?9, ?10, ?11)")
         .bind(key.id.to_string()).bind(installation).bind(user_id.to_string()).bind(&key.name)
-        .bind(&key.prefix).bind(token_hash).bind(key.created_at).bind(serde_json::to_string(&key.scopes)?).bind(key.expires_at).bind(key.allowed_template_ids.as_ref().map(serde_json::to_string).transpose()?).execute(connection).await?;
+        .bind(&key.prefix).bind(token_hash).bind(token).bind(key.created_at).bind(serde_json::to_string(&key.scopes)?).bind(key.expires_at).bind(key.allowed_template_ids.as_ref().map(serde_json::to_string).transpose()?).execute(connection).await?;
     Ok(())
 }
 
@@ -97,10 +98,11 @@ pub(in crate::storage) async fn insert_key_postgres(
     installation: &str,
     user_id: Uuid,
     key: &ApiKeySummary,
-    token_hash: &str,
+    token: &str,
 ) -> Result<(), StorageError> {
-    sqlx::query("INSERT INTO user_api_keys (id, installation_id, user_id, name, token_prefix, token_hash, last_used_at, created_at, revoked_at, scopes_json, expires_at, allowed_template_ids_json) VALUES ($1, $2, $3, $4, $5, $6, NULL, $7, NULL, $8, $9, $10)")
+    let token_hash = crate::storage::identity::hash_token(token);
+    sqlx::query("INSERT INTO user_api_keys (id, installation_id, user_id, name, token_prefix, token_hash, token, last_used_at, created_at, revoked_at, scopes_json, expires_at, allowed_template_ids_json) VALUES ($1, $2, $3, $4, $5, $6, $7, NULL, $8, NULL, $9, $10, $11)")
         .bind(key.id.to_string()).bind(installation).bind(user_id.to_string()).bind(&key.name)
-        .bind(&key.prefix).bind(token_hash).bind(key.created_at).bind(serde_json::to_string(&key.scopes)?).bind(key.expires_at).bind(key.allowed_template_ids.as_ref().map(serde_json::to_string).transpose()?).execute(connection).await?;
+        .bind(&key.prefix).bind(token_hash).bind(token).bind(key.created_at).bind(serde_json::to_string(&key.scopes)?).bind(key.expires_at).bind(key.allowed_template_ids.as_ref().map(serde_json::to_string).transpose()?).execute(connection).await?;
     Ok(())
 }

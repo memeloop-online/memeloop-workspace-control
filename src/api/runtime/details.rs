@@ -16,6 +16,7 @@ pub(super) struct WorkspaceRuntimeDetails {
     pub(super) storage_pvcs: WorkspaceStoragePvcIdentities,
     pub(super) scratch_backing: StorageBacking,
     pub(super) metrics_available: bool,
+    pub(super) node_name: Option<String>,
     pub(super) pods: Vec<PodRuntime>,
     pub(super) metrics: Vec<PodMetric>,
     pub(super) events: Vec<PodEvent>,
@@ -82,6 +83,9 @@ pub(super) async fn fetch_workspace_runtime_details(
         storage_pvcs,
         scratch_backing: scratch_backing_from_pods(&pod_list.items),
         metrics_available,
+        node_name: show_runtime
+            .then(|| active_pod_node_name(&pod_list.items))
+            .flatten(),
         pods,
         metrics,
         events,

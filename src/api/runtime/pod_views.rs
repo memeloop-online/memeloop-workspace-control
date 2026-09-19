@@ -49,6 +49,17 @@ pub(super) fn active_pod_names(pods: &[Pod]) -> BTreeSet<String> {
         .collect()
 }
 
+/// Returns the node hosting the first active Pod that has been scheduled.
+///
+/// A workspace normally has one active Pod (the ordinal-zero StatefulSet
+/// member). Pending Pods do not have a node name yet, and completed or
+/// terminating Pods must not leak a stale node into the runtime response.
+pub(super) fn active_pod_node_name(pods: &[Pod]) -> Option<String> {
+    pods.iter()
+        .filter(|pod| is_active_pod(pod))
+        .find_map(|pod| pod.spec.as_ref()?.node_name.clone())
+}
+
 pub(super) fn active_pod_metrics(
     metrics: &[PodMetric],
     active_pod_names: &BTreeSet<String>,
@@ -181,8 +192,8 @@ mod tests {
     use crate::workspaces::WorkspaceState;
 
     use super::{
-        PodEvent, RuntimeEventCategory, active_pod_metrics, active_pod_names, has_live_runtime,
-        newest_events, pod_event, runtime_event_category,
+        PodEvent, RuntimeEventCategory, active_pod_metrics, active_pod_names, active_pod_node_name,
+        has_live_runtime, newest_events, pod_event, runtime_event_category,
     };
     use crate::api::runtime::PodMetric;
 
@@ -270,6 +281,27 @@ mod tests {
         );
         assert_eq!(metrics.len(), 1);
         assert_eq!(metrics[0].pod, "running");
+    }
+
+    #[test]
+    fn only_scheduled_active_pods_supply_a_node_name() {
+        let mut running = pod("running", Some("Running"), false);
+        running.spec = Some(k8s_openapi::api::core::v1::PodSpec {
+            node_name: Some("worker-a".to_owned()),
+            ..k8s_openapi::api::core::v1::PodSpec::default()
+        });
+        let mut completed = pod("completed", Some("Succeeded"), false);
+        completed.spec = Some(k8s_openapi::api::core::v1::PodSpec {
+            node_name: Some("stale-worker".to_owned()),
+            ..k8s_openapi::api::core::v1::PodSpec::default()
+        });
+        let mut pending = pod("pending", Some("Pending"), false);
+        pending.spec = Some(k8s_openapi::api::core::v1::PodSpec::default());
+
+        assert_eq!(
+            active_pod_node_name(&[completed, pending, running]),
+            Some("worker-a".to_owned())
+        );
     }
 
     #[test]

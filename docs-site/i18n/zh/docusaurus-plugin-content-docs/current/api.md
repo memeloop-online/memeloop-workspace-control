@@ -52,7 +52,7 @@ curl "$BASE/api/v1/me" -H "Authorization: Bearer $API_KEY"
 | 工作区 | `GET`/`POST /api/v1/workspaces`、`GET /api/v1/workspaces/{id}`、`POST .../actions/{action}` |
 | 模板 | `GET`/`POST /api/v1/templates`、`PUT`/`DELETE .../{id}`、`PUT .../enabled` |
 | 注入 | `GET`/`PUT`/`DELETE /api/v1/injections/{scope}/{scope_id}[/{key}]`、`POST .../batch-delete`、`POST /api/v1/injections/preview` |
-| 访问 | `GET .../ssh-client-public-key`、`POST .../web-shell-tickets`、`GET`/`POST`/`DELETE .../port-mappings[/{id}]`、`POST .../open` |
+| 访问 | `POST .../web-shell-tickets`、`GET`/`POST`/`DELETE .../port-mappings[/{id}]`、`POST .../open` |
 | 组织 | `GET`/`POST /api/v1/organizations`、`PUT`/`DELETE .../{id}`、成员、配额、usage-summary |
 | 管理 | `GET`/`POST /api/v1/admin/users`、`GET`/`PUT /api/v1/admin/images`、`GET`/`PUT`/`DELETE /api/v1/admin/node-pools[/{name}]`、`GET /api/v1/audit`、`GET /api/v1/admin/scaling` |
 | 插件 | `GET /api/v1/plugins`、检查、安装、配置 |

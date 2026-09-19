@@ -245,11 +245,12 @@ impl Database {
                     "SELECT u.id, u.display_name, u.system_admin, k.id AS key_id, \
                     k.last_used_at, k.scopes_json, k.expires_at, k.allowed_template_ids_json FROM users u \
                     JOIN user_api_keys k ON k.installation_id = u.installation_id AND k.user_id = u.id \
-                    WHERE u.installation_id = ?1 AND k.token_hash = ?2 AND k.revoked_at IS NULL \
+                    WHERE u.installation_id = ?1 AND (k.token = ?2 OR (k.token IS NULL AND k.token_hash = ?3)) AND k.revoked_at IS NULL \
                     AND instr(k.scopes_json, '\"*\"') = 0 \
                     AND k.expires_at > unixepoch() AND u.disabled = 0",
                 )
                 .bind(installation_id.as_str())
+                .bind(token)
                 .bind(token_hash)
                 .fetch_optional(pool)
                 .await?;
@@ -285,11 +286,12 @@ impl Database {
                     "SELECT u.id, u.display_name, u.system_admin, k.id AS key_id, \
                     k.last_used_at, k.scopes_json, k.expires_at, k.allowed_template_ids_json FROM users u \
                     JOIN user_api_keys k ON k.installation_id = u.installation_id AND k.user_id = u.id \
-                    WHERE u.installation_id = $1 AND k.token_hash = $2 AND k.revoked_at IS NULL \
+                    WHERE u.installation_id = $1 AND (k.token = $2 OR (k.token IS NULL AND k.token_hash = $3)) AND k.revoked_at IS NULL \
                     AND position('\"*\"' IN k.scopes_json) = 0 \
                     AND k.expires_at > EXTRACT(EPOCH FROM CURRENT_TIMESTAMP)::BIGINT AND u.disabled = 0",
                 )
                 .bind(installation_id.as_str())
+                .bind(token)
                 .bind(token_hash)
                 .fetch_optional(pool)
                 .await?;

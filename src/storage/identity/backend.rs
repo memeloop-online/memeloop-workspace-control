@@ -36,7 +36,7 @@ pub(super) async fn create_user_with_key_sqlite(
         installation_id,
         user_id,
         &command.initial_key,
-        token_hash,
+        command.token,
     )
     .await?;
     insert_optional_membership_sqlite(&mut transaction, installation_id, user_id, command).await?;
@@ -69,7 +69,7 @@ pub(super) async fn create_user_with_key_postgres(
         installation_id,
         user_id,
         &command.initial_key,
-        token_hash,
+        command.token,
     )
     .await?;
     insert_optional_membership_postgres(&mut transaction, installation_id, user_id, command)

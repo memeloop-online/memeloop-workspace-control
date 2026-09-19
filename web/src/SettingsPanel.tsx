@@ -19,7 +19,6 @@ import {
 import type { ApiClient } from "./api";
 import { Page } from "./design-system/Page";
 import { useI18n } from "./i18n";
-import { ApiKeySection } from "./settings/ApiKeySection";
 import type { Organization, Principal, UserProfile } from "./types";
 import { UserAvatar } from "./UserAvatar";
 
@@ -178,9 +177,6 @@ export function SettingsPanel({
           organizations={organizations}
           onOrganizationChange={onOrganizationChange}
         />
-        <section className={classes.fullCard} aria-labelledby="api-keys-title">
-          <ApiKeySection api={api} organizationId={organizationId} principal={principal} onError={onError} />
-        </section>
       </div>
     </Page>;
 }
@@ -212,14 +208,12 @@ function ProfileCard({
 }: ProfileCardProps) {
   const { t } = useI18n();
   const classes = useStyles();
-  return <Card className={`${className} ${cardClassName}`}>
-    <div className={classes.cardHeader}>
-      <UserAvatar displayName={profile.display_name} userId={principal.user_id} avatarUrl={profile.avatar_url} size="large" />
-      <div className={classes.cardHeaderText}>
-        <Subtitle1>{t("profileSettings")}</Subtitle1>
-        <Body1 className={classes.cardDescription}>{t("displayName")}</Body1>
-      </div>
-    </div>
+  return <Card appearance="outline" className={`${className} ${cardClassName}`}>
+    <CardHeader
+      image={<UserAvatar displayName={profile.display_name} userId={principal.user_id} avatarUrl={profile.avatar_url} size="large" />}
+      header={<Subtitle1>{t("profileSettings")}</Subtitle1>}
+      description={<Body1 className={classes.cardDescription}>{t("displayName")}</Body1>}
+    />
     <form className={classes.form} onSubmit={onSave}>
       <Field label={t("displayName")} required>
         <Input
@@ -260,13 +254,11 @@ function OrganizationCard({
   const { t } = useI18n();
   const classes = useStyles();
   const selectedOrganization = organizations.find((organization) => organization.id === organizationId);
-  return <Card className={`${className} ${cardClassName}`}>
-    <div className={classes.cardHeader}>
-      <div className={classes.cardHeaderText}>
-        <Subtitle1>{t("organizationSettings")}</Subtitle1>
-        <Body1 className={classes.cardDescription}>{t("organizationSwitchHelp")}</Body1>
-      </div>
-    </div>
+  return <Card appearance="outline" className={`${className} ${cardClassName}`}>
+    <CardHeader
+      header={<Subtitle1>{t("organizationSettings")}</Subtitle1>}
+      description={<Body1 className={classes.cardDescription}>{t("organizationSwitchHelp")}</Body1>}
+    />
     <Field label={t("currentOrganization")} required>
       <Dropdown
         value={selectedOrganization?.name ?? ""}

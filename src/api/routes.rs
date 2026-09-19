@@ -8,8 +8,8 @@ use axum::{
 use super::{
     AppState, admin, auth, catalog, diagnostics, events, health, injections, metrics, node_pools,
     openapi, organization_usage, organizations, plugins, port_mappings, ready, runtime, ssh,
-    system_info, ui, user_quota, web_shell, webhooks, workspace_client_key, workspace_image_update,
-    workspace_placement, workspaces,
+    system_info, ui, user_quota, web_shell, webhooks, workspace_image_update, workspace_placement,
+    workspaces,
 };
 
 pub(super) fn router(state: Arc<AppState>) -> Router {
@@ -95,7 +95,7 @@ fn organization_routes(router: ApiRouter) -> ApiRouter {
         )
         .route(
             "/api/v1/admin/users/{user_id}/api-keys",
-            get(admin::list_user_api_keys),
+            get(admin::list_user_api_keys).post(admin::admin_create_api_key),
         )
         .route(
             "/api/v1/admin/users/{user_id}/api-keys/{key_id}",
@@ -206,10 +206,6 @@ fn workspace_routes(router: ApiRouter) -> ApiRouter {
         )
         .route("/api/v1/node-pools", get(node_pools::list_available))
         .route("/api/v1/workspaces/{workspace_id}", get(workspaces::get))
-        .route(
-            "/api/v1/workspaces/{workspace_id}/ssh-client-public-key",
-            get(workspace_client_key::get),
-        )
         .route(
             "/api/v1/workspaces/{workspace_id}/image",
             axum::routing::put(workspace_image_update::update),

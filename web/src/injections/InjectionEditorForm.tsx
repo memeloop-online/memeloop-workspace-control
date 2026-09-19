@@ -22,11 +22,17 @@ import { AddRegular, CheckmarkRegular, CopyRegular, DeleteRegular, DismissRegula
 import { useI18n } from "../i18n";
 import type { MessageKey } from "../i18n";
 import type { InjectionKind, InjectionScope, WorkspaceTemplate } from "../types";
-import { FILE_MODE_PATTERN, changeInjectionKey, changeInjectionKind } from "./editorModel";
+import {
+  FILE_MODE_PATTERN,
+  changeInjectionKey,
+  changeInjectionKind,
+  hasSubstantiveInjectionChanges,
+} from "./editorModel";
 import type { InjectionEditorDraft } from "./editorModel";
 
 interface Props {
   draft: InjectionEditorDraft;
+  baseline: InjectionEditorDraft;
   update: Dispatch<SetStateAction<InjectionEditorDraft>>;
   scope: InjectionScope;
   templates: WorkspaceTemplate[];
@@ -134,6 +140,7 @@ const useStyles = makeStyles({
 
 export function InjectionEditorForm({
   draft,
+  baseline,
   update,
   scope,
   templates,
@@ -150,6 +157,7 @@ export function InjectionEditorForm({
   const styles = useStyles();
   const [copied, setCopied] = useState(false);
   const copyTimer = useRef<number | undefined>(undefined);
+  const dirty = hasSubstantiveInjectionChanges(draft, baseline);
 
   useEffect(() => () => window.clearTimeout(copyTimer.current), []);
   useEffect(() => setCopied(false), [draft.value.value, selectedKey]);
@@ -285,9 +293,10 @@ export function InjectionEditorForm({
         {scope === "organization" && <Checkbox checked={draft.locked} onChange={(_, data) => update({ ...draft, locked: data.checked === true })} label={<LabelHint label={t("locked")} help={t("lockedHelp")} />} />}
       </div>
       <div className={styles.actions}>
-        <Button type="submit" appearance="primary" icon={<SaveRegular aria-hidden="true" />} disabled={saving || disabled}>{saving ? t("savingEncrypted") : selectedKey ? t("replaceEncrypted") : t("createEncrypted")}</Button>
+        {dirty || saving || disabled ? <Button type="submit" appearance="primary" icon={<SaveRegular aria-hidden="true" />} disabled={saving || disabled || !dirty}>{saving ? t("savingEncrypted") : selectedKey ? t("replaceEncrypted") : t("createEncrypted")}</Button> : <Tooltip content={t("noModifiedContent")} relationship="description"><Button type="submit" appearance="primary" icon={<SaveRegular aria-hidden="true" />} disabled>{selectedKey ? t("replaceEncrypted") : t("createEncrypted")}</Button></Tooltip>}
         {selectedKey && <Button type="button" appearance="secondary" icon={<DeleteRegular aria-hidden="true" />} disabled={saving || !onDelete} onClick={() => void onDelete?.()}>{t("deleteCredential")}</Button>}
       </div>
+      {dirty && !saving && !disabled && draft.kind !== "environment_variable" && <Text size={200} className={styles.note}>{t("fileInjectionLiveApply")}</Text>}
     </form>
   );
 }

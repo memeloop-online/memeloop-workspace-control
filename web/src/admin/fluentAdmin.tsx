@@ -164,10 +164,15 @@ export const useAdminStyles = makeStyles({
   dialogBody: {
     display: "grid",
     rowGap: tokens.spacingVerticalM,
-    minWidth: "min(72vw, 680px)",
-    maxWidth: "min(92vw, 760px)",
+    width: "100%",
+    minWidth: 0,
+    maxWidth: "none",
     maxHeight: "min(76vh, 720px)",
     overflowY: "auto",
+  },
+  dialogSurface: {
+    width: "min(calc(100vw - 32px), 760px)",
+    maxWidth: "calc(100vw - 32px)",
   },
 });
 

@@ -25,7 +25,7 @@ import {
   Textarea,
 } from "@fluentui/react-components";
 import type { TableColumnDefinition } from "@fluentui/react-components";
-import { ArrowLeftRegular, ArrowRightRegular, EditRegular, KeyRegular, SaveRegular } from "@fluentui/react-icons";
+import { AddRegular, ArrowLeftRegular, ArrowRightRegular, CopyRegular, EditRegular, KeyRegular, SaveRegular } from "@fluentui/react-icons";
 
 import {
   formatApiKeyExpiry,
@@ -39,7 +39,8 @@ import { applyLocalRevocations, getApiKeyStatus } from "./apiKeyStatus";
 import { ConfirmDialog } from "./components/ConfirmDialog";
 import { useI18n } from "./i18n";
 import { hasApiKeyScope } from "./permissions";
-import type { ApiKeyPage, ApiKeySummary, MembershipSummary, Principal, Role, UserSummary } from "./types";
+import type { AdminApiKey, ApiKeyPage, ApiKeyScope, ApiKeySummary, MembershipSummary, Principal, Role, UserSummary } from "./types";
+import { API_KEY_SCOPES } from "./apiKeyScopes";
 import { AdminToolbar, SaveButton, useAdminStyles } from "./admin/fluentAdmin";
 
 type DirectoryItem = UserSummary & { membershipRole: Role | null };
@@ -162,7 +163,7 @@ export function UsersDirectory({ api, organizationId, principal, canManageUsers,
       </DataGrid>
     </div>}
     {selectedUser && <UserEditDialog user={selectedUser} api={api} organizationId={organizationId} principal={principal} canManageUsers={canManageUsers} onClose={() => setSelectedUser(null)} onError={onError} onUpdated={updateUser} onMembershipChanged={updateMembership} />}
-    {apiKeyUser && <AdminUserApiKeysDialog api={api} userId={apiKeyUser.id} userDisplayName={apiKeyUser.display_name} onClose={() => setApiKeyUser(null)} onError={onError} />}
+    {apiKeyUser && <AdminUserApiKeysDialog api={api} principal={principal} userId={apiKeyUser.id} userDisplayName={apiKeyUser.display_name} onClose={() => setApiKeyUser(null)} onError={onError} />}
   </div>;
 }
 
@@ -219,7 +220,7 @@ function UserEditDialog({ user, api, organizationId, principal, canManageUsers, 
     }
   }
 
-  return <><Dialog open onOpenChange={(_, data) => { if (!data.open && !saving) onClose(); }}><DialogSurface><DialogBody><DialogTitle>{t("saveUser")} · {user.display_name}</DialogTitle><DialogContent className={styles.dialogBody}>
+  return <><Dialog open onOpenChange={(_, data) => { if (!data.open && !saving) onClose(); }}><DialogSurface className={styles.dialogSurface}><DialogBody><DialogTitle>{t("saveUser")} · {user.display_name}</DialogTitle><DialogContent className={styles.dialogBody}>
     {canManageUsers && <><Field label={t("displayName")} required><Input value={displayName} onChange={(event) => setDisplayName(event.target.value)} /></Field><Checkbox checked={systemAdmin} disabled={isCurrentUser} onChange={(_, data) => setSystemAdmin(Boolean(data.checked))} label={t("systemAdmin")} /><Checkbox checked={disabled} disabled={isCurrentUser} onChange={(_, data) => setDisabled(Boolean(data.checked))} label={t("disableUser")} /></>}
     <Field label={t("role")}><Select value={role} disabled={saving} onChange={(event) => setRole(event.target.value as Role)}><Option value="member">{t("roleMember")}</Option><Option value="organization_admin">{t("roleOrganizationAdmin")}</Option></Select></Field>
     {status && <MessageBar intent="success"><MessageBarBody>{status}</MessageBarBody></MessageBar>}
@@ -239,10 +240,10 @@ function UserEditDialog({ user, api, organizationId, principal, canManageUsers, 
   </>;
 }
 
-function AdminUserApiKeysDialog({ api, userId, userDisplayName, onClose, onError }: { api: ApiClient; userId: string; userDisplayName: string; onClose: () => void; onError: (message: string) => void }) {
+function AdminUserApiKeysDialog({ api, principal, userId, userDisplayName, onClose, onError }: { api: ApiClient; principal: Principal; userId: string; userDisplayName: string; onClose: () => void; onError: (message: string) => void }) {
   const { locale, t } = useI18n();
   const styles = useAdminStyles();
-  const [items, setItems] = useState<ApiKeySummary[]>([]);
+  const [items, setItems] = useState<AdminApiKey[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [cursorHistory, setCursorHistory] = useState<(string | null)[]>([null]);
   const [pageNumber, setPageNumber] = useState(1);
@@ -250,6 +251,12 @@ function AdminUserApiKeysDialog({ api, userId, userDisplayName, onClose, onError
   const [revokingKeyId, setRevokingKeyId] = useState<string | null>(null);
   const [reason, setReason] = useState("");
   const [revoking, setRevoking] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [showCreate, setShowCreate] = useState(false);
+  const [name, setName] = useState("");
+  const [expiresAt, setExpiresAt] = useState(defaultExpiry);
+  const [scopes, setScopes] = useState<ApiKeyScope[]>(() => principal.api_key_scopes.includes("read_workspace") ? ["read_workspace"] : principal.api_key_scopes.slice(0, 1));
+  const [copiedKeyId, setCopiedKeyId] = useState<string | null>(null);
   const localRevocationsRef = useRef(new Map<string, number>());
 
   useEffect(() => { void loadPage(null, "reset"); }, [api, userId]);
@@ -288,12 +295,33 @@ function AdminUserApiKeysDialog({ api, userId, userDisplayName, onClose, onError
     }
   }
 
+  async function createKey() {
+    const expires = Math.floor(new Date(expiresAt).getTime() / 1_000);
+    if (!name.trim() || !Number.isFinite(expires) || scopes.length === 0) return;
+    setCreating(true);
+    try {
+      const created = await api.createAdminUserApiKey(userId, { name: name.trim(), scopes, expires_at: expires });
+      setName("");
+      setShowCreate(false);
+      await loadPage(null, "reset");
+      try { await navigator.clipboard.writeText(created.token); setCopiedKeyId(created.id); } catch { /* Value remains visible in the list. */ }
+    } catch (error) { onError(message(error, t("requestFailed"))); } finally { setCreating(false); }
+  }
+
+  async function copyKey(key: AdminApiKey) {
+    if (!key.token) return;
+    try { await navigator.clipboard.writeText(key.token); setCopiedKeyId(key.id); window.setTimeout(() => setCopiedKeyId((id) => id === key.id ? null : id), 1_500); } catch { onError(t("requestFailed")); }
+  }
+
+  function toggleScope(scope: ApiKeyScope) { setScopes((current) => current.includes(scope) ? current.filter((value) => value !== scope) : [...current, scope]); }
+
   const revokingKey = revokingKeyId ? items.find((item) => item.id === revokingKeyId) ?? null : null;
 
   return <>
-  <Dialog open onOpenChange={(_, data) => { if (!data.open && !revoking) onClose(); }}><DialogSurface><DialogBody><DialogTitle>{t("manageUserApiKeys")} · {userDisplayName}</DialogTitle><DialogContent className={styles.dialogBody}>
-    <AdminToolbar action={<div className={styles.actions}><Button icon={<ArrowLeftRegular />} disabled={pageNumber <= 1 || loading || revoking} onClick={() => void loadPage(cursorHistory[pageNumber - 2] ?? null, "previous")}>{t("previousPage")}</Button><Button icon={<ArrowRightRegular />} iconPosition="after" disabled={!nextCursor || loading || revoking} onClick={() => void loadPage(nextCursor, "next")}>{t("nextPage")}</Button></div>}><Text size={300}>{formatApiKeyPageStatus(locale, pageNumber, items.length, t)}</Text></AdminToolbar>
-    {loading && items.length === 0 ? <Spinner label={t("loading")} /> : items.length === 0 ? <Text className={styles.empty}>{t("noApiKeys")}</Text> : <DataGrid items={items} columns={apiKeyColumns({ t, locale, styles, revokingKeyId, revoking, loading, setRevokingKeyId, setReason })}><DataGridHeader><DataGridRow<ApiKeySummary>>{(column) => <DataGridHeaderCell>{column.renderHeaderCell()}</DataGridHeaderCell>}</DataGridRow></DataGridHeader><DataGridBody<ApiKeySummary>>{({ item }) => <DataGridRow<ApiKeySummary>>{(column) => <DataGridCell>{column.renderCell(item)}</DataGridCell>}</DataGridRow>}</DataGridBody></DataGrid>}
+  <Dialog open onOpenChange={(_, data) => { if (!data.open && !revoking && !creating) onClose(); }}><DialogSurface className={styles.dialogSurface}><DialogBody><DialogTitle>{t("manageUserApiKeys")} · {userDisplayName}</DialogTitle><DialogContent className={styles.dialogBody}>
+    <AdminToolbar action={<div className={styles.actions}><Button icon={<AddRegular />} onClick={() => setShowCreate((value) => !value)}>{t("createApiKey")}</Button><Button icon={<ArrowLeftRegular />} disabled={pageNumber <= 1 || loading || revoking || creating} onClick={() => void loadPage(cursorHistory[pageNumber - 2] ?? null, "previous")}>{t("previousPage")}</Button><Button icon={<ArrowRightRegular />} iconPosition="after" disabled={!nextCursor || loading || revoking || creating} onClick={() => void loadPage(nextCursor, "next")}>{t("nextPage")}</Button></div>}><Text size={300}>{formatApiKeyPageStatus(locale, pageNumber, items.length, t)}</Text></AdminToolbar>
+    {showCreate && <div className={styles.stack}><div className={styles.formGrid}><Field label={t("apiKeyName")} required><Input value={name} onChange={(event) => setName(event.target.value)} /></Field><Field label={t("apiKeyExpires")} required><Input type="datetime-local" value={expiresAt} onChange={(event) => setExpiresAt(event.target.value)} /></Field></div><Text weight="semibold">{t("apiKeyPermissions")}</Text><div className={styles.formGrid}>{API_KEY_SCOPES.filter(({ scope }) => principal.api_key_scopes.includes(scope)).map(({ scope, label }) => <Checkbox key={scope} checked={scopes.includes(scope)} onChange={() => toggleScope(scope)} label={t(label)} />)}</div><div className={styles.actions}><SaveButton disabled={creating || !name.trim() || scopes.length === 0} onClick={() => void createKey()}>{creating ? t("saving") : t("createApiKey")}</SaveButton></div></div>}
+    {loading && items.length === 0 ? <Spinner label={t("loading")} /> : items.length === 0 ? <Text className={styles.empty}>{t("noApiKeys")}</Text> : <DataGrid items={items} columns={apiKeyColumns({ t, locale, styles, revokingKeyId, revoking, loading, copiedKeyId, onCopy: copyKey, setRevokingKeyId, setReason })}><DataGridHeader><DataGridRow<AdminApiKey>>{(column) => <DataGridHeaderCell>{column.renderHeaderCell()}</DataGridHeaderCell>}</DataGridRow></DataGridHeader><DataGridBody<AdminApiKey>>{({ item }) => <DataGridRow<AdminApiKey>>{(column) => <DataGridCell>{column.renderCell(item)}</DataGridCell>}</DataGridRow>}</DataGridBody></DataGrid>}
   </DialogContent><DialogActions><Button appearance="secondary" disabled={revoking} onClick={onClose}>{t("close")}</Button></DialogActions></DialogBody></DialogSurface></Dialog>
   <ConfirmDialog
     open={revokingKey !== null}
@@ -320,13 +348,19 @@ function userColumns({ t, styles, canManageUsers, canEditQuota, principal, setSe
   ];
 }
 
-function apiKeyColumns({ t, locale, styles, revokingKeyId, revoking, loading, setRevokingKeyId, setReason }: { t: ReturnType<typeof useI18n>["t"]; locale: string; styles: ReturnType<typeof useAdminStyles>; revokingKeyId: string | null; revoking: boolean; loading: boolean; setRevokingKeyId: (id: string | null) => void; setReason: (reason: string) => void }): TableColumnDefinition<ApiKeySummary>[] {
+function apiKeyColumns({ t, locale, styles, revokingKeyId, revoking, loading, copiedKeyId, onCopy, setRevokingKeyId, setReason }: { t: ReturnType<typeof useI18n>["t"]; locale: string; styles: ReturnType<typeof useAdminStyles>; revokingKeyId: string | null; revoking: boolean; loading: boolean; copiedKeyId: string | null; onCopy: (key: AdminApiKey) => void; setRevokingKeyId: (id: string | null) => void; setReason: (reason: string) => void }): TableColumnDefinition<AdminApiKey>[] {
   return [
     { columnId: "key", compare: (a, b) => a.name.localeCompare(b.name), renderHeaderCell: () => t("manageUserApiKeys"), renderCell: (item) => <div className={styles.stack}><Text weight="semibold">{item.name}</Text><Text size={200}>{item.prefix}</Text><Text size={200}>{formatApiKeyScopes(item, t)}</Text></div> },
     { columnId: "status", compare: (a, b) => getApiKeyStatus(a).localeCompare(getApiKeyStatus(b)), renderHeaderCell: () => t("apiKeyStatus"), renderCell: (item) => formatApiKeyStatus(item, t) },
     { columnId: "expires", compare: (a, b) => (a.expires_at ?? 0) - (b.expires_at ?? 0), renderHeaderCell: () => t("apiKeyExpires"), renderCell: (item) => formatApiKeyExpiry(item.expires_at, locale, t) },
-    { columnId: "actions", compare: () => 0, renderHeaderCell: () => t("actions"), renderCell: (item) => getApiKeyStatus(item) === "active" && <Button disabled={revoking || loading || revokingKeyId !== null} onClick={() => { setRevokingKeyId(item.id); setReason(""); }}>{t("revokeApiKey")}</Button> },
+    { columnId: "actions", compare: () => 0, renderHeaderCell: () => t("actions"), renderCell: (item) => <div className={styles.actions}>{item.token && <Button appearance="subtle" icon={<CopyRegular />} onClick={() => onCopy(item)}>{copiedKeyId === item.id ? t("copied") : t("copy")}</Button>}{getApiKeyStatus(item) === "active" && <Button disabled={revoking || loading || revokingKeyId !== null} onClick={() => { setRevokingKeyId(item.id); setReason(""); }}>{t("revokeApiKey")}</Button>}</div> },
   ];
 }
 
 function message(error: unknown, fallback: string) { return error instanceof Error ? error.message : fallback; }
+
+function defaultExpiry(): string {
+  const value = new Date(Date.now() + 30 * 86_400_000);
+  const offset = value.getTimezoneOffset() * 60_000;
+  return new Date(value.getTime() - offset).toISOString().slice(0, 16);
+}

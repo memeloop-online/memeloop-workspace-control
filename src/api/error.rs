@@ -22,7 +22,6 @@ pub enum ApiError {
     IdempotencyInProgress,
     EncryptionUnavailable,
     WorkspaceNotConnectable,
-    WorkspaceClientKeyUnavailable,
     ProductNamespaceConflict,
     KubernetesUnavailable,
     Kubernetes(kube::Error),
@@ -78,7 +77,6 @@ impl ApiError {
             | Self::IdempotencyInProgress
             | Self::EncryptionUnavailable
             | Self::WorkspaceNotConnectable
-            | Self::WorkspaceClientKeyUnavailable
             | Self::ProductNamespaceConflict
             | Self::KubernetesUnavailable
             | Self::Kubernetes(_)) => operational_response(error),

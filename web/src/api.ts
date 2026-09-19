@@ -150,6 +150,12 @@ export class ApiClient {
     return this.request(`/api/v1/admin/users/${encodeURIComponent(userId)}/api-keys?${queryString(options)}`);
   }
 
+  createAdminUserApiKey(userId: string, input: { name: string; scopes: ApiKeyScope[]; expires_at: number }): Promise<CreatedApiKey> {
+    return this.request(`/api/v1/admin/users/${encodeURIComponent(userId)}/api-keys`, {
+      method: "POST", body: JSON.stringify(input),
+    });
+  }
+
   revokeAdminUserApiKey(userId: string, keyId: string, reason: string): Promise<void> {
     return this.request(`/api/v1/admin/users/${encodeURIComponent(userId)}/api-keys/${encodeURIComponent(keyId)}`, {
       method: "DELETE", body: JSON.stringify({ reason }),
@@ -298,10 +304,6 @@ export class ApiClient {
 
   workspaceRuntime(workspaceId: string): Promise<WorkspaceRuntime> {
     return this.request(`/api/v1/workspaces/${workspaceId}/runtime`);
-  }
-
-  workspaceClientPublicKey(workspaceId: string): Promise<{ public_key: string }> {
-    return this.request(`/api/v1/workspaces/${workspaceId}/ssh-client-public-key`);
   }
 
   workspaceRuntimes(organizationId: string, workspaceIds: string[]): Promise<WorkspaceRuntimeEntry[]> {

@@ -6,7 +6,6 @@ use k8s_openapi::{
     api::core::v1::{ConfigMap, Secret},
 };
 use serde::Serialize;
-use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::injections::{
@@ -25,13 +24,6 @@ pub struct InjectionMaterialization {
     pub file_config_map: ConfigMap,
     pub environment_targets: BTreeSet<String>,
     pub provenance: Vec<ResolvedInjectionSummary>,
-}
-
-impl InjectionMaterialization {
-    pub fn revision(&self) -> Result<String, MaterializationError> {
-        let summaries = serde_json::to_vec(&self.provenance)?;
-        Ok(format!("{:x}", Sha256::digest(summaries)))
-    }
 }
 
 #[derive(Debug, Serialize)]

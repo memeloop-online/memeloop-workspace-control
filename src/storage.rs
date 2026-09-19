@@ -71,8 +71,8 @@ pub use template_store::{CreateWorkspaceTemplate, WorkspaceTemplate};
 pub use transfer::DatabaseSnapshot;
 pub(crate) use user_settings::validate_api_key_policy;
 pub use user_settings::{
-    ApiKeyListStatus, ApiKeyPage, ApiKeyRevokeResult, ApiKeySummary, CreatedApiKey,
-    StoredUserProfile,
+    ApiKeyListStatus, ApiKeyPage, ApiKeyRevokeResult, ApiKeySummary, ApiKeyWithToken,
+    CreatedApiKey, StoredUserProfile,
 };
 pub use web_shell::{IssuedWebShellTicket, WebShellIdentity};
 pub use webhook_store::{CreateWebhookSubscription, WebhookDelivery, WebhookSubscriptionSummary};

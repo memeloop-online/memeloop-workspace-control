@@ -36,8 +36,8 @@ use details::{
     WorkspaceStoragePvcIdentities, fetch_workspace_runtime_details, scratch_backing_from_pods,
 };
 use pod_views::{
-    active_pod_metrics, active_pod_names, has_live_runtime, is_active_pod, newest_events,
-    object_workspace_id, pod_event, pod_metrics, pod_metrics_all, pod_runtime,
+    active_pod_metrics, active_pod_names, active_pod_node_name, has_live_runtime, is_active_pod,
+    newest_events, object_workspace_id, pod_event, pod_metrics, pod_metrics_all, pod_runtime,
 };
 pub(super) use storage_metrics::{
     StorageBacking, StoragePressure, StorageTelemetry, StorageTelemetryCoverage,
@@ -53,6 +53,8 @@ pub(super) struct WorkspaceRuntimeResponse {
     persistent_storage: StorageTelemetry,
     temporary_storage: StorageTelemetry,
     metrics_available: bool,
+    /// The node hosting the workspace's active Pod, when it has been scheduled.
+    node_name: Option<String>,
     pods: Vec<PodRuntime>,
     metrics: Vec<PodMetric>,
     events: Vec<PodEvent>,
@@ -99,10 +101,12 @@ type ActivePodMap = BTreeMap<Uuid, BTreeSet<String>>;
 type PodMetricMap = BTreeMap<Uuid, Vec<PodMetric>>;
 type WorkspaceStoragePvcMap = BTreeMap<Uuid, WorkspaceStoragePvcIdentities>;
 type ScratchBackingMap = BTreeMap<Uuid, StorageBacking>;
+type WorkspaceNodeNameMap = BTreeMap<Uuid, String>;
 
 struct KubernetesRuntimeBatch {
     pods: PodRuntimeMap,
     active_pods: ActivePodMap,
+    node_names: WorkspaceNodeNameMap,
     storage_pvcs: WorkspaceStoragePvcMap,
     scratch_backings: ScratchBackingMap,
     metrics: PodMetricMap,
@@ -196,10 +200,11 @@ async fn fetch_kubernetes_runtime(
         BTreeMap::new()
     });
     request.success();
-    let (pods, active_pods, scratch_backings) = index_pods(&pod_list.items);
+    let (pods, active_pods, node_names, scratch_backings) = index_pods(&pod_list.items);
     Ok(KubernetesRuntimeBatch {
         pods,
         active_pods,
+        node_names,
         storage_pvcs: index_storage_pvcs(pvc_list.items),
         scratch_backings,
         metrics,
@@ -207,9 +212,17 @@ async fn fetch_kubernetes_runtime(
     })
 }
 
-fn index_pods(pods: &[Pod]) -> (PodRuntimeMap, ActivePodMap, ScratchBackingMap) {
+fn index_pods(
+    pods: &[Pod],
+) -> (
+    PodRuntimeMap,
+    ActivePodMap,
+    WorkspaceNodeNameMap,
+    ScratchBackingMap,
+) {
     let mut runtimes = PodRuntimeMap::new();
     let mut active_names = ActivePodMap::new();
+    let mut node_names = WorkspaceNodeNameMap::new();
     let mut scratch_backings = ScratchBackingMap::new();
     for pod in pods {
         let Some(workspace_id) = object_workspace_id(&pod.metadata.labels) else {
@@ -219,6 +232,11 @@ fn index_pods(pods: &[Pod]) -> (PodRuntimeMap, ActivePodMap, ScratchBackingMap) 
             .entry(workspace_id)
             .or_insert_with(|| scratch_backing_from_pods(std::slice::from_ref(pod)));
         if is_active_pod(pod) {
+            if let Some(node_name) = pod.spec.as_ref().and_then(|spec| spec.node_name.as_ref()) {
+                node_names
+                    .entry(workspace_id)
+                    .or_insert_with(|| node_name.clone());
+            }
             if let Some(name) = &pod.metadata.name {
                 active_names
                     .entry(workspace_id)
@@ -231,7 +249,7 @@ fn index_pods(pods: &[Pod]) -> (PodRuntimeMap, ActivePodMap, ScratchBackingMap) 
                 .push(pod_runtime(pod));
         }
     }
-    (runtimes, active_names, scratch_backings)
+    (runtimes, active_names, node_names, scratch_backings)
 }
 
 fn index_storage_pvcs(pvcs: Vec<PersistentVolumeClaim>) -> WorkspaceStoragePvcMap {
@@ -274,6 +292,9 @@ fn build_runtime_entries(
         .map(|workspace| {
             let workspace_id = workspace.id;
             let show_runtime = has_live_runtime(workspace.state);
+            let node_name = show_runtime
+                .then(|| kubernetes.node_names.remove(&workspace_id))
+                .flatten();
             let active_pod_names = kubernetes
                 .active_pods
                 .remove(&workspace_id)
@@ -322,6 +343,7 @@ fn build_runtime_entries(
                         observed_now,
                     ),
                     metrics_available: kubernetes.metrics_available,
+                    node_name,
                     pods,
                     metrics,
                     events: incidents
@@ -418,6 +440,7 @@ pub(super) async fn get(
             observed_now,
         ),
         metrics_available: details.metrics_available,
+        node_name: details.node_name,
         pods: details.pods,
         metrics: details.metrics,
         events: incidents

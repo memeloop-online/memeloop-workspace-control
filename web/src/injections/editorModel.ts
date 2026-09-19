@@ -5,6 +5,29 @@ export interface InjectionEditorDraft extends Omit<InjectionDraft, "file_mode"> 
   storedValueAvailable: boolean;
 }
 
+/**
+ * Compare the fields that can change when an injection is saved.
+ *
+ * `version` is assigned by the API and `storedValueAvailable` only describes
+ * whether the read-only value request has completed, so neither belongs in a
+ * dirty check. Labels are sorted to make their object insertion order
+ * irrelevant, and valid file modes are compared by their numeric value so
+ * equivalent octal spellings (644 and 0644) do not count as a change.
+ */
+export function injectionDraftsEqual(
+  left: InjectionEditorDraft,
+  right: InjectionEditorDraft,
+): boolean {
+  return JSON.stringify(comparableDraft(left)) === JSON.stringify(comparableDraft(right));
+}
+
+export function hasSubstantiveInjectionChanges(
+  draft: InjectionEditorDraft,
+  baseline: InjectionEditorDraft,
+): boolean {
+  return !injectionDraftsEqual(draft, baseline);
+}
+
 export const FILE_MODE_PATTERN = "(?:0)?[0-7]{3}";
 
 export function emptyInjectionDraft(templateSelector: string | null = null): InjectionEditorDraft {
@@ -98,6 +121,34 @@ export function parseFileMode(kind: InjectionKind, value: string): number | null
     throw new Error("invalid_file_mode");
   }
   return Number.parseInt(value, 8);
+}
+
+function comparableDraft(draft: InjectionEditorDraft) {
+  let fileMode: number | string | null;
+  if (draft.kind === "environment_variable") {
+    fileMode = null;
+  } else {
+    try {
+      fileMode = parseFileMode(draft.kind, draft.fileMode);
+    } catch {
+      // Keep invalid input distinct while the user is editing it. The form
+      // will report the validation error when they attempt to save.
+      fileMode = draft.fileMode;
+    }
+  }
+  return {
+    key: draft.key,
+    kind: draft.kind,
+    target: draft.target,
+    value: draft.value,
+    sensitive: draft.sensitive,
+    locked: draft.locked,
+    fileMode,
+    owner: draft.owner,
+    group: draft.group,
+    template_selector: draft.template_selector,
+    labels: Object.fromEntries(Object.entries(draft.labels).sort(([a], [b]) => a.localeCompare(b))),
+  };
 }
 
 function sshTarget(key: string) {

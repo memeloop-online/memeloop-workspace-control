@@ -38,11 +38,6 @@ pub(super) fn operational_response(error: ApiError) -> ErrorResponse {
             "workspace_not_connectable",
             "new Web Shell and SSH authorization requires a ready workspace",
         ),
-        ApiError::WorkspaceClientKeyUnavailable => response(
-            StatusCode::NOT_FOUND,
-            "workspace_client_key_unavailable",
-            "the workspace client public key is unavailable",
-        ),
         ApiError::ProductNamespaceConflict => response(
             StatusCode::CONFLICT,
             "product_namespace_conflict",

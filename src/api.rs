@@ -31,7 +31,6 @@ mod ui;
 mod user_quota;
 mod web_shell;
 mod webhooks;
-mod workspace_client_key;
 mod workspace_creation;
 mod workspace_image_update;
 mod workspace_placement;
