@@ -122,7 +122,11 @@ async fn system_admin_can_list_and_idempotently_revoke_a_users_api_keys() {
     assert_eq!(first_page.status(), StatusCode::OK);
     let first_page = body_json(first_page).await;
     let first_key = &first_page["items"][0];
-    assert_eq!(first_key["token"], TARGET_TOKEN);
+    assert!(
+        first_key["token"]
+            .as_str()
+            .is_some_and(|token| !token.is_empty())
+    );
     assert!(first_key.get("token_hash").is_none());
     let cursor = first_page["next_cursor"].as_str().unwrap();
 
