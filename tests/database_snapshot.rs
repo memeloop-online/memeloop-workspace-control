@@ -143,6 +143,7 @@ async fn sqlite_snapshot_contains_ciphertext_and_resets_only_pending_work() {
         snapshot_asset()
     );
     assert_eq!(snapshot.tables["user_api_keys"].len(), 1);
+    assert_eq!(snapshot.tables["user_api_keys"][0]["token"], TOKEN);
     assert!(snapshot.tables["user_api_keys"][0]["allowed_template_ids_json"].is_null());
     assert!(!snapshot.tables.contains_key("web_shell_tickets"));
     assert!(!snapshot.tables.contains_key("workspace_leases"));
@@ -162,6 +163,7 @@ async fn sqlite_snapshot_contains_ciphertext_and_resets_only_pending_work() {
     assert!(!serialized.contains(secret_plaintext));
     assert!(!serialized.contains("line one"));
     assert!(!serialized.contains("snapshot-secret-token"));
+    assert!(serialized.contains(TOKEN));
     assert!(!serialized.contains(std::str::from_utf8(&snapshot_asset()).unwrap()));
     assert!(serialized.contains("ciphertext"));
 }
