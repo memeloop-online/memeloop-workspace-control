@@ -1,4 +1,9 @@
-import type { ApiKeySummary } from "./types";
+import type { AdminApiKey, ApiKeySummary, CreatedApiKey } from "./types";
+
+/** Keep a newly-created plaintext token visible if the follow-up page read is briefly stale. */
+export function prependCreatedApiKey(items: AdminApiKey[], created: CreatedApiKey): AdminApiKey[] {
+  return [created, ...items.filter((item) => item.id !== created.id)];
+}
 
 export type ApiKeyStatus = "revoked" | "expired" | "active";
 

@@ -38,7 +38,7 @@ import {
   formatTime,
 } from "./adminApiKeyView";
 import type { ApiClient } from "./api";
-import { applyLocalRevocations, getApiKeyStatus } from "./apiKeyStatus";
+import { applyLocalRevocations, getApiKeyStatus, prependCreatedApiKey } from "./apiKeyStatus";
 import { ConfirmDialog } from "./components/ConfirmDialog";
 import { useI18n } from "./i18n";
 import { hasApiKeyScope } from "./permissions";
@@ -339,6 +339,7 @@ function UserApiKeysPanel({ api, organizationId, principal, userId, isCurrentUse
       setTemplateRestriction(false);
       setAllowedTemplateIds([]);
       await loadPage(null, "reset");
+      setItems((current) => prependCreatedApiKey(current, created));
       try { await navigator.clipboard.writeText(created.token); setCopiedKeyId(created.id); } catch { /* Value remains visible in the list. */ }
     } catch (error) { onError(message(error, t("requestFailed"))); } finally { setCreating(false); }
   }
