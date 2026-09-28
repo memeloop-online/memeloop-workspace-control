@@ -9,6 +9,13 @@ use super::{
     workspace_store::{decode_postgres, decode_sqlite, select_workspace_sql},
 };
 
+struct PlacementUpdate<'a> {
+    node_pool: &'a str,
+    expected_generation: u64,
+    actor_user_id: Uuid,
+    now: i64,
+}
+
 impl Database {
     pub async fn update_stopped_workspace_placement(
         &self,
@@ -18,6 +25,12 @@ impl Database {
         actor_user_id: Uuid,
         now: i64,
     ) -> Result<Workspace, StorageError> {
+        let update = PlacementUpdate {
+            node_pool,
+            expected_generation,
+            actor_user_id,
+            now,
+        };
         match self {
             Self::Sqlite {
                 pool,
@@ -37,10 +50,7 @@ impl Database {
                     installation_id.as_str(),
                     &mut workspace,
                     &snapshot_yaml,
-                    node_pool,
-                    expected_generation,
-                    actor_user_id,
-                    now,
+                    &update,
                 )
                 .await?;
                 transaction.commit().await?;
@@ -64,10 +74,7 @@ impl Database {
                     installation_id.as_str(),
                     &mut workspace,
                     &snapshot_yaml,
-                    node_pool,
-                    expected_generation,
-                    actor_user_id,
-                    now,
+                    &update,
                 )
                 .await?;
                 transaction.commit().await?;
@@ -82,36 +89,40 @@ async fn update_sqlite(
     installation_id: &str,
     workspace: &mut Workspace,
     snapshot_yaml: &str,
-    node_pool: &str,
-    expected_generation: u64,
-    actor_user_id: Uuid,
-    now: i64,
+    update: &PlacementUpdate<'_>,
 ) -> Result<(), StorageError> {
-    ensure_stopped_at_generation(workspace, expected_generation)?;
+    ensure_stopped_at_generation(workspace, update.expected_generation)?;
     let placement = current_placement_sqlite(connection, installation_id, workspace).await?;
     let selected = super::node_pool_store::select_node_pool_sqlite(
         connection,
         installation_id,
         &placement,
-        Some(node_pool),
+        Some(update.node_pool),
     )
     .await?;
-    let snapshot_yaml = apply_placement(workspace, snapshot_yaml, placement, selected, now)?;
+    let snapshot_yaml = apply_placement(workspace, snapshot_yaml, placement, selected, update.now)?;
     let affected = sqlx::query("UPDATE workspaces SET node_pool = ?1, template_snapshot_yaml = ?2, generation = ?3, updated_at = ?4 WHERE installation_id = ?5 AND id = ?6 AND state = 'stopped' AND generation = ?7")
         .bind(&workspace.node_pool)
         .bind(snapshot_yaml)
         .bind(as_i64(workspace.generation)?)
-        .bind(now)
+        .bind(update.now)
         .bind(installation_id)
         .bind(workspace.id.to_string())
-        .bind(as_i64(expected_generation)?)
+        .bind(as_i64(update.expected_generation)?)
         .execute(&mut *connection)
         .await?
         .rows_affected();
     if affected != 1 {
         return Err(StorageError::WorkspacePlacementUpdateConflict);
     }
-    record_side_effects_sqlite(connection, installation_id, workspace, actor_user_id, now).await
+    record_side_effects_sqlite(
+        connection,
+        installation_id,
+        workspace,
+        update.actor_user_id,
+        update.now,
+    )
+    .await
 }
 
 async fn update_postgres(
@@ -119,36 +130,40 @@ async fn update_postgres(
     installation_id: &str,
     workspace: &mut Workspace,
     snapshot_yaml: &str,
-    node_pool: &str,
-    expected_generation: u64,
-    actor_user_id: Uuid,
-    now: i64,
+    update: &PlacementUpdate<'_>,
 ) -> Result<(), StorageError> {
-    ensure_stopped_at_generation(workspace, expected_generation)?;
+    ensure_stopped_at_generation(workspace, update.expected_generation)?;
     let placement = current_placement_postgres(connection, installation_id, workspace).await?;
     let selected = super::node_pool_store::select_node_pool_postgres(
         connection,
         installation_id,
         &placement,
-        Some(node_pool),
+        Some(update.node_pool),
     )
     .await?;
-    let snapshot_yaml = apply_placement(workspace, snapshot_yaml, placement, selected, now)?;
+    let snapshot_yaml = apply_placement(workspace, snapshot_yaml, placement, selected, update.now)?;
     let affected = sqlx::query("UPDATE workspaces SET node_pool = $1, template_snapshot_yaml = $2, generation = $3, updated_at = $4 WHERE installation_id = $5 AND id = $6 AND state = 'stopped' AND generation = $7")
         .bind(&workspace.node_pool)
         .bind(snapshot_yaml)
         .bind(as_i64(workspace.generation)?)
-        .bind(now)
+        .bind(update.now)
         .bind(installation_id)
         .bind(workspace.id.to_string())
-        .bind(as_i64(expected_generation)?)
+        .bind(as_i64(update.expected_generation)?)
         .execute(&mut *connection)
         .await?
         .rows_affected();
     if affected != 1 {
         return Err(StorageError::WorkspacePlacementUpdateConflict);
     }
-    record_side_effects_postgres(connection, installation_id, workspace, actor_user_id, now).await
+    record_side_effects_postgres(
+        connection,
+        installation_id,
+        workspace,
+        update.actor_user_id,
+        update.now,
+    )
+    .await
 }
 
 async fn current_placement_sqlite(
