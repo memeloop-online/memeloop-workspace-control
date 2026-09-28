@@ -42,7 +42,7 @@ import { useI18n } from "./i18n";
 import { hasApiKeyScope } from "./permissions";
 import type { AdminApiKey, ApiKeyScope, ApiKeySummary, MembershipSummary, Principal, Role, UserSummary, WorkspaceTemplate } from "./types";
 import { API_KEY_SCOPES } from "./apiKeyScopes";
-import { AdminToolbar, SaveButton, useAdminStyles } from "./admin/fluentAdmin";
+import { AdminCard, AdminToolbar, SaveButton, useAdminStyles } from "./admin/fluentAdmin";
 import { ApiKeyTemplatePicker } from "./admin/ApiKeyTemplatePicker";
 
 type DirectoryItem = UserSummary & { membershipRole: Role | null };
