@@ -131,9 +131,14 @@ test("administration selects only the clicked user's API keys and manages their 
 
     const aliceRow = page.getByRole("row", { name: /Alice Fixture/ });
     const bobRow = page.getByRole("row", { name: /Bob Fixture/ });
+    const templatesLoaded = page.waitForResponse((response) => {
+      const url = new URL(response.url());
+      return url.pathname === "/api/v1/templates" && url.searchParams.get("organization_id") === organizationId;
+    });
     await aliceRow.getByRole("button", { name: "Credential configuration" }).click();
     const editor = page.getByRole("dialog").filter({ hasText: "Alice Fixture" });
     await editor.getByText("Credential configuration · Alice Fixture", { exact: true }).waitFor();
+    assert.deepEqual((await (await templatesLoaded).json()).map((template) => template.id), [templateId]);
     assert.equal(await editor.getByRole("tab").count(), 0);
     await editor.getByText("Alice device", { exact: true }).waitFor();
     assert.deepEqual([...new Set(keyReads)], [aliceId]);
@@ -145,8 +150,11 @@ test("administration selects only the clicked user's API keys and manages their 
     await editor.getByRole("textbox", { name: "Key name" }).fill("Alice CI key");
     await editor.getByRole("checkbox", { name: "Manage API keys" }).check();
     await editor.getByRole("checkbox", { name: "Only allow selected templates" }).check();
-    await editor.getByRole("combobox", { name: "Templates" }).click();
-    await page.getByRole("option", { name: "Fixture template" }).click();
+    const templatePicker = editor.getByRole("combobox", { name: "Templates" });
+    await templatePicker.fill("Fixture template");
+    await templatePicker.press("ArrowDown");
+    await templatePicker.press("Enter");
+    await editor.getByRole("button", { name: "Remove template Fixture template" }).waitFor();
     await editor.getByRole("button", { name: "Create API key" }).last().click();
     await editor.getByText("Alice CI key", { exact: true }).waitFor();
     assert.deepEqual(writes[0], {
@@ -186,6 +194,9 @@ test("administration selects only the clicked user's API keys and manages their 
     assert.deepEqual(keyReadbacks.at(-1).items.map((item) => item.id), ["bob-existing"]);
     assert.deepEqual(unexpected, []);
     await context.close();
+  } catch (error) {
+    if (unexpected.length) throw new Error(`Unexpected mock API requests: ${unexpected.join(", ")}`, { cause: error });
+    throw error;
   } finally {
     await browser.close();
   }
