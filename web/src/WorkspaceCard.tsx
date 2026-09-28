@@ -85,7 +85,7 @@ export function WorkspaceCard({ api, item, runtime, nodePools, busyAction, onAct
     <div className={styles.toolbar} role="group" aria-labelledby={titleId} aria-busy={transition ? "true" : "false"}>
       <div className={styles.toolbarGroup}>
         {transition ? <Button appearance="subtle" disabled icon={<Spinner size="tiny" />} aria-busy="true">{t(transition.label)}</Button> : <>
-          {canConnect && running && item.ssh_connection && <WorkspaceConnectionDialog connection={item.ssh_connection} />}
+          {canConnect && running && item.ssh_connection && <WorkspaceConnectionDialog connection={item.ssh_connection} shortId={workspace.short_id} hostKey={item.workspace_host_key} />}
           {canConnect && running && <Tooltip content={t("webShellClipboardHelp")} relationship="description"><Button appearance="primary" icon={<WindowConsoleRegular />} onClick={() => void onOpenShell(workspace.id)}>{t("webShell")}</Button></Tooltip>}
           {canConnect && running && item.desktop?.status === "ready" && item.desktop.https_url && <Button appearance="outline" icon={<DesktopRegular />} disabled={openingDesktop} onClick={() => void openDesktop(api, workspace.id, item.desktop!.mapping_id, setOpeningDesktop, onError, t)}>{openingDesktop ? t("desktopOpening") : t("openDesktop")}</Button>}
           {canConnect && running && <WorkspacePortMappings api={api} workspaceId={workspace.id} workspaceReady onError={onError} />}

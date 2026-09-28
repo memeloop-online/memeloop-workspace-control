@@ -29,8 +29,8 @@ import { AdminCard, SaveButton, useAdminStyles } from "./admin/fluentAdmin";
 import type { ApiClient } from "./api";
 import { ConfirmDialog } from "./components/ConfirmDialog";
 import { Page } from "./design-system/Page";
-import { canManageOrganization, canManageSystem } from "./permissions";
-import { UsersDirectory } from "./UsersDirectory";
+import { canManageOrganization, canManageSystem, hasApiKeyScope } from "./permissions";
+import { SelfApiKeysPanel, UsersDirectory } from "./UsersDirectory";
 import { useI18n } from "./i18n";
 import { OrganizationManager } from "./OrganizationManager";
 import { TemplateEditor } from "./TemplateEditor";
@@ -92,6 +92,9 @@ export function AdminPanel({ api, principal, organizationId, onError, onOrganiza
   const canManageQuota = canManageOrganization(principal, organizationId, "manage_organization");
   const canManageMembers = canManageOrganization(principal, organizationId, "manage_members");
   const canManageGlobalState = canManageSystem(principal);
+  const canManageOwnApiKeys = hasApiKeyScope(principal, "manage_api_keys");
+  const canManageOtherApiKeys = principal.system_admin && canManageOwnApiKeys;
+  const selfServiceOnly = !canManageGlobalState && !canManageQuota && !canManageMembers;
   const currentOrganization = organizations.find((organization) => organization.id === organizationId);
   const states = workspaceStateCounts(workspaceSummary);
 
@@ -124,7 +127,7 @@ export function AdminPanel({ api, principal, organizationId, onError, onOrganiza
     }
   }
 
-  useEffect(() => { void refresh(); }, [api, organizationId, canManageGlobalState, canManageQuota]);
+  useEffect(() => { if (!selfServiceOnly && organizationId) void refresh(); }, [api, organizationId, canManageGlobalState, canManageQuota, canManageMembers, selfServiceOnly]);
 
   useEffect(() => {
     setOrganizationName(currentOrganization?.name ?? "");
@@ -241,9 +244,15 @@ export function AdminPanel({ api, principal, organizationId, onError, onOrganiza
     }
   }
 
+  if (selfServiceOnly || !organizationId) return <Page title={t("administrationTitle")}>
+    {canManageOwnApiKeys && <SelfApiKeysPanel api={api} organizationId={organizationId} principal={principal} onError={onError} />}
+    {organizationId && canManageOtherApiKeys && <AdminCard title={t("usersRoles")}><UsersDirectory api={api} organizationId={organizationId} principal={principal} canListUsers canManageUsers={false} canEditMembership={false} canEditQuota={false} refreshVersion={directoryVersion} onError={onError} onEditQuota={(userId) => void editUserQuota(userId)} /></AdminCard>}
+  </Page>;
+
   return <Page title={t("administrationTitle")} description={currentOrganization?.name} actions={<>{loading && <Spinner size="tiny" label={t("loading")} />}<Button as="a" href="/api/v1/openapi.json" target="_blank" rel="noreferrer" icon={<OpenRegular />}>{t("openApi")}</Button></>}>
 
     <div className={styles.sectionGrid}>
+      {!principal.system_admin && canManageOwnApiKeys && <div className={styles.wide}><SelfApiKeysPanel api={api} organizationId={organizationId} principal={principal} onError={onError} /></div>}
       <IdentityQuotaCard quota={quota} principal={principal} canManageQuota={canManageQuota} editingQuota={editingQuota} quotaDraft={quotaDraft} onEdit={() => setEditingQuota(true)} onCancel={() => setEditingQuota(false)} onSave={() => void saveQuota()} onDraftChange={setQuotaDraft} />
       <AdminCard title={t("workspaceState")}>
         <DataGrid items={Object.entries(states) as [string, number][]} columns={stateColumns(t)}>
@@ -254,7 +263,7 @@ export function AdminPanel({ api, principal, organizationId, onError, onOrganiza
       {scaling && <AdminCard title={t("scaling")}><dl className={styles.definitionList}><div className={styles.definitionItem}><dt className={styles.definitionTerm}>{t("database")}</dt><dd className={styles.definitionValue}>{scaling.database_mode}</dd></div><div className={styles.definitionItem}><dt className={styles.definitionTerm}>{t("replicas")}</dt><dd className={styles.definitionValue}>{scaling.configured_replicas}</dd></div><div className={styles.definitionItem}><dt className={styles.definitionTerm}>{t("jobs")}</dt><dd className={styles.definitionValue}>{scaling.jobs.pending} {t("pendingJobs")} · {scaling.jobs.running} {t("runningJobs")}</dd></div><div className={styles.definitionItem}><dt className={styles.definitionTerm}>{t("schema")}</dt><dd className={styles.definitionValue}>v{scaling.schema_version}</dd></div></dl></AdminCard>}
       <OrganizationManager organization={currentOrganization} organizationName={organizationName} newOrganizationName={newOrganizationName} canCreate={canManageGlobalState} canEdit={canManageQuota} canDelete={canManageGlobalState} onOrganizationNameChange={setOrganizationName} onNewOrganizationNameChange={setNewOrganizationName} onSave={() => void saveOrganization()} onDelete={() => setConfirmOrganizationDelete(true)} onCreate={() => void createOrganization()} />
 
-      {canManageMembers && <div className={styles.wide}><AdminCard title={t("usersRoles")} action={canManageGlobalState ? <Button icon={<AddRegular />} aria-expanded={showCreateUser} onClick={() => setShowCreateUser((visible) => !visible)}>{t("createUser")}</Button> : undefined}>{canManageGlobalState && showCreateUser && <CreateUserForm api={api} principal={principal} organizationId={organizationId} onCancel={() => setShowCreateUser(false)} onError={onError} onCreated={async () => { setShowCreateUser(false); setDirectoryVersion((value) => value + 1); await refresh(); }} />}<UsersDirectory api={api} organizationId={organizationId} principal={principal} canManageUsers={canManageGlobalState} canEditQuota={canManageGlobalState} refreshVersion={directoryVersion} onError={onError} onEditQuota={(userId) => void editUserQuota(userId)} /></AdminCard></div>}
+      {(canManageMembers || canManageOtherApiKeys) && <div className={styles.wide}><AdminCard title={t("usersRoles")} action={canManageGlobalState ? <Button icon={<AddRegular />} aria-expanded={showCreateUser} onClick={() => setShowCreateUser((visible) => !visible)}>{t("createUser")}</Button> : undefined}>{canManageGlobalState && showCreateUser && <CreateUserForm api={api} principal={principal} organizationId={organizationId} onCancel={() => setShowCreateUser(false)} onError={onError} onCreated={async () => { setShowCreateUser(false); setDirectoryVersion((value) => value + 1); await refresh(); }} />}<UsersDirectory api={api} organizationId={organizationId} principal={principal} canListUsers={principal.system_admin} canManageUsers={canManageGlobalState} canEditMembership={canManageMembers} canEditQuota={canManageGlobalState} refreshVersion={directoryVersion} onError={onError} onEditQuota={(userId) => void editUserQuota(userId)} /></AdminCard></div>}
       {canManageGlobalState && <div className={styles.wide}><ImageAllowlist images={images} image={image} adding={addingImage} busyImage={imageBusy} onImageChange={setImage} onAllow={() => void allowImage()} onToggle={(policy) => void toggleImage(policy)} /></div>}
       {canManageQuota && <div className={styles.wide}><AdminCard title={t("templates")}><TemplateEditor api={api} organizationId={organizationId} templates={templates} canGrantClusterAccess={canManageGlobalState} onRefresh={refresh} onError={onError} /></AdminCard></div>}
       {canManageQuota && <div className={styles.wide}><AdminCard title={t("webhook")} action={<Button icon={<AddRegular />} onClick={() => setShowWebhookForm(true)}>{t("addWebhook")}</Button>}><DataGrid items={webhooks} columns={webhookColumns(t)}><DataGridHeader><DataGridRow<WebhookSubscription>>{(column) => <DataGridHeaderCell>{column.renderHeaderCell()}</DataGridHeaderCell>}</DataGridRow></DataGridHeader><DataGridBody<WebhookSubscription>>{({ item }) => <DataGridRow<WebhookSubscription>>{(column) => <DataGridCell>{column.renderCell(item)}</DataGridCell>}</DataGridRow>}</DataGridBody></DataGrid>{webhooks.length === 0 && <Text>{t("noWebhooks")}</Text>}</AdminCard></div>}

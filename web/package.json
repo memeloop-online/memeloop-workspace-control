@@ -9,7 +9,8 @@
     "dev": "vite",
     "check": "tsc -b --pretty false",
     "test": "node --experimental-strip-types --test src/*.test.ts src/*/*.test.ts && node tests/plugin-sandbox-check.mjs",
-    "test:browser": "node tests/plugin-sandbox-check.mjs"
+    "test:browser": "node tests/plugin-sandbox-check.mjs",
+    "test:e2e": "node --test e2e/user-api-keys.test.mjs"
   },
   "dependencies": {
     "@fluentui/react-components": "9.74.7",

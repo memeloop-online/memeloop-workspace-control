@@ -79,6 +79,26 @@ jobs:
           cache-dependency-path: web/package-lock.json
       - run: npm ci && npm run check && npm test && npm run build
         working-directory: web
+      - name: Verify user credential configuration in Chromium
+        working-directory: web
+        timeout-minutes: 10
+        run: |
+          npx playwright-core install --with-deps chromium
+          ./node_modules/.bin/vite preview --host 127.0.0.1 --port 4173 --strictPort > /tmp/mwc-vite-e2e.log 2>&1 &
+          vite_pid=$!
+          trap 'kill "$vite_pid" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent http://127.0.0.1:4173/ > /dev/null; then
+              break
+            fi
+            if ! kill -0 "$vite_pid" 2>/dev/null; then
+              cat /tmp/mwc-vite-e2e.log
+              exit 1
+            fi
+            sleep 1
+          done
+          curl --fail --silent http://127.0.0.1:4173/ > /dev/null
+          npm run test:e2e
       - name: Enforce the current data-model vocabulary
         run: |
           for prohibited in 'leg''acy' 'leg''acy_v1' 'pre''fixed_v2' 'runtime''_profile'; do
