@@ -1,6 +1,7 @@
-use sqlx::{PgConnection, SqliteConnection};
+use sqlx::{PgConnection, Row, SqliteConnection};
 use uuid::Uuid;
 
+use crate::templates::{WorkspacePlacement, WorkspaceTemplateDocument};
 use crate::workspaces::{Workspace, WorkspaceState};
 
 use super::{
@@ -29,11 +30,13 @@ impl Database {
                     .fetch_optional(&mut *transaction)
                     .await?
                     .ok_or(StorageError::WorkspaceNotFound)?;
+                let snapshot_yaml: String = row.try_get("template_snapshot_yaml")?;
                 let mut workspace = decode_sqlite(row, installation_id)?;
                 update_sqlite(
                     &mut transaction,
                     installation_id.as_str(),
                     &mut workspace,
+                    &snapshot_yaml,
                     node_pool,
                     expected_generation,
                     actor_user_id,
@@ -54,11 +57,13 @@ impl Database {
                     .fetch_optional(&mut *transaction)
                     .await?
                     .ok_or(StorageError::WorkspaceNotFound)?;
+                let snapshot_yaml: String = row.try_get("template_snapshot_yaml")?;
                 let mut workspace = decode_postgres(row, installation_id)?;
                 update_postgres(
                     &mut transaction,
                     installation_id.as_str(),
                     &mut workspace,
+                    &snapshot_yaml,
                     node_pool,
                     expected_generation,
                     actor_user_id,
@@ -76,22 +81,25 @@ async fn update_sqlite(
     connection: &mut SqliteConnection,
     installation_id: &str,
     workspace: &mut Workspace,
+    snapshot_yaml: &str,
     node_pool: &str,
     expected_generation: u64,
     actor_user_id: Uuid,
     now: i64,
 ) -> Result<(), StorageError> {
     ensure_stopped_at_generation(workspace, expected_generation)?;
+    let placement = current_placement_sqlite(connection, installation_id, workspace).await?;
     let selected = super::node_pool_store::select_node_pool_sqlite(
         connection,
         installation_id,
-        &workspace.template.placement,
+        &placement,
         Some(node_pool),
     )
     .await?;
-    apply_placement(workspace, selected, now)?;
-    let affected = sqlx::query("UPDATE workspaces SET node_pool = ?1, generation = ?2, updated_at = ?3 WHERE installation_id = ?4 AND id = ?5 AND state = 'stopped' AND generation = ?6")
+    let snapshot_yaml = apply_placement(workspace, snapshot_yaml, placement, selected, now)?;
+    let affected = sqlx::query("UPDATE workspaces SET node_pool = ?1, template_snapshot_yaml = ?2, generation = ?3, updated_at = ?4 WHERE installation_id = ?5 AND id = ?6 AND state = 'stopped' AND generation = ?7")
         .bind(&workspace.node_pool)
+        .bind(snapshot_yaml)
         .bind(as_i64(workspace.generation)?)
         .bind(now)
         .bind(installation_id)
@@ -110,22 +118,25 @@ async fn update_postgres(
     connection: &mut PgConnection,
     installation_id: &str,
     workspace: &mut Workspace,
+    snapshot_yaml: &str,
     node_pool: &str,
     expected_generation: u64,
     actor_user_id: Uuid,
     now: i64,
 ) -> Result<(), StorageError> {
     ensure_stopped_at_generation(workspace, expected_generation)?;
+    let placement = current_placement_postgres(connection, installation_id, workspace).await?;
     let selected = super::node_pool_store::select_node_pool_postgres(
         connection,
         installation_id,
-        &workspace.template.placement,
+        &placement,
         Some(node_pool),
     )
     .await?;
-    apply_placement(workspace, selected, now)?;
-    let affected = sqlx::query("UPDATE workspaces SET node_pool = $1, generation = $2, updated_at = $3 WHERE installation_id = $4 AND id = $5 AND state = 'stopped' AND generation = $6")
+    let snapshot_yaml = apply_placement(workspace, snapshot_yaml, placement, selected, now)?;
+    let affected = sqlx::query("UPDATE workspaces SET node_pool = $1, template_snapshot_yaml = $2, generation = $3, updated_at = $4 WHERE installation_id = $5 AND id = $6 AND state = 'stopped' AND generation = $7")
         .bind(&workspace.node_pool)
+        .bind(snapshot_yaml)
         .bind(as_i64(workspace.generation)?)
         .bind(now)
         .bind(installation_id)
@@ -140,6 +151,46 @@ async fn update_postgres(
     record_side_effects_postgres(connection, installation_id, workspace, actor_user_id, now).await
 }
 
+async fn current_placement_sqlite(
+    connection: &mut SqliteConnection,
+    installation_id: &str,
+    workspace: &Workspace,
+) -> Result<WorkspacePlacement, StorageError> {
+    let template_id = workspace
+        .template_id
+        .ok_or(StorageError::TemplateNotFound)?;
+    Ok(super::template_store::resolve_template_sqlite(
+        connection,
+        installation_id,
+        template_id,
+        workspace.organization_id,
+        true,
+    )
+    .await?
+    .spec
+    .placement)
+}
+
+async fn current_placement_postgres(
+    connection: &mut PgConnection,
+    installation_id: &str,
+    workspace: &Workspace,
+) -> Result<WorkspacePlacement, StorageError> {
+    let template_id = workspace
+        .template_id
+        .ok_or(StorageError::TemplateNotFound)?;
+    Ok(super::template_store::resolve_template_postgres(
+        connection,
+        installation_id,
+        template_id,
+        workspace.organization_id,
+        true,
+    )
+    .await?
+    .spec
+    .placement)
+}
+
 fn ensure_stopped_at_generation(
     workspace: &Workspace,
     expected_generation: u64,
@@ -151,16 +202,25 @@ fn ensure_stopped_at_generation(
 
 fn apply_placement(
     workspace: &mut Workspace,
+    snapshot_yaml: &str,
+    placement: WorkspacePlacement,
     node_pool: String,
     now: i64,
-) -> Result<(), StorageError> {
+) -> Result<String, StorageError> {
+    let mut snapshot = WorkspaceTemplateDocument::parse(snapshot_yaml)
+        .map_err(|_| StorageError::InvalidWorkspace)?;
+    snapshot.spec.placement = placement.clone();
+    let snapshot_yaml = snapshot
+        .to_yaml()
+        .map_err(|_| StorageError::InvalidWorkspace)?;
+    workspace.template.placement = placement;
     workspace.node_pool = node_pool;
     workspace.generation = workspace
         .generation
         .checked_add(1)
         .ok_or(StorageError::InvalidWorkspace)?;
     workspace.updated_at = now;
-    Ok(())
+    Ok(snapshot_yaml)
 }
 
 async fn record_side_effects_sqlite(
@@ -234,3 +294,6 @@ async fn record_side_effects_postgres(
 fn as_i64(value: u64) -> Result<i64, StorageError> {
     i64::try_from(value).map_err(|_| StorageError::InvalidWorkspace)
 }
+
+#[cfg(test)]
+mod tests;
