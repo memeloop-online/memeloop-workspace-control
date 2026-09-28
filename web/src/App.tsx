@@ -6,7 +6,7 @@ import { AppShell, EmptyOrganization, LoadingView, LoginScreen, type AppNotice, 
 import { darkTheme, lightTheme } from "./design-system/theme";
 import { WorkspacePanel } from "./WorkspacePanel";
 import { useI18n, type MessageKey } from "./i18n";
-import { canManageOrganization as mayManageOrganization, canManageSystem } from "./permissions";
+import { canManageOrganization as mayManageOrganization, canManageSystem, hasApiKeyScope } from "./permissions";
 import { principalQueryKey, useOrganizationsQuery, usePrincipalQuery, useWorkspacePreviewQuery } from "./state/appQueries";
 import { queryClient, useAppStore } from "./state";
 import type { Principal } from "./types";
@@ -83,7 +83,8 @@ export default function App() {
   const canManageGlobalState = Boolean(principal && canManageSystem(principal));
   const canManageOrganizationState = Boolean(principal && organizationId && mayManageOrganization(principal, organizationId, "manage_organization"));
   const canManageMembers = Boolean(principal && organizationId && mayManageOrganization(principal, organizationId, "manage_members"));
-  const canOpenAdministration = canManageGlobalState || canManageOrganizationState || canManageMembers;
+  const canManageOwnApiKeys = Boolean(principal && hasApiKeyScope(principal, "manage_api_keys"));
+  const canOpenAdministration = canManageGlobalState || canManageOrganizationState || canManageMembers || canManageOwnApiKeys;
   const currentOrganization = organizations.find((organization) => organization.id === organizationId);
 
   useEffect(() => {
@@ -215,7 +216,7 @@ export default function App() {
             <SettingsPanel api={api} principal={principal} organizations={organizations} organizationId={organizationId} onOrganizationChange={selectOrganization} onProfileChanged={(profile) => queryClient.setQueryData<Principal>(principalQueryKey(), (current) => current ? { ...current, ...profile } : current)} onError={reportError} />
           ) : view === "audit" ? (
             <AuditPanel api={api} organizationId={organizationId} systemAdmin={canManageGlobalState} onError={reportError} />
-          ) : !organizationId ? <EmptyOrganization systemAdmin={canManageGlobalState} t={t} /> : view === "workspaces" ? (
+          ) : !organizationId && (view !== "administration" || !canManageOwnApiKeys) ? <EmptyOrganization systemAdmin={canManageGlobalState} t={t} /> : view === "workspaces" ? (
             <WorkspacePanel api={api} principal={principal} organizationId={organizationId} workspaces={scopedWorkspaces} busy={loading} onRefresh={refresh} onError={reportError} />
           ) : view === "injections" ? (
             <InjectionPanel api={api} principal={principal} organizationId={organizationId} workspaces={scopedWorkspaces} onError={reportError} />

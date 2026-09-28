@@ -21,8 +21,6 @@ import {
   Option,
   Select,
   Spinner,
-  Tab,
-  TabList,
   Text,
   Textarea,
   Tooltip,
@@ -42,26 +40,26 @@ import { applyLocalRevocations, getApiKeyStatus, prependCreatedApiKey } from "./
 import { ConfirmDialog } from "./components/ConfirmDialog";
 import { useI18n } from "./i18n";
 import { hasApiKeyScope } from "./permissions";
-import type { AdminApiKey, ApiKeyPage, ApiKeyScope, ApiKeySummary, MembershipSummary, Principal, Role, UserSummary, WorkspaceTemplate } from "./types";
+import type { AdminApiKey, ApiKeyScope, ApiKeySummary, MembershipSummary, Principal, Role, UserSummary, WorkspaceTemplate } from "./types";
 import { API_KEY_SCOPES } from "./apiKeyScopes";
 import { AdminToolbar, SaveButton, useAdminStyles } from "./admin/fluentAdmin";
 import { ApiKeyTemplatePicker } from "./admin/ApiKeyTemplatePicker";
 
 type DirectoryItem = UserSummary & { membershipRole: Role | null };
-type UserEditorSection = "details" | "apiKeys";
-
 export interface UsersDirectoryProps {
   api: ApiClient;
   organizationId: string;
   principal: Principal;
+  canListUsers: boolean;
   canManageUsers: boolean;
+  canEditMembership: boolean;
   canEditQuota: boolean;
   refreshVersion: number;
   onError: (message: string) => void;
   onEditQuota: (userId: string) => void;
 }
 
-export function UsersDirectory({ api, organizationId, principal, canManageUsers, canEditQuota, refreshVersion, onError, onEditQuota }: UsersDirectoryProps) {
+export function UsersDirectory({ api, organizationId, principal, canListUsers, canManageUsers, canEditMembership, canEditQuota, refreshVersion, onError, onEditQuota }: UsersDirectoryProps) {
   const { t } = useI18n();
   const styles = useAdminStyles();
   const [query, setQuery] = useState("");
@@ -74,8 +72,8 @@ export function UsersDirectory({ api, organizationId, principal, canManageUsers,
   const loadingRef = useRef(false);
   const requestRef = useRef(0);
   const [selectedUser, setSelectedUser] = useState<DirectoryItem | null>(null);
-  const [selectedSection, setSelectedSection] = useState<UserEditorSection>("details");
-  const canManageApiKeys = principal.system_admin && hasApiKeyScope(principal, "manage_system") && hasApiKeyScope(principal, "manage_api_keys");
+  const [apiKeyUser, setApiKeyUser] = useState<DirectoryItem | null>(null);
+  const canManageApiKeys = principal.system_admin && hasApiKeyScope(principal, "manage_api_keys");
 
   useEffect(() => {
     let active = true;
@@ -87,7 +85,7 @@ export function UsersDirectory({ api, organizationId, principal, canManageUsers,
     loadingRef.current = true;
     setLoading(true);
     const timer = window.setTimeout(() => {
-      void loadPageData(api, organizationId, size, query.trim() || undefined, canManageUsers, null)
+      void loadPageData(api, organizationId, size, query.trim() || undefined, canListUsers, null)
         .then((page) => {
           if (!active || requestRef.current !== requestId) return;
           setItems(page.items);
@@ -101,7 +99,7 @@ export function UsersDirectory({ api, organizationId, principal, canManageUsers,
         });
     }, 250);
     return () => { active = false; window.clearTimeout(timer); };
-  }, [api, organizationId, query, size, canManageUsers, refreshVersion, onError, t]);
+  }, [api, organizationId, query, size, canListUsers, refreshVersion, onError, t]);
 
   async function loadPage(pageCursor: string | null) {
     if (loadingRef.current) return false;
@@ -109,7 +107,7 @@ export function UsersDirectory({ api, organizationId, principal, canManageUsers,
     loadingRef.current = true;
     setLoading(true);
     try {
-      const page = await loadPageData(api, organizationId, size, query.trim() || undefined, canManageUsers, pageCursor);
+      const page = await loadPageData(api, organizationId, size, query.trim() || undefined, canListUsers, pageCursor);
       if (requestRef.current !== requestId) return false;
       setItems(page.items);
       setNextCursor(page.nextCursor);
@@ -153,11 +151,6 @@ export function UsersDirectory({ api, organizationId, principal, canManageUsers,
     setSelectedUser((user) => user?.id === userId ? { ...user, membershipRole } : user);
   }
 
-  function openUser(user: DirectoryItem, section: UserEditorSection) {
-    setSelectedSection(section);
-    setSelectedUser(user);
-  }
-
   return <div className={styles.stack}>
     <AdminToolbar action={<div className={styles.actions}>
       <Field label={t("rowsPerPage")}><Select value={String(size)} onChange={(event) => setSize(Number(event.target.value))}><Option value="25">25</Option><Option value="50">50</Option><Option value="100">100</Option></Select></Field>
@@ -171,17 +164,18 @@ export function UsersDirectory({ api, organizationId, principal, canManageUsers,
       </div>
     </AdminToolbar>
     {loading && items.length === 0 ? <Spinner label={t("loading")} /> : items.length === 0 ? <Text className={styles.empty}>{t("noUsers")}</Text> : <div className={styles.table} aria-busy={loading}>
-      <DataGrid items={items} columns={userColumns({ t, styles, canManageUsers, canEditQuota, canManageApiKeys, openUser, onEditQuota })}>
+      <DataGrid items={items} columns={userColumns({ t, styles, canManageUsers, canEditMembership, canEditQuota, canManageApiKeys, openUser: setSelectedUser, openApiKeys: setApiKeyUser, onEditQuota })}>
         <DataGridHeader><DataGridRow<DirectoryItem>>{(column) => <DataGridHeaderCell>{column.renderHeaderCell()}</DataGridHeaderCell>}</DataGridRow></DataGridHeader>
         <DataGridBody<DirectoryItem>>{({ item }) => <DataGridRow<DirectoryItem>>{(column) => <DataGridCell>{column.renderCell(item)}</DataGridCell>}</DataGridRow>}</DataGridBody>
       </DataGrid>
     </div>}
-    {selectedUser && <UserEditDialog user={selectedUser} initialSection={selectedSection} api={api} organizationId={organizationId} principal={principal} canManageUsers={canManageUsers} onClose={() => setSelectedUser(null)} onError={onError} onUpdated={updateUser} onMembershipChanged={updateMembership} />}
+    {selectedUser && <UserEditDialog user={selectedUser} api={api} organizationId={organizationId} principal={principal} canManageUsers={canManageUsers} canEditMembership={canEditMembership} onClose={() => setSelectedUser(null)} onError={onError} onUpdated={updateUser} onMembershipChanged={updateMembership} />}
+    {apiKeyUser && canManageApiKeys && <UserApiKeysDialog api={api} organizationId={organizationId} principal={principal} user={apiKeyUser} onClose={() => setApiKeyUser(null)} onError={onError} />}
   </div>;
 }
 
-async function loadPageData(api: ApiClient, organizationId: string, size: number, search: string | undefined, canManageUsers: boolean, cursor: string | null): Promise<{ items: DirectoryItem[]; nextCursor: string | null }> {
-  if (!canManageUsers) {
+async function loadPageData(api: ApiClient, organizationId: string, size: number, search: string | undefined, canListUsers: boolean, cursor: string | null): Promise<{ items: DirectoryItem[]; nextCursor: string | null }> {
+  if (!canListUsers) {
     const page = await api.membersPage(organizationId, { limit: size, search, cursor: cursor ?? undefined });
     return { items: page.items.map(memberToItem), nextCursor: page.next_cursor };
   }
@@ -192,7 +186,7 @@ async function loadPageData(api: ApiClient, organizationId: string, size: number
 function userToItem(user: UserSummary): DirectoryItem { return { ...user, membershipRole: user.membership_role ?? null }; }
 function memberToItem(membership: MembershipSummary): DirectoryItem { return { ...membership.user, membershipRole: membership.role }; }
 
-function UserEditDialog({ user, initialSection, api, organizationId, principal, canManageUsers, onClose, onError, onUpdated, onMembershipChanged }: { user: DirectoryItem; initialSection: UserEditorSection; api: ApiClient; organizationId: string; principal: Principal; canManageUsers: boolean; onClose: () => void; onError: (message: string) => void; onUpdated: (user: UserSummary) => void; onMembershipChanged: (userId: string, role: Role | null) => void }) {
+function UserEditDialog({ user, api, organizationId, principal, canManageUsers, canEditMembership, onClose, onError, onUpdated, onMembershipChanged }: { user: DirectoryItem; api: ApiClient; organizationId: string; principal: Principal; canManageUsers: boolean; canEditMembership: boolean; onClose: () => void; onError: (message: string) => void; onUpdated: (user: UserSummary) => void; onMembershipChanged: (userId: string, role: Role | null) => void }) {
   const { t } = useI18n();
   const styles = useAdminStyles();
   const [displayName, setDisplayName] = useState(user.display_name);
@@ -200,20 +194,19 @@ function UserEditDialog({ user, initialSection, api, organizationId, principal, 
   const [disabled, setDisabled] = useState(user.disabled);
   const [role, setRole] = useState<Role>(user.membershipRole ?? "member");
   const [saving, setSaving] = useState(false);
-  const [managingKeys, setManagingKeys] = useState(false);
-  const [section, setSection] = useState<UserEditorSection>(initialSection);
   const [status, setStatus] = useState("");
   const [confirmRemove, setConfirmRemove] = useState(false);
   const isCurrentUser = user.id === principal.user_id;
-  const canManageApiKeys = principal.system_admin && hasApiKeyScope(principal, "manage_system") && hasApiKeyScope(principal, "manage_api_keys");
 
   async function save() {
     if (!displayName.trim()) return;
     setSaving(true);
     try {
       if (canManageUsers) onUpdated(await api.updateUser(user.id, { display_name: displayName.trim(), system_admin: systemAdmin, disabled }));
-      await api.setMembership(organizationId, user.id, role);
-      onMembershipChanged(user.id, role);
+      if (canEditMembership) {
+        await api.setMembership(organizationId, user.id, role);
+        onMembershipChanged(user.id, role);
+      }
       setStatus(t("userSaved"));
     } catch (error) {
       onError(message(error, t("requestFailed")));
@@ -236,17 +229,11 @@ function UserEditDialog({ user, initialSection, api, organizationId, principal, 
     }
   }
 
-  return <><Dialog open onOpenChange={(_, data) => { if (!data.open && !saving && !managingKeys) onClose(); }}><DialogSurface className={styles.dialogSurface}><DialogBody><DialogTitle>{t("saveUser")} · {user.display_name}</DialogTitle><DialogContent className={styles.dialogBody}>
-    <TabList selectedValue={section} onTabSelect={(_, data) => setSection(data.value as UserEditorSection)}>
-      <Tab value="details">{t("user")}</Tab>
-      {canManageApiKeys && <Tab value="apiKeys">{t("apiKeys")}</Tab>}
-    </TabList>
-    {section === "details" ? <>
+  return <><Dialog open onOpenChange={(_, data) => { if (!data.open && !saving) onClose(); }}><DialogSurface className={styles.dialogSurface}><DialogBody><DialogTitle>{t("saveUser")} · {user.display_name}</DialogTitle><DialogContent className={styles.dialogBody}>
       {canManageUsers && <><Field label={t("displayName")} required><Input value={displayName} onChange={(event) => setDisplayName(event.target.value)} /></Field><Checkbox checked={systemAdmin} disabled={isCurrentUser} onChange={(_, data) => setSystemAdmin(Boolean(data.checked))} label={t("systemAdmin")} /><Checkbox checked={disabled} disabled={isCurrentUser} onChange={(_, data) => setDisabled(Boolean(data.checked))} label={t("disableUser")} /></>}
-      <Field label={t("role")}><Select value={role} disabled={saving} onChange={(event) => setRole(event.target.value as Role)}><Option value="member">{t("roleMember")}</Option><Option value="organization_admin">{t("roleOrganizationAdmin")}</Option></Select></Field>
+      {canEditMembership && <Field label={t("role")}><Select value={role} disabled={saving} onChange={(event) => setRole(event.target.value as Role)}><Option value="member">{t("roleMember")}</Option><Option value="organization_admin">{t("roleOrganizationAdmin")}</Option></Select></Field>}
       {status && <MessageBar intent="success"><MessageBarBody>{status}</MessageBarBody></MessageBar>}
-    </> : <UserApiKeysPanel api={api} organizationId={organizationId} principal={principal} userId={user.id} isCurrentUser={isCurrentUser} onBusyChange={setManagingKeys} onError={onError} />}
-  </DialogContent><DialogActions><Button appearance="secondary" disabled={saving || managingKeys} onClick={onClose}>{t("close")}</Button>{section === "details" && <>{user.membershipRole && <Button disabled={saving} onClick={() => setConfirmRemove(true)}>{t("removeOrganizationMember")}</Button>}<SaveButton icon={<SaveRegular />} disabled={saving || !displayName.trim()} onClick={() => void save()}>{saving ? t("saving") : t("saveUser")}</SaveButton></>}</DialogActions></DialogBody></DialogSurface></Dialog>
+  </DialogContent><DialogActions><Button appearance="secondary" disabled={saving} onClick={onClose}>{t("close")}</Button>{canEditMembership && user.membershipRole && <Button disabled={saving} onClick={() => setConfirmRemove(true)}>{t("removeOrganizationMember")}</Button>}<SaveButton icon={<SaveRegular />} disabled={saving || !displayName.trim()} onClick={() => void save()}>{saving ? t("saving") : t("saveUser")}</SaveButton></DialogActions></DialogBody></DialogSurface></Dialog>
   <ConfirmDialog
     open={confirmRemove}
     title={t("removeOrganizationMember")}
@@ -260,6 +247,30 @@ function UserEditDialog({ user, initialSection, api, organizationId, principal, 
     onConfirm={() => void removeMember()}
   />
   </>;
+}
+
+const ignoreBusyChange = () => {};
+
+export function SelfApiKeysPanel({ api, organizationId, principal, onError }: { api: ApiClient; organizationId: string; principal: Principal; onError: (message: string) => void }) {
+  const { t } = useI18n();
+  if (!hasApiKeyScope(principal, "manage_api_keys")) return null;
+  return <AdminCard title={t("userApiCredentials")} description={<span>{t("apiKeysHelp")}</span>}>
+    <UserApiKeysPanel api={api} organizationId={organizationId} principal={principal} userId={principal.user_id} isCurrentUser onBusyChange={ignoreBusyChange} onError={onError} />
+  </AdminCard>;
+}
+
+function UserApiKeysDialog({ api, organizationId, principal, user, onClose, onError }: { api: ApiClient; organizationId: string; principal: Principal; user: DirectoryItem; onClose: () => void; onError: (message: string) => void }) {
+  const { t } = useI18n();
+  const styles = useAdminStyles();
+  const [busy, setBusy] = useState(false);
+  return <Dialog open onOpenChange={(_, data) => { if (!data.open && !busy) onClose(); }}><DialogSurface className={styles.dialogSurface}><DialogBody>
+    <DialogTitle>{t("userApiCredentials")} · {user.display_name}</DialogTitle>
+    <DialogContent className={styles.dialogBody}>
+      <Text size={200} className={styles.muted}>{t("apiKeysHelp")}</Text>
+      <UserApiKeysPanel api={api} organizationId={organizationId} principal={principal} userId={user.id} isCurrentUser={user.id === principal.user_id} onBusyChange={setBusy} onError={onError} />
+    </DialogContent>
+    <DialogActions><Button appearance="secondary" disabled={busy} onClick={onClose}>{t("close")}</Button></DialogActions>
+  </DialogBody></DialogSurface></Dialog>;
 }
 
 function UserApiKeysPanel({ api, organizationId, principal, userId, isCurrentUser, onBusyChange, onError }: { api: ApiClient; organizationId: string; principal: Principal; userId: string; isCurrentUser: boolean; onBusyChange: (busy: boolean) => void; onError: (message: string) => void }) {
@@ -276,10 +287,10 @@ function UserApiKeysPanel({ api, organizationId, principal, userId, isCurrentUse
   const [creating, setCreating] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
   const [name, setName] = useState("");
-  const [expiresAt, setExpiresAt] = useState(defaultExpiry);
+  const [expiresAt, setExpiresAt] = useState(() => defaultExpiry(isCurrentUser ? principal.api_key_expires_at : null));
   const [scopes, setScopes] = useState<ApiKeyScope[]>(() => principal.api_key_scopes.includes("read_workspace") ? ["read_workspace"] : principal.api_key_scopes.slice(0, 1));
   const [templates, setTemplates] = useState<WorkspaceTemplate[]>([]);
-  const [templateRestriction, setTemplateRestriction] = useState(false);
+  const [templateRestriction, setTemplateRestriction] = useState(principal.allowed_template_ids !== null);
   const [allowedTemplateIds, setAllowedTemplateIds] = useState<string[]>([]);
   const [copiedKeyId, setCopiedKeyId] = useState<string | null>(null);
   const localRevocationsRef = useRef(new Map<string, number>());
@@ -288,15 +299,20 @@ function UserApiKeysPanel({ api, organizationId, principal, userId, isCurrentUse
   useEffect(() => onBusyChange(revoking || creating), [creating, onBusyChange, revoking]);
   useEffect(() => () => onBusyChange(false), [onBusyChange]);
   useEffect(() => {
+    setTemplates([]);
+    setAllowedTemplateIds([]);
+    if (!organizationId || !hasApiKeyScope(principal, "read_workspace")) return;
     let active = true;
-    void api.templates(organizationId).then((items) => { if (active) setTemplates(items); }).catch((error) => { if (active) onError(message(error, t("requestFailed"))); });
+    void api.templates(organizationId).then((items) => { if (active) setTemplates(principal.allowed_template_ids === null ? items : items.filter((item) => principal.allowed_template_ids?.includes(item.id))); }).catch((error) => { if (active) onError(message(error, t("requestFailed"))); });
     return () => { active = false; };
-  }, [api, onError, organizationId, t]);
+  }, [api, onError, organizationId, principal.allowed_template_ids, principal.api_key_scopes, t]);
 
   async function loadPage(cursor: string | null, navigation: "reset" | "next" | "previous" = "reset") {
     setLoading(true);
     try {
-      const page = await api.adminUserApiKeys(userId, { status: "all", limit: 25, cursor: cursor ?? undefined });
+      const page = isCurrentUser
+        ? { items: (await api.apiKeys()).map((item) => ({ ...item, token: null })), next_cursor: null }
+        : await api.adminUserApiKeys(userId, { status: "all", limit: 25, cursor: cursor ?? undefined });
       const normalized = { ...page, items: applyLocalRevocations(page.items, localRevocationsRef.current) };
       setItems(normalized.items);
       setNextCursor(page.next_cursor);
@@ -317,8 +333,11 @@ function UserApiKeysPanel({ api, organizationId, principal, userId, isCurrentUse
       if (isCurrentUser) await api.deleteApiKey(key.id);
       else await api.revokeAdminUserApiKey(userId, key.id, reason.trim());
       const revokedAt = Math.floor(Date.now() / 1_000);
-      localRevocationsRef.current.set(key.id, revokedAt);
-      setItems((current) => current.map((item) => item.id === key.id ? { ...item, revoked_at: item.revoked_at ?? revokedAt } : item));
+      if (isCurrentUser) setItems((current) => current.filter((item) => item.id !== key.id));
+      else {
+        localRevocationsRef.current.set(key.id, revokedAt);
+        setItems((current) => current.map((item) => item.id === key.id ? { ...item, revoked_at: item.revoked_at ?? revokedAt } : item));
+      }
       setRevokingKeyId(null);
       setReason("");
     } catch (error) {
@@ -330,13 +349,14 @@ function UserApiKeysPanel({ api, organizationId, principal, userId, isCurrentUse
 
   async function createKey() {
     const expires = Math.floor(new Date(expiresAt).getTime() / 1_000);
-    if (!name.trim() || !Number.isFinite(expires) || scopes.length === 0) return;
+    if (!name.trim() || !Number.isFinite(expires) || expires <= Date.now() / 1_000 || (isCurrentUser && principal.api_key_expires_at !== null && expires > principal.api_key_expires_at) || scopes.length === 0) return;
     setCreating(true);
     try {
-      const created = await api.createAdminUserApiKey(userId, { name: name.trim(), scopes, expires_at: expires, allowed_template_ids: templateRestriction ? allowedTemplateIds : null });
+      const input = { name: name.trim(), scopes, expires_at: expires, allowed_template_ids: templateRestriction || principal.allowed_template_ids !== null ? allowedTemplateIds.filter((id) => templates.some((template) => template.id === id)) : null };
+      const created = isCurrentUser ? await api.createApiKey(input) : await api.createAdminUserApiKey(userId, input);
       setName("");
       setShowCreate(false);
-      setTemplateRestriction(false);
+      setTemplateRestriction(principal.allowed_template_ids !== null);
       setAllowedTemplateIds([]);
       await loadPage(null, "reset");
       setItems((current) => prependCreatedApiKey(current, created));
@@ -352,11 +372,13 @@ function UserApiKeysPanel({ api, organizationId, principal, userId, isCurrentUse
   function toggleScope(scope: ApiKeyScope) { setScopes((current) => current.includes(scope) ? current.filter((value) => value !== scope) : [...current, scope]); }
 
   const revokingKey = revokingKeyId ? items.find((item) => item.id === revokingKeyId) ?? null : null;
+  const expires = Math.floor(new Date(expiresAt).getTime() / 1_000);
+  const validExpiry = Number.isFinite(expires) && expires > Date.now() / 1_000 && (!isCurrentUser || principal.api_key_expires_at === null || expires <= principal.api_key_expires_at);
 
   return <>
-    <AdminToolbar action={<div className={styles.actions}><Button icon={<AddRegular />} onClick={() => setShowCreate((value) => !value)}>{t("createApiKey")}</Button><Button icon={<ArrowLeftRegular />} disabled={pageNumber <= 1 || loading || revoking || creating} onClick={() => void loadPage(cursorHistory[pageNumber - 2] ?? null, "previous")}>{t("previousPage")}</Button><Button icon={<ArrowRightRegular />} iconPosition="after" disabled={!nextCursor || loading || revoking || creating} onClick={() => void loadPage(nextCursor, "next")}>{t("nextPage")}</Button></div>}><Text size={300}>{formatApiKeyPageStatus(locale, pageNumber, items.length, t)}</Text></AdminToolbar>
-    {showCreate && <div className={styles.stack}><div className={styles.formGrid}><Field label={t("apiKeyName")} required><Input value={name} onChange={(event) => setName(event.target.value)} /></Field><Field label={t("apiKeyExpires")} required><Input type="datetime-local" value={expiresAt} onChange={(event) => setExpiresAt(event.target.value)} /></Field></div><Text weight="semibold">{t("apiKeyPermissions")}</Text><div className={styles.formGrid}>{API_KEY_SCOPES.filter(({ scope }) => principal.api_key_scopes.includes(scope)).map(({ scope, label }) => <Checkbox key={scope} checked={scopes.includes(scope)} onChange={() => toggleScope(scope)} label={t(label)} />)}</div><ApiKeyTemplatePicker templates={templates} selected={allowedTemplateIds} restricted={templateRestriction} disabled={creating} translate={t} onRestrictedChange={setTemplateRestriction} onSelectedChange={setAllowedTemplateIds} /><div className={styles.actions}><SaveButton disabled={creating || !name.trim() || scopes.length === 0} onClick={() => void createKey()}>{creating ? t("saving") : t("createApiKey")}</SaveButton></div></div>}
-    {loading && items.length === 0 ? <Spinner label={t("loading")} /> : items.length === 0 ? <Text className={styles.empty}>{t("noApiKeys")}</Text> : <DataGrid items={items} columns={apiKeyColumns({ t, locale, styles, revokingKeyId, revoking, loading, copiedKeyId, onCopy: copyKey, setRevokingKeyId, setReason })}><DataGridHeader><DataGridRow<AdminApiKey>>{(column) => <DataGridHeaderCell>{column.renderHeaderCell()}</DataGridHeaderCell>}</DataGridRow></DataGridHeader><DataGridBody<AdminApiKey>>{({ item }) => <DataGridRow<AdminApiKey>>{(column) => <DataGridCell>{column.renderCell(item)}</DataGridCell>}</DataGridRow>}</DataGridBody></DataGrid>}
+    <AdminToolbar action={<div className={styles.actions}><Button icon={<AddRegular />} onClick={() => setShowCreate((value) => !value)}>{t("createApiKey")}</Button>{!isCurrentUser && <><Button icon={<ArrowLeftRegular />} disabled={pageNumber <= 1 || loading || revoking || creating} onClick={() => void loadPage(cursorHistory[pageNumber - 2] ?? null, "previous")}>{t("previousPage")}</Button><Button icon={<ArrowRightRegular />} iconPosition="after" disabled={!nextCursor || loading || revoking || creating} onClick={() => void loadPage(nextCursor, "next")}>{t("nextPage")}</Button></>}</div>}><Text size={300}>{isCurrentUser ? `${items.length} ${t("apiKeyCountUnit")}` : formatApiKeyPageStatus(locale, pageNumber, items.length, t)}</Text></AdminToolbar>
+    {showCreate && <div className={styles.stack}><div className={styles.formGrid}><Field label={t("apiKeyName")} required><Input maxLength={80} value={name} onChange={(event) => setName(event.target.value)} /></Field><Field label={t("apiKeyExpires")} required><Input type="datetime-local" value={expiresAt} max={isCurrentUser && principal.api_key_expires_at !== null ? localDateTime(new Date(principal.api_key_expires_at * 1_000)) : undefined} onChange={(event) => setExpiresAt(event.target.value)} /></Field></div><Text weight="semibold">{t("apiKeyPermissions")}</Text><div className={styles.formGrid}>{API_KEY_SCOPES.filter(({ scope }) => principal.api_key_scopes.includes(scope)).map(({ scope, label }) => <Checkbox key={scope} checked={scopes.includes(scope)} onChange={() => toggleScope(scope)} label={t(label)} />)}</div><ApiKeyTemplatePicker templates={templates} selected={allowedTemplateIds} restricted={templateRestriction} disabled={creating} translate={t} onRestrictedChange={(restricted) => setTemplateRestriction(principal.allowed_template_ids !== null || restricted)} onSelectedChange={setAllowedTemplateIds} /><div className={styles.actions}><SaveButton disabled={creating || !name.trim() || scopes.length === 0 || !validExpiry} onClick={() => void createKey()}>{creating ? t("saving") : t("createApiKey")}</SaveButton></div></div>}
+    {loading && items.length === 0 ? <Spinner label={t("loading")} /> : items.length === 0 ? <Text className={styles.empty}>{t("noApiKeys")}</Text> : <DataGrid items={items} columns={apiKeyColumns({ t, locale, styles, templates, revokingKeyId, revoking, loading, copiedKeyId, onCopy: copyKey, setRevokingKeyId, setReason })}><DataGridHeader><DataGridRow<AdminApiKey>>{(column) => <DataGridHeaderCell>{column.renderHeaderCell()}</DataGridHeaderCell>}</DataGridRow></DataGridHeader><DataGridBody<AdminApiKey>>{({ item }) => <DataGridRow<AdminApiKey>>{(column) => <DataGridCell>{column.renderCell(item)}</DataGridCell>}</DataGridRow>}</DataGridBody></DataGrid>}
   <ConfirmDialog
     open={revokingKey !== null}
     title={t("revokeApiKey")}
@@ -373,18 +395,18 @@ function UserApiKeysPanel({ api, organizationId, principal, userId, isCurrentUse
   </>;
 }
 
-function userColumns({ t, styles, canManageUsers, canEditQuota, canManageApiKeys, openUser, onEditQuota }: { t: ReturnType<typeof useI18n>["t"]; styles: ReturnType<typeof useAdminStyles>; canManageUsers: boolean; canEditQuota: boolean; canManageApiKeys: boolean; openUser: (user: DirectoryItem, section: UserEditorSection) => void; onEditQuota: (userId: string) => void }): TableColumnDefinition<DirectoryItem>[] {
+function userColumns({ t, styles, canManageUsers, canEditMembership, canEditQuota, canManageApiKeys, openUser, openApiKeys, onEditQuota }: { t: ReturnType<typeof useI18n>["t"]; styles: ReturnType<typeof useAdminStyles>; canManageUsers: boolean; canEditMembership: boolean; canEditQuota: boolean; canManageApiKeys: boolean; openUser: (user: DirectoryItem) => void; openApiKeys: (user: DirectoryItem) => void; onEditQuota: (userId: string) => void }): TableColumnDefinition<DirectoryItem>[] {
   return [
     { columnId: "user", compare: (a, b) => a.display_name.localeCompare(b.display_name), renderHeaderCell: () => t("user"), renderCell: (item) => <div className={styles.stack}><Text weight="semibold">{item.display_name}</Text><Text size={200}>{item.id}</Text></div> },
     { columnId: "role", compare: (a, b) => String(a.membershipRole).localeCompare(String(b.membershipRole)), renderHeaderCell: () => t("role"), renderCell: (item) => item.membershipRole === "organization_admin" ? t("roleOrganizationAdmin") : item.membershipRole === "member" ? t("roleMember") : t("notEnabled") },
     { columnId: "status", compare: (a, b) => Number(a.disabled) - Number(b.disabled), renderHeaderCell: () => t("workspaceState"), renderCell: (item) => item.disabled ? t("userStatusDisabled") : t("userStatusActive") },
-    { columnId: "actions", compare: () => 0, renderHeaderCell: () => t("actions"), renderCell: (item) => <div className={styles.actions}>{(canManageUsers || item.membershipRole !== null) && <Button icon={<EditRegular />} onClick={() => openUser(item, "details")}>{t("editUser")}</Button>}{canManageApiKeys && <Button icon={<KeyRegular />} onClick={() => openUser(item, "apiKeys")}>{t("apiKeys")}</Button>}{canEditQuota && <Button onClick={() => onEditQuota(item.id)}>{t("editUserQuota")}</Button>}</div> },
+    { columnId: "actions", compare: () => 0, renderHeaderCell: () => t("actions"), renderCell: (item) => <div className={styles.actions}>{(canManageUsers || canEditMembership && item.membershipRole !== null) && <Button icon={<EditRegular />} onClick={() => openUser(item)}>{t("editUser")}</Button>}{canManageApiKeys && <Button icon={<KeyRegular />} onClick={() => openApiKeys(item)}>{t("userApiCredentials")}</Button>}{canEditQuota && <Button onClick={() => onEditQuota(item.id)}>{t("editUserQuota")}</Button>}</div> },
   ];
 }
 
-function apiKeyColumns({ t, locale, styles, revokingKeyId, revoking, loading, copiedKeyId, onCopy, setRevokingKeyId, setReason }: { t: ReturnType<typeof useI18n>["t"]; locale: string; styles: ReturnType<typeof useAdminStyles>; revokingKeyId: string | null; revoking: boolean; loading: boolean; copiedKeyId: string | null; onCopy: (key: AdminApiKey) => void; setRevokingKeyId: (id: string | null) => void; setReason: (reason: string) => void }): TableColumnDefinition<AdminApiKey>[] {
+function apiKeyColumns({ t, locale, styles, templates, revokingKeyId, revoking, loading, copiedKeyId, onCopy, setRevokingKeyId, setReason }: { t: ReturnType<typeof useI18n>["t"]; locale: string; styles: ReturnType<typeof useAdminStyles>; templates: WorkspaceTemplate[]; revokingKeyId: string | null; revoking: boolean; loading: boolean; copiedKeyId: string | null; onCopy: (key: AdminApiKey) => void; setRevokingKeyId: (id: string | null) => void; setReason: (reason: string) => void }): TableColumnDefinition<AdminApiKey>[] {
   return [
-    { columnId: "key", compare: (a, b) => a.name.localeCompare(b.name), renderHeaderCell: () => t("manageUserApiKeys"), renderCell: (item) => <div className={styles.stack}><Text weight="semibold">{item.name}</Text><Text size={200}>{item.prefix}</Text><Text size={200}>{formatApiKeyScopes(item, t)}</Text></div> },
+    { columnId: "key", compare: (a, b) => a.name.localeCompare(b.name), renderHeaderCell: () => t("manageUserApiKeys"), renderCell: (item) => <div className={styles.stack}><Text weight="semibold">{item.name}</Text>{item.token ? <Text size={200} className={styles.code}>{item.token}</Text> : <Text size={200}>{item.prefix}</Text>}<Text size={200}>{formatApiKeyScopes(item, t)}</Text><Text size={200}>{t("apiKeyTemplates")}: {formatTemplateRestriction(item, templates, t)}</Text><Text size={200}>{t("createdAt")}: {formatTime(item.created_at, locale)} · {t("lastUsedAt")}: {item.last_used_at ? formatTime(item.last_used_at, locale) : t("never")}</Text></div> },
     { columnId: "status", compare: (a, b) => getApiKeyStatus(a).localeCompare(getApiKeyStatus(b)), renderHeaderCell: () => t("apiKeyStatus"), renderCell: (item) => formatApiKeyStatus(item, t) },
     { columnId: "expires", compare: (a, b) => (a.expires_at ?? 0) - (b.expires_at ?? 0), renderHeaderCell: () => t("apiKeyExpires"), renderCell: (item) => formatApiKeyExpiry(item.expires_at, locale, t) },
     { columnId: "actions", compare: () => 0, renderHeaderCell: () => t("actions"), renderCell: (item) => <div className={styles.actions}>{item.token ? <Button appearance="subtle" icon={<CopyRegular />} onClick={() => onCopy(item)}>{copiedKeyId === item.id ? t("copied") : t("copy")}</Button> : <Tooltip content={t("apiKeyCopyUnavailable")} relationship="description"><span><Button appearance="subtle" icon={<CopyRegular />} disabled>{t("copy")}</Button></span></Tooltip>}{getApiKeyStatus(item) === "active" && <Button disabled={revoking || loading || revokingKeyId !== null} onClick={() => { setRevokingKeyId(item.id); setReason(""); }}>{t("revokeApiKey")}</Button>}</div> },
@@ -393,8 +415,18 @@ function apiKeyColumns({ t, locale, styles, revokingKeyId, revoking, loading, co
 
 function message(error: unknown, fallback: string) { return error instanceof Error ? error.message : fallback; }
 
-function defaultExpiry(): string {
-  const value = new Date(Date.now() + 30 * 86_400_000);
+function formatTemplateRestriction(key: ApiKeySummary, templates: WorkspaceTemplate[], t: ReturnType<typeof useI18n>["t"]): string {
+  if (key.allowed_template_ids === null) return t("allTemplates");
+  if (key.allowed_template_ids.length === 0) return t("noTemplates");
+  const names = new Map(templates.map((template) => [template.id, template.name]));
+  return key.allowed_template_ids.map((id) => names.get(id) ?? id.slice(-8)).join(" · ");
+}
+
+function localDateTime(value: Date): string {
   const offset = value.getTimezoneOffset() * 60_000;
   return new Date(value.getTime() - offset).toISOString().slice(0, 16);
+}
+
+function defaultExpiry(limit: number | null): string {
+  return localDateTime(new Date(Math.min(Date.now() + 30 * 86_400_000, limit === null ? Infinity : limit * 1_000)));
 }

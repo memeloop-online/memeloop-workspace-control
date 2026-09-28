@@ -7,9 +7,11 @@ import { useWorkspaceStyles } from "./workspaces/workspaceStyles";
 
 interface Props {
   connection: WorkspaceSshConnection;
+  shortId: string;
+  hostKey: { algorithm: string; public_key: string; fingerprint: string } | null;
 }
 
-export function WorkspaceConnectionDialog({ connection }: Props) {
+export function WorkspaceConnectionDialog({ connection, shortId, hostKey }: Props) {
   const { t } = useI18n();
   const styles = useWorkspaceStyles();
   const [open, setOpen] = useState(false);
@@ -34,16 +36,12 @@ export function WorkspaceConnectionDialog({ connection }: Props) {
               <Fact label={t("workspaceUser")} value={connection.user} code styles={styles} />
             </dl>
             <Divider />
-            <section className={styles.dialogSection}>
-              <Title3>{t("codexAppConnection")}</Title3>
-              <Caption1>{t("codexAppAliasHelp")}</Caption1>
-              <dl className={styles.dialogFacts}>
-                <Fact label={t("displayName")} value={connection.app.display_name} code styles={styles} />
-                <Fact label={t("hostname")} value={connection.app.hostname} code styles={styles} />
-                <Fact label={t("sshPortOptional")} value={connection.app.ssh_port === null ? t("leaveBlank") : String(connection.app.ssh_port)} code styles={styles} />
-              </dl>
-            </section>
-            <Divider />
+            {hostKey && <section className={styles.dialogSection}>
+              <Title3>{t("sshHostKey")}</Title3>
+              <Caption1>{t("sshHostKeyHelp")}</Caption1>
+              <CopyBlock label={t("copyHostKey")} value={hostKey.public_key} />
+              <CopyBlock label={t("copyKnownHostsEntry")} value={knownHostsEntry(shortId, hostKey)} multiline />
+            </section>}
             <section className={styles.dialogSection}>
               <Title3>{t("sshConfig")}</Title3>
               <Caption1>{t("sshConfigInstallHelp")}</Caption1>
@@ -58,6 +56,10 @@ export function WorkspaceConnectionDialog({ connection }: Props) {
       </DialogSurface>
     </Dialog>
   </>;
+}
+
+function knownHostsEntry(shortId: string, hostKey: { public_key: string }): string {
+  return `workspace-${shortId} ${hostKey.public_key}`;
 }
 
 function CopyBlock({ label, value, multiline = false }: { label: string; value: string; multiline?: boolean }) {
