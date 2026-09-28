@@ -75,6 +75,19 @@ test("administration selects only the clicked user's API keys and manages their 
         response = { body: [] };
       } else if (method === "GET" && path === "/api/v1/organizations/organization-fixture/quota") {
         response = { body: null };
+      } else if (method === "GET" && path === "/api/v1/organizations/organization-fixture/usage-summary") {
+        response = { body: {
+          total_count: 0,
+          state_counts: {},
+          requested: { cpu_millis: 0, memory_mib: 0, gpu_count: 0, disk_gib: 0 },
+          temporary_requested_gib: 0,
+          actual: { cpu_millis: null, memory_mib: null, disk_bytes: null, temporary_bytes: null },
+          observed_at: null,
+          availability: { cpu: "unknown", memory: "unknown", disk: "unknown", temporary: "unknown" },
+          coverage: { total_workspaces: 0, eligible_workspaces: 0, template_label_coverage: "complete" },
+        } };
+      } else if (method === "GET" && (path === "/api/v1/injections/organization/organization-fixture" || path === "/api/v1/injections/user/fixture-admin")) {
+        response = { body: [] };
       } else if (method === "GET" && path === "/api/v1/templates") {
         response = { body: [{ id: templateId, name: "Fixture template", organization_id: organizationId, enabled: true }] };
       } else if (method === "GET" && path === "/api/v1/webhooks") {
