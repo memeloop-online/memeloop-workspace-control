@@ -30,7 +30,10 @@ async fn app() -> (Router, Database, Workspace) {
         .await
         .unwrap();
     database.migrate().await.unwrap();
-    database.upsert_image_policy(IMAGE, true, now).await.unwrap();
+    database
+        .upsert_image_policy(IMAGE, true, now)
+        .await
+        .unwrap();
     let admin = database
         .create_user_with_initial_key(
             "Admin",
