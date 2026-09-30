@@ -19,7 +19,7 @@ use tower::ServiceExt;
 
 const ADMIN_TOKEN: &str = "scratch-resize-admin-000000000000000000000000";
 const MEMBER_TOKEN: &str = "scratch-resize-member-00000000000000000000000";
-const IMAGE: &str = "registry.example/workspace:stable";
+const IMAGE: &str = "registry.example/workspace@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
 async fn app() -> (Router, Database, Workspace) {
     let now = SystemTime::now()
@@ -30,6 +30,7 @@ async fn app() -> (Router, Database, Workspace) {
         .await
         .unwrap();
     database.migrate().await.unwrap();
+    database.upsert_image_policy(IMAGE, true, now).await.unwrap();
     let admin = database
         .create_user_with_initial_key(
             "Admin",
