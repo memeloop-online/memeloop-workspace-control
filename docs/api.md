@@ -54,7 +54,7 @@ server-generated and returned verbatim by clients — no offset arithmetic:
 | --- | --- |
 | Identity | `GET /api/v1/me`, `GET`/`PUT /api/v1/me/profile` |
 | API keys | `GET`/`POST /api/v1/me/api-keys`, `DELETE .../api-keys/{key_id}` |
-| Workspaces | `GET`/`POST /api/v1/workspaces`, `GET /api/v1/workspaces/{id}`, `POST .../actions/{action}` |
+| Workspaces | `GET`/`POST /api/v1/workspaces`, `GET /api/v1/workspaces/{id}`, `POST .../actions/{action}`, `PUT .../temporary-storage` |
 | Templates | `GET`/`POST /api/v1/templates`, `PUT`/`DELETE .../{id}`, `PUT .../enabled` |
 | Injections | `GET`/`PUT`/`DELETE /api/v1/injections/{scope}/{scope_id}[/{key}]`, `POST .../batch-delete`, `POST /api/v1/injections/preview` |
 | Access | `POST .../web-shell-tickets`, `GET`/`POST`/`DELETE .../port-mappings[/{id}]`, `POST .../open` |
@@ -77,3 +77,9 @@ server-generated and returned verbatim by clients — no offset arithmetic:
 Errors return a JSON body with a machine-readable code and message. Mutating
 endpoints are idempotent where retries are expected (creation, actions), so
 clients can safely retry on network failure.
+
+System administrators can resize a stopped workspace's temporary storage with
+`PUT /api/v1/workspaces/{workspace_id}/temporary-storage`, providing
+`temporary_storage_gib` (1–2,048) and `expected_generation`. Include an
+`Idempotency-Key`; the accepted snapshot and accounting update are reconciled
+on the next start.

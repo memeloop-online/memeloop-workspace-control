@@ -35,6 +35,7 @@ mod workspace_creation;
 mod workspace_image_update;
 mod workspace_placement;
 mod workspace_response;
+mod workspace_scratch_resize;
 mod workspaces;
 
 pub use error::{ApiError, ErrorBody, ErrorEnvelope};

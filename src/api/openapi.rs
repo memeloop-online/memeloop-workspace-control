@@ -6,7 +6,8 @@ use crate::config::{DatabaseMode, InstallationId};
 use super::{
     ErrorBody, ErrorEnvelope, admin, auth, catalog, events, injections, node_pools,
     organization_usage, organizations, plugins, port_mappings, runtime, ssh, system, user_quota,
-    web_shell, webhooks, workspace_image_update, workspace_placement, workspaces,
+    web_shell, webhooks, workspace_image_update, workspace_placement, workspace_scratch_resize,
+    workspaces,
 };
 
 #[derive(OpenApi)]
@@ -70,6 +71,7 @@ use super::{
         organization_usage::get,
         workspaces::action,
         workspace_image_update::update,
+        workspace_scratch_resize::update,
         workspace_placement::update,
         port_mappings::list,
         port_mappings::create,
@@ -111,6 +113,7 @@ use super::{
         crate::storage::CreateWorkspace,
         workspaces::CreateWorkspaceRequest,
         workspace_image_update::UpdateWorkspaceImageRequest,
+        workspace_scratch_resize::UpdateWorkspaceTemporaryStorageRequest,
         workspace_placement::UpdateWorkspacePlacementRequest,
         crate::workspaces::Workspace,
         crate::workspaces::WorkspaceState,

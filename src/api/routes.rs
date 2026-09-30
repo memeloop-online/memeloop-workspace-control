@@ -9,7 +9,7 @@ use super::{
     AppState, admin, auth, catalog, diagnostics, events, health, injections, metrics, node_pools,
     openapi, organization_usage, organizations, plugins, port_mappings, ready, runtime, ssh,
     system_info, ui, user_quota, web_shell, webhooks, workspace_image_update, workspace_placement,
-    workspaces,
+    workspace_scratch_resize, workspaces,
 };
 
 pub(super) fn router(state: Arc<AppState>) -> Router {
@@ -209,6 +209,10 @@ fn workspace_routes(router: ApiRouter) -> ApiRouter {
         .route(
             "/api/v1/workspaces/{workspace_id}/image",
             axum::routing::put(workspace_image_update::update),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/temporary-storage",
+            axum::routing::put(workspace_scratch_resize::update),
         )
         .route(
             "/api/v1/workspaces/{workspace_id}/placement",
