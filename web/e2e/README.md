@@ -11,3 +11,5 @@ node --test e2e/production-user-credentials.test.mjs
 ```
 
 The token must belong to an unrestricted system administrator with `manage_system` and `manage_api_keys`. The target must be a different, enabled user. By default the test only reads; set `E2E_ALLOW_WRITES=1` to create a short-lived key through the UI, verify copy/list readback, and revoke it. The test also attempts revocation during cleanup if an assertion fails. Do not use a person's account as the target. `CHROMIUM_BIN` and `E2E_PLAYWRIGHT_MODULE` can point to an existing browser/runtime in restricted environments.
+
+Set `E2E_NODE_WORKSPACE_ID` to a running workspace in the selected organization to compare its runtime node with the workspace-list label. The injection editor test changes only an unsaved browser draft; it does not write an injection.

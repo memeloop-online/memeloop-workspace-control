@@ -5,6 +5,7 @@ const baseUrl = process.env.E2E_BASE_URL;
 const adminToken = process.env.E2E_ADMIN_TOKEN;
 const organizationId = process.env.E2E_ORGANIZATION_ID;
 const targetUserId = process.env.E2E_TARGET_USER_ID;
+const nodeWorkspaceId = process.env.E2E_NODE_WORKSPACE_ID;
 const playwrightModule = process.env.E2E_PLAYWRIGHT_MODULE ?? "playwright-core";
 
 async function api(path, options = {}) {
@@ -115,6 +116,87 @@ test("production labels distinguish environment files from user API credentials"
       await page.getByRole("button", { name: credentials, exact: true }).first().waitFor();
       await context.close();
     }
+  } finally {
+    await browser.close();
+  }
+});
+
+test("production injection editor enables save only for changed fields", { timeout: 90_000 }, async () => {
+  assert.ok(baseUrl?.startsWith("https://") && adminToken && organizationId, "Set the production E2E URL, token and organization");
+  const { chromium } = await import(playwrightModule);
+  const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_BIN || chromium.executablePath(), headless: true, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
+  try {
+    const context = await browser.newContext();
+    await context.addInitScript(({ token, organization }) => {
+      sessionStorage.setItem("mwc.api-token", token);
+      localStorage.setItem("mwc.locale", "en");
+      localStorage.setItem("mwc.organization-id", organization);
+      localStorage.setItem("mwc.view", "workspaces");
+    }, { token: adminToken, organization: organizationId });
+    const page = await context.newPage();
+    await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
+    await page.getByRole("button", { name: "Environment Variables & Files", exact: true }).click();
+    const editor = page.locator("form").filter({ hasText: "New credential" });
+    const save = editor.getByRole("button", { name: "Create", exact: true });
+    await save.waitFor();
+    assert.equal(await save.isDisabled(), true);
+    await save.hover({ force: true });
+    await page.getByText("No modified content", { exact: true }).waitFor();
+    const name = editor.getByRole("textbox", { name: "Name" });
+    await name.fill("mwc-ui-e2e-unsaved");
+    assert.equal(await save.isEnabled(), true);
+    await editor.getByText("After saving, matching running workspaces update this file in place; stopped workspaces use the new content on their next start.").waitFor();
+    await name.clear();
+    assert.equal(await save.isDisabled(), true);
+    await context.close();
+  } finally {
+    await browser.close();
+  }
+});
+
+test("production workspace list shows the runtime Kubernetes node", { skip: !nodeWorkspaceId, timeout: 90_000 }, async () => {
+  assert.ok(baseUrl?.startsWith("https://") && adminToken && organizationId, "Set the production E2E URL, token and organization");
+  const runtimes = await api(`/api/v1/workspace-runtimes?organization_id=${organizationId}&workspace_ids=${nodeWorkspaceId}`);
+  const runtime = runtimes.find((entry) => entry.workspace_id === nodeWorkspaceId)?.runtime;
+  assert.ok(runtime?.node_name, "selected workspace must be scheduled on a node");
+  const { chromium } = await import(playwrightModule);
+  const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_BIN || chromium.executablePath(), headless: true, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
+  try {
+    const context = await browser.newContext();
+    await context.addInitScript(({ token, organization }) => {
+      sessionStorage.setItem("mwc.api-token", token);
+      localStorage.setItem("mwc.locale", "en");
+      localStorage.setItem("mwc.organization-id", organization);
+      localStorage.setItem("mwc.view", "workspaces");
+    }, { token: adminToken, organization: organizationId });
+    const page = await context.newPage();
+    await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
+    await page.getByText(`Kubernetes node: ${runtime.node_name}`, { exact: true }).first().waitFor();
+    await context.close();
+  } finally {
+    await browser.close();
+  }
+});
+
+test("production Settings uses the shared Fluent form controls", { timeout: 90_000 }, async () => {
+  assert.ok(baseUrl?.startsWith("https://") && adminToken && organizationId, "Set the production E2E URL, token and organization");
+  const { chromium } = await import(playwrightModule);
+  const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_BIN || chromium.executablePath(), headless: true, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
+  try {
+    const context = await browser.newContext();
+    await context.addInitScript(({ token, organization }) => {
+      sessionStorage.setItem("mwc.api-token", token);
+      localStorage.setItem("mwc.locale", "en");
+      localStorage.setItem("mwc.organization-id", organization);
+      localStorage.setItem("mwc.view", "workspaces");
+    }, { token: adminToken, organization: organizationId });
+    const page = await context.newPage();
+    await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    await page.getByRole("textbox", { name: "Display name" }).waitFor();
+    await page.getByRole("combobox", { name: "Current organization" }).waitFor();
+    await page.getByRole("button", { name: "Save profile" }).waitFor();
+    await context.close();
   } finally {
     await browser.close();
   }
