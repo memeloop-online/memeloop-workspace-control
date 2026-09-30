@@ -190,6 +190,16 @@ fn workspace_storage_response(error: &StorageError) -> Option<ErrorResponse> {
             "workspace_image_update_conflict",
             "workspace must be stopped and at the expected generation before its image can change",
         ),
+        StorageError::InvalidWorkspaceTemporaryStorage => response(
+            StatusCode::BAD_REQUEST,
+            "invalid_workspace_temporary_storage",
+            "temporary storage must be between 1 and 2048 GiB",
+        ),
+        StorageError::WorkspaceTemporaryStorageUpdateConflict => response(
+            StatusCode::CONFLICT,
+            "workspace_temporary_storage_update_conflict",
+            "workspace must be stopped and at the expected generation before temporary storage can change",
+        ),
         StorageError::TemplateNotFound => response(
             StatusCode::UNPROCESSABLE_ENTITY,
             "template_not_found",

@@ -41,6 +41,7 @@ mod workspace_events;
 mod workspace_image_update;
 mod workspace_injection_refs;
 mod workspace_placement_update;
+mod workspace_scratch_resize;
 mod workspace_store;
 
 pub use admin_store::{

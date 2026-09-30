@@ -80,6 +80,12 @@ pub enum StorageError {
     InvalidWorkspaceImageUpdate,
     #[error("workspace image can only be changed while stopped and at the expected generation")]
     WorkspaceImageUpdateConflict,
+    #[error("workspace temporary storage must be between 1 and 2048 GiB")]
+    InvalidWorkspaceTemporaryStorage,
+    #[error(
+        "workspace temporary storage can only be changed while stopped and at the expected generation"
+    )]
+    WorkspaceTemporaryStorageUpdateConflict,
     #[error("node pool is invalid")]
     InvalidNodePool,
     #[error("node pool was not found")]

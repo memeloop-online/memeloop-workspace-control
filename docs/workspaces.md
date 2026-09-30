@@ -62,7 +62,9 @@ MWC separates durable user data from regenerable data:
   ephemeral PVC named `workspace-scratch`. The selected class should enforce
   capacity; containers also keep small local `ephemeral-storage` requests and
   limits so writable-layer or log pressure cannot silently consume PVC
-  capacity.
+  capacity. A system administrator can resize this regenerable storage on a
+  stopped workspace through `PUT /api/v1/workspaces/{workspace_id}/temporary-storage`;
+  the updated snapshot and capacity accounting apply on its next start.
 
 ## Placement and node pools
 
