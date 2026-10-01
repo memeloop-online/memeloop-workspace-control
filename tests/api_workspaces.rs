@@ -399,12 +399,21 @@ async fn authenticated_workspace_api_enforces_rbac_and_exact_idempotent_replay()
     let (ready_status, ready_body) = body(ready).await;
     assert_eq!(ready_status, StatusCode::OK);
     let ready: Value = serde_json::from_slice(&ready_body).unwrap();
-    let alias = format!("mwc-{}", ready["workspace"]["short_id"].as_str().unwrap());
+    let alias = format!(
+        "mwc-primary-{}",
+        ready["workspace"]["short_id"].as_str().unwrap()
+    );
     assert_eq!(ready["ssh_connection"]["display_name"], "primary");
     assert_eq!(ready["ssh_connection"]["alias"], alias);
     assert_eq!(ready["ssh_connection"]["port"], 2_222);
     assert_eq!(ready["ssh_connection"]["user"], "workspace");
     assert_eq!(ready["ssh_connection"]["app"]["hostname"], alias);
+    assert!(
+        ready["ssh_connection"]["config"]
+            .as_str()
+            .unwrap()
+            .starts_with(&format!("Host {alias}\n"))
+    );
     assert_eq!(
         ready["ssh_connection"]["app"]["port_strategy"],
         "ssh_config"

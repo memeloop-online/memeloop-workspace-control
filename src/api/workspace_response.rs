@@ -203,23 +203,41 @@ fn ssh_commands(
     };
     let user = workspace.template.workspace_user.as_str();
     let short = workspace.short_id.as_str();
+    let alias = ssh_config_alias(&workspace.name, short);
     match (workspace.template.access_mode, public_host) {
         (AccessMode::Public, Some(jump_host)) => {
             let jump_login = format!("access+{short}@{jump_host}");
             (
                 Some(format!("ssh -J {jump_login} -p {port} {user}@{host}")),
                 Some(format!(
-                    "Host mwc-{short}\n  HostName {host}\n  Port {port}\n  User {user}\n  ProxyJump {jump_login}\n  HostKeyAlias workspace-{short}\n"
+                    "Host {alias}\n  HostName {host}\n  Port {port}\n  User {user}\n  ProxyJump {jump_login}\n  HostKeyAlias workspace-{short}\n"
                 )),
             )
         }
         (AccessMode::Internal, _) => (
             Some(format!("ssh -p {port} {user}@{host}")),
             Some(format!(
-                "Host mwc-{short}\n  HostName {host}\n  Port {port}\n  User {user}\n  HostKeyAlias workspace-{short}\n"
+                "Host {alias}\n  HostName {host}\n  Port {port}\n  User {user}\n  HostKeyAlias workspace-{short}\n"
             )),
         ),
         (AccessMode::Public, None) => (None, None),
+    }
+}
+
+fn ssh_config_alias(name: &str, short_id: &str) -> String {
+    let mut slug = String::new();
+    for character in name.chars().take(48) {
+        if character.is_alphanumeric() || character == '-' || character == '_' {
+            slug.push(character);
+        } else if !slug.ends_with('-') {
+            slug.push('-');
+        }
+    }
+    let slug = slug.trim_matches('-');
+    if slug.is_empty() {
+        format!("mwc-{short_id}")
+    } else {
+        format!("mwc-{slug}-{short_id}")
     }
 }
 
@@ -237,7 +255,7 @@ fn structured_ssh_connection(
     if !connectable {
         return None;
     }
-    let alias = format!("mwc-{}", workspace.short_id);
+    let alias = ssh_config_alias(&workspace.name, &workspace.short_id);
     Some(WorkspaceSshConnection {
         display_name: workspace.name.clone(),
         alias: alias.clone(),
@@ -303,6 +321,23 @@ async fn injection_sources(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ssh_alias_includes_safe_workspace_name_and_stable_short_id() {
+        assert_eq!(
+            ssh_config_alias("tidgi-app-dev", "a53b69fc"),
+            "mwc-tidgi-app-dev-a53b69fc"
+        );
+        assert_eq!(
+            ssh_config_alias("知识库 项目", "a53b69fc"),
+            "mwc-知识库-项目-a53b69fc"
+        );
+        assert_eq!(
+            ssh_config_alias("bad\nHost *\nProxyCommand evil", "a53b69fc"),
+            "mwc-bad-Host-ProxyCommand-evil-a53b69fc"
+        );
+        assert_eq!(ssh_config_alias("  /  ", "a53b69fc"), "mwc-a53b69fc");
+    }
 
     #[test]
     fn a_stopped_workspace_never_advertises_its_desktop_as_connectable() {
