@@ -33,6 +33,9 @@ test("administration selects only the clicked user's API keys and manages their 
   const keyReadbacks = [];
   const writes = [];
   const unexpected = [];
+  const adminReads = [];
+  let principalScopes = ["manage_system", "manage_organization", "manage_members", "manage_api_keys", "read_workspace"];
+  let principalAllowedTemplateIds = null;
   const browser = await chromium.launch({
     executablePath: process.env.CHROMIUM_BIN || chromium.executablePath(),
     headless: true,
@@ -58,6 +61,7 @@ test("administration selects only the clicked user's API keys and manages their 
 
       const method = request.method();
       const path = url.pathname;
+      if (method === "GET" && path.startsWith("/api/v1/admin/")) adminReads.push(path);
       let response;
       if (request.headers().authorization !== "Bearer fixture-admin-token") {
         unexpected.push(`unauthorized fixture request: ${method} ${path}`);
@@ -66,8 +70,8 @@ test("administration selects only the clicked user's API keys and manages their 
         response = { body: {
           user_id: "fixture-admin", display_name: "Fixture Admin", system_admin: true,
           memberships: [{ organization_id: organizationId, role: "organization_admin" }],
-          api_key_scopes: ["manage_system", "manage_organization", "manage_members", "manage_api_keys", "read_workspace"],
-          api_key_expires_at: expiresAt, allowed_template_ids: null,
+          api_key_scopes: principalScopes,
+          api_key_expires_at: expiresAt, allowed_template_ids: principalAllowedTemplateIds,
         } };
       } else if (method === "GET" && path === "/api/v1/organizations") {
         response = { body: { items: [{ id: organizationId, name: "Fixture Organization", created_at: 1_700_000_000 }], next_cursor: null } };
@@ -163,7 +167,7 @@ test("administration selects only the clicked user's API keys and manages their 
     await editor.getByRole("textbox", { name: "Key name" }).fill("Alice CI key");
     await editor.getByRole("checkbox", { name: "Manage API keys" }).check();
     await editor.getByRole("checkbox", { name: "Only allow selected templates" }).check();
-    const templatePicker = editor.getByRole("combobox", { name: "Templates" });
+    const templatePicker = editor.getByRole("combobox", { name: "Workspace templates" });
     await templatePicker.fill("Fixture template");
     await templatePicker.press("ArrowDown");
     await templatePicker.press("Enter");
@@ -205,6 +209,16 @@ test("administration selects only the clicked user's API keys and manages their 
     assert.equal(await bobEditor.getByText("Alice CI key", { exact: true }).count(), 0);
     assert.equal(keyReadbacks.at(-1).userId, bobId);
     assert.deepEqual(keyReadbacks.at(-1).items.map((item) => item.id), ["bob-existing"]);
+    await bobEditor.getByRole("button", { name: "Close" }).click();
+
+    principalScopes = ["manage_system", "manage_api_keys", "read_workspace"];
+    principalAllowedTemplateIds = [templateId];
+    const adminReadsBeforeRestrictedLogin = adminReads.length;
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await page.getByRole("button", { name: "Administration", exact: true }).click();
+    await page.getByText("Credential configuration", { exact: true }).waitFor();
+    assert.equal(await page.getByText("Users and roles", { exact: true }).count(), 0);
+    assert.equal(adminReads.length, adminReadsBeforeRestrictedLogin);
     assert.deepEqual(unexpected, []);
     await context.close();
   } catch (error) {

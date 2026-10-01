@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { test as nodeTest } from "node:test";
 
 const baseUrl = process.env.E2E_BASE_URL;
 const adminToken = process.env.E2E_ADMIN_TOKEN;
@@ -7,6 +7,7 @@ const organizationId = process.env.E2E_ORGANIZATION_ID;
 const targetUserId = process.env.E2E_TARGET_USER_ID;
 const nodeWorkspaceId = process.env.E2E_NODE_WORKSPACE_ID;
 const playwrightModule = process.env.E2E_PLAYWRIGHT_MODULE ?? "playwright-core";
+const test = baseUrl && adminToken && organizationId && targetUserId ? nodeTest : nodeTest.skip;
 
 async function api(path, options = {}) {
   const response = await fetch(new URL(path, baseUrl), {
