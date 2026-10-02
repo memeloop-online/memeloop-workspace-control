@@ -99,6 +99,20 @@ jobs:
           done
           curl --fail --silent http://127.0.0.1:4173/ > /dev/null
           npm run test:e2e
+      - name: Verify administrator credential configuration against a real local backend
+        timeout-minutes: 15
+        run: |
+          cargo build --locked --release
+          E2E_LOG_DIR="$RUNNER_TEMP/mwc-real-credential-e2e-logs" \
+            bash web/e2e/ci-real-user-credentials.sh
+      - name: Upload real credential E2E logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: mwc-real-credential-e2e-logs
+          path: ${{ runner.temp }}/mwc-real-credential-e2e-logs
+          if-no-files-found: warn
+          retention-days: 7
       - name: Enforce the current data-model vocabulary
         run: |
           for prohibited in 'leg''acy' 'leg''acy_v1' 'pre''fixed_v2' 'runtime''_profile'; do

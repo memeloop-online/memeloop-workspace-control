@@ -8,6 +8,14 @@ const targetUserId = process.env.E2E_TARGET_USER_ID;
 const nodeWorkspaceId = process.env.E2E_NODE_WORKSPACE_ID;
 const playwrightModule = process.env.E2E_PLAYWRIGHT_MODULE ?? "playwright-core";
 
+function assertSafeE2eBaseUrl() {
+  const url = new URL(baseUrl);
+  const localHttp = process.env.E2E_LOCAL_BACKEND === "1"
+    && url.protocol === "http:"
+    && ["127.0.0.1", "::1", "localhost"].includes(url.hostname);
+  assert.ok(url.protocol === "https:" || localHttp, "E2E_BASE_URL must be HTTPS or an explicitly enabled loopback HTTP backend");
+}
+
 async function api(path, options = {}) {
   const response = await fetch(new URL(path, baseUrl), {
     ...options,
@@ -31,7 +39,7 @@ async function findKey(name) {
 }
 
 test("production administrator manages a specific user's credentials through the real API", { timeout: 120_000 }, async () => {
-  assert.ok(baseUrl?.startsWith("https://"), "E2E_BASE_URL must be a production HTTPS origin");
+  assertSafeE2eBaseUrl();
   assert.ok(adminToken && organizationId && targetUserId, "Set E2E_ADMIN_TOKEN, E2E_ORGANIZATION_ID and E2E_TARGET_USER_ID");
   const principal = await api("/api/v1/me");
   assert.equal(principal.system_admin, true, "the browser principal must be a system administrator");
