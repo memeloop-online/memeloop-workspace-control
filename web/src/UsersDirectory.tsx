@@ -73,7 +73,7 @@ export function UsersDirectory({ api, organizationId, principal, canListUsers, c
   const requestRef = useRef(0);
   const [selectedUser, setSelectedUser] = useState<DirectoryItem | null>(null);
   const [apiKeyUser, setApiKeyUser] = useState<DirectoryItem | null>(null);
-  const canManageApiKeys = principal.system_admin && hasApiKeyScope(principal, "manage_api_keys");
+  const canManageApiKeys = hasApiKeyScope(principal, "manage_api_keys");
 
   useEffect(() => {
     let active = true;
@@ -164,13 +164,13 @@ export function UsersDirectory({ api, organizationId, principal, canListUsers, c
       </div>
     </AdminToolbar>
     {loading && items.length === 0 ? <Spinner label={t("loading")} /> : items.length === 0 ? <Text className={styles.empty}>{t("noUsers")}</Text> : <div className={styles.table} aria-busy={loading}>
-      <DataGrid items={items} columns={userColumns({ t, styles, canManageUsers, canEditMembership, canEditQuota, canManageApiKeys, openUser: setSelectedUser, openApiKeys: setApiKeyUser, onEditQuota })}>
+      <DataGrid items={items} columns={userColumns({ t, styles, canManageUsers, canEditMembership, canEditQuota, canManageApiKeys, principal, openUser: setSelectedUser, openApiKeys: setApiKeyUser, onEditQuota })}>
         <DataGridHeader><DataGridRow<DirectoryItem>>{(column) => <DataGridHeaderCell>{column.renderHeaderCell()}</DataGridHeaderCell>}</DataGridRow></DataGridHeader>
         <DataGridBody<DirectoryItem>>{({ item }) => <DataGridRow<DirectoryItem>>{(column) => <DataGridCell>{column.renderCell(item)}</DataGridCell>}</DataGridRow>}</DataGridBody>
       </DataGrid>
     </div>}
     {selectedUser && <UserEditDialog user={selectedUser} api={api} organizationId={organizationId} principal={principal} canManageUsers={canManageUsers} canEditMembership={canEditMembership} onClose={() => setSelectedUser(null)} onError={onError} onUpdated={updateUser} onMembershipChanged={updateMembership} />}
-    {apiKeyUser && canManageApiKeys && <UserApiKeysDialog api={api} organizationId={organizationId} principal={principal} user={apiKeyUser} onClose={() => setApiKeyUser(null)} onError={onError} />}
+    {apiKeyUser && canManageApiKeys && (principal.system_admin || apiKeyUser.id === principal.user_id) && <UserApiKeysDialog api={api} organizationId={organizationId} principal={principal} user={apiKeyUser} onClose={() => setApiKeyUser(null)} onError={onError} />}
   </div>;
 }
 
@@ -395,12 +395,12 @@ function UserApiKeysPanel({ api, organizationId, principal, userId, isCurrentUse
   </>;
 }
 
-function userColumns({ t, styles, canManageUsers, canEditMembership, canEditQuota, canManageApiKeys, openUser, openApiKeys, onEditQuota }: { t: ReturnType<typeof useI18n>["t"]; styles: ReturnType<typeof useAdminStyles>; canManageUsers: boolean; canEditMembership: boolean; canEditQuota: boolean; canManageApiKeys: boolean; openUser: (user: DirectoryItem) => void; openApiKeys: (user: DirectoryItem) => void; onEditQuota: (userId: string) => void }): TableColumnDefinition<DirectoryItem>[] {
+function userColumns({ t, styles, canManageUsers, canEditMembership, canEditQuota, canManageApiKeys, principal, openUser, openApiKeys, onEditQuota }: { t: ReturnType<typeof useI18n>["t"]; styles: ReturnType<typeof useAdminStyles>; canManageUsers: boolean; canEditMembership: boolean; canEditQuota: boolean; canManageApiKeys: boolean; principal: Principal; openUser: (user: DirectoryItem) => void; openApiKeys: (user: DirectoryItem) => void; onEditQuota: (userId: string) => void }): TableColumnDefinition<DirectoryItem>[] {
   return [
     { columnId: "user", compare: (a, b) => a.display_name.localeCompare(b.display_name), renderHeaderCell: () => t("user"), renderCell: (item) => <div className={styles.stack}><Text weight="semibold">{item.display_name}</Text><Text size={200}>{item.id}</Text></div> },
     { columnId: "role", compare: (a, b) => String(a.membershipRole).localeCompare(String(b.membershipRole)), renderHeaderCell: () => t("role"), renderCell: (item) => item.membershipRole === "organization_admin" ? t("roleOrganizationAdmin") : item.membershipRole === "member" ? t("roleMember") : t("notEnabled") },
     { columnId: "status", compare: (a, b) => Number(a.disabled) - Number(b.disabled), renderHeaderCell: () => t("workspaceState"), renderCell: (item) => item.disabled ? t("userStatusDisabled") : t("userStatusActive") },
-    { columnId: "actions", compare: () => 0, renderHeaderCell: () => t("actions"), renderCell: (item) => <div className={styles.actions}>{(canManageUsers || canEditMembership && item.membershipRole !== null) && <Button icon={<EditRegular />} onClick={() => openUser(item)}>{t("editUser")}</Button>}{canManageApiKeys && <Button icon={<KeyRegular />} onClick={() => openApiKeys(item)}>{t("userApiCredentials")}</Button>}{canEditQuota && <Button onClick={() => onEditQuota(item.id)}>{t("editUserQuota")}</Button>}</div> },
+    { columnId: "actions", compare: () => 0, renderHeaderCell: () => t("actions"), renderCell: (item) => <div className={styles.actions}>{(canManageUsers || canEditMembership && item.membershipRole !== null) && <Button icon={<EditRegular />} onClick={() => openUser(item)}>{t("editUser")}</Button>}{canManageApiKeys && (principal.system_admin || item.id === principal.user_id) && <Button icon={<KeyRegular />} onClick={() => openApiKeys(item)}>{t("userApiCredentials")}</Button>}{canEditQuota && <Button onClick={() => onEditQuota(item.id)}>{t("editUserQuota")}</Button>}</div> },
   ];
 }
 
