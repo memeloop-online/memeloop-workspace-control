@@ -10,7 +10,7 @@
     "check": "tsc -b --pretty false",
     "test": "node --experimental-strip-types --test src/*.test.ts src/*/*.test.ts && node tests/plugin-sandbox-check.mjs",
     "test:browser": "node tests/plugin-sandbox-check.mjs",
-    "test:e2e": "node --test e2e/user-api-keys.test.mjs",
+    "test:e2e": "node --test e2e/user-api-keys.test.mjs e2e/organization-admin-credentials.test.mjs",
     "test:e2e:production": "node --test e2e/production-user-credentials.test.mjs"
   },
   "dependencies": {
