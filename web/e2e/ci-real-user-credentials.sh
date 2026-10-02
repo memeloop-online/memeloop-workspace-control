@@ -19,6 +19,7 @@ trap cleanup EXIT
 binary=target/release/memeloop-workspace-control
 database_url="sqlite://${fixture_dir}/control-plane.sqlite?mode=rwc"
 admin_token=$(openssl rand -hex 32)
+organization_admin_token=$(openssl rand -hex 32)
 target_token=$(openssl rand -hex 32)
 
 run_control_plane() {
@@ -58,6 +59,14 @@ organization_json=$(curl --fail --silent --show-error \
   http://127.0.0.1:18080/api/v1/organizations)
 organization_id=$(jq --exit-status --raw-output '.id' <<<"$organization_json")
 
+organization_admin_json=$(curl --fail --silent --show-error \
+  --header "Authorization: Bearer $admin_token" \
+  --header "Content-Type: application/json" \
+  --header "Idempotency-Key: ci-credentials-organization-admin" \
+  --data "{\"display_name\":\"CI Credentials Organization Administrator\",\"token\":\"$organization_admin_token\",\"organization_id\":\"$organization_id\",\"organization_role\":\"organization_admin\"}" \
+  http://127.0.0.1:18080/api/v1/admin/users)
+organization_admin_user_id=$(jq --exit-status --raw-output '.id' <<<"$organization_admin_json")
+
 target_json=$(curl --fail --silent --show-error \
   --header "Authorization: Bearer $admin_token" \
   --header "Content-Type: application/json" \
@@ -76,4 +85,16 @@ target_user_id=$(jq --exit-status --raw-output '.id' <<<"$target_json")
     E2E_TARGET_USER_ID="$target_user_id" \
     node --test --test-name-pattern="production administrator manages a specific user's credentials" \
     e2e/production-user-credentials.test.mjs
-) 2>&1 | tee "$log_dir/e2e.log"
+) 2>&1 | tee "$log_dir/system-admin-e2e.log"
+
+(
+  cd web
+  E2E_ALLOW_WRITES=1 \
+    E2E_LOCAL_BACKEND=1 \
+    E2E_BASE_URL=http://127.0.0.1:18080 \
+    E2E_ORGANIZATION_ID="$organization_id" \
+    E2E_ORGANIZATION_ADMIN_TOKEN="$organization_admin_token" \
+    E2E_ORGANIZATION_ADMIN_USER_ID="$organization_admin_user_id" \
+    node --test --test-name-pattern="production organization administrator manages their own credentials" \
+    e2e/production-organization-admin-credentials.test.mjs
+) 2>&1 | tee "$log_dir/organization-admin-e2e.log"
