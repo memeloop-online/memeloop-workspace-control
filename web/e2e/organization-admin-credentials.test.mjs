@@ -61,6 +61,7 @@ test("organization administrator opens only their own credential configuration",
       };
       else if (method === "GET" && path === "/api/v1/workspaces") body = { items: [], next_cursor: null, summary: { total_count: 0, requested: { cpu_millis: 0, memory_mib: 0, gpu_count: 0, disk_gib: 0 }, temporary_requested_gib: 0, state_counts: {} } };
       else if (method === "GET" && path === "/api/v1/templates") body = [];
+      else if (method === "GET" && path === "/api/v1/node-pools") body = [];
       else if (method === "GET" && path === "/api/v1/webhooks") body = [];
       else if (method === "GET" && (path === `/api/v1/injections/organization/${organizationId}` || path === `/api/v1/injections/user/${ownUserId}`)) body = [];
       else {
