@@ -29,7 +29,7 @@ import { AdminCard, SaveButton, useAdminStyles } from "./admin/fluentAdmin";
 import type { ApiClient } from "./api";
 import { ConfirmDialog } from "./components/ConfirmDialog";
 import { Page } from "./design-system/Page";
-import { canManageOrganization, canManageSystem, hasApiKeyScope } from "./permissions";
+import { canManageOrganization, canManageOtherUserApiKeys, canManageSystem, hasApiKeyScope } from "./permissions";
 import { SelfApiKeysPanel, UsersDirectory } from "./UsersDirectory";
 import { useI18n } from "./i18n";
 import { OrganizationManager } from "./OrganizationManager";
@@ -93,7 +93,7 @@ export function AdminPanel({ api, principal, organizationId, onError, onOrganiza
   const canManageMembers = canManageOrganization(principal, organizationId, "manage_members");
   const canManageGlobalState = canManageSystem(principal);
   const canManageOwnApiKeys = hasApiKeyScope(principal, "manage_api_keys");
-  const canManageOtherApiKeys = principal.system_admin && canManageOwnApiKeys;
+  const canManageOtherApiKeys = canManageOtherUserApiKeys(principal);
   const selfServiceOnly = !canManageGlobalState && !canManageQuota && !canManageMembers;
   const currentOrganization = organizations.find((organization) => organization.id === organizationId);
   const states = workspaceStateCounts(workspaceSummary);
