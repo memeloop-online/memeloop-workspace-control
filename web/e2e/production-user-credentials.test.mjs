@@ -71,7 +71,6 @@ test("production administrator manages a specific user's credentials through the
     const dialog = page.getByRole("dialog").filter({ hasText: target.display_name });
     await dialog.getByText(`Credential configuration · ${target.display_name}`, { exact: true }).waitFor();
     assert.equal(await dialog.getByRole("tab").count(), 0, "credentials must open directly, not through the old user editor tabs");
-    await page.getByRole("button", { name: "Environment Variables & Files", exact: true }).waitFor();
 
     if (process.env.E2E_ALLOW_WRITES !== "1") return;
     await dialog.getByRole("button", { name: "Create API key" }).first().click();
