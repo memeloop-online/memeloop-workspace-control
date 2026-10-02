@@ -160,7 +160,7 @@ export function UsersDirectory({ api, organizationId, principal, canListUsers, c
       <Field label={t("searchUsers")}><Input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t("searchUsersPlaceholder")} /></Field>
       <div className={styles.stack}>
         <Text size={300}>{t("userPageStatus")} {pageNumber} · {items.length}</Text>
-        {canManageApiKeys && <Text size={200} className={styles.muted}>{t("apiKeyManagementHint")}</Text>}
+        {canManageApiKeys && principal.system_admin && <Text size={200} className={styles.muted}>{t("apiKeyManagementHint")}</Text>}
       </div>
     </AdminToolbar>
     {loading && items.length === 0 ? <Spinner label={t("loading")} /> : items.length === 0 ? <Text className={styles.empty}>{t("noUsers")}</Text> : <div className={styles.table} aria-busy={loading}>
