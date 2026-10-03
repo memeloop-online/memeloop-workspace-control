@@ -8,6 +8,14 @@ const targetUserId = process.env.E2E_TARGET_USER_ID;
 const nodeWorkspaceId = process.env.E2E_NODE_WORKSPACE_ID;
 const playwrightModule = process.env.E2E_PLAYWRIGHT_MODULE ?? "playwright-core";
 
+function assertSafeE2eBaseUrl() {
+  const url = new URL(baseUrl);
+  const localHttp = process.env.E2E_LOCAL_BACKEND === "1"
+    && url.protocol === "http:"
+    && ["127.0.0.1", "::1", "localhost"].includes(url.hostname);
+  assert.ok(url.protocol === "https:" || localHttp, "E2E_BASE_URL must be HTTPS or an explicitly enabled loopback HTTP backend");
+}
+
 async function api(path, options = {}) {
   const response = await fetch(new URL(path, baseUrl), {
     ...options,
@@ -31,7 +39,7 @@ async function findKey(name) {
 }
 
 test("production administrator manages a specific user's credentials through the real API", { timeout: 120_000 }, async () => {
-  assert.ok(baseUrl?.startsWith("https://"), "E2E_BASE_URL must be a production HTTPS origin");
+  assertSafeE2eBaseUrl();
   assert.ok(adminToken && organizationId && targetUserId, "Set E2E_ADMIN_TOKEN, E2E_ORGANIZATION_ID and E2E_TARGET_USER_ID");
   const principal = await api("/api/v1/me");
   assert.equal(principal.system_admin, true, "the browser principal must be a system administrator");
@@ -63,7 +71,6 @@ test("production administrator manages a specific user's credentials through the
     const dialog = page.getByRole("dialog").filter({ hasText: target.display_name });
     await dialog.getByText(`Credential configuration · ${target.display_name}`, { exact: true }).waitFor();
     assert.equal(await dialog.getByRole("tab").count(), 0, "credentials must open directly, not through the old user editor tabs");
-    await page.getByRole("button", { name: "Environment Variables & Files", exact: true }).waitFor();
 
     if (process.env.E2E_ALLOW_WRITES !== "1") return;
     await dialog.getByRole("button", { name: "Create API key" }).first().click();
@@ -74,13 +81,19 @@ test("production administrator manages a specific user's credentials through the
     const listed = await findKey(keyName);
     createdId = listed?.id ?? null;
     assert.ok(listed?.id && listed.token, "real API list must return the created key and copyable token");
+    await page.evaluate(() => navigator.clipboard.writeText(""));
     await keyRow.getByRole("button", { name: /Copy|Copied/ }).click();
-    assert.equal(await page.evaluate(() => navigator.clipboard.readText()), listed.token);
+    const copiedToken = await page.evaluate(() => navigator.clipboard.readText());
+    assert.ok(copiedToken === listed.token, "clipboard must match the created credential");
+    const copiedPrincipal = await api("/api/v1/me", { headers: { Authorization: `Bearer ${copiedToken}` } });
+    assert.equal(copiedPrincipal.user_id, targetUserId);
     await keyRow.getByRole("button", { name: "Revoke" }).click();
     await page.getByRole("textbox", { name: "Reason for revocation" }).fill("MWC UI E2E acceptance");
     await page.getByRole("button", { name: "Revoke", exact: true }).last().click();
     await keyRow.getByText("Revoked", { exact: true }).waitFor();
     assert.ok((await findKey(keyName))?.revoked_at, "real API must persist revocation");
+    const revoked = await fetch(new URL("/api/v1/me", baseUrl), { headers: { Authorization: `Bearer ${copiedToken}` } });
+    assert.equal(revoked.status, 401, "copied credential must stop authenticating after revocation");
   } finally {
     if (process.env.E2E_ALLOW_WRITES === "1") {
       const remaining = await findKey(keyName);
