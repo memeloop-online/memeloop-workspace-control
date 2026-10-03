@@ -81,13 +81,19 @@ test("production administrator manages a specific user's credentials through the
     const listed = await findKey(keyName);
     createdId = listed?.id ?? null;
     assert.ok(listed?.id && listed.token, "real API list must return the created key and copyable token");
+    await page.evaluate(() => navigator.clipboard.writeText(""));
     await keyRow.getByRole("button", { name: /Copy|Copied/ }).click();
-    assert.equal(await page.evaluate(() => navigator.clipboard.readText()), listed.token);
+    const copiedToken = await page.evaluate(() => navigator.clipboard.readText());
+    assert.ok(copiedToken === listed.token, "clipboard must match the created credential");
+    const copiedPrincipal = await api("/api/v1/me", { headers: { Authorization: `Bearer ${copiedToken}` } });
+    assert.equal(copiedPrincipal.user_id, targetUserId);
     await keyRow.getByRole("button", { name: "Revoke" }).click();
     await page.getByRole("textbox", { name: "Reason for revocation" }).fill("MWC UI E2E acceptance");
     await page.getByRole("button", { name: "Revoke", exact: true }).last().click();
     await keyRow.getByText("Revoked", { exact: true }).waitFor();
     assert.ok((await findKey(keyName))?.revoked_at, "real API must persist revocation");
+    const revoked = await fetch(new URL("/api/v1/me", baseUrl), { headers: { Authorization: `Bearer ${copiedToken}` } });
+    assert.equal(revoked.status, 401, "copied credential must stop authenticating after revocation");
   } finally {
     if (process.env.E2E_ALLOW_WRITES === "1") {
       const remaining = await findKey(keyName);

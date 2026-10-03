@@ -6,7 +6,8 @@ const organizationId = process.env.E2E_ORGANIZATION_ID;
 const organizationAdminToken = process.env.E2E_ORGANIZATION_ADMIN_TOKEN;
 const organizationAdminUserId = process.env.E2E_ORGANIZATION_ADMIN_USER_ID;
 const playwrightModule = process.env.E2E_PLAYWRIGHT_MODULE ?? "playwright-core";
-const test = baseUrl && organizationId && organizationAdminToken && organizationAdminUserId ? nodeTest : nodeTest.skip;
+const targetUserId = process.env.E2E_TARGET_USER_ID;
+const test = nodeTest;
 
 function assertSafeE2eBaseUrl() {
   const url = new URL(baseUrl);
@@ -31,10 +32,12 @@ async function findOwnKey(name) {
 
 test("production organization administrator manages their own credentials through the real API", { timeout: 120_000 }, async () => {
   assertSafeE2eBaseUrl();
+  assert.ok(targetUserId, "E2E_TARGET_USER_ID is required for the other-member boundary");
   const principal = await api("/api/v1/me");
   assert.equal(principal.system_admin, false, "the self-service principal must not be a system administrator");
   assert.equal(principal.user_id, organizationAdminUserId);
   assert.ok(principal.api_key_scopes.includes("manage_api_keys"), "organization administrator needs manage_api_keys");
+  assert.ok(principal.api_key_scopes.includes("manage_members"), "organization administrator needs manage_members");
   assert.ok(principal.memberships.some((membership) => membership.organization_id === organizationId && membership.role === "organization_admin"), "principal must be an organization administrator");
 
   const { chromium } = await import(playwrightModule);
@@ -52,24 +55,39 @@ test("production organization administrator manages their own credentials throug
     const page = await context.newPage();
     await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
     await page.getByRole("button", { name: "Administration", exact: true }).click();
-    await page.getByText("Credential configuration", { exact: true }).waitFor();
-    assert.equal(await page.getByText("Users and roles", { exact: true }).count(), 0, "organization administrators must not receive the system user directory");
+    await page.getByText("Users and roles", { exact: true }).waitFor();
+    const otherRow = page.getByRole("row").filter({ hasText: targetUserId });
+    await otherRow.waitFor();
+    assert.equal(await otherRow.getByRole("button", { name: "Credential configuration", exact: true }).count(), 0);
+    const ownRow = page.getByRole("row").filter({ hasText: organizationAdminUserId });
+    await ownRow.getByRole("button", { name: "Credential configuration", exact: true }).click();
+    const dialog = page.getByRole("dialog");
+    await dialog.getByText(`Credential configuration · ${principal.display_name}`, { exact: true }).waitFor();
     if (process.env.E2E_ALLOW_WRITES !== "1") return;
 
-    await page.getByRole("button", { name: "Create API key" }).first().click();
-    await page.getByRole("textbox", { name: "Key name" }).fill(keyName);
-    await page.getByRole("button", { name: "Create API key" }).last().click();
-    const keyRow = page.getByRole("row", { name: new RegExp(keyName) });
+    await dialog.getByRole("button", { name: "Create API key" }).first().click();
+    await dialog.getByRole("textbox", { name: "Key name" }).fill(keyName);
+    const creation = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/v1/me/api-keys" && response.request().method() === "POST");
+    await dialog.getByRole("button", { name: "Create API key" }).last().click();
+    assert.equal((await creation).status(), 201);
+    const keyRow = dialog.getByRole("row", { name: new RegExp(keyName) });
     await keyRow.getByRole("button", { name: /Copy|Copied/ }).waitFor();
     const listed = await findOwnKey(keyName);
     createdId = listed?.id ?? null;
     assert.ok(createdId, "the self-service API must persist the created key");
+    await page.evaluate(() => navigator.clipboard.writeText(""));
     await keyRow.getByRole("button", { name: /Copy|Copied/ }).click();
-    assert.match(await page.evaluate(() => navigator.clipboard.readText()), /.+/, "the created key must be copyable before revocation");
+    const copiedToken = await page.evaluate(() => navigator.clipboard.readText());
+    const copiedPrincipal = await api("/api/v1/me", { headers: { Authorization: `Bearer ${copiedToken}` } });
+    assert.equal(copiedPrincipal.user_id, organizationAdminUserId);
+    const revocation = page.waitForResponse((response) => new URL(response.url()).pathname === `/api/v1/me/api-keys/${createdId}` && response.request().method() === "DELETE");
     await keyRow.getByRole("button", { name: "Revoke" }).click();
     await page.getByRole("button", { name: "Revoke", exact: true }).last().click();
+    assert.equal((await revocation).status(), 204);
     await keyRow.waitFor({ state: "detached" });
     assert.equal(await findOwnKey(keyName), null, "the self-service API must remove the revoked key");
+    const revoked = await fetch(new URL("/api/v1/me", baseUrl), { headers: { Authorization: `Bearer ${copiedToken}` } });
+    assert.equal(revoked.status, 401, "copied credential must stop authenticating after revocation");
     await context.close();
   } finally {
     if (createdId && await findOwnKey(keyName)) {

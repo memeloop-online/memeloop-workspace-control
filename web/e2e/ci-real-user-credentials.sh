@@ -63,7 +63,7 @@ organization_admin_json=$(curl --fail --silent --show-error \
   --header "Authorization: Bearer $admin_token" \
   --header "Content-Type: application/json" \
   --header "Idempotency-Key: ci-credentials-organization-admin" \
-  --data "{\"display_name\":\"CI Credentials Organization Administrator\",\"token\":\"$organization_admin_token\",\"organization_id\":\"$organization_id\",\"organization_role\":\"organization_admin\"}" \
+  --data "$(jq -nc --arg token "$organization_admin_token" --arg organization "$organization_id" '{display_name:"CI Credentials Organization Administrator",token:$token,organization_id:$organization,organization_role:"organization_admin",scopes:["manage_members","manage_api_keys","read_workspace"]}')" \
   http://127.0.0.1:18080/api/v1/admin/users)
 organization_admin_user_id=$(jq --exit-status --raw-output '.id' <<<"$organization_admin_json")
 
@@ -93,6 +93,7 @@ target_user_id=$(jq --exit-status --raw-output '.id' <<<"$target_json")
     E2E_LOCAL_BACKEND=1 \
     E2E_BASE_URL=http://127.0.0.1:18080 \
     E2E_ORGANIZATION_ID="$organization_id" \
+    E2E_TARGET_USER_ID="$target_user_id" \
     E2E_ORGANIZATION_ADMIN_TOKEN="$organization_admin_token" \
     E2E_ORGANIZATION_ADMIN_USER_ID="$organization_admin_user_id" \
     node --test --test-name-pattern="production organization administrator manages their own credentials" \
