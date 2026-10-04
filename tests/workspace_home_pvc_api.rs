@@ -1,3 +1,5 @@
+#[path = "support/home_capacity.rs"]
+mod managed_capacity;
 #[path = "support/home_pvc_pending.rs"]
 mod pending;
 #[path = "support/home_pvc.rs"]
