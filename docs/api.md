@@ -83,7 +83,7 @@ System administrators can resize a stopped workspace's temporary storage with
 `temporary_storage_gib` (1–2,048) and `expected_generation`. Include an
 `Idempotency-Key`; the accepted snapshot and accounting update are reconciled
 on the next start.
-# Adopt or bind an existing workspace Home PVC
+## Adopt or bind an existing workspace Home PVC
 
 `PUT /api/v1/workspaces/{workspace_id}/home-pvc` requires an unrestricted system
 administrator with `manage_system`, an `Idempotency-Key`, and this JSON body:

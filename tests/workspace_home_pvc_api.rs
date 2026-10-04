@@ -658,3 +658,22 @@ async fn sqlite_v25_upgrade_preserves_workspace_and_does_not_bind_or_change_a_te
         WorkspaceTemplateDocument::parse(&serde_yaml_ng::to_string(&document).unwrap()).is_err()
     );
 }
+
+#[tokio::test]
+async fn accepts_equivalent_exact_kubernetes_quantity_representations() {
+    for quantity in ["20Gi", "20.0Gi", "20480Mi", "21474836480", "2.147483648e10"] {
+        let fixture = Fixture::new().await;
+        let mut claim = fixture.claim();
+        claim["spec"]["resources"]["requests"]["storage"] = json!(quantity);
+        claim["status"]["capacity"]["storage"] = json!(quantity);
+        let (status, response) = put(
+            fixture.app(claim, vec![], vec![]),
+            &fixture.workspace,
+            ADMIN,
+            fixture.input(),
+            "quantity",
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{quantity}: {response}");
+    }
+}

@@ -6,7 +6,7 @@ use kube::{Api, Client, api::ListParams};
 
 use super::super::ApiError;
 use crate::{
-    kubernetes::{OWNER_INSTALLATION_LABEL, WORKSPACE_ID_LABEL},
+    kubernetes::{OWNER_INSTALLATION_LABEL, WORKSPACE_ID_LABEL, home_volume_capacity_bytes},
     storage::StorageError,
     workspaces::{Workspace, WorkspaceHomeVolumeBinding, WorkspaceState},
 };
@@ -129,21 +129,22 @@ fn validate_claim(
             .volume_mode
             .as_deref()
             .is_some_and(|mode| mode != "Filesystem")
-        || !capacity.is_some_and(|quantity| matches_capacity(&quantity.0, binding.capacity_gib))
-        || !requested.is_some_and(|quantity| matches_capacity(&quantity.0, binding.capacity_gib))
+        || capacity.and_then(|quantity| home_volume_capacity_bytes(&quantity.0))
+            != binding.capacity_gib.checked_mul(1 << 30)
+        || requested.and_then(|quantity| home_volume_capacity_bytes(&quantity.0))
+            != binding.capacity_gib.checked_mul(1 << 30)
     {
         return Err(StorageError::WorkspaceHomePvcMismatch.into());
     }
-    if let Some(labels) = &claim.metadata.labels {
-        if labels
+    if let Some(labels) = &claim.metadata.labels
+        && (labels
             .get(WORKSPACE_ID_LABEL)
             .is_some_and(|owner| owner != &workspace.id.to_string())
             || labels
                 .get(OWNER_INSTALLATION_LABEL)
-                .is_some_and(|owner| owner != installation)
-        {
-            return Err(StorageError::WorkspaceHomePvcInUse.into());
-        }
+                .is_some_and(|owner| owner != installation))
+    {
+        return Err(StorageError::WorkspaceHomePvcInUse.into());
     }
     Ok(())
 }
@@ -155,31 +156,4 @@ fn references(spec: &PodSpec, claim_name: &str) -> bool {
             .as_ref()
             .is_some_and(|claim| claim.claim_name == claim_name)
     })
-}
-
-fn matches_capacity(value: &str, capacity_gib: u64) -> bool {
-    let (number, multiplier) = [
-        ("Ki", 1_u128 << 10),
-        ("Mi", 1 << 20),
-        ("Gi", 1 << 30),
-        ("Ti", 1 << 40),
-        ("Pi", 1 << 50),
-        ("Ei", 1 << 60),
-        ("k", 1_000),
-        ("M", 1_000_000),
-        ("G", 1_000_000_000),
-        ("T", 1_000_000_000_000),
-    ]
-    .into_iter()
-    .find_map(|(suffix, multiplier)| {
-        value
-            .strip_suffix(suffix)
-            .map(|number| (number, multiplier))
-    })
-    .unwrap_or((value, 1));
-    number
-        .parse::<u128>()
-        .ok()
-        .and_then(|number| number.checked_mul(multiplier))
-        == Some(u128::from(capacity_gib) * (1 << 30))
 }

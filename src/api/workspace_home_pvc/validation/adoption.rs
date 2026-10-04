@@ -54,6 +54,7 @@ pub(super) fn validate(
                 .any(|condition| condition.type_ == "Ready" && condition.status == "True")
     });
     if pod.metadata.name.as_deref() != Some(format!("{name}-0").as_str())
+        || pod.metadata.uid.is_none()
         || pod.metadata.deletion_timestamp.is_some()
         || !pod.metadata.owner_references.iter().flatten().any(|owner| {
             owner.kind == "StatefulSet"
