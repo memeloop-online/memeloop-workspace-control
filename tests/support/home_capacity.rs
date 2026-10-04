@@ -107,8 +107,8 @@ async fn put(
     body: Value,
     key: &str,
 ) -> (StatusCode, Value) {
-    decode(
-        app.oneshot(
+    let response = app
+        .oneshot(
             Request::builder()
                 .method("PUT")
                 .uri(format!(
@@ -122,9 +122,22 @@ async fn put(
                 .unwrap(),
         )
         .await
-        .unwrap(),
-    )
-    .await
+        .unwrap();
+    if response.status() == StatusCode::UNPROCESSABLE_ENTITY
+        && response
+            .headers()
+            .get("Content-Type")
+            .is_some_and(|value| value.as_bytes().starts_with(b"text/plain"))
+    {
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            json!(String::from_utf8(body.to_vec()).unwrap()),
+        );
+    }
+    decode(response).await
 }
 
 #[tokio::test]
