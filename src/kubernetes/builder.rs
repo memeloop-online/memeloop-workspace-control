@@ -96,6 +96,7 @@ impl ResourceBuilder {
         workspace: &Workspace,
         placement: &ResolvedPlacement,
     ) -> Result<DesiredResources, BuildError> {
+        self.validate_home_volume_binding(workspace)?;
         if matches!(
             workspace.state,
             WorkspaceState::Deleting | WorkspaceState::Deleted
@@ -195,6 +196,30 @@ impl ResourceBuilder {
             web_shell_ingress,
             web_shell_envoy_filter,
         })
+    }
+
+    pub(super) fn validate_home_volume_binding(
+        &self,
+        workspace: &Workspace,
+    ) -> Result<(), BuildError> {
+        if let Some(binding) = &workspace.home_volume_binding {
+            if binding.namespace != workspace.runtime.namespace() {
+                return Err(BuildError::HomeVolumeNamespaceMismatch);
+            }
+            if binding.claim_name.trim().is_empty() || binding.claim_uid.trim().is_empty() {
+                return Err(BuildError::InvalidHomeVolumeIdentity);
+            }
+            if binding.capacity_gib == 0
+                || binding.capacity_gib != workspace.template.resources.disk_gib
+                || binding
+                    .capacity_gib
+                    .checked_mul(1 << 30)
+                    .is_none_or(|bytes| bytes > i64::MAX as u64)
+            {
+                return Err(BuildError::HomeVolumeCapacityMismatch);
+            }
+        }
+        Ok(())
     }
 
     fn web_shell_resources(
@@ -390,6 +415,12 @@ impl ResourceBuilder {
 
 #[derive(Debug, Error)]
 pub enum BuildError {
+    #[error("bound Home PVC namespace does not match the workspace runtime namespace")]
+    HomeVolumeNamespaceMismatch,
+    #[error("bound Home PVC requires a non-empty claim name and UID")]
+    InvalidHomeVolumeIdentity,
+    #[error("bound Home capacity must be positive and match the persisted workspace disk capacity")]
+    HomeVolumeCapacityMismatch,
     #[error(transparent)]
     Config(#[from] crate::config::ConfigError),
     #[error(transparent)]

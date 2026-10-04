@@ -128,12 +128,12 @@ impl KubernetesCoordinator {
             return Ok(DeleteProgress::DeletionRequested);
         }
         if self
-            .workspace_pod_or_pvc_reference_is_present(namespace, names, workspace_id)
+            .workspace_pod_or_pvc_reference_is_present(workspace, names)
             .await?
         {
             return Ok(DeleteProgress::Terminating);
         }
-        self.delete_workspace_remaining(namespace, names, workspace_id, &mapping_policies)
+        self.delete_workspace_remaining(workspace, names, &mapping_policies)
             .await
     }
 
@@ -184,10 +184,11 @@ impl KubernetesCoordinator {
 
     async fn workspace_pod_or_pvc_reference_is_present(
         &self,
-        namespace: &str,
+        workspace: &Workspace,
         names: &WorkspaceResourceNames,
-        workspace_id: Uuid,
     ) -> Result<bool, ReconcileError> {
+        let namespace = workspace.runtime.namespace();
+        let workspace_id = workspace.id;
         let pods = Api::<Pod>::namespaced(self.client.clone(), namespace);
         let target_pod = names.pod_ordinal_zero();
         if let Some(pod) = pods.get_opt(&target_pod).await? {
@@ -205,7 +206,7 @@ impl KubernetesCoordinator {
                     .verify_delete_ownership(pod.meta(), workspace_id)?;
                 return Ok(true);
             }
-            if pod_references_pvc(&pod, &data_pvc) {
+            if workspace.home_volume_binding.is_none() && pod_references_pvc(&pod, &data_pvc) {
                 return Ok(true);
             }
         }
@@ -214,11 +215,12 @@ impl KubernetesCoordinator {
 
     async fn delete_workspace_remaining(
         &self,
-        namespace: &str,
+        workspace: &Workspace,
         names: &WorkspaceResourceNames,
-        workspace_id: Uuid,
         mapping_policies: &Api<NetworkPolicy>,
     ) -> Result<DeleteProgress, ReconcileError> {
+        let namespace = workspace.runtime.namespace();
+        let workspace_id = workspace.id;
         if delete_owned_if_present(
             mapping_policies,
             &names.network_policy,
@@ -262,13 +264,14 @@ impl KubernetesCoordinator {
             return Ok(DeleteProgress::DeletionRequested);
         }
         let pvcs = Api::<PersistentVolumeClaim>::namespaced(self.client.clone(), namespace);
-        if delete_owned_if_present(
-            &pvcs,
-            &names.data_pvc_ordinal_zero(),
-            &self.builder,
-            workspace_id,
-        )
-        .await?
+        if workspace.home_volume_binding.is_none()
+            && delete_owned_if_present(
+                &pvcs,
+                &names.data_pvc_ordinal_zero(),
+                &self.builder,
+                workspace_id,
+            )
+            .await?
         {
             return Ok(DeleteProgress::DeletionRequested);
         }

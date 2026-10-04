@@ -7,9 +7,10 @@ use k8s_openapi::{
             Affinity, ConfigMapVolumeSource, Container, EmptyDirVolumeSource,
             EphemeralVolumeSource, KeyToPath, NodeAffinity, NodeSelector, NodeSelectorRequirement,
             NodeSelectorTerm, PersistentVolumeClaim, PersistentVolumeClaimSpec,
-            PersistentVolumeClaimTemplate, PodSpec, PodTemplateSpec, PreferredSchedulingTerm,
-            ProjectedVolumeSource, ResourceRequirements, SecretProjection, SecretVolumeSource,
-            Volume, VolumeProjection, VolumeResourceRequirements,
+            PersistentVolumeClaimTemplate, PersistentVolumeClaimVolumeSource, PodSpec,
+            PodTemplateSpec, PreferredSchedulingTerm, ProjectedVolumeSource, ResourceRequirements,
+            SecretProjection, SecretVolumeSource, Volume, VolumeProjection,
+            VolumeResourceRequirements,
         },
     },
     apimachinery::pkg::{
@@ -73,12 +74,10 @@ pub(super) fn stateful_set(
                     placement,
                 )),
             },
-            volume_claim_templates: Some(vec![workspace_claim(
-                builder,
-                stable_labels,
-                workspace,
-                names,
-            )]),
+            volume_claim_templates: workspace
+                .home_volume_binding
+                .is_none()
+                .then(|| vec![workspace_claim(builder, stable_labels, workspace, names)]),
             ..StatefulSetSpec::default()
         }),
         ..StatefulSet::default()
@@ -136,6 +135,7 @@ fn pod_spec(
         security_context: pod.pod_security_context(),
         image_pull_secrets: pod.image_pull_secrets(),
         volumes: Some(workspace_volumes(
+            workspace,
             &workspace.template.storage_policy,
             names,
             builder.ttyd_mtls.as_ref(),
@@ -196,6 +196,7 @@ fn workspace_resources(pod: WorkspacePod<'_>, workspace: &Workspace) -> Resource
 }
 
 fn workspace_volumes(
+    workspace: &Workspace,
     policy: &WorkspaceStoragePolicy,
     names: &WorkspaceResourceNames,
     ttyd_mtls: Option<&super::TtydMtlsConfig>,
@@ -259,6 +260,16 @@ fn workspace_volumes(
             stable_labels,
         ),
     ];
+    if let Some(binding) = &workspace.home_volume_binding {
+        volumes.push(Volume {
+            name: names.data_claim_template.clone(),
+            persistent_volume_claim: Some(PersistentVolumeClaimVolumeSource {
+                claim_name: binding.claim_name.clone(),
+                read_only: Some(false),
+            }),
+            ..Volume::default()
+        });
+    }
     if let Some(mtls) = ttyd_mtls {
         volumes.push(ttyd_tls_volume(mtls));
     }

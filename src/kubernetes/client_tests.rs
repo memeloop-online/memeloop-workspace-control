@@ -56,7 +56,7 @@ mod coordinator_tests {
         quota::Resources,
         templates::WorkspaceTemplateSpec,
         workspace_runtime::WorkspaceRuntimeIdentity,
-        workspaces::{AccessMode, Workspace, WorkspaceState},
+        workspaces::{AccessMode, Workspace, WorkspaceHomeVolumeBinding, WorkspaceState},
     };
 
     #[test]
@@ -199,6 +199,7 @@ mod coordinator_tests {
             owner_id: Uuid::now_v7(),
             name: "test".to_owned(),
             template_id: None,
+            home_volume_binding: None,
             node_pool: "default".to_owned(),
             runtime: WorkspaceRuntimeIdentity,
             template: WorkspaceTemplateSpec::standard(
@@ -222,37 +223,321 @@ mod coordinator_tests {
         Uuid::parse_str("018f0000-0000-7000-8000-000000000001").unwrap()
     }
 
+    fn bind_home(workspace: &mut Workspace, claim_name: &str) {
+        workspace.home_volume_binding = Some(WorkspaceHomeVolumeBinding {
+            namespace: workspace.runtime.namespace().to_owned(),
+            claim_name: claim_name.to_owned(),
+            claim_uid: "home-uid".to_owned(),
+            capacity_gib: workspace.template.resources.disk_gib,
+        });
+    }
+
+    #[tokio::test]
+    async fn bound_home_is_retained_even_when_its_name_matches_the_legacy_generated_claim() {
+        let mut workspace = workspace(workspace_id());
+        bind_home(&mut workspace, "workspace-data-w-8000000000000001-0");
+        let mock = Arc::new(WorkspaceDeleteMock::new("public-a", workspace.id));
+        let coordinator = workspace_coordinator(mock.clone());
+        assert_eq!(
+            coordinator.delete_or_confirm(&workspace).await.unwrap(),
+            DeleteProgress::Terminating
+        );
+        mock.pod_exists.store(false, Ordering::SeqCst);
+        mock.config_exists.store(true, Ordering::SeqCst);
+        assert_eq!(
+            coordinator.delete_or_confirm(&workspace).await.unwrap(),
+            DeleteProgress::DeletionRequested
+        );
+        assert!(!mock.config_exists.load(Ordering::SeqCst));
+        assert_eq!(
+            coordinator.delete_or_confirm(&workspace).await.unwrap(),
+            DeleteProgress::Gone
+        );
+        assert!(mock.pvc_exists.load(Ordering::SeqCst));
+        assert_no_pvc_delete(&mock);
+        assert!(
+            mock.requests
+                .lock()
+                .unwrap()
+                .iter()
+                .all(|(_, uri)| !uri.contains("persistentvolumeclaims"))
+        );
+    }
+
+    #[tokio::test]
+    async fn retained_home_readers_do_not_block_workspace_deletion() {
+        let mut workspace = workspace(workspace_id());
+        bind_home(&mut workspace, "existing-home");
+        let mut mock = WorkspaceDeleteMock::new("public-a", workspace.id);
+        mock.referenced_pvc = "existing-home".to_owned();
+        mock.pod_exists.store(false, Ordering::SeqCst);
+        mock.other_pod_references_pvc.store(true, Ordering::SeqCst);
+        let mock = Arc::new(mock);
+        let coordinator = workspace_coordinator(mock.clone());
+        assert_eq!(
+            coordinator.delete_or_confirm(&workspace).await.unwrap(),
+            DeleteProgress::Gone
+        );
+        mock.other_pod_references_pvc.store(false, Ordering::SeqCst);
+        assert_eq!(
+            coordinator.delete_or_confirm(&workspace).await.unwrap(),
+            DeleteProgress::Gone
+        );
+        assert_no_pvc_delete(&mock);
+    }
+
+    fn bound_claim() -> serde_json::Value {
+        serde_json::json!({
+            "apiVersion": "v1", "kind": "PersistentVolumeClaim",
+            "metadata": {"name": "existing-home", "namespace": "memeloop-workspace-control", "uid": "home-uid"},
+            "spec": {"volumeName": "home-volume"},
+            "status": {"phase": "Bound", "capacity": {"storage": "10Gi"}}
+        })
+    }
+
+    #[tokio::test]
+    async fn invalid_persisted_home_identity_or_capacity_makes_no_kubernetes_requests() {
+        for invalid in ["namespace", "uid", "capacity", "zero"] {
+            let contacted = Arc::new(AtomicBool::new(false));
+            let observed = contacted.clone();
+            let service = service_fn(move |_: Request<kube::client::Body>| {
+                observed.store(true, Ordering::SeqCst);
+                async { Ok::<_, Infallible>(not_found()) }
+            });
+            let mut workspace = workspace(workspace_id());
+            workspace.state = WorkspaceState::Ready;
+            bind_home(&mut workspace, "existing-home");
+            match invalid {
+                "namespace" => {
+                    workspace.home_volume_binding.as_mut().unwrap().namespace = "other".to_owned()
+                }
+                "uid" => workspace
+                    .home_volume_binding
+                    .as_mut()
+                    .unwrap()
+                    .claim_uid
+                    .clear(),
+                "zero" => workspace.home_volume_binding.as_mut().unwrap().capacity_gib = 0,
+                _ => workspace.template.resources.disk_gib = 100,
+            }
+            let builder =
+                workspace_coordinator(Arc::new(WorkspaceDeleteMock::new("public-a", workspace.id)))
+                    .builder;
+            let coordinator =
+                KubernetesCoordinator::new(kube::Client::new(service, "default"), builder);
+            assert!(matches!(
+                coordinator.reconcile(&workspace).await,
+                Err(ReconcileError::Build(_))
+            ));
+            assert!(!contacted.load(Ordering::SeqCst));
+        }
+    }
+
+    #[tokio::test]
+    async fn invalid_home_binding_fails_before_any_mutation_or_generated_pvc_lookup() {
+        let mut invalid_claims = vec![None];
+        for (pointer, value) in [
+            ("/metadata/uid", serde_json::json!("replacement-uid")),
+            ("/metadata/uid", serde_json::Value::Null),
+            ("/status/phase", serde_json::json!("Pending")),
+            ("/status/phase", serde_json::json!("Lost")),
+            ("/status/phase", serde_json::json!("Unknown")),
+            ("/status/capacity/storage", serde_json::json!("9Gi")),
+            ("/status/capacity/storage", serde_json::json!("invalid")),
+            ("/status/capacity", serde_json::Value::Null),
+            ("/status", serde_json::Value::Null),
+        ] {
+            let mut claim = bound_claim();
+            *claim.pointer_mut(pointer).unwrap() = value;
+            invalid_claims.push(Some(claim));
+        }
+        let mut terminating = bound_claim();
+        terminating["metadata"]["deletionTimestamp"] = serde_json::json!("2026-10-04T00:00:00Z");
+        invalid_claims.push(Some(terminating));
+        for claim in invalid_claims {
+            let requests = Arc::new(Mutex::new(Vec::new()));
+            let recorded = requests.clone();
+            let service = service_fn(move |request: Request<kube::client::Body>| {
+                recorded
+                    .lock()
+                    .unwrap()
+                    .push((request.method().clone(), request.uri().path().to_owned()));
+                let response = claim
+                    .clone()
+                    .map_or_else(not_found, |claim| json_response(StatusCode::OK, claim));
+                async move { Ok::<_, Infallible>(response) }
+            });
+            let mut workspace = workspace(workspace_id());
+            workspace.state = WorkspaceState::Ready;
+            bind_home(&mut workspace, "existing-home");
+            let builder =
+                workspace_coordinator(Arc::new(WorkspaceDeleteMock::new("public-a", workspace.id)))
+                    .builder;
+            let coordinator =
+                KubernetesCoordinator::new(kube::Client::new(service, "default"), builder);
+            assert!(matches!(
+                coordinator.reconcile(&workspace).await,
+                Err(ReconcileError::InvalidHomeVolumeBinding { .. })
+            ));
+            assert_eq!(*requests.lock().unwrap(), [(Method::GET, "/api/v1/namespaces/memeloop-workspace-control/persistentvolumeclaims/existing-home".to_owned())]);
+        }
+    }
+
+    #[tokio::test]
+    async fn bound_home_reconcile_checks_again_before_patch_and_immutable_recreation() {
+        use http_body_util::BodyExt;
+        use std::sync::atomic::AtomicUsize;
+
+        for (bound, fail_on_check) in [
+            (false, None),
+            (true, None),
+            (true, Some(2)),
+            (true, Some(3)),
+        ] {
+            let requests = Arc::new(Mutex::new(Vec::new()));
+            let recorded = requests.clone();
+            let claim_reads = Arc::new(AtomicUsize::new(0));
+            let read_count = claim_reads.clone();
+            let service = service_fn(move |request: Request<kube::client::Body>| {
+                let recorded = recorded.clone();
+                let read_count = read_count.clone();
+                async move {
+                    let method = request.method().clone();
+                    let path = request.uri().path().to_owned();
+                    recorded
+                        .lock()
+                        .unwrap()
+                        .push((method.clone(), path.clone()));
+                    if path.contains("persistentvolumeclaims") {
+                        assert_eq!(method, Method::GET);
+                        if !bound {
+                            assert!(path.ends_with("/workspace-data-w-8000000000000001-0"));
+                            return Ok::<_, Infallible>(not_found());
+                        }
+                        assert!(path.ends_with("/existing-home"));
+                        let check = read_count.fetch_add(1, Ordering::SeqCst) + 1;
+                        return Ok::<_, Infallible>(if fail_on_check == Some(check) {
+                            not_found()
+                        } else {
+                            let mut claim = bound_claim();
+                            claim["status"]["capacity"]["storage"] = serde_json::json!("10240Mi");
+                            json_response(StatusCode::OK, claim)
+                        });
+                    }
+                    if method == Method::GET {
+                        return Ok(not_found());
+                    }
+                    assert_eq!(method, Method::PATCH, "unexpected mutation: {path}");
+                    let bytes = request.into_body().collect().await.unwrap().to_bytes();
+                    let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+                    if path.contains("/statefulsets/") {
+                        if bound {
+                            assert!(body["spec"].get("volumeClaimTemplates").is_none());
+                            assert!(
+                                body["spec"]["template"]["spec"]["volumes"]
+                                    .as_array()
+                                    .unwrap()
+                                    .iter()
+                                    .any(|volume| {
+                                        volume["name"] == "workspace-data"
+                                            && volume["persistentVolumeClaim"]["claimName"]
+                                                == "existing-home"
+                                    })
+                            );
+                        } else {
+                            assert_eq!(
+                                body["spec"]["volumeClaimTemplates"][0]["metadata"]["name"],
+                                "workspace-data"
+                            );
+                        }
+                        if fail_on_check == Some(3) {
+                            return Ok(json_response(
+                                StatusCode::UNPROCESSABLE_ENTITY,
+                                serde_json::json!({
+                                    "apiVersion": "v1", "kind": "Status", "status": "Failure",
+                                    "code": 422, "reason": "Invalid", "message": "updates to statefulset spec are forbidden"
+                                }),
+                            ));
+                        }
+                    }
+                    Ok(json_response(StatusCode::OK, body))
+                }
+            });
+            let mut workspace = workspace(workspace_id());
+            workspace.state = WorkspaceState::Ready;
+            if bound {
+                bind_home(&mut workspace, "existing-home");
+            }
+            let builder =
+                workspace_coordinator(Arc::new(WorkspaceDeleteMock::new("public-a", workspace.id)))
+                    .builder;
+            let coordinator =
+                KubernetesCoordinator::new(kube::Client::new(service, "default"), builder);
+            let result = coordinator.reconcile(&workspace).await;
+            if fail_on_check.is_some() {
+                assert!(matches!(
+                    result,
+                    Err(ReconcileError::InvalidHomeVolumeBinding { .. })
+                ));
+            } else {
+                result.unwrap();
+            }
+            let requests = requests.lock().unwrap();
+            let stateful_patches = requests
+                .iter()
+                .filter(|(method, path)| {
+                    *method == Method::PATCH && path.contains("/statefulsets/")
+                })
+                .count();
+            assert_eq!(stateful_patches, usize::from(fail_on_check != Some(2)));
+            assert!(requests.iter().all(|(method, _)| *method != Method::DELETE));
+            if bound {
+                assert!(
+                    requests
+                        .iter()
+                        .all(|(_, path)| !path.contains("/persistentvolumeclaims/workspace-data-"))
+                );
+            }
+        }
+    }
+
     struct WorkspaceDeleteMock {
+        referenced_pvc: String,
         pod_owner: Option<String>,
         workspace_id: Uuid,
         pod_exists: AtomicBool,
         target_pod_appears_in_list: AtomicBool,
         other_pod_references_pvc: AtomicBool,
         pvc_exists: AtomicBool,
+        config_exists: AtomicBool,
         requests: Mutex<Vec<(String, String)>>,
     }
 
     impl WorkspaceDeleteMock {
         fn new(pod_owner: &str, workspace_id: Uuid) -> Self {
             Self {
+                referenced_pvc: "workspace-data-w-8000000000000001-0".to_owned(),
                 pod_owner: Some(pod_owner.to_owned()),
                 workspace_id,
                 pod_exists: AtomicBool::new(true),
                 target_pod_appears_in_list: AtomicBool::new(false),
                 other_pod_references_pvc: AtomicBool::new(false),
                 pvc_exists: AtomicBool::new(true),
+                config_exists: AtomicBool::new(false),
                 requests: Mutex::new(Vec::new()),
             }
         }
 
         fn without_pod_labels(workspace_id: Uuid) -> Self {
             Self {
+                referenced_pvc: "workspace-data-w-8000000000000001-0".to_owned(),
                 pod_owner: None,
                 workspace_id,
                 pod_exists: AtomicBool::new(true),
                 target_pod_appears_in_list: AtomicBool::new(false),
                 other_pod_references_pvc: AtomicBool::new(false),
                 pvc_exists: AtomicBool::new(true),
+                config_exists: AtomicBool::new(false),
                 requests: Mutex::new(Vec::new()),
             }
         }
@@ -283,6 +568,22 @@ mod coordinator_tests {
             let target_pod_path =
                 "/api/v1/namespaces/memeloop-workspace-control/pods/w-8000000000000001-0";
             let pvc_path = "/api/v1/namespaces/memeloop-workspace-control/persistentvolumeclaims/workspace-data-w-8000000000000001-0";
+            let config_path = "/api/v1/namespaces/memeloop-workspace-control/configmaps/w-8000000000000001-config";
+            if path == config_path {
+                if method == Method::GET && self.config_exists.load(Ordering::SeqCst) {
+                    return json_response(
+                        StatusCode::OK,
+                        serde_json::json!({
+                            "apiVersion": "v1", "kind": "ConfigMap",
+                            "metadata": {"name": "w-8000000000000001-config", "labels": ownership_labels("public-a", self.workspace_id)}
+                        }),
+                    );
+                }
+                if method == Method::DELETE {
+                    self.config_exists.store(false, Ordering::SeqCst);
+                    return success();
+                }
+            }
             if method == Method::GET && path == namespace_path {
                 return json_response(
                     StatusCode::OK,
@@ -324,7 +625,7 @@ mod coordinator_tests {
                             "volumes": [{
                                 "name": "workspace-data",
                                 "persistentVolumeClaim": {
-                                    "claimName": "workspace-data-w-8000000000000001-0",
+                                    "claimName": self.referenced_pvc,
                                 },
                             }],
                         },

@@ -38,6 +38,7 @@ impl KubernetesCoordinator {
         if namespace_name != workspace.runtime.namespace() {
             return Err(ReconcileError::RuntimeIdentityMismatch);
         }
+        self.verify_home_volume_binding(workspace).await?;
         self.apply_namespace(workspace, desired).await?;
         self.apply_access_identity(namespace_name, workspace, desired)
             .await?;
@@ -233,6 +234,7 @@ impl KubernetesCoordinator {
         {
             return Err(ReconcileError::StatefulSetRecreationPending);
         }
+        self.verify_home_volume_binding(workspace).await?;
         let stateful_set_result = stateful_sets
             .patch(
                 &names.stateful_set,
@@ -242,6 +244,7 @@ impl KubernetesCoordinator {
             .await;
         if let Err(error) = stateful_set_result {
             if immutable_stateful_set_update(&error) {
+                self.verify_home_volume_binding(workspace).await?;
                 stateful_sets
                     .delete(&names.stateful_set, &DeleteParams::default())
                     .await?;
@@ -252,7 +255,9 @@ impl KubernetesCoordinator {
         let persistent_volume_claims =
             Api::<PersistentVolumeClaim>::namespaced(self.client.clone(), namespace_name);
         let pvc_name = names.data_pvc_ordinal_zero();
-        if let Some(existing) = persistent_volume_claims.get_opt(&pvc_name).await? {
+        if workspace.home_volume_binding.is_none()
+            && let Some(existing) = persistent_volume_claims.get_opt(&pvc_name).await?
+        {
             self.builder
                 .verify_delete_ownership(&existing.metadata, workspace_id)?;
             let claim_labels = desired
