@@ -171,6 +171,10 @@ pub enum DeleteProgress {
 
 #[derive(Debug, Error)]
 pub enum ReconcileError {
+    #[error(
+        "workspace StatefulSet explicitly uses Home PVC {claim_name} without a persisted binding; adopt this claim before reconciling"
+    )]
+    UnpersistedHomeVolumeBinding { claim_name: String },
     #[error("bound Home PVC {claim_name} is unavailable or invalid: {reason}")]
     InvalidHomeVolumeBinding {
         claim_name: String,

@@ -220,19 +220,28 @@ impl KubernetesCoordinator {
                 .await?;
         }
         let stateful_sets = Api::<StatefulSet>::namespaced(self.client.clone(), namespace_name);
-        verify_existing(
-            &stateful_sets,
-            &names.stateful_set,
-            &self.builder,
-            workspace_id,
-        )
-        .await?;
-        if stateful_sets
-            .get_metadata_opt(&names.stateful_set)
-            .await?
-            .is_some_and(|resource| resource.metadata.deletion_timestamp.is_some())
-        {
-            return Err(ReconcileError::StatefulSetRecreationPending);
+        if let Some(existing) = stateful_sets.get_opt(&names.stateful_set).await? {
+            self.builder
+                .verify_delete_ownership(&existing.metadata, workspace_id)?;
+            if workspace.home_volume_binding.is_none()
+                && let Some(claim) = existing
+                    .spec
+                    .as_ref()
+                    .and_then(|spec| spec.template.spec.as_ref())
+                    .and_then(|spec| spec.volumes.as_ref())
+                    .into_iter()
+                    .flatten()
+                    .filter(|volume| volume.name == names.data_claim_template)
+                    .filter_map(|volume| volume.persistent_volume_claim.as_ref())
+                    .find(|claim| claim.claim_name != names.data_pvc_ordinal_zero())
+            {
+                return Err(ReconcileError::UnpersistedHomeVolumeBinding {
+                    claim_name: claim.claim_name.clone(),
+                });
+            }
+            if existing.metadata.deletion_timestamp.is_some() {
+                return Err(ReconcileError::StatefulSetRecreationPending);
+            }
         }
         self.verify_home_volume_binding(workspace).await?;
         let stateful_set_result = stateful_sets

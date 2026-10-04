@@ -501,6 +501,98 @@ mod coordinator_tests {
         }
     }
 
+    #[tokio::test]
+    async fn unpersisted_custom_home_blocks_stateful_set_mutation_but_default_homes_reconcile() {
+        use http_body_util::BodyExt;
+
+        for claim_name in [
+            Some("custom-home-20gi"),
+            Some("workspace-data-w-8000000000000001-0"),
+            None,
+        ] {
+            let requests = Arc::new(Mutex::new(Vec::new()));
+            let recorded = requests.clone();
+            let mut workspace = workspace(workspace_id());
+            workspace.state = WorkspaceState::Ready;
+            workspace.template.resources.disk_gib = 100;
+            let workspace_id = workspace.id;
+            let service = service_fn(move |request: Request<kube::client::Body>| {
+                let recorded = recorded.clone();
+                async move {
+                    let method = request.method().clone();
+                    let path = request.uri().path().to_owned();
+                    recorded
+                        .lock()
+                        .unwrap()
+                        .push((method.clone(), path.clone()));
+                    if method == Method::GET && path.contains("/statefulsets/") {
+                        let volumes = claim_name.into_iter().map(|name| serde_json::json!({
+                            "name": "workspace-data", "persistentVolumeClaim": {"claimName": name}
+                        })).collect::<Vec<_>>();
+                        return Ok::<_, Infallible>(json_response(
+                            StatusCode::OK,
+                            serde_json::json!({
+                                "apiVersion": "apps/v1", "kind": "StatefulSet",
+                                "metadata": {"name": "w-8000000000000001", "namespace": "memeloop-workspace-control", "labels": ownership_labels("public-a", workspace_id)},
+                                "spec": {
+                                    "replicas": 1,
+                                    "selector": {"matchLabels": ownership_labels("public-a", workspace_id)},
+                                    "template": {"spec": {"containers": [{"name": "workspace", "image": "example/workspace:1"}], "volumes": volumes}}
+                                }
+                            }),
+                        ));
+                    }
+                    if method == Method::GET {
+                        return Ok(not_found());
+                    }
+                    assert_eq!(method, Method::PATCH, "unexpected mutation: {path}");
+                    let bytes = request.into_body().collect().await.unwrap().to_bytes();
+                    let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+                    if path.contains("/statefulsets/") {
+                        assert_ne!(claim_name, Some("custom-home-20gi"));
+                        assert_eq!(
+                            body["spec"]["volumeClaimTemplates"][0]["spec"]["resources"]["requests"]
+                                ["storage"],
+                            "100Gi"
+                        );
+                    }
+                    Ok(json_response(StatusCode::OK, body))
+                }
+            });
+            let builder =
+                workspace_coordinator(Arc::new(WorkspaceDeleteMock::new("public-a", workspace.id)))
+                    .builder;
+            let coordinator =
+                KubernetesCoordinator::new(kube::Client::new(service, "default"), builder);
+            let result = coordinator.reconcile(&workspace).await;
+            let blocked = claim_name == Some("custom-home-20gi");
+            if blocked {
+                assert!(
+                    matches!(result, Err(ReconcileError::UnpersistedHomeVolumeBinding { claim_name }) if claim_name == "custom-home-20gi")
+                );
+            } else {
+                result.unwrap();
+            }
+            let requests = requests.lock().unwrap();
+            assert_eq!(
+                requests
+                    .iter()
+                    .filter(|(method, path)| *method == Method::PATCH
+                        && path.contains("/statefulsets/"))
+                    .count(),
+                usize::from(!blocked)
+            );
+            assert!(requests.iter().all(|(method, _)| *method != Method::DELETE));
+            if blocked {
+                assert!(
+                    requests
+                        .iter()
+                        .all(|(_, path)| !path.contains("/persistentvolumeclaims/"))
+                );
+            }
+        }
+    }
+
     struct WorkspaceDeleteMock {
         referenced_pvc: String,
         pod_owner: Option<String>,
