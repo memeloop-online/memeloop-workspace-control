@@ -126,8 +126,11 @@ The operation holds the existing workspace lease and applies a generation CAS.
 One database transaction persists namespace/name/UID/capacity, corrects both the
 workspace template snapshot and accounting `disk_gib`, increments generation, and
 writes an audit record. Stopped binding queues reconciliation; Ready adoption
-does not queue it or mutate the live workload. The next workspace action uses the
-persisted binding. GET workspace and runtime allocation show the bound capacity;
+does not queue it or directly modify the StatefulSet. An already-pending reconcile
+may subsequently update the Pod template generation annotation and cause a rolling
+restart; adoption does not guarantee zero downtime. New Pods still use the
+persisted Home binding, never the old generated claim. GET workspace and runtime
+allocation show the bound capacity;
 runtime metrics resolve the bound claim by name and UID rather than the obsolete
 generated claim. Missing/replaced claims never fall back to the old Home.
 
