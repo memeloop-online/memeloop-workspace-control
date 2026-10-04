@@ -24,33 +24,20 @@ use super::{
     workspace_response::complete_workspace_response,
 };
 
-pub(super) mod validation;
+mod validation;
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
-pub(super) struct BindWorkspaceHomePvcRequest {
-    pub namespace: String,
-    pub claim_name: String,
+pub(super) struct CorrectWorkspaceHomeCapacityRequest {
     pub claim_uid: String,
     pub capacity_gib: u64,
     pub expected_generation: u64,
 }
 
-impl BindWorkspaceHomePvcRequest {
-    fn binding(&self) -> WorkspaceHomeVolumeBinding {
-        WorkspaceHomeVolumeBinding {
-            namespace: self.namespace.clone(),
-            claim_name: self.claim_name.clone(),
-            claim_uid: self.claim_uid.clone(),
-            capacity_gib: self.capacity_gib,
-        }
-    }
-}
-
 #[utoipa::path(
     put,
-    path = "/api/v1/workspaces/{workspace_id}/home-pvc",
-    request_body = BindWorkspaceHomePvcRequest,
+    path = "/api/v1/workspaces/{workspace_id}/home-capacity",
+    request_body = CorrectWorkspaceHomeCapacityRequest,
     params(("workspace_id" = Uuid, Path), ("Idempotency-Key" = String, Header)),
     responses(
         (status = 200, body = super::workspaces::WorkspaceResponse),
@@ -68,19 +55,15 @@ pub(super) async fn update(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Path(workspace_id): Path<Uuid>,
-    Json(request): Json<BindWorkspaceHomePvcRequest>,
+    Json(request): Json<CorrectWorkspaceHomeCapacityRequest>,
 ) -> Result<Response, ApiError> {
     let actor = principal(&state, &headers).await?;
     if !actor.may_manage_system() || actor.has_template_restriction() {
         return Err(ApiError::Forbidden);
     }
-    let binding = request.binding();
-    if !binding.is_valid() {
-        return Err(StorageError::InvalidWorkspaceHomePvc.into());
-    }
     let key = idempotency_key(&headers)?;
     let request_hash = hash(&(workspace_id, &request))?;
-    let scope = format!("{}:workspace-home-pvc-binding", actor.user_id);
+    let scope = format!("{}:workspace-home-capacity-correction", actor.user_id);
     let now = unix_timestamp()?;
     match state
         .database
@@ -98,15 +81,7 @@ pub(super) async fn update(
         IdempotencyDecision::InProgress => return Err(ApiError::IdempotencyInProgress),
         IdempotencyDecision::Reserved => {}
     }
-    let workspace = match bind(
-        &state,
-        workspace_id,
-        &binding,
-        request.expected_generation,
-        actor.user_id,
-    )
-    .await
-    {
+    let workspace = match correct(&state, workspace_id, &request, actor.user_id).await {
         Ok(workspace) => workspace,
         Err(error) => {
             state
@@ -128,15 +103,14 @@ pub(super) async fn update(
     .await
 }
 
-async fn bind(
+async fn correct(
     state: &AppState,
     workspace_id: Uuid,
-    binding: &WorkspaceHomeVolumeBinding,
-    generation: u64,
+    request: &CorrectWorkspaceHomeCapacityRequest,
     actor: Uuid,
 ) -> Result<Workspace, ApiError> {
     let now = unix_timestamp()?;
-    let lease_owner = format!("home-pvc-api:{}", Uuid::now_v7());
+    let lease_owner = format!("home-capacity-api:{}", Uuid::now_v7());
     if !state
         .database
         .try_acquire_workspace_lease(workspace_id, &lease_owner, now, Duration::from_secs(60))
@@ -146,12 +120,20 @@ async fn bind(
     }
     let result = tokio::time::timeout(Duration::from_secs(30), async {
         let workspace = state.database.get_workspace(workspace_id).await?;
-        if !matches!(
-            workspace.state,
-            WorkspaceState::Stopped | WorkspaceState::Ready | WorkspaceState::Failed
-        ) || workspace.generation != generation
+        if workspace.state != WorkspaceState::Stopped
+            || workspace.home_volume_binding.is_some()
+            || workspace.generation != request.expected_generation
         {
             return Err(StorageError::WorkspaceHomePvcUpdateConflict.into());
+        }
+        let binding = WorkspaceHomeVolumeBinding {
+            namespace: workspace.runtime.namespace().to_owned(),
+            claim_name: format!("workspace-data-w-{}-0", workspace.short_id),
+            claim_uid: request.claim_uid.clone(),
+            capacity_gib: request.capacity_gib,
+        };
+        if !binding.is_valid() {
+            return Err(StorageError::InvalidWorkspaceHomePvc.into());
         }
         let client = state
             .kubernetes_client
@@ -160,19 +142,19 @@ async fn bind(
         validation::validate(
             client,
             &workspace,
-            binding,
+            &binding,
             state.config.installation_id.as_str(),
         )
         .await?;
         Ok(state
             .database
-            .bind_workspace_home_volume(
+            .correct_stopped_workspace_home_capacity(
                 workspace_id,
-                binding,
-                generation,
+                request.capacity_gib,
+                request.expected_generation,
                 actor,
                 unix_timestamp()?,
-                workspace.state != WorkspaceState::Stopped,
+                &request.claim_uid,
             )
             .await?)
     })

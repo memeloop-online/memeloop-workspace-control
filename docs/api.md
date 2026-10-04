@@ -139,3 +139,47 @@ scope, or template-restricted key; `409` generation/lease/state/ownership/refere
 conflict; `422` missing or mismatched PVC; `502/503` unavailable Kubernetes. An
 external Home PVC is retained when its workspace is deleted. Release both API and
 reconciler support together before using this endpoint.
+
+## Correct managed Home capacity after a migration
+
+`PUT /api/v1/workspaces/{workspace_id}/home-capacity` corrects persisted Home
+capacity/accounting to an existing managed PVC's actual size. It is not a PVC
+resize or binding endpoint. It requires an unrestricted system administrator
+with `manage_system`, an `Idempotency-Key`, and this body:
+
+```json
+{
+  "capacity_gib": 40,
+  "claim_uid": "the-current-managed-pvc-uid",
+  "expected_generation": 19
+}
+```
+
+The server derives `workspace-data-w-{short_id}-0` in the runtime namespace;
+clients cannot select a different claim or namespace. The workspace must be
+`Stopped`, have no Home binding and no Pod, and its owned StatefulSet must have
+zero replicas and a managed Home claim template. PVC ownership labels and UID
+must match; the claim must be Bound, non-terminating, filesystem-mode, and its
+request and actual capacity must both equal the supplied whole-GiB size. Shared
+references, PVC owner references, and StatefulSet claim-retention policies that
+could delete the existing data volume are rejected. Kubernetes read failures
+fail closed.
+
+The operation holds the workspace lease and uses generation CAS. A transaction
+updates only this workspace's `disk_gib`, template snapshot and accounting,
+increments generation, records the verified claim UID in the audit log, and
+queues reconciliation. `home_volume_binding` stays absent, the shared template
+is unchanged, and the normal managed-PVC lifecycle is preserved. No Kubernetes
+resources are mutated by the API, and no physical PVC expansion/shrink is issued.
+
+After releasing this feature, stop each workspace through the normal action API,
+wait for `Stopped` and Pod disappearance, then correct capacity using a freshly
+read generation and PVC UID. Wait for the stopped StatefulSet's claim template
+to reflect the new capacity before starting. Reconciliation may recreate the
+StatefulSet to change its immutable template, but must retain the same data PVC;
+verify its UID before and after restart. This is a single-replica maintenance
+operation, not a zero-downtime migration or a request for an additional backup PV.
+
+Responses follow `/home-pvc`: `200` success/replay; `400` invalid capacity/UID;
+`403` restricted principal; `409` state, lease, generation, ownership or reference
+conflict; `422` mismatched/missing PVC; `502/503` Kubernetes unavailable.

@@ -13,12 +13,12 @@ use crate::{
 
 mod adoption;
 
-pub(super) async fn validate(
+pub(in crate::api) async fn validate(
     client: &Client,
     workspace: &Workspace,
     binding: &WorkspaceHomeVolumeBinding,
     installation: &str,
-) -> Result<(), ApiError> {
+) -> Result<PersistentVolumeClaim, ApiError> {
     if binding.namespace != workspace.runtime.namespace() {
         return Err(StorageError::InvalidWorkspaceHomePvc.into());
     }
@@ -97,7 +97,7 @@ pub(super) async fn validate(
     }) {
         return Err(StorageError::WorkspaceHomePvcInUse.into());
     }
-    Ok(())
+    Ok(claim)
 }
 
 fn validate_claim(
