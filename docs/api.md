@@ -113,6 +113,13 @@ adoption cannot switch to another volume. It rejects pending/running reconcile
 jobs, so an old task cannot overwrite an out-of-band migrated Home immediately
 after adoption. Do not stop an unadopted migrated workspace just to use this API.
 
+An unpersisted custom Home blocks StatefulSet mutation during reconciliation.
+If terminal job failure has marked the workspace `Failed`, this endpoint permits
+the same adoption only when the live workload passes every Ready adoption check.
+It atomically restores `Ready` with the binding and generation update, without
+queueing reconciliation or changing the live volume. Pending/running reconcile
+jobs, a held workspace lease, and stale generations still reject recovery.
+
 The operation holds the existing workspace lease and applies a generation CAS.
 One database transaction persists namespace/name/UID/capacity, corrects both the
 workspace template snapshot and accounting `disk_gib`, increments generation, and

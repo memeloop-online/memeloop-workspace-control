@@ -289,6 +289,24 @@ impl Fixture {
         }
     }
 
+    pub async fn terminal_failure(&mut self) {
+        assert!(
+            self.database
+                .mark_workspace_failed_if_generation(
+                    self.workspace.id,
+                    self.workspace.generation,
+                    self.now,
+                )
+                .await
+                .unwrap()
+        );
+        self.workspace = self
+            .database
+            .get_workspace(self.workspace.id)
+            .await
+            .unwrap();
+    }
+
     pub fn adopted_runtime(&self) -> (Value, Value) {
         let name = format!("w-{}", self.workspace.short_id);
         let labels = json!({"workspace.memeloop.dev/workspace-id":self.workspace.id,"workspace.memeloop.dev/owner-installation":"home-binding"});

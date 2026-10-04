@@ -73,7 +73,10 @@ pub(super) async fn validate(
             return Err(StorageError::WorkspaceHomePvcInUse.into());
         }
     }
-    if workspace.state == WorkspaceState::Ready {
+    if matches!(
+        workspace.state,
+        WorkspaceState::Ready | WorkspaceState::Failed
+    ) {
         adoption::validate(
             workspace,
             binding,

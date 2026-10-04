@@ -113,12 +113,13 @@ async fn update_sqlite(
     if conflict != 0 {
         return Err(StorageError::WorkspaceHomePvcInUse);
     }
+    let previous_state = workspace.state;
     let previous = previous_binding(workspace);
     let snapshot = apply_binding(workspace, snapshot, update)?;
-    let affected = sqlx::query("UPDATE workspaces SET home_pvc_namespace = ?1, home_pvc_name = ?2, home_pvc_uid = ?3, home_pvc_capacity_gib = ?4, disk_gib = ?4, template_snapshot_yaml = ?5, generation = ?6, updated_at = ?7 WHERE installation_id = ?8 AND id = ?9 AND state = ?11 AND generation = ?10")
+    let affected = sqlx::query("UPDATE workspaces SET home_pvc_namespace = ?1, home_pvc_name = ?2, home_pvc_uid = ?3, home_pvc_capacity_gib = ?4, disk_gib = ?4, template_snapshot_yaml = ?5, generation = ?6, updated_at = ?7, state = ?12 WHERE installation_id = ?8 AND id = ?9 AND state = ?11 AND generation = ?10")
         .bind(&update.binding.namespace).bind(&update.binding.claim_name).bind(&update.binding.claim_uid)
         .bind(as_i64(update.binding.capacity_gib)?).bind(snapshot).bind(as_i64(workspace.generation)?)
-        .bind(update.now).bind(installation).bind(workspace.id.to_string()).bind(as_i64(update.expected_generation)?).bind(workspace.state.as_str())
+        .bind(update.now).bind(installation).bind(workspace.id.to_string()).bind(as_i64(update.expected_generation)?).bind(previous_state.as_str()).bind(workspace.state.as_str())
         .execute(&mut *connection).await.map_err(binding_error)?.rows_affected();
     if affected != 1 {
         return Err(StorageError::WorkspaceHomePvcUpdateConflict);
@@ -147,12 +148,13 @@ async fn update_postgres(
     if conflict != 0 {
         return Err(StorageError::WorkspaceHomePvcInUse);
     }
+    let previous_state = workspace.state;
     let previous = previous_binding(workspace);
     let snapshot = apply_binding(workspace, snapshot, update)?;
-    let affected = sqlx::query("UPDATE workspaces SET home_pvc_namespace = $1, home_pvc_name = $2, home_pvc_uid = $3, home_pvc_capacity_gib = $4, disk_gib = $4, template_snapshot_yaml = $5, generation = $6, updated_at = $7 WHERE installation_id = $8 AND id = $9 AND state = $11 AND generation = $10")
+    let affected = sqlx::query("UPDATE workspaces SET home_pvc_namespace = $1, home_pvc_name = $2, home_pvc_uid = $3, home_pvc_capacity_gib = $4, disk_gib = $4, template_snapshot_yaml = $5, generation = $6, updated_at = $7, state = $12 WHERE installation_id = $8 AND id = $9 AND state = $11 AND generation = $10")
         .bind(&update.binding.namespace).bind(&update.binding.claim_name).bind(&update.binding.claim_uid)
         .bind(as_i64(update.binding.capacity_gib)?).bind(snapshot).bind(as_i64(workspace.generation)?)
-        .bind(update.now).bind(installation).bind(workspace.id.to_string()).bind(as_i64(update.expected_generation)?).bind(workspace.state.as_str())
+        .bind(update.now).bind(installation).bind(workspace.id.to_string()).bind(as_i64(update.expected_generation)?).bind(previous_state.as_str()).bind(workspace.state.as_str())
         .execute(&mut *connection).await.map_err(binding_error)?.rows_affected();
     if affected != 1 {
         return Err(StorageError::WorkspaceHomePvcUpdateConflict);
@@ -161,12 +163,15 @@ async fn update_postgres(
 }
 
 fn ensure_state(workspace: &Workspace, update: &BindingUpdate<'_>) -> Result<(), StorageError> {
-    let expected_state = if update.adopt_ready {
-        WorkspaceState::Ready
+    let permitted_state = if update.adopt_ready {
+        matches!(
+            workspace.state,
+            WorkspaceState::Ready | WorkspaceState::Failed
+        )
     } else {
-        WorkspaceState::Stopped
+        workspace.state == WorkspaceState::Stopped
     };
-    if workspace.state != expected_state || workspace.generation != update.expected_generation {
+    if !permitted_state || workspace.generation != update.expected_generation {
         return Err(StorageError::WorkspaceHomePvcUpdateConflict);
     }
     Ok(())
@@ -182,6 +187,9 @@ fn apply_binding(
     document.spec.resources.disk_gib = update.binding.capacity_gib;
     workspace.template.resources.disk_gib = update.binding.capacity_gib;
     workspace.home_volume_binding = Some(update.binding.clone());
+    if update.adopt_ready {
+        workspace.state = WorkspaceState::Ready;
+    }
     workspace.generation = workspace
         .generation
         .checked_add(1)
@@ -193,7 +201,7 @@ fn apply_binding(
 }
 
 fn previous_binding(workspace: &Workspace) -> serde_json::Value {
-    serde_json::json!({"home_volume_binding": workspace.home_volume_binding, "disk_gib": workspace.template.resources.disk_gib})
+    serde_json::json!({"home_volume_binding": workspace.home_volume_binding, "disk_gib": workspace.template.resources.disk_gib, "state": workspace.state})
 }
 
 fn audit_metadata(workspace: &Workspace, previous: serde_json::Value) -> String {

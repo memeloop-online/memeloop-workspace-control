@@ -148,7 +148,7 @@ async fn bind(
         let workspace = state.database.get_workspace(workspace_id).await?;
         if !matches!(
             workspace.state,
-            WorkspaceState::Stopped | WorkspaceState::Ready
+            WorkspaceState::Stopped | WorkspaceState::Ready | WorkspaceState::Failed
         ) || workspace.generation != generation
         {
             return Err(StorageError::WorkspaceHomePvcUpdateConflict.into());
@@ -172,7 +172,7 @@ async fn bind(
                 generation,
                 actor,
                 unix_timestamp()?,
-                workspace.state == WorkspaceState::Ready,
+                workspace.state != WorkspaceState::Stopped,
             )
             .await?)
     })

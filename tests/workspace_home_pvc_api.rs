@@ -226,8 +226,20 @@ async fn rejects_claim_ownership_mounts_and_missing_kubernetes() {
 
 #[tokio::test]
 async fn adopts_identical_ready_home_without_enqueueing_reconcile_or_mutating_kubernetes() {
+    adopts_current_home(false).await;
+}
+
+#[tokio::test]
+async fn failed_workspace_with_ready_current_home_recovers_atomically() {
+    adopts_current_home(true).await;
+}
+
+async fn adopts_current_home(terminal_failure: bool) {
     let mut fixture = Fixture::new().await;
     fixture.ready().await;
+    if terminal_failure {
+        fixture.terminal_failure().await;
+    }
     let (pod, sts) = fixture.adopted_runtime();
     let app = fixture.app(fixture.claim(), vec![pod], vec![sts]);
     let (status, response) = put(
@@ -261,8 +273,20 @@ async fn adopts_identical_ready_home_without_enqueueing_reconcile_or_mutating_ku
 
 #[tokio::test]
 async fn ready_adoption_rejects_different_live_home_templates_and_container_mounts() {
+    rejects_unsafe_adoption(false).await;
+}
+
+#[tokio::test]
+async fn failed_adoption_rejects_different_live_home_templates_and_container_mounts() {
+    rejects_unsafe_adoption(true).await;
+}
+
+async fn rejects_unsafe_adoption(terminal_failure: bool) {
     let mut fixture = Fixture::new().await;
     fixture.ready().await;
+    if terminal_failure {
+        fixture.terminal_failure().await;
+    }
     let (pod, sts) = fixture.adopted_runtime();
     let mut cases = Vec::new();
     let mut different_pod = pod.clone();
@@ -305,8 +329,24 @@ async fn ready_adoption_rejects_different_live_home_templates_and_container_moun
 
 #[tokio::test]
 async fn lease_and_generation_conflicts_do_not_commit_partial_binding() {
-    let fixture = Fixture::new().await;
-    let app = fixture.app(fixture.claim(), vec![], vec![]);
+    binding_race(false).await;
+}
+
+#[tokio::test]
+async fn failed_adoption_lease_and_generation_conflicts_do_not_commit_partial_binding() {
+    binding_race(true).await;
+}
+
+async fn binding_race(terminal_failure: bool) {
+    let mut fixture = Fixture::new().await;
+    let app = if terminal_failure {
+        fixture.ready().await;
+        fixture.terminal_failure().await;
+        let (pod, sts) = fixture.adopted_runtime();
+        fixture.app(fixture.claim(), vec![pod], vec![sts])
+    } else {
+        fixture.app(fixture.claim(), vec![], vec![])
+    };
     assert!(
         fixture
             .database
@@ -501,8 +541,20 @@ async fn storage_rejects_double_booking_and_another_workspaces_generated_claim()
 
 #[tokio::test]
 async fn ready_adoption_rejects_pending_reconcile_and_foreign_pod() {
+    rejects_busy_adoption(false).await;
+}
+
+#[tokio::test]
+async fn failed_adoption_rejects_pending_reconcile_and_foreign_pod() {
+    rejects_busy_adoption(true).await;
+}
+
+async fn rejects_busy_adoption(terminal_failure: bool) {
     let mut fixture = Fixture::new().await;
     fixture.ready().await;
+    if terminal_failure {
+        fixture.terminal_failure().await;
+    }
     let (pod, sts) = fixture.adopted_runtime();
     let mut foreign = pod.clone();
     foreign["metadata"]["name"] = json!("foreign-pod");
