@@ -8,7 +8,7 @@ use memeloop_workspace_control::{
     quota::Resources,
     templates::{EgressPolicy, WorkspaceTemplateSpec},
     workspace_runtime::{WorkspaceRuntimeIdentity, WorkspaceRuntimeNames},
-    workspaces::{AccessMode, Workspace, WorkspaceState},
+    workspaces::{AccessMode, Workspace, WorkspaceHomeVolumeBinding, WorkspaceState},
 };
 use std::collections::BTreeMap;
 use uuid::Uuid;
@@ -58,6 +58,7 @@ fn workspace(state: WorkspaceState) -> Workspace {
         owner_id: Uuid::now_v7(),
         name: "test-workspace".to_owned(),
         template_id: Some(Uuid::now_v7()),
+        home_volume_binding: None,
         node_pool: "default".to_owned(),
         runtime: WorkspaceRuntimeIdentity::new(id, &short_id).unwrap(),
         template: WorkspaceTemplateSpec::standard(
@@ -98,6 +99,96 @@ fn runtime_names(workspace: &Workspace) -> WorkspaceRuntimeNames {
 
 fn metadata_name(metadata: &k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta) -> &str {
     metadata.name.as_deref().unwrap()
+}
+
+#[test]
+fn bound_home_uses_only_the_persisted_claim_and_preserves_scratch() {
+    let builder = builder();
+    let mut workspace = workspace(WorkspaceState::Ready);
+    workspace.template.resources.disk_gib = 20;
+    let unbound = builder
+        .build(&workspace)
+        .unwrap()
+        .stateful_set
+        .spec
+        .unwrap();
+    let unbound_volumes = unbound.template.spec.unwrap().volumes.unwrap();
+    workspace.home_volume_binding = Some(WorkspaceHomeVolumeBinding {
+        namespace: workspace.runtime.namespace().to_owned(),
+        claim_name: "existing-home-20gi".to_owned(),
+        claim_uid: "persistent-home-uid".to_owned(),
+        capacity_gib: 20,
+    });
+    for state in [
+        WorkspaceState::Ready,
+        WorkspaceState::Starting,
+        WorkspaceState::Restarting,
+        WorkspaceState::Stopped,
+    ] {
+        workspace.state = state;
+        let spec = builder
+            .build(&workspace)
+            .unwrap()
+            .stateful_set
+            .spec
+            .unwrap();
+        assert!(spec.volume_claim_templates.is_none());
+        let mut volumes = spec.template.spec.unwrap().volumes.unwrap();
+        let home_index = volumes
+            .iter()
+            .position(|volume| volume.name == "workspace-data")
+            .unwrap();
+        let home = volumes.remove(home_index);
+        assert_eq!(home.name, "workspace-data");
+        assert_eq!(
+            home.persistent_volume_claim.unwrap().claim_name,
+            "existing-home-20gi"
+        );
+        assert_eq!(volumes, unbound_volumes);
+    }
+}
+
+#[test]
+fn invalid_home_binding_never_renders_a_generated_claim_template() {
+    let builder = builder();
+    let mut workspace = workspace(WorkspaceState::Ready);
+    workspace.template.resources.disk_gib = 100;
+    workspace.home_volume_binding = Some(WorkspaceHomeVolumeBinding {
+        namespace: workspace.runtime.namespace().to_owned(),
+        claim_name: "existing-home-20gi".to_owned(),
+        claim_uid: "persistent-home-uid".to_owned(),
+        capacity_gib: 20,
+    });
+    assert!(matches!(
+        builder.build(&workspace),
+        Err(BuildError::HomeVolumeCapacityMismatch)
+    ));
+    workspace.template.resources.disk_gib = 20;
+    workspace.home_volume_binding.as_mut().unwrap().namespace = "another-namespace".to_owned();
+    assert!(matches!(
+        builder.build(&workspace),
+        Err(BuildError::HomeVolumeNamespaceMismatch)
+    ));
+    workspace.home_volume_binding.as_mut().unwrap().namespace =
+        workspace.runtime.namespace().to_owned();
+    workspace
+        .home_volume_binding
+        .as_mut()
+        .unwrap()
+        .claim_uid
+        .clear();
+    assert!(matches!(
+        builder.build(&workspace),
+        Err(BuildError::InvalidHomeVolumeIdentity)
+    ));
+    workspace.home_volume_binding = None;
+    let spec = builder
+        .build(&workspace)
+        .unwrap()
+        .stateful_set
+        .spec
+        .unwrap();
+    assert_eq!(spec.volume_claim_templates.unwrap().len(), 1);
 }
 
 #[test]

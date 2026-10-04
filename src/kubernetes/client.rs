@@ -24,6 +24,9 @@ const FIELD_MANAGER: &str = "memeloop-workspace-control";
 mod apply;
 #[path = "client_delete.rs"]
 mod delete;
+#[path = "client_home_volume.rs"]
+mod home_volume;
+pub use home_volume::home_volume_capacity_bytes;
 
 #[derive(Clone)]
 pub struct KubernetesCoordinator {
@@ -168,6 +171,15 @@ pub enum DeleteProgress {
 
 #[derive(Debug, Error)]
 pub enum ReconcileError {
+    #[error(
+        "workspace StatefulSet explicitly uses Home PVC {claim_name} without a persisted binding; adopt this claim before reconciling"
+    )]
+    UnpersistedHomeVolumeBinding { claim_name: String },
+    #[error("bound Home PVC {claim_name} is unavailable or invalid: {reason}")]
+    InvalidHomeVolumeBinding {
+        claim_name: String,
+        reason: &'static str,
+    },
     #[error(transparent)]
     Build(#[from] BuildError),
     #[error(transparent)]

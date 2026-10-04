@@ -72,6 +72,16 @@ pub enum StorageError {
     PortMappingNotFound,
     #[error("workspace name and image must not be empty")]
     InvalidWorkspace,
+    #[error("Home PVC binding name, UID, or capacity is invalid")]
+    InvalidWorkspaceHomePvc,
+    #[error(
+        "Home PVC binding requires a stopped workspace or verified Ready adoption at the expected generation"
+    )]
+    WorkspaceHomePvcUpdateConflict,
+    #[error("Home PVC is already reserved or referenced by another workspace")]
+    WorkspaceHomePvcInUse,
+    #[error("Home PVC must exist, be Bound, and match the requested UID and capacity")]
+    WorkspaceHomePvcMismatch,
     #[error("workspace injection references are invalid or duplicated")]
     InvalidWorkspaceInjectionRefs,
     #[error("workspace image is not enabled by the image allowlist")]

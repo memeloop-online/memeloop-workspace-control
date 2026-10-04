@@ -136,7 +136,17 @@ pub(super) async fn list(
         .clone()
         .ok_or(ApiError::KubernetesUnavailable)?;
     let selector = runtime_selector(&state.config.installation_id, &workspaces);
-    let kubernetes_runtime = fetch_kubernetes_runtime(state.as_ref(), client, &selector).await?;
+    let mut kubernetes_runtime =
+        fetch_kubernetes_runtime(state.as_ref(), client.clone(), &selector).await?;
+    for workspace in &workspaces {
+        if let Some(binding) = &workspace.home_volume_binding {
+            kubernetes_runtime
+                .storage_pvcs
+                .entry(workspace.id)
+                .or_default()
+                .persistent = details::bound_home_identity(&client, binding).await?;
+        }
+    }
     let storage_identities = kubernetes_runtime
         .storage_pvcs
         .values()
@@ -395,7 +405,7 @@ pub(super) async fn get(
         namespace,
         &names,
         &selector,
-        workspace_id,
+        &workspace,
         show_runtime,
         &state.config.installation_id.to_string(),
     )

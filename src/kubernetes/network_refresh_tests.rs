@@ -57,6 +57,7 @@ fn fixture() -> (ResourceBuilder, Workspace) {
         owner_id: Uuid::now_v7(),
         name: "refresh".to_owned(),
         template_id: None,
+        home_volume_binding: None,
         node_pool: "default".to_owned(),
         runtime: WorkspaceRuntimeIdentity,
         template: WorkspaceTemplateSpec::standard(

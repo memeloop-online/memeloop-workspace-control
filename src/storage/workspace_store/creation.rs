@@ -129,6 +129,7 @@ fn build_workspace(
         template_id: Some(command.template_id),
         node_pool,
         runtime,
+        home_volume_binding: None,
         template: snapshot.spec,
         state: WorkspaceState::Provisioning,
         generation: 1,

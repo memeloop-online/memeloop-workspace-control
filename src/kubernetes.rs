@@ -21,7 +21,10 @@ mod workload;
 mod workspace_pod;
 
 pub use builder::{BuildError, DesiredResources, ResourceBuilder};
-pub use client::{DeleteProgress, KubernetesCoordinator, ReconcileError, workspace_ssh_node_port};
+pub use client::{
+    DeleteProgress, KubernetesCoordinator, ReconcileError, home_volume_capacity_bytes,
+    workspace_ssh_node_port,
+};
 pub use egress_refresh::{
     DynamicEgressRefresh, DynamicEgressRefreshConfig, DynamicEgressRefreshError,
 };

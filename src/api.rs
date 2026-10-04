@@ -32,6 +32,7 @@ mod user_quota;
 mod web_shell;
 mod webhooks;
 mod workspace_creation;
+mod workspace_home_pvc;
 mod workspace_image_update;
 mod workspace_placement;
 mod workspace_response;

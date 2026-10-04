@@ -1,4 +1,13 @@
-pub(super) const SCHEMA_VERSION: i64 = 25;
+pub(super) const SCHEMA_VERSION: i64 = 26;
+
+pub(super) const HOME_PVC_MIGRATION: &[&str] = &[
+    "ALTER TABLE workspaces ADD COLUMN home_pvc_namespace TEXT",
+    "ALTER TABLE workspaces ADD COLUMN home_pvc_name TEXT",
+    "ALTER TABLE workspaces ADD COLUMN home_pvc_uid TEXT",
+    "ALTER TABLE workspaces ADD COLUMN home_pvc_capacity_gib BIGINT",
+    "CREATE UNIQUE INDEX workspace_home_pvc_name_idx ON workspaces (home_pvc_namespace, home_pvc_name) WHERE home_pvc_name IS NOT NULL AND state <> 'deleted'",
+    "CREATE UNIQUE INDEX workspace_home_pvc_uid_idx ON workspaces (home_pvc_uid) WHERE home_pvc_uid IS NOT NULL AND state <> 'deleted'",
+];
 
 pub(super) const MIGRATION_TABLE: &str = "CREATE TABLE IF NOT EXISTS schema_migrations (version BIGINT PRIMARY KEY, applied_at BIGINT NOT NULL)";
 

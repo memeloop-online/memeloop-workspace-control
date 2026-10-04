@@ -83,3 +83,59 @@ System administrators can resize a stopped workspace's temporary storage with
 `temporary_storage_gib` (1–2,048) and `expected_generation`. Include an
 `Idempotency-Key`; the accepted snapshot and accounting update are reconciled
 on the next start.
+## Adopt or bind an existing workspace Home PVC
+
+`PUT /api/v1/workspaces/{workspace_id}/home-pvc` requires an unrestricted system
+administrator with `manage_system`, an `Idempotency-Key`, and this JSON body:
+
+```json
+{
+  "namespace": "memeloop-workspace-control",
+  "claim_name": "migrated-home-20gi",
+  "claim_uid": "the-current-pvc-uid",
+  "capacity_gib": 20,
+  "expected_generation": 13
+}
+```
+
+The binding is workspace-specific `home_volume_binding`, never a reusable template
+option. The namespace must equal the workspace runtime namespace. The claim must
+exist, be Bound and non-terminating, and have the requested UID, filesystem mode,
+and matching requested/actual whole-GiB capacity. Claims reserved by other
+workspaces or referenced by another workload are rejected. Kubernetes API failure
+fails closed. This endpoint does not create, resize, delete, or move a PVC.
+
+Ordinary binding requires `Stopped`, no workspace Pod, and no Pod mounting the
+target claim. A `Ready` workspace may instead **adopt its current Home**: its live
+StatefulSet and Ready Pod must already mount that exact claim, with matching MWC
+ownership, Pod controller UID, Home mounts, and no volume claim templates. Ready
+adoption cannot switch to another volume. It rejects running reconcile jobs and
+held workspace leases. Pending jobs do not block adoption: after the generation
+CAS, they reload the workspace and use its persisted binding, not an old volume
+snapshot. Do not stop an unadopted migrated workspace just to use this API.
+
+An unpersisted custom Home blocks StatefulSet mutation during reconciliation and
+defers the job without consuming failure attempts or changing workspace state.
+If terminal job failure has marked the workspace `Failed`, this endpoint permits
+the same adoption only when the live workload passes every Ready adoption check.
+It atomically restores `Ready` with the binding and generation update, without
+queueing reconciliation or changing the live volume. Running reconcile
+jobs, a held workspace lease, and stale generations still reject recovery.
+
+The operation holds the existing workspace lease and applies a generation CAS.
+One database transaction persists namespace/name/UID/capacity, corrects both the
+workspace template snapshot and accounting `disk_gib`, increments generation, and
+writes an audit record. Stopped binding queues reconciliation; Ready adoption
+does not queue it or directly modify the StatefulSet. An already-pending reconcile
+may subsequently update the Pod template generation annotation and cause a rolling
+restart; adoption does not guarantee zero downtime. New Pods still use the
+persisted Home binding, never the old generated claim. GET workspace and runtime
+allocation show the bound capacity;
+runtime metrics resolve the bound claim by name and UID rather than the obsolete
+generated claim. Missing/replaced claims never fall back to the old Home.
+
+Responses: `200` success or idempotent replay; `400` invalid binding; `403` role,
+scope, or template-restricted key; `409` generation/lease/state/ownership/reference
+conflict; `422` missing or mismatched PVC; `502/503` unavailable Kubernetes. An
+external Home PVC is retained when its workspace is deleted. Release both API and
+reconciler support together before using this endpoint.
