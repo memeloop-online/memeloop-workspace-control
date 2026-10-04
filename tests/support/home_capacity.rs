@@ -196,12 +196,15 @@ async fn corrects_three_migration_sizes_without_binding_or_shared_template_chang
         );
         assert!(stored.home_volume_binding.is_none());
         assert_eq!(
-            fixture
-                .database
-                .get_workspace_template(fixture.workspace.template_id.unwrap())
-                .await
-                .unwrap(),
-            template
+            serde_json::to_value(
+                fixture
+                    .database
+                    .get_workspace_template(fixture.workspace.template_id.unwrap())
+                    .await
+                    .unwrap()
+            )
+            .unwrap(),
+            serde_json::to_value(template).unwrap()
         );
         assert_eq!(
             fixture.database.job_counts().await.unwrap().pending,
