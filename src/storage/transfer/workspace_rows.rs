@@ -32,6 +32,10 @@ const WORKSPACE_COLUMNS: &[&str] = &[
     "updated_at",
     "deleted_at",
     "template_snapshot_yaml",
+    "home_pvc_name",
+    "home_pvc_namespace",
+    "home_pvc_uid",
+    "home_pvc_capacity_gib",
 ];
 
 pub(super) fn validate(

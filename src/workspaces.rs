@@ -59,12 +59,51 @@ pub struct Workspace {
     pub template_id: Option<Uuid>,
     pub node_pool: String,
     pub runtime: WorkspaceRuntimeIdentity,
+    #[serde(default)]
+    pub home_volume_binding: Option<WorkspaceHomeVolumeBinding>,
     #[serde(flatten)]
     pub template: WorkspaceTemplateSpec,
     pub state: WorkspaceState,
     pub generation: u64,
     pub created_at: i64,
     pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WorkspaceHomeVolumeBinding {
+    pub namespace: String,
+    pub claim_name: String,
+    pub claim_uid: String,
+    pub capacity_gib: u64,
+}
+
+impl WorkspaceHomeVolumeBinding {
+    pub fn is_valid(&self) -> bool {
+        self.namespace == WorkspaceRuntimeIdentity.namespace()
+            && !self.claim_name.is_empty()
+            && self.claim_name.len() <= 253
+            && self.claim_name.split('.').all(|label| {
+                !label.is_empty()
+                    && label.len() <= 63
+                    && label.starts_with(|character: char| character.is_ascii_alphanumeric())
+                    && label.ends_with(|character: char| character.is_ascii_alphanumeric())
+                    && label.bytes().all(|byte| {
+                        byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-'
+                    })
+            })
+            && !self.claim_uid.is_empty()
+            && self.claim_uid.len() <= 128
+            && self
+                .claim_uid
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+            && self.capacity_gib > 0
+            && self
+                .capacity_gib
+                .checked_mul(1 << 30)
+                .is_some_and(|bytes| bytes <= i64::MAX as u64)
+    }
 }
 
 /// Private Kubernetes scheduling material stored by a system-managed node pool.

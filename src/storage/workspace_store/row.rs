@@ -6,12 +6,12 @@ use crate::{
     storage::StorageError,
     templates::WorkspaceTemplateDocument,
     workspace_runtime::WorkspaceRuntimeIdentity,
-    workspaces::{Workspace, WorkspaceState},
+    workspaces::{Workspace, WorkspaceHomeVolumeBinding, WorkspaceState},
 };
 
 pub(crate) const WORKSPACE_COLUMNS: &str = "id, short_id, organization_id, owner_id, name, \
     template_id, template_snapshot_yaml, node_pool, state, \
-    generation, created_at, updated_at";
+    generation, created_at, updated_at, home_pvc_namespace, home_pvc_name, home_pvc_uid, home_pvc_capacity_gib";
 
 pub(crate) fn select_workspace_sql(installation: &str, id: &str) -> String {
     format!(
@@ -62,6 +62,28 @@ where
     let yaml: String = row.try_get("template_snapshot_yaml")?;
     let document =
         WorkspaceTemplateDocument::parse(&yaml).map_err(|_| StorageError::InvalidWorkspace)?;
+    let home_volume_binding = match (
+        row.try_get::<Option<String>, _>("home_pvc_namespace")?,
+        row.try_get::<Option<String>, _>("home_pvc_name")?,
+        row.try_get::<Option<String>, _>("home_pvc_uid")?,
+        row.try_get::<Option<i64>, _>("home_pvc_capacity_gib")?,
+    ) {
+        (None, None, None, None) => None,
+        (Some(namespace), Some(claim_name), Some(claim_uid), Some(capacity)) => {
+            let binding = WorkspaceHomeVolumeBinding {
+                namespace,
+                claim_name,
+                claim_uid,
+                capacity_gib: u64::try_from(capacity)
+                    .map_err(|_| StorageError::InvalidWorkspace)?,
+            };
+            if !binding.is_valid() || binding.capacity_gib != document.spec.resources.disk_gib {
+                return Err(StorageError::InvalidWorkspace);
+            }
+            Some(binding)
+        }
+        _ => return Err(StorageError::InvalidWorkspace),
+    };
     let id = Uuid::parse_str(&row.try_get::<String, _>("id")?)?;
     let short_id: String = row.try_get("short_id")?;
     let runtime = WorkspaceRuntimeIdentity;
@@ -77,6 +99,7 @@ where
         template_id: template_id.map(|id| Uuid::parse_str(&id)).transpose()?,
         node_pool: row.try_get("node_pool")?,
         runtime,
+        home_volume_binding,
         template: document.spec,
         state: WorkspaceState::from_database(&state)
             .ok_or(StorageError::UnknownWorkspaceState(state))?,

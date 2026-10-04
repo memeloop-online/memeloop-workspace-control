@@ -14,7 +14,8 @@ fn workspace_short_identity_is_validated_before_import() {
         "cpu_millis": 1000, "memory_mib": 1024, "gpu_count": 0, "disk_gib": 10,
         "temporary_storage_gib": 22, "node_pool": "default",
         "generation": 1, "created_at": 1, "updated_at": 1, "deleted_at": null,
-        "template_snapshot_yaml": ""
+        "template_snapshot_yaml": "", "home_pvc_name": null,
+        "home_pvc_uid": null, "home_pvc_capacity_gib": null, "home_pvc_namespace": null
     })];
     assert!(validate(&rows, &installation).is_ok());
     rows[0]["short_id"] = serde_json::json!(format!("{short_id}0"));

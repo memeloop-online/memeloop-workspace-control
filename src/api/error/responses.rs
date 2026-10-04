@@ -141,6 +141,9 @@ pub(super) fn storage_response(error: StorageError) -> ErrorResponse {
 }
 
 fn workspace_storage_response(error: &StorageError) -> Option<ErrorResponse> {
+    if let Some(response) = home_pvc_response(error) {
+        return Some(response);
+    }
     if let Some(response) = node_pool_storage_response(error) {
         return Some(response);
     }
@@ -224,6 +227,32 @@ fn workspace_storage_response(error: &StorageError) -> Option<ErrorResponse> {
             StatusCode::FORBIDDEN,
             "privileged_template_forbidden",
             "cluster-access templates require a system administrator",
+        ),
+        _ => return None,
+    })
+}
+
+fn home_pvc_response(error: &StorageError) -> Option<ErrorResponse> {
+    Some(match error {
+        StorageError::InvalidWorkspaceHomePvc => response(
+            StatusCode::BAD_REQUEST,
+            "invalid_workspace_home_pvc",
+            "Home PVC requires the workspace namespace, a valid claim name and UID, and positive whole-GiB capacity",
+        ),
+        StorageError::WorkspaceHomePvcUpdateConflict => response(
+            StatusCode::CONFLICT,
+            "workspace_home_pvc_update_conflict",
+            "workspace must be stopped or eligible for Ready adoption, at the expected generation with no reconciliation in progress",
+        ),
+        StorageError::WorkspaceHomePvcInUse => response(
+            StatusCode::CONFLICT,
+            "workspace_home_pvc_in_use",
+            "Home PVC is mounted by a Pod or reserved by another workspace or workload",
+        ),
+        StorageError::WorkspaceHomePvcMismatch => response(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "workspace_home_pvc_mismatch",
+            "Home PVC must be a non-terminating Bound filesystem claim with the expected UID and capacity",
         ),
         _ => return None,
     })

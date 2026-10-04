@@ -27,7 +27,7 @@ pub(super) async fn fetch_workspace_runtime_details(
     namespace: &str,
     names: &crate::workspace_runtime::WorkspaceRuntimeNames,
     selector: &str,
-    workspace_id: Uuid,
+    workspace: &Workspace,
     show_runtime: bool,
     installation_id: &str,
 ) -> Result<WorkspaceRuntimeDetails, ApiError> {
@@ -61,7 +61,10 @@ pub(super) async fn fetch_workspace_runtime_details(
         .await
         .map_err(ApiError::Kubernetes)?
         .items;
-    let storage_pvcs = storage_pvc_identities(storage_pvcs, workspace_id, installation_id);
+    let mut storage_pvcs = storage_pvc_identities(storage_pvcs, workspace.id, installation_id);
+    if let Some(binding) = &workspace.home_volume_binding {
+        storage_pvcs.persistent = bound_home_identity(client, binding).await?;
+    }
 
     let metric_result = pod_metrics(client.clone(), namespace, selector).await;
     let (metrics_available, metrics) = match metric_result {
@@ -90,6 +93,27 @@ pub(super) async fn fetch_workspace_runtime_details(
         metrics,
         events,
     })
+}
+
+pub(super) async fn bound_home_identity(
+    client: &Client,
+    binding: &crate::workspaces::WorkspaceHomeVolumeBinding,
+) -> Result<Option<StorageIdentity>, ApiError> {
+    let claim = Api::<PersistentVolumeClaim>::namespaced(client.clone(), &binding.namespace)
+        .get_opt(&binding.claim_name)
+        .await
+        .map_err(ApiError::Kubernetes)?;
+    Ok(claim
+        .filter(|claim| {
+            claim.metadata.uid.as_deref() == Some(binding.claim_uid.as_str())
+                && claim.metadata.deletion_timestamp.is_none()
+                && claim
+                    .status
+                    .as_ref()
+                    .and_then(|status| status.phase.as_deref())
+                    == Some("Bound")
+        })
+        .map(|_| (binding.namespace.clone(), binding.claim_name.clone())))
 }
 
 fn storage_pvc_identities(
