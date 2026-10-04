@@ -109,15 +109,17 @@ Ordinary binding requires `Stopped`, no workspace Pod, and no Pod mounting the
 target claim. A `Ready` workspace may instead **adopt its current Home**: its live
 StatefulSet and Ready Pod must already mount that exact claim, with matching MWC
 ownership, Pod controller UID, Home mounts, and no volume claim templates. Ready
-adoption cannot switch to another volume. It rejects pending/running reconcile
-jobs, so an old task cannot overwrite an out-of-band migrated Home immediately
-after adoption. Do not stop an unadopted migrated workspace just to use this API.
+adoption cannot switch to another volume. It rejects running reconcile jobs and
+held workspace leases. Pending jobs do not block adoption: after the generation
+CAS, they reload the workspace and use its persisted binding, not an old volume
+snapshot. Do not stop an unadopted migrated workspace just to use this API.
 
-An unpersisted custom Home blocks StatefulSet mutation during reconciliation.
+An unpersisted custom Home blocks StatefulSet mutation during reconciliation and
+defers the job without consuming failure attempts or changing workspace state.
 If terminal job failure has marked the workspace `Failed`, this endpoint permits
 the same adoption only when the live workload passes every Ready adoption check.
 It atomically restores `Ready` with the binding and generation update, without
-queueing reconciliation or changing the live volume. Pending/running reconcile
+queueing reconciliation or changing the live volume. Running reconcile
 jobs, a held workspace lease, and stale generations still reject recovery.
 
 The operation holds the existing workspace lease and applies a generation CAS.

@@ -1,3 +1,5 @@
+#[path = "support/home_pvc_pending.rs"]
+mod pending;
 #[path = "support/home_pvc.rs"]
 mod support;
 
@@ -540,12 +542,12 @@ async fn storage_rejects_double_booking_and_another_workspaces_generated_claim()
 }
 
 #[tokio::test]
-async fn ready_adoption_rejects_pending_reconcile_and_foreign_pod() {
+async fn ready_adoption_rejects_running_reconcile_and_foreign_pod() {
     rejects_busy_adoption(false).await;
 }
 
 #[tokio::test]
-async fn failed_adoption_rejects_pending_reconcile_and_foreign_pod() {
+async fn failed_adoption_rejects_running_reconcile_and_foreign_pod() {
     rejects_busy_adoption(true).await;
 }
 
@@ -576,7 +578,7 @@ async fn rejects_busy_adoption(terminal_failure: bool) {
     let Database::Sqlite { pool, .. } = &fixture.database else {
         unreachable!()
     };
-    sqlx::query("UPDATE jobs SET status = 'pending' WHERE workspace_id = ?1")
+    sqlx::query("UPDATE jobs SET status = 'running' WHERE workspace_id = ?1")
         .bind(fixture.workspace.id.to_string())
         .execute(pool)
         .await
@@ -586,7 +588,7 @@ async fn rejects_busy_adoption(terminal_failure: bool) {
         &fixture.workspace,
         ADMIN,
         fixture.input(),
-        "pending",
+        "running",
     )
     .await;
     assert_eq!(status, StatusCode::CONFLICT);

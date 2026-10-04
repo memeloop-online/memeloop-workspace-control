@@ -101,7 +101,7 @@ async fn update_sqlite(
 ) -> Result<(), StorageError> {
     ensure_state(workspace, update)?;
     if update.adopt_ready {
-        let active: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM jobs WHERE workspace_id = ?1 AND kind = 'reconcile_workspace' AND status IN ('pending', 'running')")
+        let active: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM jobs WHERE workspace_id = ?1 AND kind = 'reconcile_workspace' AND status = 'running'")
             .bind(workspace.id.to_string()).fetch_one(&mut *connection).await?;
         if active != 0 {
             return Err(StorageError::WorkspaceHomePvcUpdateConflict);
@@ -136,7 +136,7 @@ async fn update_postgres(
 ) -> Result<(), StorageError> {
     ensure_state(workspace, update)?;
     if update.adopt_ready {
-        let active: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM jobs WHERE workspace_id = $1 AND kind = 'reconcile_workspace' AND status IN ('pending', 'running')")
+        let active: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM jobs WHERE workspace_id = $1 AND kind = 'reconcile_workspace' AND status = 'running'")
             .bind(workspace.id.to_string()).fetch_one(&mut *connection).await?;
         if active != 0 {
             return Err(StorageError::WorkspaceHomePvcUpdateConflict);

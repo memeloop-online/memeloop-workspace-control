@@ -377,7 +377,10 @@ fn job_error(error: impl std::fmt::Display) -> JobHandlerError {
 
 fn reconcile_error(error: ReconcileError) -> JobHandlerError {
     match error {
-        ReconcileError::StatefulSetRecreationPending => JobHandlerError::Pending(error.to_string()),
+        ReconcileError::StatefulSetRecreationPending
+        | ReconcileError::UnpersistedHomeVolumeBinding { .. } => {
+            JobHandlerError::Pending(error.to_string())
+        }
         error => job_error(error),
     }
 }
