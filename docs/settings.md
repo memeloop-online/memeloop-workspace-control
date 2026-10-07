@@ -10,6 +10,11 @@ sidebar_position: 6
 The console has one **Settings** navigation entry for personal preferences and
 administrative controls. Older `#administration` links continue to open it.
 
+![Unified Settings in the CI browser with sanitized MWC Demo data](/img/screenshots/settings-desktop.png)
+
+All screenshots on this page are CI browser captures of sanitized demo data,
+not production accounts or secrets.
+
 ## Find a setting
 
 Choose **Personal**, **Organization**, or **System**, then search for a section
@@ -17,6 +22,8 @@ by its title, description, or related term. Search filters individual sections,
 not just the whole category. Only sections you are authorized to use appear in
 the category list or search results; a missing section may require a different
 role or API-key scope. Empty results mean no accessible section matches.
+
+![Search narrowed to the appearance and language section](/img/screenshots/settings-search.png)
 
 Personal settings include your profile, appearance (theme and language), and API
 keys. Organization settings include current organization selection and permitted
@@ -33,6 +40,8 @@ contains metadata only; the token is fetched on the explicit Copy action and
 should be stored in a password manager. Authorized administrators can copy a
 different user's retained key in **Organization → Users and roles → Credential
 configuration**. Access is governed by the same permissions as key management.
+
+![Personal API-key summary in the sanitized demo; no token value is shown](/img/screenshots/user-api-keys.png)
 
 Older hash-only keys have no recoverable plaintext. Copy cannot reconstruct
 them. Create a replacement key intentionally and revoke the old one after

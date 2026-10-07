@@ -53,9 +53,12 @@ test("real Settings schema searches only sections visible to each role", { timeo
       if (role === "member") {
         assert.equal(await page.getByTestId("settings-section-users").count(), 0, "search must not discover hidden administrator sections");
       } else {
-        await page.getByTestId("settings-section-users").waitFor();
+        const usersSection = page.getByTestId("settings-section-users");
+        await usersSection.waitFor();
         await search.clear();
-        await page.getByRole("row").filter({ hasText: "CI Credentials" }).first().getByRole("button", { name: "Credential configuration" }).waitFor();
+        const credentialUser = role === "system" ? "CI Credentials Target" : "CI Credentials Organization Administrator";
+        await usersSection.getByRole("row").filter({ hasText: credentialUser }).getByRole("button", { name: "Credential configuration" }).waitFor();
+        if (role === "organization") assert.equal(await usersSection.getByRole("row").filter({ hasText: "CI Credentials Target" }).getByRole("button", { name: "Credential configuration" }).count(), 0, "organization administrator must not configure another user's credentials");
       }
 
       await search.fill("image allowlist");

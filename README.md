@@ -27,6 +27,8 @@ authenticated port mappings.
 - **WebAssembly plugins** — creation policies, API middleware, custom routes,
   and console surfaces through a versioned WIT interface.
 
+![Unified Settings captured in CI with sanitized MWC Demo data](docs-site/static/img/screenshots/settings-desktop.png)
+
 ## Architecture
 
 MWC runs as a single control-plane service backed by a SQL database. It drives

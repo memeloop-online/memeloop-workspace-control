@@ -24,6 +24,8 @@ Memeloop Workspace Control（MWC）是一个开源的 Kubernetes 工作区控制
 - **WebAssembly 插件** —— 创建策略、API 中间件、自定义路由和控制台
   界面，基于版本化 WIT 接口。
 
+![CI 浏览器截取的统一设置，使用脱敏 MWC Demo 数据](docs-site/static/img/screenshots/settings-desktop.png)
+
 ## 架构
 
 MWC 以单一控制面服务的形式运行，由 SQL 数据库支撑。它调用 Kubernetes
