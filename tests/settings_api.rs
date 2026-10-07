@@ -55,6 +55,10 @@ async fn app() -> (Router, Database) {
         )
         .await
         .unwrap();
+    (app_for(database.clone(), installation_id), database)
+}
+
+fn app_for(database: Database, installation_id: InstallationId) -> Router {
     let config = AppConfig {
         installation_id,
         listen_address: SocketAddr::from(([127, 0, 0, 1], 0)),
@@ -68,10 +72,7 @@ async fn app() -> (Router, Database) {
         prometheus_url: None,
         plugin_dir: None,
     };
-    (
-        router(Arc::new(AppState::new(config, database.clone()))),
-        database,
-    )
+    router(Arc::new(AppState::new(config, database)))
 }
 
 #[tokio::test]
@@ -332,6 +333,229 @@ async fn api_keys_rotate_without_exposing_tokens_in_self_service_lists() {
     assert!(snapshot_json.contains(PRIMARY_TOKEN));
     assert!(snapshot_json.contains("user.api_key.create"));
     assert!(snapshot_json.contains("user.api_key.revoke"));
+}
+
+#[tokio::test]
+async fn api_key_token_requires_owner_permission_and_active_copyable_key() {
+    let (app, database) = app().await;
+    let primary = database.authenticate(PRIMARY_TOKEN).await.unwrap().unwrap();
+    let other = database.authenticate(OTHER_TOKEN).await.unwrap().unwrap();
+    let primary_key = database.list_api_keys(primary.user_id).await.unwrap()[0].id;
+    let other_key = database.list_api_keys(other.user_id).await.unwrap()[0].id;
+    let path = format!("/api/v1/me/api-keys/{primary_key}/token");
+
+    let response = app
+        .clone()
+        .oneshot(request(Method::GET, &path, PRIMARY_TOKEN, None))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()["cache-control"], "no-store");
+    assert_eq!(
+        json_response(response, StatusCode::OK).await,
+        json!({"token": PRIMARY_TOKEN})
+    );
+
+    let reloaded = app_for(database.clone(), "settings-api".parse().unwrap());
+    let again = reloaded
+        .clone()
+        .oneshot(request(Method::GET, &path, PRIMARY_TOKEN, None))
+        .await
+        .unwrap();
+    assert_eq!(again.headers()["cache-control"], "no-store");
+    assert_eq!(
+        json_response(again, StatusCode::OK).await,
+        json!({"token": PRIMARY_TOKEN})
+    );
+
+    let snapshot = database.export_snapshot(unix_timestamp()).await.unwrap();
+    let reads: Vec<_> = snapshot.tables["audit_log"]
+        .iter()
+        .filter(|row| row["action"] == "user.api_key.token_read")
+        .collect();
+    assert_eq!(reads.len(), 2);
+    for row in reads {
+        let metadata: Value = serde_json::from_str(row["metadata_json"].as_str().unwrap()).unwrap();
+        assert_eq!(metadata["api_key_id"], primary_key.to_string());
+        assert!(!row.to_string().contains(PRIMARY_TOKEN));
+    }
+
+    let no_auth = reloaded
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(path.as_str())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(no_auth.status(), StatusCode::UNAUTHORIZED);
+    let wrong_owner = reloaded
+        .clone()
+        .oneshot(request(Method::GET, &path, OTHER_TOKEN, None))
+        .await
+        .unwrap();
+    assert_eq!(wrong_owner.status(), StatusCode::NOT_FOUND);
+    let other_path = format!("/api/v1/me/api-keys/{other_key}/token");
+    let reverse_owner = reloaded
+        .clone()
+        .oneshot(request(Method::GET, &other_path, PRIMARY_TOKEN, None))
+        .await
+        .unwrap();
+    assert_eq!(reverse_owner.status(), StatusCode::NOT_FOUND);
+
+    let now = unix_timestamp();
+    let read_only = json_response(
+        reloaded
+            .clone()
+            .oneshot(request(
+                Method::POST,
+                "/api/v1/me/api-keys",
+                PRIMARY_TOKEN,
+                Some(json!({
+                    "name": "read only",
+                    "scopes": ["read_workspace"],
+                    "expires_at": now + 300
+                })),
+            ))
+            .await
+            .unwrap(),
+        StatusCode::CREATED,
+    )
+    .await;
+    let read_only_token = read_only["token"].as_str().unwrap();
+    let usable = reloaded
+        .clone()
+        .oneshot(request(Method::GET, "/api/v1/me", read_only_token, None))
+        .await
+        .unwrap();
+    assert_eq!(usable.status(), StatusCode::OK);
+    let forbidden = reloaded
+        .clone()
+        .oneshot(request(Method::GET, &path, read_only_token, None))
+        .await
+        .unwrap();
+    assert_eq!(forbidden.status(), StatusCode::FORBIDDEN);
+
+    let expiring = database
+        .create_api_key(
+            primary.user_id,
+            "expiring",
+            vec![ApiKeyScope::ReadWorkspace],
+            Some(now + 300),
+            None,
+            now,
+        )
+        .await
+        .unwrap();
+    let revoked = database
+        .create_api_key(
+            primary.user_id,
+            "revoked",
+            vec![ApiKeyScope::ReadWorkspace],
+            Some(now + 300),
+            None,
+            now,
+        )
+        .await
+        .unwrap();
+    let hash_only = database
+        .create_api_key(
+            primary.user_id,
+            "historical",
+            vec![ApiKeyScope::ReadWorkspace],
+            Some(now + 300),
+            None,
+            now,
+        )
+        .await
+        .unwrap();
+    if let Database::Sqlite { pool, .. } = &database {
+        sqlx::query("UPDATE user_api_keys SET expires_at = ?1 WHERE id = ?2")
+            .bind(now - 1)
+            .bind(expiring.summary.id.to_string())
+            .execute(pool)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE user_api_keys SET token = NULL WHERE id = ?1")
+            .bind(hash_only.summary.id.to_string())
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+    database
+        .revoke_api_key(primary.user_id, revoked.summary.id, now)
+        .await
+        .unwrap();
+    for key_id in [expiring.summary.id, revoked.summary.id] {
+        let response = reloaded
+            .clone()
+            .oneshot(request(
+                Method::GET,
+                &format!("/api/v1/me/api-keys/{key_id}/token"),
+                PRIMARY_TOKEN,
+                None,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+    let response = reloaded
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            &format!("/api/v1/me/api-keys/{}/token", hash_only.summary.id),
+            PRIMARY_TOKEN,
+            None,
+        ))
+        .await
+        .unwrap();
+    let error = json_response(response, StatusCode::CONFLICT).await;
+    assert_eq!(error["error"]["code"], "api_key_token_unavailable");
+    assert!(
+        error["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("cannot be recovered")
+    );
+    let still_usable = reloaded
+        .clone()
+        .oneshot(request(Method::GET, "/api/v1/me", &hash_only.token, None))
+        .await
+        .unwrap();
+    assert_eq!(still_usable.status(), StatusCode::OK);
+
+    let isolated = match &database {
+        Database::Sqlite { pool, .. } => Database::Sqlite {
+            pool: pool.clone(),
+            installation_id: "other-installation".parse().unwrap(),
+        },
+        _ => unreachable!(),
+    };
+    assert!(matches!(
+        isolated
+            .get_api_key_token(primary.user_id, primary_key, now)
+            .await,
+        Err(memeloop_workspace_control::storage::StorageError::ApiKeyNotFound)
+    ));
+
+    let openapi = json_response(
+        reloaded
+            .oneshot(request(
+                Method::GET,
+                "/api/v1/openapi.json",
+                PRIMARY_TOKEN,
+                None,
+            ))
+            .await
+            .unwrap(),
+        StatusCode::OK,
+    )
+    .await;
+    let operation = &openapi["paths"]["/api/v1/me/api-keys/{key_id}/token"]["get"];
+    assert!(operation["responses"]["200"]["headers"]["Cache-Control"].is_object());
+    assert!(operation["responses"]["409"].is_object());
 }
 
 #[tokio::test]

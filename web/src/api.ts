@@ -85,6 +85,10 @@ export class ApiClient {
     return this.request("/api/v1/me/api-keys");
   }
 
+  apiKeyToken(keyId: string): Promise<{ token: string }> {
+    return this.request(`/api/v1/me/api-keys/${encodeURIComponent(keyId)}/token`, { cache: "no-store" });
+  }
+
   createApiKey(input: { name: string; scopes: ApiKeyScope[]; expires_at: number; allowed_template_ids: string[] | null }): Promise<CreatedApiKey> {
     return this.request("/api/v1/me/api-keys", {
       method: "POST", body: JSON.stringify(input),

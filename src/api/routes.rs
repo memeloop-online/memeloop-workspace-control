@@ -51,6 +51,10 @@ fn system_and_identity_routes(router: ApiRouter) -> ApiRouter {
             "/api/v1/me/api-keys/{key_id}",
             axum::routing::delete(admin::delete_api_key),
         )
+        .route(
+            "/api/v1/me/api-keys/{key_id}/token",
+            get(admin::get_api_key_token),
+        )
         .route("/api/v1/events", get(events::stream))
         .route(
             "/api/v1/injections/{scope}/{scope_id}",

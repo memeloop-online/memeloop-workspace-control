@@ -28,6 +28,11 @@ pub(super) fn operational_response(error: ApiError) -> ErrorResponse {
             "idempotency_in_progress",
             "an equivalent request is still in progress",
         ),
+        ApiError::ApiKeyTokenUnavailable => response(
+            StatusCode::CONFLICT,
+            "api_key_token_unavailable",
+            "the original token for this hash-only API key cannot be recovered; create a new key if needed",
+        ),
         ApiError::EncryptionUnavailable => response(
             StatusCode::SERVICE_UNAVAILABLE,
             "encryption_unavailable",

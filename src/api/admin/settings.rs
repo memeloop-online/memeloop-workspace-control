@@ -3,7 +3,7 @@ use std::sync::Arc;
 use axum::{
     Json,
     extract::{Path, State},
-    http::{HeaderMap, StatusCode},
+    http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
 };
 use base64::{Engine, engine::general_purpose::STANDARD};
@@ -50,6 +50,11 @@ pub(in crate::api) struct CreatedApiKeyResponse {
     /// Plaintext API key. The user editor's administrator-only API-key view
     /// retains it for later copying; ordinary self-service list responses
     /// remain summary-only.
+    pub token: String,
+}
+
+#[derive(Serialize, ToSchema)]
+pub(in crate::api) struct ApiKeyTokenResponse {
     pub token: String,
 }
 
@@ -125,6 +130,51 @@ pub(in crate::api) async fn list_api_keys(
         return Err(ApiError::Forbidden);
     }
     Ok(Json(state.database.list_api_keys(actor.user_id).await?))
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/me/api-keys/{key_id}/token",
+    params(("key_id" = Uuid, Path)),
+    description = "Explicitly retrieves the authenticated user's active, unexpired API key token. Historical hash-only keys cannot be recovered. The response must not be cached.",
+    responses(
+        (status = 200, body = ApiKeyTokenResponse, headers(("Cache-Control" = String, description = "no-store"))),
+        (status = 409, description = "The key is hash-only; its original token cannot be recovered", body = crate::api::ErrorEnvelope),
+        (status = 401, body = crate::api::ErrorEnvelope),
+        (status = 403, body = crate::api::ErrorEnvelope),
+        (status = 404, description = "The key is missing, belongs to another user or installation, revoked, or expired", body = crate::api::ErrorEnvelope)
+    )
+)]
+pub(in crate::api) async fn get_api_key_token(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(key_id): Path<Uuid>,
+) -> Result<Response, ApiError> {
+    let actor = principal(&state, &headers).await?;
+    if !actor.may_manage_api_keys() {
+        return Err(ApiError::Forbidden);
+    }
+    let token = state
+        .database
+        .get_api_key_token(actor.user_id, key_id, unix_timestamp()?)
+        .await?
+        .ok_or(ApiError::ApiKeyTokenUnavailable)?;
+    state
+        .database
+        .record_audit(
+            Some(actor.user_id),
+            None,
+            None,
+            "user.api_key.token_read",
+            serde_json::json!({"api_key_id": key_id}),
+            unix_timestamp()?,
+        )
+        .await?;
+    Ok((
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(ApiKeyTokenResponse { token }),
+    )
+        .into_response())
 }
 
 #[utoipa::path(
