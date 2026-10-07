@@ -36,9 +36,10 @@ the responsibilities that remain with deployers.
   roles with distinct permissions.
 - **Scoped API keys** — keys carry fine-grained scopes, mandatory expiry
   (≤ 365 days), and optional template restrictions. Plaintext values are
-  retained for copying only in the administrator user editor, which requires
-  both `manage_system` and `manage_api_keys`; ordinary self-service lists
-  expose summaries only.
+  available for repeated copying by their owner or an authorized administrator
+  when plaintext was retained. Ordinary self-service lists expose summaries;
+  the token is retrieved only for an explicit Copy action. Historical hash-only
+  keys cannot be reconstructed and are not automatically rotated.
 - **Short-lived tickets** — web terminal and port-mapping sessions are
   established through single-use tickets, then held in `HttpOnly`, `Secure`,
   `SameSite=Lax` session cookies.
@@ -51,8 +52,8 @@ the responsibilities that remain with deployers.
   terminal validates client certificates.
 - **Secret hygiene** — wildcard certificates for port mappings are held by
   the gateway only; private keys are never copied into workspace namespaces.
-- **Audit** — privileged administrative actions are recorded in the audit
-  log.
+- **Operation records** — privileged administrative actions are recorded as
+  operation records; the API endpoint retains the historical `/api/v1/audit` path.
 
 ## Deployer responsibilities
 

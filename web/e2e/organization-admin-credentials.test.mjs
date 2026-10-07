@@ -10,13 +10,14 @@ const otherUserId = "other-member";
 test("organization administrator opens only their own credential configuration", { timeout: 90_000 }, async () => {
   const unexpected = [];
   const keyRequests = [];
+  const ownKeys = [{ id: "own-key", name: "Own device", prefix: "own-prefix", scopes: ["read_workspace"], created_at: 1_700_000_000, last_used_at: null, expires_at: 2_100_000_000, allowed_template_ids: null, revoked_at: null }];
   const browser = await chromium.launch({
     executablePath: process.env.CHROMIUM_BIN || chromium.executablePath(),
     headless: true,
     args: ["--no-sandbox", "--disable-dev-shm-usage"],
   });
   try {
-    const context = await browser.newContext();
+    const context = await browser.newContext({ permissions: ["clipboard-read", "clipboard-write"] });
     await context.addInitScript(() => {
       sessionStorage.setItem("mwc.api-token", "fixture-organization-admin-token");
       localStorage.setItem("mwc.locale", "en");
@@ -41,6 +42,7 @@ test("organization administrator opens only their own credential configuration",
         api_key_scopes: ["manage_members", "manage_api_keys", "read_workspace"],
         api_key_expires_at: 2_100_000_000, allowed_template_ids: null,
       };
+      else if (method === "GET" && path === "/api/v1/me/profile") body = { display_name: "Own Admin", avatar_url: null };
       else if (method === "GET" && path === "/api/v1/organizations") body = { items: [{ id: organizationId, name: "Fixture Organization", created_at: 1_700_000_000 }], next_cursor: null };
       else if (method === "GET" && path === `/api/v1/organizations/${organizationId}/members`) body = {
         items: [
@@ -50,7 +52,15 @@ test("organization administrator opens only their own credential configuration",
       };
       else if (method === "GET" && path === "/api/v1/me/api-keys") {
         keyRequests.push(path);
-        body = [{ id: "own-key", name: "Own device", prefix: "own-prefix", scopes: ["read_workspace"], created_at: 1_700_000_000, last_used_at: null, expires_at: 2_100_000_000, allowed_template_ids: null, revoked_at: null }];
+        body = ownKeys;
+      }
+      else if (method === "POST" && path === "/api/v1/me/api-keys") {
+        ownKeys.push({ ...ownKeys[0], id: "created-key", name: request.postDataJSON().name, prefix: "created-prefix" });
+        return route.fulfill({ status: 201, contentType: "application/json", body: JSON.stringify({ ...ownKeys.at(-1), token: "fixture-created-self-token" }) });
+      }
+      else if (method === "GET" && path === "/api/v1/me/api-keys/created-key/token") {
+        keyRequests.push(path);
+        body = { token: "fixture-created-self-token" };
       }
       else if (method === "GET" && path === `/api/v1/organizations/${organizationId}/quota`) body = null;
       else if (method === "GET" && path === `/api/v1/organizations/${organizationId}/usage-summary`) body = {
@@ -73,7 +83,7 @@ test("organization administrator opens only their own credential configuration",
 
     const page = await context.newPage();
     await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
-    await page.getByRole("button", { name: "Administration", exact: true }).click();
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
     await page.getByText("Users and roles", { exact: true }).waitFor();
     const ownRow = page.getByRole("row", { name: /Own Admin/ });
     const otherRow = page.getByRole("row", { name: /Other Member/ });
@@ -82,7 +92,22 @@ test("organization administrator opens only their own credential configuration",
     const dialog = page.getByRole("dialog").filter({ hasText: "Own Admin" });
     await dialog.getByText("Own device", { exact: true }).waitFor();
     assert.ok(keyRequests.length > 0);
-    assert.equal(await dialog.getByRole("button", { name: "Copy" }).isDisabled(), true);
+    await dialog.getByRole("button", { name: "Create API key" }).first().click();
+    await dialog.getByRole("textbox", { name: "Key name" }).fill("Created own key");
+    await dialog.getByRole("button", { name: "Create API key" }).last().click();
+    await dialog.getByRole("row", { name: /Created own key/ }).waitFor();
+    await dialog.getByRole("button", { name: "Close" }).click();
+    await ownRow.getByRole("button", { name: "Credential configuration" }).click();
+    const reopened = page.getByRole("dialog").filter({ hasText: "Own Admin" });
+    const createdRow = reopened.getByRole("row", { name: /Created own key/ });
+    assert.equal(await reopened.getByText("fixture-created-self-token", { exact: true }).count(), 0, "reopening must not display the secret");
+    await page.evaluate(() => navigator.clipboard.writeText(""));
+    const tokenRead = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/v1/me/api-keys/created-key/token" && response.request().method() === "GET");
+    await createdRow.getByRole("button", { name: "Copy" }).click();
+    await tokenRead;
+    await createdRow.getByRole("button", { name: "Copied" }).waitFor();
+    assert.ok((await page.evaluate(() => navigator.clipboard.readText())) === "fixture-created-self-token", "reopened self-service copy must match token endpoint");
+    assert.ok(keyRequests.includes("/api/v1/me/api-keys/created-key/token"));
     assert.deepEqual(unexpected, []);
     await context.close();
   } catch (error) {

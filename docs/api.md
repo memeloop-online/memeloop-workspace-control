@@ -19,8 +19,10 @@ API consumers authenticate with personal API keys:
 curl "$BASE/api/v1/me" -H "Authorization: Bearer $API_KEY"
 ```
 
-Keys are managed from **Administration → Users and roles → Edit user → API
-keys**, or through `GET`/`POST /api/v1/me/api-keys` and `DELETE
+Administrators manage user keys from **Settings → Organization → Users and
+roles → Credential configuration**. Users manage their own keys from
+**Settings → Personal → API keys**, or through `GET`/`POST /api/v1/me/api-keys`, `GET
+/api/v1/me/api-keys/{key_id}/token`, and `DELETE
 /api/v1/me/api-keys/{key_id}`. Rules:
 
 - Every key carries at least one fine-grained scope.
@@ -31,6 +33,18 @@ keys**, or through `GET`/`POST /api/v1/me/api-keys` and `DELETE
 - Keys can optionally be restricted to specific template IDs: `null` means no
   additional restriction, `[]` means the key cannot create workspaces from any
   template.
+
+`GET /api/v1/me/api-keys/{key_id}/token` explicitly retrieves only the
+authenticated user's own active, unexpired key. The authenticating key must
+have `manage_api_keys`; this permission applies to retrieval, not to normal use
+of a `read_workspace`-only key. A successful response is `{"token":"..."}` with
+`Cache-Control: no-store`; clients should not persist the token in browser
+storage. Missing, other-user, other-installation, revoked, and expired keys
+return `404`. A historical hash-only key whose original token was not retained
+returns `409 api_key_token_unavailable`: the plaintext cannot be reconstructed,
+and retrieval does not rotate or replace the key. Failed authentication returns
+`401`; insufficient scope returns `403`. Retrieval audit metadata contains the
+key ID, never its token.
 
 Available scopes: `create_workspace`, `read_workspace`, `connect_workspace`,
 `change_workspace_state`, `delete_workspace`, `manage_organization`,
@@ -53,7 +67,7 @@ server-generated and returned verbatim by clients — no offset arithmetic:
 | Area | Endpoints |
 | --- | --- |
 | Identity | `GET /api/v1/me`, `GET`/`PUT /api/v1/me/profile` |
-| API keys | `GET`/`POST /api/v1/me/api-keys`, `DELETE .../api-keys/{key_id}` |
+| API keys | `GET`/`POST /api/v1/me/api-keys`, `GET .../api-keys/{key_id}/token`, `DELETE .../api-keys/{key_id}` |
 | Workspaces | `GET`/`POST /api/v1/workspaces`, `GET /api/v1/workspaces/{id}`, `POST .../actions/{action}`, `PUT .../temporary-storage` |
 | Templates | `GET`/`POST /api/v1/templates`, `PUT`/`DELETE .../{id}`, `PUT .../enabled` |
 | Injections | `GET`/`PUT`/`DELETE /api/v1/injections/{scope}/{scope_id}[/{key}]`, `POST .../batch-delete`, `POST /api/v1/injections/preview` |

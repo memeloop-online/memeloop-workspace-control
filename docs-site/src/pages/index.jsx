@@ -28,10 +28,10 @@ const FEATURES = [
     }),
   },
   {
-    title: translate({ id: 'home.feature.governance.title', message: 'Administration' }),
+    title: translate({ id: 'home.feature.governance.title', message: 'Unified Settings' }),
     body: translate({
       id: 'home.feature.governance.body',
-      message: 'Image allowlists, templates, quotas, node pools, and audit logging.',
+      message: 'Search permission-aware Personal, Organization, and System settings; view operation records separately.',
     }),
   },
   {
@@ -178,7 +178,7 @@ export default function Home() {
       title={translate({ id: 'home.title', message: 'Memeloop Workspace Control' })}
       description={translate({
         id: 'home.description',
-        message: 'A Kubernetes control plane for isolated, per-user development workspaces',
+        message: 'Kubernetes workspaces with secure injection and unified, searchable settings',
       })}>
       <header className={styles.hero}>
         <div className={styles.heroInner}>

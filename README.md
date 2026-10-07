@@ -19,8 +19,9 @@ authenticated port mappings.
   encrypted storage and organization-locked items.
 - **Workspace access** — OpenSSH, a web terminal, and authenticated HTTPS
   port mappings, enabled per deployment and template.
-- **Administration** — image allowlist, templates, organizations and members,
-  two-level quotas, and an audit log.
+- **Unified Settings** — searchable, permission-filtered Personal, Organization,
+  and System sections for profile, appearance, API keys, image allowlist,
+  templates, members, and quotas. Operation records have a separate navigation entry.
 - **API-first** — scoped API keys, cursor pagination, SSE events, signed
   webhooks, and an OpenAPI contract.
 - **WebAssembly plugins** — creation policies, API middleware, custom routes,
@@ -58,7 +59,7 @@ Full bilingual documentation is published at
 
 - [Quick start](docs/quickstart.md)
 - [Workspaces](docs/workspaces.md) · [Credentials and files](docs/credentials-and-files.md) · [Access](docs/access.md)
-- [Administration](docs/administration.md) · [API](docs/api.md) · [Plugin development](docs/plugin-development.md)
+- [Settings](docs/settings.md) · [Administration](docs/administration.md) · [API](docs/api.md) · [Plugin development](docs/plugin-development.md)
 - [Security model](docs/security-model.md) · [FAQ](docs/faq.md)
 
 ## License

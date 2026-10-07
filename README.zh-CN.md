@@ -17,7 +17,8 @@ Memeloop Workspace Control（MWC）是一个开源的 Kubernetes 工作区控制
   组织锁定项。
 - **工作区访问** —— OpenSSH、网页终端和鉴权 HTTPS 端口映射，按部署与
   模板启用。
-- **管理面** —— 镜像白名单、模板、组织与成员、两级配额和审计日志。
+- **统一设置** —— 按个人、组织、系统分类搜索个人资料、外观、API 密钥、
+  镜像白名单、模板、成员与配额；仅展示有权限的设置。操作记录保留独立导航入口。
 - **API 优先** —— 细粒度 scope 的 API 密钥、游标分页、SSE 事件、签名
   Webhook 和 OpenAPI 契约。
 - **WebAssembly 插件** —— 创建策略、API 中间件、自定义路由和控制台
@@ -53,7 +54,7 @@ Helm Chart。加密注入与 Webhook 需要 `MWC_ENCRYPTION_KEY` 和
 
 - [快速开始](docs/quickstart.md)
 - [工作区](docs/workspaces.md) · [凭据与文件](docs/credentials-and-files.md) · [访问](docs/access.md)
-- [管理](docs/administration.md) · [API](docs/api.md) · [插件开发](docs/plugin-development.md)
+- [设置](docs/settings.md) · [管理](docs/administration.md) · [API](docs/api.md) · [插件开发](docs/plugin-development.md)
 - [安全模型](docs/security-model.md) · [常见问题](docs/faq.md)
 
 ## 许可证

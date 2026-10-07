@@ -320,7 +320,6 @@ export function AppShell(props: AppShellProps) {
       <NavItem view="workspaces" current={props.view} onSelect={props.onViewChange} t={props.t} />
       <NavItem view="injections" current={props.view} onSelect={props.onViewChange} t={props.t} />
       {canShowPlugins && <NavItem view="plugins" current={props.view} onSelect={props.onViewChange} t={props.t} />}
-      {props.canOpenAdministration && <NavItem view="administration" current={props.view} onSelect={props.onViewChange} t={props.t} />}
       {canShowPlugins && <NavItem view="audit" current={props.view} onSelect={props.onViewChange} t={props.t} />}
       <NavItem view="settings" current={props.view} onSelect={props.onViewChange} t={props.t} />
     </nav>

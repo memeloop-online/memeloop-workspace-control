@@ -54,7 +54,7 @@ test("production organization administrator manages their own credentials throug
     }, { token: organizationAdminToken, organization: organizationId });
     const page = await context.newPage();
     await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
-    await page.getByRole("button", { name: "Administration", exact: true }).click();
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
     await page.getByText("Users and roles", { exact: true }).waitFor();
     const otherRow = page.getByRole("row").filter({ hasText: targetUserId });
     await otherRow.waitFor();
@@ -75,16 +75,30 @@ test("production organization administrator manages their own credentials throug
     const listed = await findOwnKey(keyName);
     createdId = listed?.id ?? null;
     assert.ok(createdId, "the self-service API must persist the created key");
+    await dialog.getByRole("button", { name: "Close" }).click();
+    await ownRow.getByRole("button", { name: "Credential configuration", exact: true }).click();
+    const reopened = page.getByRole("dialog");
+    const reopenedRow = reopened.getByRole("row", { name: new RegExp(keyName) });
+    await reopenedRow.getByRole("button", { name: /Copy|Copied/ }).waitFor();
     await page.evaluate(() => navigator.clipboard.writeText(""));
-    await keyRow.getByRole("button", { name: /Copy|Copied/ }).click();
+    const tokenRead = page.waitForResponse((response) => new URL(response.url()).pathname === `/api/v1/me/api-keys/${createdId}/token` && response.request().method() === "GET");
+    await reopenedRow.getByRole("button", { name: /Copy|Copied/ }).click();
+    assert.equal((await tokenRead).status(), 200, "copy after reopening must use the self-service token endpoint");
+    await reopenedRow.getByRole("button", { name: "Copied" }).waitFor();
     const copiedToken = await page.evaluate(() => navigator.clipboard.readText());
+    assert.ok(copiedToken, "clipboard must contain a credential");
+    assert.equal(await page.evaluate((secret) => document.body.innerText.includes(secret), copiedToken), false, "reopened credentials must not display plaintext");
+    if (process.env.E2E_ADMIN_TOKEN) {
+      const audit = await api("/api/v1/audit?action=user.api_key.token_read&limit=100", { headers: { Authorization: `Bearer ${process.env.E2E_ADMIN_TOKEN}` } });
+      assert.ok(audit.items.some((record) => record.action === "user.api_key.token_read" && record.actor_user_id === organizationAdminUserId && record.metadata.api_key_id === createdId), "copy must record an operation without the token");
+    }
     const copiedPrincipal = await api("/api/v1/me", { headers: { Authorization: `Bearer ${copiedToken}` } });
     assert.equal(copiedPrincipal.user_id, organizationAdminUserId);
     const revocation = page.waitForResponse((response) => new URL(response.url()).pathname === `/api/v1/me/api-keys/${createdId}` && response.request().method() === "DELETE");
-    await keyRow.getByRole("button", { name: "Revoke" }).click();
+    await reopenedRow.getByRole("button", { name: "Revoke" }).click();
     await page.getByRole("button", { name: "Revoke", exact: true }).last().click();
     assert.equal((await revocation).status(), 204);
-    await keyRow.waitFor({ state: "detached" });
+    await reopenedRow.waitFor({ state: "detached" });
     assert.equal(await findOwnKey(keyName), null, "the self-service API must remove the revoked key");
     const revoked = await fetch(new URL("/api/v1/me", baseUrl), { headers: { Authorization: `Bearer ${copiedToken}` } });
     assert.equal(revoked.status, 401, "copied credential must stop authenticating after revocation");

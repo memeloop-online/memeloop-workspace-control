@@ -30,12 +30,12 @@ const SECTIONS = [
     to: '/docs/access',
   },
   {
-    title: translate({ id: 'features.admin.title', message: 'Administration' }),
+    title: translate({ id: 'features.admin.title', message: 'Settings' }),
     body: translate({
       id: 'features.admin.body',
-      message: 'Default-deny image allowlist, template catalog, organizations and members, two-level quotas, node pools, audit events, and platform metrics.',
+      message: 'One searchable, permission-aware place for Personal, Organization, and System settings: profile, API keys, image allowlist, members, quotas, and scaling. Operation records remain a separate view.',
     }),
-    to: '/docs/administration',
+    to: '/docs/settings',
   },
   {
     title: translate({ id: 'features.api.title', message: 'API' }),

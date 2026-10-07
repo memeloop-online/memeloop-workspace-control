@@ -1,21 +1,24 @@
 ---
 id: administration
-title: Administration
+title: Administration in Settings
 sidebar_label: Administration
 sidebar_position: 6
 ---
 
-# Administration
+# Administration in Settings
 
-This page covers the system- and organization-level management surface. All
-operations are available in the console and through the REST API.
+The console has one **Settings** entry. Organization and System categories
+contain the management sections described here; they are not a separate
+Administration page. Sections are permission-filtered before search. See the
+[Settings guide](./settings.md) for navigation and personal settings. Management
+operations are also available through the REST API.
 
 ## Roles
 
 MWC has three roles:
 
-- **System administrator** — full control: images, users, organizations,
-  node pools, audit, and platform settings.
+- **System administrator** — full control of images, users, organizations,
+  node pools, and platform settings. Operation records use a separate navigation entry.
 - **Organization administrator** — manages members, quotas, locked injection
   items, and workspaces within their organization.
 - **Member** — creates and operates their own workspaces and personal
@@ -70,9 +73,12 @@ Quotas cap resource consumption at both levels:
   that templates and placements reference.
 - `GET /api/v1/admin/scaling` — capacity and scaling overview.
 
-## Audit and observability
+## Operation records and observability
 
-- `GET /api/v1/audit` — administrative audit log of privileged actions.
+- **Operation records** remain a separate console navigation entry, not a
+  searchable Settings section.
+- `GET /api/v1/audit` — operation records for privileged actions (the API path
+  retains its historical name).
 - `GET /api/v1/events` — SSE stream of workspace and platform events.
 - `GET /livez` / `GET /readyz` — probe endpoints on both listeners.
 - `GET /metrics` — Prometheus metrics on the internal listener only.
