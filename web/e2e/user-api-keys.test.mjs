@@ -43,7 +43,7 @@ test("Settings selects only the clicked user's API keys and manages their UI", {
     const context = await browser.newContext({ permissions: ["clipboard-read", "clipboard-write"] });
     await context.addInitScript(() => {
       sessionStorage.setItem("mwc.api-token", "fixture-admin-token");
-      localStorage.setItem("mwc.locale", "en");
+      localStorage.setItem("mwc.locale", sessionStorage.getItem("mwc.e2e-locale") ?? "en");
       localStorage.setItem("mwc.organization-id", "organization-fixture");
       localStorage.setItem("mwc.view", "workspaces");
     });
@@ -226,7 +226,7 @@ test("Settings selects only the clicked user's API keys and manages their UI", {
     assert.equal(keyReadbacks.at(-1).userId, bobId);
     assert.deepEqual(keyReadbacks.at(-1).items.map((item) => item.id), ["bob-existing"]);
     await bobEditor.getByRole("button", { name: "Close" }).click();
-    await page.evaluate(() => localStorage.setItem("mwc.locale", "zh-CN"));
+    await page.evaluate(() => sessionStorage.setItem("mwc.e2e-locale", "zh-CN"));
     await page.reload({ waitUntil: "domcontentloaded" });
     const chineseSearch = page.getByTestId("settings-search");
     await chineseSearch.fill("头像");

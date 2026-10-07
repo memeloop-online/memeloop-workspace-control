@@ -76,13 +76,13 @@ const STORIES = [
     image: 'img/screenshots/workspaces-desktop.png',
     alt: translate({
       id: 'home.story.workspaces.alt',
-      message: 'Workspace list showing resource meters, status badges, and lifecycle actions',
+      message: 'Workspace list with resource meters and status badges, captured in CI with sanitized demo data',
     }),
     width: 1440,
     height: 1000,
   },
   {
-    eyebrow: translate({ id: 'home.story.credentials.eyebrow', message: 'Credentials & files' }),
+    eyebrow: translate({ id: 'home.story.credentials.eyebrow', message: 'Environment variables and files' }),
     title: translate({ id: 'home.story.credentials.title', message: 'Secrets, scoped and injected' }),
     body: translate({
       id: 'home.story.credentials.body',
@@ -106,7 +106,7 @@ const STORIES = [
     image: 'img/screenshots/credentials-desktop.png',
     alt: translate({
       id: 'home.story.credentials.alt',
-      message: 'Credential library with scoped items and a creation form for file-based secrets',
+      message: 'Environment variables and files editor with sanitized demo data',
     }),
     width: 1440,
     height: 1000,
@@ -133,7 +133,7 @@ const STORIES = [
     image: 'img/screenshots/workspaces-mobile.png',
     alt: translate({
       id: 'home.story.mobile.alt',
-      message: 'Workspace console on a narrow mobile viewport with stacked meters and actions',
+      message: 'Workspace console with mobile navigation open, captured in CI with sanitized demo data',
     }),
     width: 390,
     height: 1154,

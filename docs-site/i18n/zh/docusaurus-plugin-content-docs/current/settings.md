@@ -34,4 +34,4 @@ sidebar_position: 6
 ## 注入设置
 
 工作区注入项包括**环境变量与文件**，也支持 SSH 公钥；它们与 API 密钥
-分别管理。作用域与覆盖规则见[凭据与文件](./credentials-and-files.md)。
+分别管理。作用域与覆盖规则见[环境变量与文件](./credentials-and-files.md)。

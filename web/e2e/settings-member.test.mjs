@@ -40,6 +40,14 @@ test("ordinary member Settings cannot reveal administrator sections or request a
       else if (method === "GET" && path === "/api/v1/me/profile") body = { display_name: "Ordinary Member", avatar_url: null };
       else if (method === "GET" && path === "/api/v1/organizations") body = { items: [{ id: organizationId, name: "Fixture Organization", created_at: 1_700_000_000 }], next_cursor: null };
       else if (method === "GET" && path === "/api/v1/workspaces") body = { items: [], next_cursor: null, summary: { total_count: 0, requested: { cpu_millis: 0, memory_mib: 0, gpu_count: 0, disk_gib: 0 }, temporary_requested_gib: 0, state_counts: {} } };
+      else if (method === "GET" && path === `/api/v1/organizations/${organizationId}/quota`) body = null;
+      else if (method === "GET" && path === `/api/v1/organizations/${organizationId}/usage-summary`) body = {
+        total_count: 0, state_counts: {}, requested: { cpu_millis: 0, memory_mib: 0, gpu_count: 0, disk_gib: 0 },
+        temporary_requested_gib: 0, actual: { cpu_millis: null, memory_mib: null, disk_bytes: null, temporary_bytes: null },
+        observed_at: null, availability: { cpu: "unknown", memory: "unknown", disk: "unknown", temporary: "unknown" },
+        coverage: { total_workspaces: 0, eligible_workspaces: 0, template_label_coverage: "complete" },
+      };
+      else if (method === "GET" && (path === `/api/v1/injections/organization/${organizationId}` || path === "/api/v1/injections/user/ordinary-member")) body = [];
       else if (method === "GET" && path === "/api/v1/templates") body = [];
       else if (method === "GET" && path === "/api/v1/node-pools") body = [];
       else {

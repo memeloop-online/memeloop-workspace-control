@@ -14,7 +14,7 @@ const SECTIONS = [
     to: '/docs/workspaces',
   },
   {
-    title: translate({ id: 'features.credentials.title', message: 'Credentials and files' }),
+    title: translate({ id: 'features.credentials.title', message: 'Environment variables and files' }),
     body: translate({
       id: 'features.credentials.body',
       message: 'Three-scope injection cascade (organization, user, workspace) with encrypted storage, template selectors, locked organization items, and per-workspace selection.',

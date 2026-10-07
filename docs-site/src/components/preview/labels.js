@@ -36,7 +36,7 @@ export const PREVIEW_LABELS = {
     user: translate({ id: 'preview.scopes.user', message: 'User' }),
     workspace: translate({ id: 'preview.scopes.workspace', message: 'Workspace' }),
     ariaLabel: translate({ id: 'preview.scopes.ariaLabel', message: 'Credential scope' }),
-    title: translate({ id: 'preview.scopes.listTitle', message: 'Credentials' }),
+    title: translate({ id: 'preview.scopes.listTitle', message: 'Environment variables and files' }),
     empty: translate({ id: 'preview.scopes.empty', message: 'No credentials at this scope' }),
     searchPlaceholder: translate({ id: 'preview.scopes.searchPlaceholder', message: 'Search credentials' }),
     clearSearch: translate({ id: 'preview.scopes.clearSearch', message: 'Clear search' }),

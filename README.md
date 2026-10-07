@@ -8,14 +8,14 @@ reviewed templates and an image allowlist, injects encrypted credentials and
 files at startup, and provides access over SSH, a browser terminal, and
 authenticated port mappings.
 
-![Workspace resource overview](docs-site/static/img/screenshots/workspaces-desktop.png)
+![Workspace resource overview captured in CI with sanitized demo data](docs-site/static/img/screenshots/workspaces-desktop.png)
 
 ## Capabilities
 
 - **Workspace lifecycle** — template-based create, start, stop, restart, and
   delete, with persistent home volumes, bounded temporary storage, and
   node-pool scheduling.
-- **Credentials & files** — organization, user, and workspace scopes with
+- **Environment variables and files** — organization, user, and workspace scopes with
   encrypted storage and organization-locked items.
 - **Workspace access** — OpenSSH, a web terminal, and authenticated HTTPS
   port mappings, enabled per deployment and template.
@@ -58,7 +58,7 @@ Full bilingual documentation is published at
 <https://memeloop-online.github.io/memeloop-workspace-control/>.
 
 - [Quick start](docs/quickstart.md)
-- [Workspaces](docs/workspaces.md) · [Credentials and files](docs/credentials-and-files.md) · [Access](docs/access.md)
+- [Workspaces](docs/workspaces.md) · [Environment variables and files](docs/credentials-and-files.md) · [Access](docs/access.md)
 - [Settings](docs/settings.md) · [Administration](docs/administration.md) · [API](docs/api.md) · [Plugin development](docs/plugin-development.md)
 - [Security model](docs/security-model.md) · [FAQ](docs/faq.md)
 

@@ -71,7 +71,7 @@ target_json=$(curl --fail --silent --show-error \
   --header "Authorization: Bearer $admin_token" \
   --header "Content-Type: application/json" \
   --header "Idempotency-Key: ci-credentials-target-user" \
-  --data "{\"display_name\":\"CI Credentials Target\",\"token\":\"$target_token\",\"organization_id\":\"$organization_id\",\"organization_role\":\"member\"}" \
+  --data "{\"display_name\":\"CI Credentials Target\",\"token\":\"$target_token\",\"organization_id\":\"$organization_id\",\"organization_role\":\"member\",\"scopes\":[\"read_workspace\"]}" \
   http://127.0.0.1:18080/api/v1/admin/users)
 target_user_id=$(jq --exit-status --raw-output '.id' <<<"$target_json")
 

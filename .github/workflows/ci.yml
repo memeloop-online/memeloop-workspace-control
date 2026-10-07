@@ -101,11 +101,12 @@ jobs:
           npm run test:e2e
           SCREENSHOT_DIR="$RUNNER_TEMP/mwc-settings-screenshots" node e2e/capture-settings-docs.mjs
       - name: Upload current settings documentation screenshots
+        if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: mwc-settings-screenshots
           path: ${{ runner.temp }}/mwc-settings-screenshots
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 7
       - name: Verify administrator credential configuration against a real local backend
         timeout-minutes: 15

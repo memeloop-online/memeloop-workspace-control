@@ -13,7 +13,6 @@ const demoKey = {
   allowed_template_ids: null, revoked_at: null,
 };
 const emptyPage = { items: [], next_cursor: null };
-const requested = { cpu_millis: 0, memory_mib: 0, gpu_count: 0, disk_gib: 0 };
 const unexpected = [];
 const demoWorkspaces = [
   { id: "demo-web", short_id: "demo-web", name: "Demo Web Workspace", state: "ready", resources: { cpu_millis: 2000, memory_mib: 4096, gpu_count: 0, disk_gib: 24 } },
@@ -126,34 +125,44 @@ const browser = await chromium.launch({
 });
 
 try {
-  const context = await browser.newContext({ viewport: { width: 1440, height: 960 }, deviceScaleFactor: 1 });
-  await context.addInitScript(() => {
-    sessionStorage.setItem("mwc.api-token", "sanitized-demo-auth-placeholder");
-    localStorage.setItem("mwc.locale", "en");
-    localStorage.setItem("mwc.organization-id", "demo-organization");
-    localStorage.setItem("mwc.view", "workspaces");
-  });
-  await context.route("**/*", async (route) => {
-    const request = route.request();
-    const url = new URL(request.url());
-    if (url.origin !== origin) {
-      unexpected.push(`external request: ${url.origin}`);
-      return route.abort();
-    }
-    if (!url.pathname.startsWith("/api/")) return route.continue();
-    const response = request.method() === "GET" ? fixture(url.pathname) : undefined;
-    if (request.method() !== "GET" || (response === undefined && url.pathname !== `/api/v1/organizations/${organizationId}/quota`)) {
-      unexpected.push(`${request.method()} ${url.pathname}`);
-      return route.fulfill({ status: 501, contentType: "application/json", body: "{}" });
-    }
-    await route.fulfill({ contentType: "application/json", body: JSON.stringify(response ?? null) });
-  });
+  async function prepareContext(context) {
+    await context.addInitScript(() => {
+      sessionStorage.setItem("mwc.api-token", "sanitized-demo-auth-placeholder");
+      localStorage.setItem("mwc.locale", "en");
+      localStorage.setItem("mwc.organization-id", "demo-organization");
+      localStorage.setItem("mwc.view", "workspaces");
+    });
+    await context.route("**/*", async (route) => {
+      const request = route.request();
+      const url = new URL(request.url());
+      if (url.origin !== origin) {
+        unexpected.push(`external request: ${url.origin}`);
+        return route.abort();
+      }
+      if (!url.pathname.startsWith("/api/")) return route.continue();
+      const response = request.method() === "GET" ? fixture(url.pathname) : undefined;
+      if (request.method() !== "GET" || (response === undefined && url.pathname !== `/api/v1/organizations/${organizationId}/quota`)) {
+        unexpected.push(`${request.method()} ${url.pathname}`);
+        return route.fulfill({ status: 501, contentType: "application/json", body: "{}" });
+      }
+      await route.fulfill({ contentType: "application/json", body: JSON.stringify(response ?? null) });
+    });
+  }
 
+  const context = await browser.newContext({ viewport: { width: 1440, height: 960 }, deviceScaleFactor: 1 });
+  await prepareContext(context);
   const page = await context.newPage();
   await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
+  await page.getByText("Demo Web Workspace", { exact: true }).waitFor();
+  await labelDemo(page);
+  await page.screenshot({ path: join(screenshotDir, "workspaces-desktop.png"), fullPage: true, animations: "disabled" });
+
+  await page.getByRole("button", { name: "Environment Variables & Files", exact: true }).click();
+  await page.getByText("demo-editor-mode", { exact: true }).waitFor();
+  await page.screenshot({ path: join(screenshotDir, "credentials-desktop.png"), fullPage: true, animations: "disabled" });
+
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await page.getByTestId("settings-section-profile").waitFor();
-  await labelDemo(page);
   await page.screenshot({ path: join(screenshotDir, "settings-desktop.png"), fullPage: true, animations: "disabled" });
 
   await page.getByTestId("settings-search").fill("appearance");
@@ -166,8 +175,20 @@ try {
   await page.getByText("Demo automation key", { exact: true }).waitFor();
   await page.screenshot({ path: join(screenshotDir, "user-api-keys.png"), fullPage: true, animations: "disabled" });
 
-  if (unexpected.length) throw new Error(`Unexpected demo requests: ${unexpected.join(", ")}`);
   await context.close();
+
+  const mobileContext = await browser.newContext({ viewport: { width: 390, height: 1154 }, deviceScaleFactor: 1, isMobile: true, hasTouch: true });
+  await prepareContext(mobileContext);
+  const mobilePage = await mobileContext.newPage();
+  await mobilePage.goto(baseUrl, { waitUntil: "domcontentloaded" });
+  await mobilePage.getByText("Demo Web Workspace", { exact: true }).waitFor();
+  await labelDemo(mobilePage);
+  await mobilePage.getByRole("button", { name: "Menu", exact: true }).click();
+  await mobilePage.getByRole("button", { name: "Environment Variables & Files", exact: true }).waitFor();
+  await mobilePage.screenshot({ path: join(screenshotDir, "workspaces-mobile.png"), animations: "disabled" });
+  await mobileContext.close();
+
+  if (unexpected.length) throw new Error(`Unexpected demo requests: ${unexpected.join(", ")}`);
 } finally {
   await browser.close();
 }

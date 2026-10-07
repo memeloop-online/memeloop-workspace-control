@@ -16,7 +16,7 @@ Memeloop Workspace Control（MWC）是一个 Kubernetes 工作区控制面。它
 
 - **用户** —— 创建并连接工作区，管理个人凭据与 API 密钥：从
   [快速开始](./quickstart.md) 开始，然后阅读 [工作区](./workspaces.md)、
-  [凭据与文件](./credentials-and-files.md)、[设置](./settings.md)和
+  [环境变量与文件](./credentials-and-files.md)、[设置](./settings.md)和
   [访问：SSH、网页终端、端口映射](./access.md)。
 - **管理员** —— 管理镜像、模板、用户、组织、配额与节点池：见
   [设置中的管理功能](./administration.md)。

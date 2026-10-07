@@ -1,17 +1,18 @@
 ---
 id: credentials-and-files
-title: Credentials and files
-sidebar_label: Credentials & files
+title: Environment variables and files
+sidebar_label: Environment variables and files
 sidebar_position: 4
 ---
 
-# Credentials and files
+# Environment variables and files
 
-MWC injects credentials and files into workspaces through **injection items**.
+MWC injects environment variables and files into workspaces through **injection items**.
+These are separate from the personal API keys used to authenticate to MWC.
 Items are defined once and resolved into every matching workspace at start
 time, so rotating a secret does not require recreating workspaces.
 
-![Credential and file editor](/img/screenshots/credentials-desktop.png)
+![Environment variables and files editor with sanitized demo data](/img/screenshots/credentials-desktop.png)
 
 ## Scopes and cascade
 

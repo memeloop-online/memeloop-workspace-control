@@ -17,7 +17,7 @@ This documentation is organized by audience:
 
 - **Users** — create and connect to workspaces, manage personal credentials and
   API keys in [Settings](./settings.md): start with [Quick start](./quickstart.md), then
-  [Workspaces](./workspaces.md), [Credentials and files](./credentials-and-files.md),
+  [Workspaces](./workspaces.md), [Environment variables and files](./credentials-and-files.md),
   and [Access: SSH, web terminal, port mappings](./access.md).
 - **Administrators** — manage images, templates, users, organizations, quotas,
   and node pools in the same Settings entry: see [Administration](./administration.md).

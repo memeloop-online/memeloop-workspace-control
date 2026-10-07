@@ -7,13 +7,13 @@ Memeloop Workspace Control（MWC）是一个开源的 Kubernetes 工作区控制
 工作区，在启动时注入加密的凭据与文件，并通过 SSH、网页终端和带鉴权的
 端口映射提供访问。
 
-![工作区资源总览](docs-site/static/img/screenshots/workspaces-desktop.png)
+![工作区资源总览，CI 浏览器截取的脱敏演示数据](docs-site/static/img/screenshots/workspaces-desktop.png)
 
 ## 功能
 
 - **工作区生命周期** —— 基于模板的创建、启动、停止、重启和删除，支持
   持久 Home 卷、受限临时存储与节点池调度。
-- **凭据与文件** —— 组织、用户、工作区三级作用域，静态加密存储，支持
+- **环境变量与文件** —— 组织、用户、工作区三级作用域，静态加密存储，支持
   组织锁定项。
 - **工作区访问** —— OpenSSH、网页终端和鉴权 HTTPS 端口映射，按部署与
   模板启用。
@@ -53,7 +53,7 @@ Helm Chart。加密注入与 Webhook 需要 `MWC_ENCRYPTION_KEY` 和
 <https://memeloop-online.github.io/memeloop-workspace-control/>。
 
 - [快速开始](docs/quickstart.md)
-- [工作区](docs/workspaces.md) · [凭据与文件](docs/credentials-and-files.md) · [访问](docs/access.md)
+- [工作区](docs/workspaces.md) · [环境变量与文件](docs/credentials-and-files.md) · [访问](docs/access.md)
 - [设置](docs/settings.md) · [管理](docs/administration.md) · [API](docs/api.md) · [插件开发](docs/plugin-development.md)
 - [安全模型](docs/security-model.md) · [常见问题](docs/faq.md)
 

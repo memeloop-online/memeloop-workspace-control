@@ -9,11 +9,11 @@ sidebar_position: 3
 
 工作区页面汇总实时资源用量、生命周期操作和访问入口。
 
-![工作区列表与实时资源用量](/img/screenshots/workspaces-desktop.png)
+![CI 浏览器截取的工作区列表与脱敏演示资源用量](/img/screenshots/workspaces-desktop.png)
 
 窄屏布局保留相同的资源信息和操作能力：
 
-![移动端工作区页面](/img/screenshots/workspaces-mobile.png)
+![CI 浏览器截取的移动端工作区导航，使用脱敏演示数据](/img/screenshots/workspaces-mobile.png)
 
 工作区是从经过评审的模板创建的、隔离的按用户分配的 Kubernetes 工作负载。
 控制面拥有其完整生命周期：供给、凭据注入、状态转换、协调与拆除。

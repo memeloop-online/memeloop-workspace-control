@@ -42,4 +42,4 @@ updating its consumers; the system does not rotate keys automatically.
 
 Workspace injection items support **environment variables and files**, as well
 as SSH public keys. They are managed separately from API keys. See
-[Credentials and files](./credentials-and-files.md) for scopes and precedence.
+[Environment variables and files](./credentials-and-files.md) for scopes and precedence.
