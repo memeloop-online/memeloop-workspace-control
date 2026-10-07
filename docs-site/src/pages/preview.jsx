@@ -44,7 +44,7 @@ export default function Preview() {
         </section>
         <section aria-labelledby="preview-scopes-heading">
           <h2 className={styles.sectionHeading} id="preview-scopes-heading">
-            <Translate id="preview.scopes.heading">Credential scopes</Translate>
+            <Translate id="preview.scopes.heading">Environment variable and file scopes</Translate>
           </h2>
           <p className={styles.sectionCaption}>
             <Translate id="preview.scopes.caption">

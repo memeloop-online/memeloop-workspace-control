@@ -27,6 +27,7 @@ import { CreateUserForm } from "./admin/CreateUserForm";
 import { workspaceStateCounts } from "./admin/workspaceSummary";
 import { AdminCard, SaveButton, useAdminStyles } from "./admin/fluentAdmin";
 import type { ApiClient } from "./api";
+import type { SettingsSectionId } from "./settings/schema";
 import { ConfirmDialog } from "./components/ConfirmDialog";
 import { Page } from "./design-system/Page";
 import { canManageOrganization, canManageOtherUserApiKeys, canManageSystem, hasApiKeyScope } from "./permissions";
@@ -60,9 +61,11 @@ interface AdminPanelProps {
   organizationId: string;
   onError: (message: string) => void;
   onOrganizationsChanged: (preferredOrganizationId?: string) => Promise<void>;
+  visibleSections?: readonly SettingsSectionId[];
+  embedded?: boolean;
 }
 
-export function AdminPanel({ api, principal, organizationId, onError, onOrganizationsChanged }: AdminPanelProps) {
+export function AdminPanel({ api, principal, organizationId, onError, onOrganizationsChanged, visibleSections, embedded = false }: AdminPanelProps) {
   const { t } = useI18n();
   const styles = useAdminStyles();
   const [organizations, setOrganizations] = useState<Organization[]>([]);
@@ -97,16 +100,17 @@ export function AdminPanel({ api, principal, organizationId, onError, onOrganiza
   const selfServiceOnly = !canManageGlobalState && !canManageQuota && !canManageMembers;
   const currentOrganization = organizations.find((organization) => organization.id === organizationId);
   const states = workspaceStateCounts(workspaceSummary);
+  const show = (id: SettingsSectionId) => !visibleSections || visibleSections.includes(id);
 
   async function refresh() {
     setLoading(true);
     try {
       const [managedResources, organizationPage, workspacePage] = await Promise.all([
         canManageQuota
-          ? Promise.all([api.quota(organizationId), api.templates(organizationId), api.webhooks(organizationId)])
+          ? Promise.all([show("quota") ? api.quota(organizationId) : Promise.resolve(null), show("templates") ? api.templates(organizationId) : Promise.resolve([]), show("webhooks") ? api.webhooks(organizationId) : Promise.resolve([])])
           : Promise.resolve([null, [], []] as [QuotaResources | null, WorkspaceTemplate[], WebhookSubscription[]]),
-        api.organizationsPage({ limit: 200 }),
-        api.workspacesPage(organizationId, { limit: 1 }),
+        show("organization-management") ? api.organizationsPage({ limit: 200 }) : Promise.resolve({ items: [] }),
+        show("workspace-state") ? api.workspacesPage(organizationId, { limit: 1 }) : Promise.resolve({ summary: null }),
       ]);
       const [currentQuota, visibleTemplates, subscriptions] = managedResources;
       setQuota(currentQuota);
@@ -115,8 +119,8 @@ export function AdminPanel({ api, principal, organizationId, onError, onOrganiza
       setWebhooks(subscriptions);
       setOrganizations(organizationPage.items);
       setWorkspaceSummary(workspacePage.summary);
-      if (canManageGlobalState) {
-        const [allImages, status] = await Promise.all([api.images(), api.scaling()]);
+      if (canManageGlobalState && (show("images") || show("scaling"))) {
+        const [allImages, status] = await Promise.all([show("images") ? api.images() : Promise.resolve([]), show("scaling") ? api.scaling() : Promise.resolve(null)]);
         setImages(allImages);
         setScaling(status);
       }
@@ -127,7 +131,7 @@ export function AdminPanel({ api, principal, organizationId, onError, onOrganiza
     }
   }
 
-  useEffect(() => { if (!selfServiceOnly && organizationId) void refresh(); }, [api, organizationId, canManageGlobalState, canManageQuota, canManageMembers, selfServiceOnly]);
+  useEffect(() => { if (!selfServiceOnly && (organizationId || canManageGlobalState) && visibleSections?.some((id) => !["profile", "appearance", "api-keys"].includes(id)) !== false) void refresh(); }, [api, organizationId, canManageGlobalState, canManageQuota, canManageMembers, selfServiceOnly, visibleSections?.join(",")]);
 
   useEffect(() => {
     setOrganizationName(currentOrganization?.name ?? "");
@@ -244,35 +248,36 @@ export function AdminPanel({ api, principal, organizationId, onError, onOrganiza
     }
   }
 
-  if (selfServiceOnly || !organizationId) return <Page title={t("administrationTitle")}>
-    {canManageOwnApiKeys && <SelfApiKeysPanel api={api} organizationId={organizationId} principal={principal} onError={onError} />}
-    {organizationId && canManageOtherApiKeys && <AdminCard title={t("usersRoles")}><UsersDirectory api={api} organizationId={organizationId} principal={principal} canListUsers canManageUsers={false} canEditMembership={false} canEditQuota={false} refreshVersion={directoryVersion} onError={onError} onEditQuota={(userId) => void editUserQuota(userId)} /></AdminCard>}
-  </Page>;
+  if (selfServiceOnly) return <>
+    {show("api-keys") && canManageOwnApiKeys && <section data-testid="settings-section-api-keys"><SelfApiKeysPanel api={api} organizationId={organizationId} principal={principal} onError={onError} /></section>}
+    {show("users") && organizationId && canManageOtherApiKeys && <section data-testid="settings-section-users"><AdminCard title={t("usersRoles")}><UsersDirectory api={api} organizationId={organizationId} principal={principal} canListUsers canManageUsers={false} canEditMembership={false} canEditQuota={false} refreshVersion={directoryVersion} onError={onError} onEditQuota={(userId) => void editUserQuota(userId)} /></AdminCard></section>}
+  </>;
 
-  return <Page title={t("administrationTitle")} description={currentOrganization?.name} actions={<>{loading && <Spinner size="tiny" label={t("loading")} />}<Button as="a" href="/api/v1/openapi.json" target="_blank" rel="noreferrer" icon={<OpenRegular />}>{t("openApi")}</Button></>}>
+  const content = <>
 
     <div className={styles.sectionGrid}>
-      {!principal.system_admin && canManageOwnApiKeys && <div className={styles.wide}><SelfApiKeysPanel api={api} organizationId={organizationId} principal={principal} onError={onError} /></div>}
-      <IdentityQuotaCard quota={quota} principal={principal} canManageQuota={canManageQuota} editingQuota={editingQuota} quotaDraft={quotaDraft} onEdit={() => setEditingQuota(true)} onCancel={() => setEditingQuota(false)} onSave={() => void saveQuota()} onDraftChange={setQuotaDraft} />
-      <AdminCard title={t("workspaceState")}>
+      {show("api-keys") && canManageOwnApiKeys && <section data-testid="settings-section-api-keys" className={styles.wide}><SelfApiKeysPanel api={api} organizationId={organizationId} principal={principal} onError={onError} /></section>}
+      {show("quota") && <section data-testid="settings-section-quota"><IdentityQuotaCard quota={quota} principal={principal} canManageQuota={canManageQuota} editingQuota={editingQuota} quotaDraft={quotaDraft} onEdit={() => setEditingQuota(true)} onCancel={() => setEditingQuota(false)} onSave={() => void saveQuota()} onDraftChange={setQuotaDraft} /></section>}
+      {show("workspace-state") && <section data-testid="settings-section-workspace-state"><AdminCard title={t("workspaceState")}>
         <DataGrid items={Object.entries(states) as [string, number][]} columns={stateColumns(t)}>
           <DataGridHeader><DataGridRow<[string, number]>>{(column) => <DataGridHeaderCell>{column.renderHeaderCell()}</DataGridHeaderCell>}</DataGridRow></DataGridHeader>
           <DataGridBody<[string, number]>>{({ item }) => <DataGridRow<[string, number]>>{(column) => <DataGridCell>{column.renderCell(item)}</DataGridCell>}</DataGridRow>}</DataGridBody>
         </DataGrid>
-      </AdminCard>
-      {scaling && <AdminCard title={t("scaling")}><dl className={styles.definitionList}><div className={styles.definitionItem}><dt className={styles.definitionTerm}>{t("database")}</dt><dd className={styles.definitionValue}>{scaling.database_mode}</dd></div><div className={styles.definitionItem}><dt className={styles.definitionTerm}>{t("replicas")}</dt><dd className={styles.definitionValue}>{scaling.configured_replicas}</dd></div><div className={styles.definitionItem}><dt className={styles.definitionTerm}>{t("jobs")}</dt><dd className={styles.definitionValue}>{scaling.jobs.pending} {t("pendingJobs")} · {scaling.jobs.running} {t("runningJobs")}</dd></div><div className={styles.definitionItem}><dt className={styles.definitionTerm}>{t("schema")}</dt><dd className={styles.definitionValue}>v{scaling.schema_version}</dd></div></dl></AdminCard>}
-      <OrganizationManager organization={currentOrganization} organizationName={organizationName} newOrganizationName={newOrganizationName} canCreate={canManageGlobalState} canEdit={canManageQuota} canDelete={canManageGlobalState} onOrganizationNameChange={setOrganizationName} onNewOrganizationNameChange={setNewOrganizationName} onSave={() => void saveOrganization()} onDelete={() => setConfirmOrganizationDelete(true)} onCreate={() => void createOrganization()} />
+      </AdminCard></section>}
+      {show("scaling") && scaling && <section data-testid="settings-section-scaling"> <AdminCard title={t("scaling")}><dl className={styles.definitionList}><div className={styles.definitionItem}><dt className={styles.definitionTerm}>{t("database")}</dt><dd className={styles.definitionValue}>{scaling.database_mode}</dd></div><div className={styles.definitionItem}><dt className={styles.definitionTerm}>{t("replicas")}</dt><dd className={styles.definitionValue}>{scaling.configured_replicas}</dd></div><div className={styles.definitionItem}><dt className={styles.definitionTerm}>{t("jobs")}</dt><dd className={styles.definitionValue}>{scaling.jobs.pending} {t("pendingJobs")} · {scaling.jobs.running} {t("runningJobs")}</dd></div><div className={styles.definitionItem}><dt className={styles.definitionTerm}>{t("schema")}</dt><dd className={styles.definitionValue}>v{scaling.schema_version}</dd></div></dl></AdminCard></section>}
+      {show("organization-management") && <section data-testid="settings-section-organization-management"><OrganizationManager organization={currentOrganization} organizationName={organizationName} newOrganizationName={newOrganizationName} canCreate={canManageGlobalState} canEdit={canManageQuota} canDelete={canManageGlobalState} onOrganizationNameChange={setOrganizationName} onNewOrganizationNameChange={setNewOrganizationName} onSave={() => void saveOrganization()} onDelete={() => setConfirmOrganizationDelete(true)} onCreate={() => void createOrganization()} /></section>}
 
-      {(canManageMembers || canManageOtherApiKeys) && <div className={styles.wide}><AdminCard title={t("usersRoles")} action={canManageGlobalState ? <Button icon={<AddRegular />} aria-expanded={showCreateUser} onClick={() => setShowCreateUser((visible) => !visible)}>{t("createUser")}</Button> : undefined}>{canManageGlobalState && showCreateUser && <CreateUserForm api={api} principal={principal} organizationId={organizationId} onCancel={() => setShowCreateUser(false)} onError={onError} onCreated={async () => { setShowCreateUser(false); setDirectoryVersion((value) => value + 1); await refresh(); }} />}<UsersDirectory api={api} organizationId={organizationId} principal={principal} canListUsers={principal.system_admin} canManageUsers={canManageGlobalState} canEditMembership={canManageMembers} canEditQuota={canManageGlobalState} refreshVersion={directoryVersion} onError={onError} onEditQuota={(userId) => void editUserQuota(userId)} /></AdminCard></div>}
-      {canManageGlobalState && <div className={styles.wide}><ImageAllowlist images={images} image={image} adding={addingImage} busyImage={imageBusy} onImageChange={setImage} onAllow={() => void allowImage()} onToggle={(policy) => void toggleImage(policy)} /></div>}
-      {canManageQuota && <div className={styles.wide}><AdminCard title={t("templates")}><TemplateEditor api={api} organizationId={organizationId} templates={templates} canGrantClusterAccess={canManageGlobalState} onRefresh={refresh} onError={onError} /></AdminCard></div>}
-      {canManageQuota && <div className={styles.wide}><AdminCard title={t("webhook")} action={<Button icon={<AddRegular />} onClick={() => setShowWebhookForm(true)}>{t("addWebhook")}</Button>}><DataGrid items={webhooks} columns={webhookColumns(t)}><DataGridHeader><DataGridRow<WebhookSubscription>>{(column) => <DataGridHeaderCell>{column.renderHeaderCell()}</DataGridHeaderCell>}</DataGridRow></DataGridHeader><DataGridBody<WebhookSubscription>>{({ item }) => <DataGridRow<WebhookSubscription>>{(column) => <DataGridCell>{column.renderCell(item)}</DataGridCell>}</DataGridRow>}</DataGridBody></DataGrid>{webhooks.length === 0 && <Text>{t("noWebhooks")}</Text>}</AdminCard></div>}
+      {show("users") && (canManageMembers || canManageOtherApiKeys) && <section data-testid="settings-section-users" className={styles.wide}><AdminCard title={t("usersRoles")} action={canManageGlobalState ? <Button icon={<AddRegular />} aria-expanded={showCreateUser} onClick={() => setShowCreateUser((visible) => !visible)}>{t("createUser")}</Button> : undefined}>{canManageGlobalState && showCreateUser && <CreateUserForm api={api} principal={principal} organizationId={organizationId} onCancel={() => setShowCreateUser(false)} onError={onError} onCreated={async () => { setShowCreateUser(false); setDirectoryVersion((value) => value + 1); await refresh(); }} />}<UsersDirectory api={api} organizationId={organizationId} principal={principal} canListUsers={principal.system_admin} canManageUsers={canManageGlobalState} canEditMembership={canManageMembers} canEditQuota={canManageGlobalState} refreshVersion={directoryVersion} onError={onError} onEditQuota={(userId) => void editUserQuota(userId)} /></AdminCard></section>}
+      {show("images") && canManageGlobalState && <section data-testid="settings-section-images" className={styles.wide}><ImageAllowlist images={images} image={image} adding={addingImage} busyImage={imageBusy} onImageChange={setImage} onAllow={() => void allowImage()} onToggle={(policy) => void toggleImage(policy)} /></section>}
+      {show("templates") && canManageQuota && <section data-testid="settings-section-templates" className={styles.wide}><AdminCard title={t("templates")}><TemplateEditor api={api} organizationId={organizationId} templates={templates} canGrantClusterAccess={canManageGlobalState} onRefresh={refresh} onError={onError} /></AdminCard></section>}
+      {show("webhooks") && canManageQuota && <section data-testid="settings-section-webhooks" className={styles.wide}><AdminCard title={t("webhook")} action={<Button icon={<AddRegular />} onClick={() => setShowWebhookForm(true)}>{t("addWebhook")}</Button>}><DataGrid items={webhooks} columns={webhookColumns(t)}><DataGridHeader><DataGridRow<WebhookSubscription>>{(column) => <DataGridHeaderCell>{column.renderHeaderCell()}</DataGridHeaderCell>}</DataGridRow></DataGridHeader><DataGridBody<WebhookSubscription>>{({ item }) => <DataGridRow<WebhookSubscription>>{(column) => <DataGridCell>{column.renderCell(item)}</DataGridCell>}</DataGridRow>}</DataGridBody></DataGrid>{webhooks.length === 0 && <Text>{t("noWebhooks")}</Text>}</AdminCard></section>}
     </div>
 
     <ConfirmDialog open={confirmOrganizationDelete} title={t("deleteOrganization")} description={t("deleteOrganizationConfirm")} confirmLabel={t("deleteOrganization")} cancelLabel={t("cancel")} busy={dialogBusy} danger details={currentOrganization && <strong>{currentOrganization.name}</strong>} onClose={() => setConfirmOrganizationDelete(false)} onConfirm={() => void deleteOrganization()} />
     <Dialog open={userQuotaTarget !== null} onOpenChange={(_, data) => { if (!data.open && !dialogBusy) setUserQuotaTarget(null); }}><DialogSurface><DialogBody><DialogTitle>{t("editUserQuota")}</DialogTitle><DialogContent className={styles.dialogBody}><div className={styles.formGrid}><ResourceInput label={t("userCpuQuotaPrompt")} value={userQuotaDraft.cpu_millis} min={100} step={100} onChange={(cpu_millis) => setUserQuotaDraft({ ...userQuotaDraft, cpu_millis })} /><ResourceInput label={t("userMemoryQuotaPrompt")} value={userQuotaDraft.memory_mib} min={128} step={128} onChange={(memory_mib) => setUserQuotaDraft({ ...userQuotaDraft, memory_mib })} /><ResourceInput label={t("userGpuQuotaPrompt")} value={userQuotaDraft.gpu_count} min={0} step={1} onChange={(gpu_count) => setUserQuotaDraft({ ...userQuotaDraft, gpu_count })} /><ResourceInput label={t("userDiskQuotaPrompt")} value={userQuotaDraft.disk_gib} min={1} step={1} onChange={(disk_gib) => setUserQuotaDraft({ ...userQuotaDraft, disk_gib })} /></div></DialogContent><DialogActions><Button appearance="secondary" disabled={dialogBusy} onClick={() => setUserQuotaTarget(null)}>{t("cancel")}</Button><SaveButton disabled={dialogBusy} onClick={() => void saveUserQuota()}>{dialogBusy ? t("saving") : t("saveQuota")}</SaveButton></DialogActions></DialogBody></DialogSurface></Dialog>
     <Dialog open={showWebhookForm} onOpenChange={(_, data) => setShowWebhookForm(data.open)}><DialogSurface><DialogBody><DialogTitle>{t("addWebhook")}</DialogTitle><DialogContent className={styles.dialogBody}><Field label={t("webhookUrlPrompt")} required><Input type="url" value={webhookUrl} onChange={(event) => setWebhookUrl(event.target.value)} placeholder="https://example.com/hooks/workspace" /></Field><Field label={t("webhookSecretPrompt")} required><Input type="password" minLength={32} autoComplete="new-password" value={webhookSecret} onChange={(event) => setWebhookSecret(event.target.value)} /></Field></DialogContent><DialogActions><Button appearance="secondary" disabled={dialogBusy} onClick={() => setShowWebhookForm(false)}>{t("cancel")}</Button><SaveButton icon={<SaveRegular />} disabled={dialogBusy || !webhookUrl.trim() || webhookSecret.length < 32} onClick={() => void newWebhook()}>{dialogBusy ? t("saving") : t("addWebhook")}</SaveButton></DialogActions></DialogBody></DialogSurface></Dialog>
-  </Page>;
+  </>;
+  return embedded ? content : <Page title={t("administrationTitle")} description={currentOrganization?.name} actions={<>{loading && <Spinner size="tiny" label={t("loading")} />}<Button as="a" href="/api/v1/openapi.json" target="_blank" rel="noreferrer" icon={<OpenRegular />}>{t("openApi")}</Button></>}>{content}</Page>;
 }
 
 function IdentityQuotaCard({ principal, quota, canManageQuota, editingQuota, quotaDraft, onEdit, onCancel, onSave, onDraftChange }: { principal: Principal; quota: QuotaResources | null; canManageQuota: boolean; editingQuota: boolean; quotaDraft: ResourceDraft; onEdit: () => void; onCancel: () => void; onSave: () => void; onDraftChange: (draft: ResourceDraft) => void }) {

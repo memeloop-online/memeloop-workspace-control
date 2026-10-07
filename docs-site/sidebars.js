@@ -6,6 +6,7 @@ const sidebars = {
     'workspaces',
     'credentials-and-files',
     'access',
+    'settings',
     'administration',
     'api',
     'plugin-development',

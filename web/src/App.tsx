@@ -22,7 +22,6 @@ const viewTitles: Record<AppView, MessageKey> = {
   settings: "settings",
 };
 
-const AdminPanel = lazy(() => import("./OperationsPanel").then(({ AdminPanel: component }) => ({ default: component })));
 const AuditPanel = lazy(() => import("./AuditPanel").then(({ AuditPanel: component }) => ({ default: component })));
 const InjectionPanel = lazy(() => import("./InjectionPanel").then(({ InjectionPanel: component }) => ({ default: component })));
 const PluginPanel = lazy(() => import("./PluginPanel").then(({ PluginPanel: component }) => ({ default: component })));
@@ -174,8 +173,8 @@ export default function App() {
 
   useEffect(() => {
     if (!principal) return;
-    const allowed = view === "administration" ? canOpenAdministration : canManageGlobalState || canManageOrganizationState;
-    if ((view === "administration" || view === "audit" || view === "plugins") && !allowed) {
+    const allowed = canManageGlobalState || canManageOrganizationState;
+    if ((view === "audit" || view === "plugins") && !allowed) {
       navigate("workspaces");
     }
   }, [canManageGlobalState, canManageOrganizationState, canOpenAdministration, navigate, principal, view]);
@@ -212,19 +211,17 @@ export default function App() {
     <FluentProvider theme={theme === "dark" ? darkTheme : lightTheme} style={{ minHeight: "100vh" }}>
       <AppShell view={view} onViewChange={navigate} locale={locale} setLocale={setLocale} themeMode={theme} onToggleTheme={() => setTheme(theme === "dark" ? "light" : "dark")} principal={principal} currentOrganization={currentOrganization} organizationRole={organizationRole} canOpenAdministration={canOpenAdministration} canManageGlobalState={canManageGlobalState} canManageOrganizationState={canManageOrganizationState} onLogout={logout} notice={notice} t={t}>
         <Suspense fallback={<LoadingView label={t("loading")} />}>
-          {view === "settings" ? (
-            <SettingsPanel api={api} principal={principal} organizations={organizations} organizationId={organizationId} onOrganizationChange={selectOrganization} onProfileChanged={(profile) => queryClient.setQueryData<Principal>(principalQueryKey(), (current) => current ? { ...current, ...profile } : current)} onError={reportError} />
+          {view === "settings" || view === "administration" ? (
+            <SettingsPanel api={api} principal={principal} organizations={organizations} organizationId={organizationId} onOrganizationChange={selectOrganization} onOrganizationsChanged={refreshOrganizations} onProfileChanged={(profile) => queryClient.setQueryData<Principal>(principalQueryKey(), (current) => current ? { ...current, ...profile } : current)} onError={reportError} theme={theme} onThemeChange={setTheme} />
           ) : view === "audit" ? (
             <AuditPanel api={api} organizationId={organizationId} systemAdmin={canManageGlobalState} onError={reportError} />
-          ) : !organizationId && (view !== "administration" || !canManageOwnApiKeys) ? <EmptyOrganization systemAdmin={canManageGlobalState} t={t} /> : view === "workspaces" ? (
+          ) : !organizationId ? <EmptyOrganization systemAdmin={canManageGlobalState} t={t} /> : view === "workspaces" ? (
             <WorkspacePanel api={api} principal={principal} organizationId={organizationId} workspaces={scopedWorkspaces} busy={loading} onRefresh={refresh} onError={reportError} />
           ) : view === "injections" ? (
             <InjectionPanel api={api} principal={principal} organizationId={organizationId} workspaces={scopedWorkspaces} onError={reportError} />
           ) : view === "plugins" ? (
             <PluginPanel token={token} organizationId={organizationId} systemAdmin={canManageGlobalState} onOpenCredentials={() => navigate("injections")} />
-          ) : (
-            <AdminPanel api={api} principal={principal} organizationId={organizationId} onError={reportError} onOrganizationsChanged={refreshOrganizations} />
-          )}
+          ) : null}
         </Suspense>
       </AppShell>
     </FluentProvider>
@@ -241,6 +238,7 @@ function isAuthenticationError(error: unknown): boolean {
 
 function viewFromHash(hash: string): AppView {
   const candidate = hash.replace(/^#/, "") as AppView;
+  if (candidate === "administration") return "settings";
   return ["workspaces", "injections", "plugins", "administration", "audit", "settings"].includes(candidate)
     ? candidate
     : "workspaces";

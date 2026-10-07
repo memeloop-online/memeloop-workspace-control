@@ -1,15 +1,16 @@
 ---
 id: credentials-and-files
-title: 凭据与文件
-sidebar_label: 凭据与文件
+title: 环境变量与文件
+sidebar_label: 环境变量与文件
 sidebar_position: 4
 ---
 
-# 凭据与文件
+# 环境变量与文件
 
-凭据编辑器区分普通配置与敏感值，并支持组织、用户和工作区三级作用域。
+环境变量与文件编辑器区分普通配置与敏感值，并支持组织、用户和工作区三级作用域。
+这些工作区注入项不同于用于登录 MWC 的个人 API 密钥。
 
-![凭据与文件编辑器](/img/screenshots/credentials-desktop.png)
+![环境变量与文件编辑器，使用脱敏演示数据](/img/screenshots/credentials-desktop.png)
 
 MWC 通过**注入项**向工作区注入凭据与文件。注入项只需定义一次，即可在
 启动时解析进所有匹配的工作区，因此轮换密钥不需要重建工作区。

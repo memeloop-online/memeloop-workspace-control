@@ -24,7 +24,7 @@ function apiKey(id, name, token) {
   };
 }
 
-test("administration selects only the clicked user's API keys and manages their UI", { timeout: 90_000 }, async () => {
+test("Settings selects only the clicked user's API keys and manages their UI", { timeout: 90_000 }, async () => {
   const keys = new Map([
     [aliceId, [apiKey("alice-existing", "Alice device", "fixture-alice-token")]],
     [bobId, [apiKey("bob-existing", "Bob automation", "fixture-bob-token")]],
@@ -71,6 +71,8 @@ test("administration selects only the clicked user's API keys and manages their 
         } };
       } else if (method === "GET" && path === "/api/v1/organizations") {
         response = { body: { items: [{ id: organizationId, name: "Fixture Organization", created_at: 1_700_000_000 }], next_cursor: null } };
+      } else if (method === "GET" && path === "/api/v1/me/profile") {
+        response = { body: { display_name: "Fixture Admin", avatar_url: null } };
       } else if (method === "GET" && path === "/api/v1/me/api-keys") {
         response = { body: [] };
       } else if (method === "GET" && path === "/api/v1/organizations/organization-fixture/quota") {
@@ -139,7 +141,17 @@ test("administration selects only the clicked user's API keys and manages their 
 
     const page = await context.newPage();
     await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
-    await page.getByRole("button", { name: "Administration", exact: true }).click();
+    assert.equal(await page.getByRole("button", { name: "Administration", exact: true }).count(), 0);
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    const settingsSearch = page.getByTestId("settings-search");
+    await settingsSearch.fill("Profile");
+    await page.getByTestId("settings-section-profile").waitFor();
+    await settingsSearch.fill("display_name");
+    await page.getByTestId("settings-section-profile").waitFor();
+    await settingsSearch.fill("no-such-settings-keyword");
+    await page.getByText("No matching settings.", { exact: true }).waitFor();
+    assert.equal(await page.getByTestId("settings-section-profile").count(), 0);
+    await settingsSearch.clear();
     await page.getByText("Users and roles", { exact: true }).waitFor();
 
     const aliceRow = page.getByRole("row", { name: /Alice Fixture/ });
@@ -152,7 +164,6 @@ test("administration selects only the clicked user's API keys and manages their 
     const editor = page.getByRole("dialog").filter({ hasText: "Alice Fixture" });
     await editor.getByText("Credential configuration · Alice Fixture", { exact: true }).waitFor();
     assert.deepEqual((await (await templatesLoaded).json()).map((template) => template.id), [templateId]);
-    assert.equal(await editor.getByRole("tab").count(), 0);
     await editor.getByText("Alice device", { exact: true }).waitFor();
     assert.deepEqual([...new Set(keyReads)], [aliceId]);
     assert.equal(await editor.getByText("Bob automation", { exact: true }).count(), 0);
@@ -182,16 +193,25 @@ test("administration selects only the clicked user's API keys and manages their 
         { id: "alice-created", token: "fixture-created-token", scopes: ["read_workspace", "manage_api_keys"], allowed_template_ids: [templateId], revoked_at: null },
       ],
     });
-    assert.equal(await editor.getByText("fixture-created-token", { exact: true }).count(), 1);
+    assert.equal(await editor.getByText("fixture-created-token", { exact: true }).count(), 0, "the created secret must not appear by default");
 
-    const createdRow = editor.getByRole("row", { name: /Alice CI key/ });
+    await editor.getByRole("button", { name: "Close" }).click();
+    await aliceRow.getByRole("button", { name: "Credential configuration" }).click();
+    const reopenedForCopy = page.getByRole("dialog").filter({ hasText: "Alice Fixture" });
+    const createdRow = reopenedForCopy.getByRole("row", { name: /Alice CI key/ });
+    assert.equal(await reopenedForCopy.getByText("fixture-created-token", { exact: true }).count(), 0, "reopening must not display the secret");
+    await page.evaluate(() => navigator.clipboard.writeText(""));
+    await createdRow.getByRole("button", { name: "Copy" }).click();
+    await createdRow.getByRole("button", { name: "Copied" }).waitFor();
+    assert.ok((await page.evaluate(() => navigator.clipboard.readText())) === "fixture-created-token", "administrator copy after reopening must use the selected user's list endpoint");
+    assert.equal(keyReadbacks.at(-1).userId, aliceId);
     await createdRow.getByRole("button", { name: "Revoke" }).click();
     await page.getByRole("textbox", { name: "Reason for revocation" }).fill("CI fixture revoke");
     await page.getByRole("button", { name: "Revoke", exact: true }).last().click();
-    await editor.getByRole("row", { name: /Alice CI key/ }).getByText("Revoked", { exact: true }).waitFor();
+    await createdRow.getByText("Revoked", { exact: true }).waitFor();
     assert.deepEqual(writes[1], { method: "DELETE", userId: aliceId, keyId: "alice-created", input: { reason: "CI fixture revoke" } });
 
-    await editor.getByRole("button", { name: "Close" }).click();
+    await reopenedForCopy.getByRole("button", { name: "Close" }).click();
     await aliceRow.getByRole("button", { name: "Credential configuration" }).click();
     const reopened = page.getByRole("dialog").filter({ hasText: "Alice Fixture" });
     await reopened.getByRole("row", { name: /Alice CI key/ }).getByText("Revoked", { exact: true }).waitFor();
@@ -205,6 +225,21 @@ test("administration selects only the clicked user's API keys and manages their 
     assert.equal(await bobEditor.getByText("Alice CI key", { exact: true }).count(), 0);
     assert.equal(keyReadbacks.at(-1).userId, bobId);
     assert.deepEqual(keyReadbacks.at(-1).items.map((item) => item.id), ["bob-existing"]);
+    await bobEditor.getByRole("button", { name: "Close" }).click();
+    await page.getByTestId("settings-section-appearance").getByRole("combobox", { name: "Language" }).click();
+    await page.getByRole("option", { name: "简体中文" }).click();
+    const chineseSearch = page.getByTestId("settings-search");
+    await chineseSearch.fill("头像");
+    await page.getByTestId("settings-section-profile").waitFor();
+    await chineseSearch.fill("凭据配置");
+    await page.getByTestId("settings-section-api-keys").waitFor();
+    await page.getByRole("button", { name: "系统", exact: true }).click();
+    await chineseSearch.clear();
+    await page.getByTestId("settings-section-images").waitFor();
+    assert.equal(await page.getByTestId("settings-section-profile").count(), 0);
+    await page.getByRole("button", { name: "个人", exact: true }).click();
+    await page.getByTestId("settings-section-profile").waitFor();
+    assert.equal(await page.getByTestId("settings-section-images").count(), 0);
     assert.deepEqual(unexpected, []);
     await context.close();
   } catch (error) {

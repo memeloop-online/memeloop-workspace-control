@@ -64,13 +64,12 @@ test("production administrator manages a specific user's credentials through the
     }, { token: adminToken, organization: organizationId });
     const page = await context.newPage();
     await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
-    await page.getByRole("button", { name: "Administration", exact: true }).click();
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
     await page.getByText("Users and roles", { exact: true }).waitFor();
     const row = page.getByRole("row", { name: new RegExp(target.display_name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")) });
     await row.getByRole("button", { name: "Credential configuration" }).click();
     const dialog = page.getByRole("dialog").filter({ hasText: target.display_name });
     await dialog.getByText(`Credential configuration · ${target.display_name}`, { exact: true }).waitFor();
-    assert.equal(await dialog.getByRole("tab").count(), 0, "credentials must open directly, not through the old user editor tabs");
 
     if (process.env.E2E_ALLOW_WRITES !== "1") return;
     await dialog.getByRole("button", { name: "Create API key" }).first().click();
@@ -80,17 +79,24 @@ test("production administrator manages a specific user's credentials through the
     await keyRow.getByRole("button", { name: /Copy|Copied/ }).waitFor();
     const listed = await findKey(keyName);
     createdId = listed?.id ?? null;
-    assert.ok(listed?.id && listed.token, "real API list must return the created key and copyable token");
+    assert.ok(listed?.id && listed.token, "real admin API list must return the created key and copyable token");
+    await dialog.getByRole("button", { name: "Close" }).click();
+    await row.getByRole("button", { name: "Credential configuration" }).click();
+    const reopened = page.getByRole("dialog").filter({ hasText: target.display_name });
+    const reopenedRow = reopened.getByRole("row", { name: new RegExp(keyName) });
+    await reopenedRow.getByRole("button", { name: /Copy|Copied/ }).waitFor();
+    assert.equal(await page.evaluate((secret) => document.body.innerText.includes(secret), listed.token), false, "reopened credentials must not display plaintext");
     await page.evaluate(() => navigator.clipboard.writeText(""));
-    await keyRow.getByRole("button", { name: /Copy|Copied/ }).click();
+    await reopenedRow.getByRole("button", { name: /Copy|Copied/ }).click();
+    await reopenedRow.getByRole("button", { name: "Copied" }).waitFor();
     const copiedToken = await page.evaluate(() => navigator.clipboard.readText());
     assert.ok(copiedToken === listed.token, "clipboard must match the created credential");
     const copiedPrincipal = await api("/api/v1/me", { headers: { Authorization: `Bearer ${copiedToken}` } });
     assert.equal(copiedPrincipal.user_id, targetUserId);
-    await keyRow.getByRole("button", { name: "Revoke" }).click();
+    await reopenedRow.getByRole("button", { name: "Revoke" }).click();
     await page.getByRole("textbox", { name: "Reason for revocation" }).fill("MWC UI E2E acceptance");
     await page.getByRole("button", { name: "Revoke", exact: true }).last().click();
-    await keyRow.getByText("Revoked", { exact: true }).waitFor();
+    await reopenedRow.getByText("Revoked", { exact: true }).waitFor();
     assert.ok((await findKey(keyName))?.revoked_at, "real API must persist revocation");
     const revoked = await fetch(new URL("/api/v1/me", baseUrl), { headers: { Authorization: `Bearer ${copiedToken}` } });
     assert.equal(revoked.status, 401, "copied credential must stop authenticating after revocation");
@@ -110,9 +116,9 @@ test("production labels distinguish environment files from user API credentials"
   const { chromium } = await import(playwrightModule);
   const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_BIN || chromium.executablePath(), headless: true, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
   try {
-    for (const [locale, administration, files, users, credentials] of [
-      ["zh-CN", "管理", "环境变量与文件", "用户与角色", "凭据配置"],
-      ["ru", "Управление", "Переменные окружения и файлы", "Пользователи и роли", "Настройка ключей"],
+    for (const [locale, settings, files, users, credentials] of [
+      ["zh-CN", "设置", "环境变量与文件", "用户与角色", "凭据配置"],
+      ["ru", "Настройки", "Переменные окружения и файлы", "Пользователи и роли", "Настройка ключей"],
     ]) {
       const context = await browser.newContext();
       await context.addInitScript(({ token, organization, language }) => {
@@ -124,7 +130,7 @@ test("production labels distinguish environment files from user API credentials"
       const page = await context.newPage();
       await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
       await page.getByRole("button", { name: files, exact: true }).waitFor();
-      await page.getByRole("button", { name: administration, exact: true }).click();
+      await page.getByRole("button", { name: settings, exact: true }).click();
       await page.getByText(users, { exact: true }).waitFor();
       await page.getByRole("button", { name: credentials, exact: true }).first().waitFor();
       await context.close();

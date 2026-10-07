@@ -7,6 +7,7 @@ test("current mutable resources have product action labels", () => {
     "organization.update",
     "organization.delete",
     "user.update",
+    "user.api_key.token_read",
     "workspace.port_mapping.create",
     "workspace.port_mapping.delete",
   ]) {

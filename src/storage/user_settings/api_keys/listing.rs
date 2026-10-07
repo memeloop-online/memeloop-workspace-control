@@ -27,6 +27,41 @@ impl ApiKeyListStatus {
 }
 
 impl Database {
+    pub async fn get_api_key_token(
+        &self,
+        user_id: Uuid,
+        key_id: Uuid,
+        now: i64,
+    ) -> Result<Option<String>, StorageError> {
+        let token = match self {
+            Self::Sqlite {
+                pool,
+                installation_id,
+            } => sqlx::query_scalar::<_, Option<String>>(
+                "SELECT token FROM user_api_keys WHERE installation_id = ?1 AND user_id = ?2 AND id = ?3 AND revoked_at IS NULL AND expires_at > ?4",
+            )
+            .bind(installation_id.as_str())
+            .bind(user_id.to_string())
+            .bind(key_id.to_string())
+            .bind(now)
+            .fetch_optional(pool)
+            .await?,
+            Self::Postgres {
+                pool,
+                installation_id,
+            } => sqlx::query_scalar::<_, Option<String>>(
+                "SELECT token FROM user_api_keys WHERE installation_id = $1 AND user_id = $2 AND id = $3 AND revoked_at IS NULL AND expires_at > $4",
+            )
+            .bind(installation_id.as_str())
+            .bind(user_id.to_string())
+            .bind(key_id.to_string())
+            .bind(now)
+            .fetch_optional(pool)
+            .await?,
+        };
+        token.ok_or(StorageError::ApiKeyNotFound)
+    }
+
     pub async fn list_api_keys(&self, user_id: Uuid) -> Result<Vec<ApiKeySummary>, StorageError> {
         match self {
             Self::Sqlite {

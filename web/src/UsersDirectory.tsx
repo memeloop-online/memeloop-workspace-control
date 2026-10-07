@@ -23,7 +23,6 @@ import {
   Spinner,
   Text,
   Textarea,
-  Tooltip,
 } from "@fluentui/react-components";
 import type { TableColumnDefinition } from "@fluentui/react-components";
 import { AddRegular, ArrowLeftRegular, ArrowRightRegular, CopyRegular, EditRegular, KeyRegular, SaveRegular } from "@fluentui/react-icons";
@@ -294,6 +293,7 @@ function UserApiKeysPanel({ api, organizationId, principal, userId, isCurrentUse
   const [templateRestriction, setTemplateRestriction] = useState(principal.allowed_template_ids !== null);
   const [allowedTemplateIds, setAllowedTemplateIds] = useState<string[]>([]);
   const [copiedKeyId, setCopiedKeyId] = useState<string | null>(null);
+  const [copyingKeyId, setCopyingKeyId] = useState<string | null>(null);
   const localRevocationsRef = useRef(new Map<string, number>());
 
   useEffect(() => { void loadPage(null, "reset"); }, [api, userId]);
@@ -360,14 +360,23 @@ function UserApiKeysPanel({ api, organizationId, principal, userId, isCurrentUse
       setTemplateRestriction(principal.allowed_template_ids !== null);
       setAllowedTemplateIds([]);
       await loadPage(null, "reset");
-      setItems((current) => prependCreatedApiKey(current, created));
-      try { await navigator.clipboard.writeText(created.token); setCopiedKeyId(created.id); } catch { /* Value remains visible in the list. */ }
+      setItems((current) => isCurrentUser ? [{ ...created, token: null }, ...current.filter((item) => item.id !== created.id)] : prependCreatedApiKey(current, created));
+      try { await navigator.clipboard.writeText(created.token); setCopiedKeyId(created.id); } catch { onError(t("apiKeyCopyFailed")); }
     } catch (error) { onError(message(error, t("requestFailed"))); } finally { setCreating(false); }
   }
 
   async function copyKey(key: AdminApiKey) {
-    if (!key.token) return;
-    try { await navigator.clipboard.writeText(key.token); setCopiedKeyId(key.id); window.setTimeout(() => setCopiedKeyId((id) => id === key.id ? null : id), 1_500); } catch { onError(t("requestFailed")); }
+    if (getApiKeyStatus(key) !== "active" || copyingKeyId) return;
+    setCopyingKeyId(key.id);
+    try {
+      const token = isCurrentUser ? (await api.apiKeyToken(key.id)).token : key.token;
+      if (!token) { onError(t("apiKeyCopyUnavailable")); return; }
+      await navigator.clipboard.writeText(token);
+      setCopiedKeyId(key.id);
+      window.setTimeout(() => setCopiedKeyId((id) => id === key.id ? null : id), 1_500);
+    } catch (error) {
+      onError(error instanceof Error && "code" in error && (error as Error & { code?: string }).code === "api_key_token_unavailable" ? t("apiKeyCopyUnavailable") : message(error, t("requestFailed")));
+    } finally { setCopyingKeyId(null); }
   }
 
   function toggleScope(scope: ApiKeyScope) { setScopes((current) => current.includes(scope) ? current.filter((value) => value !== scope) : [...current, scope]); }
@@ -379,7 +388,7 @@ function UserApiKeysPanel({ api, organizationId, principal, userId, isCurrentUse
   return <>
     <AdminToolbar action={<div className={styles.actions}><Button icon={<AddRegular />} onClick={() => setShowCreate((value) => !value)}>{t("createApiKey")}</Button>{!isCurrentUser && <><Button icon={<ArrowLeftRegular />} disabled={pageNumber <= 1 || loading || revoking || creating} onClick={() => void loadPage(cursorHistory[pageNumber - 2] ?? null, "previous")}>{t("previousPage")}</Button><Button icon={<ArrowRightRegular />} iconPosition="after" disabled={!nextCursor || loading || revoking || creating} onClick={() => void loadPage(nextCursor, "next")}>{t("nextPage")}</Button></>}</div>}><Text size={300}>{isCurrentUser ? `${items.length} ${t("apiKeyCountUnit")}` : formatApiKeyPageStatus(locale, pageNumber, items.length, t)}</Text></AdminToolbar>
     {showCreate && <div className={styles.stack}><div className={styles.formGrid}><Field label={t("apiKeyName")} required><Input maxLength={80} value={name} onChange={(event) => setName(event.target.value)} /></Field><Field label={t("apiKeyExpires")} required><Input type="datetime-local" value={expiresAt} max={isCurrentUser && principal.api_key_expires_at !== null ? localDateTime(new Date(principal.api_key_expires_at * 1_000)) : undefined} onChange={(event) => setExpiresAt(event.target.value)} /></Field></div><Text weight="semibold">{t("apiKeyPermissions")}</Text><div className={styles.formGrid}>{API_KEY_SCOPES.filter(({ scope }) => principal.api_key_scopes.includes(scope)).map(({ scope, label }) => <Checkbox key={scope} checked={scopes.includes(scope)} onChange={() => toggleScope(scope)} label={t(label)} />)}</div><ApiKeyTemplatePicker templates={templates} selected={allowedTemplateIds} restricted={templateRestriction} disabled={creating} translate={t} onRestrictedChange={(restricted) => setTemplateRestriction(principal.allowed_template_ids !== null || restricted)} onSelectedChange={setAllowedTemplateIds} /><div className={styles.actions}><SaveButton disabled={creating || !name.trim() || scopes.length === 0 || !validExpiry} onClick={() => void createKey()}>{creating ? t("saving") : t("createApiKey")}</SaveButton></div></div>}
-    {loading && items.length === 0 ? <Spinner label={t("loading")} /> : items.length === 0 ? <Text className={styles.empty}>{t("noApiKeys")}</Text> : <DataGrid items={items} columns={apiKeyColumns({ t, locale, styles, templates, revokingKeyId, revoking, loading, copiedKeyId, onCopy: copyKey, setRevokingKeyId, setReason })}><DataGridHeader><DataGridRow<AdminApiKey>>{(column) => <DataGridHeaderCell>{column.renderHeaderCell()}</DataGridHeaderCell>}</DataGridRow></DataGridHeader><DataGridBody<AdminApiKey>>{({ item }) => <DataGridRow<AdminApiKey>>{(column) => <DataGridCell>{column.renderCell(item)}</DataGridCell>}</DataGridRow>}</DataGridBody></DataGrid>}
+    {loading && items.length === 0 ? <Spinner label={t("loading")} /> : items.length === 0 ? <Text className={styles.empty}>{t("noApiKeys")}</Text> : <DataGrid items={items} columns={apiKeyColumns({ t, locale, styles, templates, revokingKeyId, revoking, loading, copiedKeyId, copyingKeyId, isCurrentUser, onCopy: copyKey, setRevokingKeyId, setReason })}><DataGridHeader><DataGridRow<AdminApiKey>>{(column) => <DataGridHeaderCell>{column.renderHeaderCell()}</DataGridHeaderCell>}</DataGridRow></DataGridHeader><DataGridBody<AdminApiKey>>{({ item }) => <DataGridRow<AdminApiKey>>{(column) => <DataGridCell>{column.renderCell(item)}</DataGridCell>}</DataGridRow>}</DataGridBody></DataGrid>}
   <ConfirmDialog
     open={revokingKey !== null}
     title={t("revokeApiKey")}
@@ -405,12 +414,12 @@ function userColumns({ t, styles, canManageUsers, canEditMembership, canEditQuot
   ];
 }
 
-function apiKeyColumns({ t, locale, styles, templates, revokingKeyId, revoking, loading, copiedKeyId, onCopy, setRevokingKeyId, setReason }: { t: ReturnType<typeof useI18n>["t"]; locale: string; styles: ReturnType<typeof useAdminStyles>; templates: WorkspaceTemplate[]; revokingKeyId: string | null; revoking: boolean; loading: boolean; copiedKeyId: string | null; onCopy: (key: AdminApiKey) => void; setRevokingKeyId: (id: string | null) => void; setReason: (reason: string) => void }): TableColumnDefinition<AdminApiKey>[] {
+function apiKeyColumns({ t, locale, styles, templates, revokingKeyId, revoking, loading, copiedKeyId, copyingKeyId, isCurrentUser, onCopy, setRevokingKeyId, setReason }: { t: ReturnType<typeof useI18n>["t"]; locale: string; styles: ReturnType<typeof useAdminStyles>; templates: WorkspaceTemplate[]; revokingKeyId: string | null; revoking: boolean; loading: boolean; copiedKeyId: string | null; copyingKeyId: string | null; isCurrentUser: boolean; onCopy: (key: AdminApiKey) => void; setRevokingKeyId: (id: string | null) => void; setReason: (reason: string) => void }): TableColumnDefinition<AdminApiKey>[] {
   return [
-    { columnId: "key", compare: (a, b) => a.name.localeCompare(b.name), renderHeaderCell: () => t("manageUserApiKeys"), renderCell: (item) => <div className={styles.stack}><Text weight="semibold">{item.name}</Text>{item.token ? <Text size={200} className={styles.code}>{item.token}</Text> : <Text size={200}>{item.prefix}</Text>}<Text size={200}>{formatApiKeyScopes(item, t)}</Text><Text size={200}>{t("apiKeyTemplates")}: {formatTemplateRestriction(item, templates, t)}</Text><Text size={200}>{t("createdAt")}: {formatTime(item.created_at, locale)} · {t("lastUsedAt")}: {item.last_used_at ? formatTime(item.last_used_at, locale) : t("never")}</Text></div> },
+    { columnId: "key", compare: (a, b) => a.name.localeCompare(b.name), renderHeaderCell: () => t("manageUserApiKeys"), renderCell: (item) => <div className={styles.stack}><Text weight="semibold">{item.name}</Text><Text size={200}>{item.prefix}</Text><Text size={200}>{formatApiKeyScopes(item, t)}</Text><Text size={200}>{t("apiKeyTemplates")}: {formatTemplateRestriction(item, templates, t)}</Text><Text size={200}>{t("createdAt")}: {formatTime(item.created_at, locale)} · {t("lastUsedAt")}: {item.last_used_at ? formatTime(item.last_used_at, locale) : t("never")}</Text></div> },
     { columnId: "status", compare: (a, b) => getApiKeyStatus(a).localeCompare(getApiKeyStatus(b)), renderHeaderCell: () => t("apiKeyStatus"), renderCell: (item) => formatApiKeyStatus(item, t) },
     { columnId: "expires", compare: (a, b) => (a.expires_at ?? 0) - (b.expires_at ?? 0), renderHeaderCell: () => t("apiKeyExpires"), renderCell: (item) => formatApiKeyExpiry(item.expires_at, locale, t) },
-    { columnId: "actions", compare: () => 0, renderHeaderCell: () => t("actions"), renderCell: (item) => <div className={styles.actions}>{item.token ? <Button appearance="subtle" icon={<CopyRegular />} onClick={() => onCopy(item)}>{copiedKeyId === item.id ? t("copied") : t("copy")}</Button> : <Tooltip content={t("apiKeyCopyUnavailable")} relationship="description"><span><Button appearance="subtle" icon={<CopyRegular />} disabled>{t("copy")}</Button></span></Tooltip>}{getApiKeyStatus(item) === "active" && <Button disabled={revoking || loading || revokingKeyId !== null} onClick={() => { setRevokingKeyId(item.id); setReason(""); }}>{t("revokeApiKey")}</Button>}</div> },
+    { columnId: "actions", compare: () => 0, renderHeaderCell: () => t("actions"), renderCell: (item) => <div className={styles.actions}>{(isCurrentUser || item.token) && getApiKeyStatus(item) === "active" ? <Button appearance="subtle" icon={<CopyRegular />} disabled={copyingKeyId !== null} onClick={() => onCopy(item)}>{copiedKeyId === item.id ? t("copied") : t("copy")}</Button> : null}{getApiKeyStatus(item) === "active" && <Button disabled={revoking || loading || revokingKeyId !== null} onClick={() => { setRevokingKeyId(item.id); setReason(""); }}>{t("revokeApiKey")}</Button>}</div> },
   ];
 }
 

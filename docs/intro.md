@@ -16,11 +16,11 @@ SSH, a browser terminal, and authenticated HTTP port mappings.
 This documentation is organized by audience:
 
 - **Users** — create and connect to workspaces, manage personal credentials and
-  API keys: start with [Quick start](./quickstart.md), then
-  [Workspaces](./workspaces.md), [Credentials and files](./credentials-and-files.md),
+  API keys in [Settings](./settings.md): start with [Quick start](./quickstart.md), then
+  [Workspaces](./workspaces.md), [Environment variables and files](./credentials-and-files.md),
   and [Access: SSH, web terminal, port mappings](./access.md).
 - **Administrators** — manage images, templates, users, organizations, quotas,
-  and node pools: see [Administration](./administration.md).
+  and node pools in the same Settings entry: see [Administration](./administration.md).
 - **API consumers** — authenticate with scoped API keys and integrate through
   the REST API: see [API reference](./api.md).
 - **Plugin developers** — build WebAssembly policy and UI plugins against the

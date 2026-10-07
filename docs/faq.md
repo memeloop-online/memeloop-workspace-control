@@ -31,11 +31,12 @@ creation time.
 
 ## Is the API key retrievable later?
 
-Yes, for an administrator with both `manage_system` and `manage_api_keys`.
-Open **Administration → Users and roles**, edit the user, then choose the
-**API keys** tab and use **Copy**. Ordinary self-service API-key lists expose
-summaries only. Historical keys created before plaintext retention cannot be
-reconstructed; create a replacement for those keys.
+Yes, if its plaintext was retained. The owner can use **Settings → Personal →
+API keys → Copy**, including after a page refresh; the list itself exposes only
+summaries. An authorized administrator can copy another user's retained key via
+**Settings → Organization → Users and roles → Credential configuration**. Historical
+hash-only keys cannot be reconstructed. Create a replacement deliberately;
+MWC does not rotate them automatically.
 
 ## Does the port mapping expose my app publicly?
 

@@ -20,6 +20,7 @@ pub enum ApiError {
     MissingIdempotencyKey,
     IdempotencyConflict,
     IdempotencyInProgress,
+    ApiKeyTokenUnavailable,
     EncryptionUnavailable,
     WorkspaceNotConnectable,
     ProductNamespaceConflict,
@@ -75,6 +76,7 @@ impl ApiError {
             | Self::MissingIdempotencyKey
             | Self::IdempotencyConflict
             | Self::IdempotencyInProgress
+            | Self::ApiKeyTokenUnavailable
             | Self::EncryptionUnavailable
             | Self::WorkspaceNotConnectable
             | Self::ProductNamespaceConflict

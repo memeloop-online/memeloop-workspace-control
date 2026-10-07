@@ -38,6 +38,7 @@ const appViews: readonly AppView[] = ["workspaces", "injections", "plugins", "ad
 
 function initialView(): AppView {
   const saved = localValue(VIEW_KEY) as AppView;
+  if (saved === "administration") return "settings";
   return appViews.includes(saved) ? saved : "workspaces";
 }
 
@@ -71,8 +72,9 @@ export const useAppStore = create<AppState>((set) => ({
     set({ theme });
   },
   setView: (view) => {
-    setLocalValue(VIEW_KEY, view);
-    set({ view });
+    const next = view === "administration" ? "settings" : view;
+    setLocalValue(VIEW_KEY, next);
+    set({ view: next });
   },
   clearSession: () => {
     setSessionValue(TOKEN_KEY, "");

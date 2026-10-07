@@ -30,10 +30,10 @@ pub(super) use node_pools::{
 };
 pub(super) use quota::{__path_get_quota, __path_set_quota, get_quota, set_quota};
 pub(super) use settings::{
-    __path_create_api_key, __path_delete_api_key, __path_get_profile, __path_list_api_keys,
-    __path_update_profile, CreateApiKeyRequest, CreatedApiKeyResponse, UpdateUserProfileRequest,
-    UserProfileResponse, create_api_key, delete_api_key, get_profile, list_api_keys,
-    update_profile,
+    __path_create_api_key, __path_delete_api_key, __path_get_api_key_token, __path_get_profile,
+    __path_list_api_keys, __path_update_profile, ApiKeyTokenResponse, CreateApiKeyRequest,
+    CreatedApiKeyResponse, UpdateUserProfileRequest, UserProfileResponse, create_api_key,
+    delete_api_key, get_api_key_token, get_profile, list_api_keys, update_profile,
 };
 pub(super) use system::{__path_scaling, ScalingResponse, scaling};
 pub(super) use users::{
