@@ -52,9 +52,10 @@ impl Database {
             .map_err(|_| StorageError::InvalidSshIdentity)?;
         let label = match self.get_workspace(workspace_id).await {
             Ok(workspace) => crate::ssh_connection::alias(&workspace.name, &workspace.short_id),
-            Err(StorageError::WorkspaceNotFound) => {
-                crate::ssh_connection::alias("", &workspace_id.simple().to_string()[16..])
-            }
+            Err(StorageError::WorkspaceNotFound) => crate::ssh_connection::alias(
+                "",
+                &crate::workspace_runtime::workspace_short_id_for(workspace_id),
+            ),
             Err(error) => return Err(error),
         };
         private.set_comment(label);

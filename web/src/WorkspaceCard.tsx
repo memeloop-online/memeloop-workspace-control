@@ -183,7 +183,7 @@ function StartupSummary({ pod }: { pod: WorkspaceRuntimePod }) {
       {startup?.total_seconds != null && <Badge appearance="tint" color="informative">{t("startupReadyIn")} {formatDurationSeconds(startup.total_seconds)}</Badge>}
     </div>
     {startup && startup.stages.length > 0 && <div className={styles.podGrid}>{startup.stages.map((stage, index) => {
-      const labelKey = startupStageLabelKey(stage.name);
+      const labelKey = startupStageLabelKey(stage.name) ?? containerNameLabelKey(stage.name);
       return <div className={styles.podRow} key={`${stage.name}-${index}`}>
         <Text>{labelKey ? t(labelKey) : stage.name}</Text>
         <Caption1>{formatDurationSeconds(stage.duration_seconds)}</Caption1>
