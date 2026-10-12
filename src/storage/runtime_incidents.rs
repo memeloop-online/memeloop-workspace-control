@@ -23,6 +23,10 @@ pub enum RuntimeEventCategory {
     TemporaryStorageProvisioning,
     TemporaryStorageAttachment,
     VolumeUnavailable,
+    ContainerBackoff,
+    ImagePull,
+    Scheduling,
+    HealthCheck,
     Other,
 }
 
@@ -37,6 +41,10 @@ impl RuntimeEventCategory {
             Self::TemporaryStorageProvisioning => "temporary_storage_provisioning",
             Self::TemporaryStorageAttachment => "temporary_storage_attachment",
             Self::VolumeUnavailable => "volume_unavailable",
+            Self::ContainerBackoff => "container_backoff",
+            Self::ImagePull => "image_pull",
+            Self::Scheduling => "scheduling",
+            Self::HealthCheck => "health_check",
             Self::Other => "other",
         }
     }
@@ -51,6 +59,10 @@ impl RuntimeEventCategory {
             "temporary_storage_provisioning" => Ok(Self::TemporaryStorageProvisioning),
             "temporary_storage_attachment" => Ok(Self::TemporaryStorageAttachment),
             "volume_unavailable" => Ok(Self::VolumeUnavailable),
+            "container_backoff" => Ok(Self::ContainerBackoff),
+            "image_pull" => Ok(Self::ImagePull),
+            "scheduling" => Ok(Self::Scheduling),
+            "health_check" => Ok(Self::HealthCheck),
             "other" => Ok(Self::Other),
             _ => Err(StorageError::UnknownRuntimeIncidentCategory(
                 value.to_owned(),
@@ -71,6 +83,7 @@ pub struct NewWorkspaceRuntimeIncident {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WorkspaceRuntimeIncident {
+    pub last_observed_at: i64,
     pub workspace_id: Uuid,
     pub category: RuntimeEventCategory,
     pub observed_at: i64,
@@ -169,7 +182,7 @@ impl Database {
                 installation_id,
             } => {
                 let mut query = QueryBuilder::<Sqlite>::new(
-                    "SELECT workspace_id, category, observed_at, count FROM workspace_runtime_incidents WHERE installation_id = ",
+                    "SELECT workspace_id, category, observed_at, last_seen_at, count FROM workspace_runtime_incidents WHERE installation_id = ",
                 );
                 query.push_bind(installation_id.as_str());
                 query.push(" AND last_seen_at >= ");
@@ -194,7 +207,7 @@ impl Database {
                 installation_id,
             } => {
                 let mut query = QueryBuilder::<Postgres>::new(
-                    "SELECT workspace_id, category, observed_at, count FROM workspace_runtime_incidents WHERE installation_id = ",
+                    "SELECT workspace_id, category, observed_at, last_seen_at, count FROM workspace_runtime_incidents WHERE installation_id = ",
                 );
                 query.push_bind(installation_id.as_str());
                 query.push(" AND last_seen_at >= ");
@@ -317,6 +330,7 @@ where
 {
     let count = row.try_get::<i64, _>("count")?;
     Ok(WorkspaceRuntimeIncident {
+        last_observed_at: row.try_get("last_seen_at")?,
         workspace_id: Uuid::parse_str(&row.try_get::<String, _>("workspace_id")?)?,
         category: RuntimeEventCategory::from_stored(&row.try_get::<String, _>("category")?)?,
         observed_at: row.try_get("observed_at")?,
@@ -396,6 +410,7 @@ mod tests {
 
     fn stored(workspace_id: Uuid, observed_at: i64) -> WorkspaceRuntimeIncident {
         WorkspaceRuntimeIncident {
+            last_observed_at: observed_at,
             workspace_id,
             category: RuntimeEventCategory::Other,
             observed_at,

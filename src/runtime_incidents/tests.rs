@@ -187,3 +187,42 @@ async fn collector_pages_namespace_events_without_querying_individual_pods() {
             .all(|uri| !uri.contains("involvedObject.name"))
     );
 }
+
+#[test]
+fn startup_failures_are_actionable_and_unknown_warnings_are_not_stored() {
+    for (reason, message, expected) in [
+        (
+            "BackOff",
+            "Back-off restarting failed container ttyd",
+            RuntimeEventCategory::ContainerBackoff,
+        ),
+        (
+            "Failed",
+            "Failed to pull image",
+            RuntimeEventCategory::ImagePull,
+        ),
+        (
+            "FailedScheduling",
+            "0 nodes available: waiting for ephemeral volume controller to create persistentvolumeclaim workspace-scratch",
+            RuntimeEventCategory::TemporaryStorageProvisioning,
+        ),
+        (
+            "FailedScheduling",
+            "Insufficient cpu",
+            RuntimeEventCategory::Scheduling,
+        ),
+        (
+            "Unhealthy",
+            "Readiness probe failed",
+            RuntimeEventCategory::HealthCheck,
+        ),
+    ] {
+        let mut source = event(message);
+        source.reason = Some(reason.to_owned());
+        let incident = normalized_incident(&source).unwrap();
+        assert_eq!(incident.category, expected);
+    }
+    let mut unknown = event("private arbitrary message");
+    unknown.reason = Some("UnknownWarning".into());
+    assert!(normalized_incident(&unknown).is_none());
+}

@@ -46,7 +46,7 @@ pub(super) fn container(enabled: bool, image: &str) -> Option<Container> {
             ]),
         }),
         initial_delay_seconds: Some(5),
-        period_seconds: Some(30),
+        period_seconds: Some(2),
         ..Probe::default()
     };
     Some(Container {
@@ -66,6 +66,7 @@ pub(super) fn container(enabled: bool, image: &str) -> Option<Container> {
         readiness_probe: Some(probe.clone()),
         liveness_probe: Some(Probe {
             initial_delay_seconds: Some(10),
+            period_seconds: Some(30),
             ..probe
         }),
         resources: Some(ResourceRequirements {

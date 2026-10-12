@@ -306,6 +306,10 @@ export interface WorkspaceSshConnection {
   user: string;
   command: string;
   config: string;
+  /** Human-readable host key alias; matches `alias` and the config HostKeyAlias line. */
+  host_key_alias?: string;
+  /** Ready-to-append known_hosts line keyed by the host key alias. */
+  known_hosts_entry?: string | null;
   app: {
     display_name: string;
     hostname: string;
@@ -321,15 +325,57 @@ export interface WorkspaceRuntime {
   metrics_available: boolean;
   /** The Kubernetes node hosting the active workspace Pod, when scheduled. */
   node_name: string | null;
-  pods: { name: string; phase: string | null; ready: boolean; restarts: number }[];
+  pods: WorkspaceRuntimePod[];
   metrics: { pod: string; container: string; cpu: string | null; memory: string | null }[];
   events: WorkspaceRuntimeEvent[];
 }
 
+export interface WorkspaceRuntimePod {
+  name: string;
+  phase: string | null;
+  ready: boolean;
+  restarts: number;
+  /** Startup milestones and stage timings, when observed. */
+  startup?: WorkspacePodStartup | null;
+  /** Per-container states, when observed. */
+  containers?: WorkspaceContainerState[];
+}
+
+export interface WorkspacePodStartup {
+  created_at: string | null;
+  scheduled_at: string | null;
+  containers_started_at: string | null;
+  initialized_at: string | null;
+  ready_at: string | null;
+  total_seconds: number | null;
+  stages: WorkspacePodStartupStage[];
+}
+
+export interface WorkspacePodStartupStage {
+  name: string;
+  started_at: string | null;
+  finished_at: string | null;
+  duration_seconds: number | null;
+}
+
+export interface WorkspaceContainerState {
+  name: string;
+  ready: boolean;
+  restarts: number;
+  state: string;
+  reason: string | null;
+  exit_code: number | null;
+}
+
 export interface WorkspaceRuntimeEvent {
-  category: "disk_pressure" | "evicted" | "temporary_storage_provisioning" | "temporary_storage_attachment" | "volume_unavailable" | "ephemeral_storage" | "memory_pressure" | "pid_pressure" | "other";
+  category: "disk_pressure" | "evicted" | "temporary_storage_provisioning" | "temporary_storage_attachment" | "volume_unavailable" | "ephemeral_storage" | "memory_pressure" | "pid_pressure" | "container_backoff" | "image_pull" | "scheduling" | "health_check" | "other";
   count: number | null;
   observed_at: string | null;
+  last_observed_at?: string | null;
+  /** Short machine reason such as BackOff or FailedScheduling; never a raw event message. */
+  reason?: string | null;
+  /** Reporting component such as kubelet or default-scheduler. */
+  component?: string | null;
 }
 
 export interface WorkspaceStorageTelemetry {

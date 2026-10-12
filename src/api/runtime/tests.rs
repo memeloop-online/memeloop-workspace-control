@@ -63,6 +63,9 @@ fn pvc_observation_uses_explicit_storage_role() {
 #[test]
 fn runtime_incident_round_trip_keeps_only_normalized_fields() {
     let event = PodEvent {
+        reason: None,
+        component: None,
+        last_observed_at: Some("2026-09-15T12:30:00Z".to_owned()),
         category: RuntimeEventCategory::TemporaryStorageProvisioning,
         count: Some(4),
         observed_at: Some("2026-09-15T12:30:00Z".to_owned()),
@@ -73,6 +76,7 @@ fn runtime_incident_round_trip_keeps_only_normalized_fields() {
 
     let restored = pod_event_from_incident(crate::storage::WorkspaceRuntimeIncident {
         workspace_id: Uuid::now_v7(),
+        last_observed_at: incident.last_observed_at,
         category: incident.category,
         observed_at: incident.observed_at,
         count: incident.count,

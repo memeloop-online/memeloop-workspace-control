@@ -3,6 +3,7 @@ set -eu
 
 # Kubernetes invokes this wrapper only when the HTTP proxy is configured.
 # The image's default entrypoint remains stock ttyd.
+routes_revision=$(readlink /etc/mwc-http-routes/..data 2>/dev/null || true)
 nginx -t -q -c /etc/mwc-http-proxy.conf
 nginx -c /etc/mwc-http-proxy.conf -g 'daemon off;' &
 proxy_pid=$!
@@ -19,8 +20,12 @@ trap 'exit 0' TERM INT
 
 /usr/bin/ttyd "$@" &
 ttyd_pid=$!
-routes_revision=
 while kill -0 "$proxy_pid" 2>/dev/null && kill -0 "$ttyd_pid" 2>/dev/null; do
+    # The master installs its signal handlers during startup. Never reload it
+    # immediately after spawning: an early HUP can terminate nginx and this
+    # supervisor then terminates ttyd, causing minutes of kubelet backoff.
+    sleep 2 &
+    wait "$!" || true
     # Projected ConfigMap updates switch the ..data symlink atomically.
     revision=$(readlink /etc/mwc-http-routes/..data 2>/dev/null || true)
     if [ "$revision" != "$routes_revision" ]; then
@@ -32,7 +37,6 @@ while kill -0 "$proxy_pid" 2>/dev/null && kill -0 "$ttyd_pid" 2>/dev/null; do
             exit 1
         fi
     fi
-    sleep 2 &
-    wait "$!" || true
 done
+echo "Web Shell supervisor: nginx or ttyd exited; restarting container" >&2
 exit 1

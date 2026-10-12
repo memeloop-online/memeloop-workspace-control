@@ -82,6 +82,8 @@ pub(super) struct WorkspaceDesktopConnection {
 pub(super) struct WorkspaceSshConnection {
     pub display_name: String,
     pub alias: String,
+    pub host_key_alias: String,
+    pub known_hosts_entry: Option<String>,
     pub hostname: String,
     pub port: u16,
     pub user: String,

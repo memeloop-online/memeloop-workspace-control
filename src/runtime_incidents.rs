@@ -192,7 +192,7 @@ pub(crate) fn runtime_event_category(
         RuntimeEventCategory::PidPressure
     } else if contains("evicted") {
         RuntimeEventCategory::Evicted
-    } else if contains("provision")
+    } else if (contains("provision") || contains("waiting for ephemeral volume"))
         && (contains("workspace-scratch")
             || contains("ephemeral volume")
             || contains("persistentvolumeclaim"))
@@ -206,6 +206,14 @@ pub(crate) fn runtime_event_category(
         RuntimeEventCategory::TemporaryStorageAttachment
     } else if contains("failedmount") || contains("failed mount") || contains("volume") {
         RuntimeEventCategory::VolumeUnavailable
+    } else if contains("imagepull") || contains("pull image") || contains("pulling image") {
+        RuntimeEventCategory::ImagePull
+    } else if contains("backoff") || contains("back-off restarting") {
+        RuntimeEventCategory::ContainerBackoff
+    } else if contains("failedscheduling") {
+        RuntimeEventCategory::Scheduling
+    } else if contains("unhealthy") || contains("probe failed") {
+        RuntimeEventCategory::HealthCheck
     } else {
         RuntimeEventCategory::Other
     }

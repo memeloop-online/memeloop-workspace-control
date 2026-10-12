@@ -30,6 +30,7 @@ use super::{ApiError, AppState, auth::principal};
 mod details;
 pub(super) mod organization_metrics;
 mod pod_views;
+mod startup;
 mod storage_metrics;
 
 use details::{
@@ -79,6 +80,8 @@ pub(super) struct PodRuntime {
     phase: Option<String>,
     ready: bool,
     restarts: i32,
+    startup: startup::PodStartup,
+    containers: Vec<startup::ContainerRuntime>,
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
@@ -94,6 +97,9 @@ pub(super) struct PodEvent {
     category: RuntimeEventCategory,
     count: Option<i32>,
     observed_at: Option<String>,
+    last_observed_at: Option<String>,
+    reason: Option<String>,
+    component: Option<String>,
 }
 
 type PodRuntimeMap = BTreeMap<Uuid, Vec<PodRuntime>>;
@@ -360,6 +366,7 @@ fn build_runtime_entries(
                         .remove(&workspace_id)
                         .unwrap_or_default()
                         .into_iter()
+                        .filter(|event| event.category != RuntimeEventCategory::Other)
                         .map(pod_event_from_incident)
                         .collect(),
                 },
@@ -453,17 +460,18 @@ pub(super) async fn get(
         node_name: details.node_name,
         pods: details.pods,
         metrics: details.metrics,
-        events: incidents
-            .remove(&workspace_id)
-            .unwrap_or_default()
-            .into_iter()
-            .map(pod_event_from_incident)
-            .collect(),
+        events: merge_current_events(
+            incidents.remove(&workspace_id).unwrap_or_default(),
+            &details.events,
+        ),
     };
     Ok(Json(response))
 }
 
 fn new_runtime_incident(event: &PodEvent) -> Option<NewWorkspaceRuntimeIncident> {
+    if event.category == RuntimeEventCategory::Other {
+        return None;
+    }
     let observed_at = event
         .observed_at
         .as_deref()?
@@ -473,7 +481,11 @@ fn new_runtime_incident(event: &PodEvent) -> Option<NewWorkspaceRuntimeIncident>
     Some(NewWorkspaceRuntimeIncident {
         category: event.category,
         observed_at,
-        last_observed_at: observed_at,
+        last_observed_at: event
+            .last_observed_at
+            .as_deref()
+            .and_then(|value| value.parse::<k8s_openapi::jiff::Timestamp>().ok())
+            .map_or(observed_at, |time| time.as_second()),
         count: event
             .count
             .and_then(|count| u32::try_from(count).ok())
@@ -485,10 +497,36 @@ fn pod_event_from_incident(incident: WorkspaceRuntimeIncident) -> PodEvent {
     PodEvent {
         category: incident.category,
         count: Some(i32::try_from(incident.count).unwrap_or(i32::MAX)),
+        reason: None,
+        component: None,
+        last_observed_at: k8s_openapi::jiff::Timestamp::new(incident.last_observed_at, 0)
+            .ok()
+            .map(|timestamp| timestamp.to_string()),
         observed_at: k8s_openapi::jiff::Timestamp::new(incident.observed_at, 0)
             .ok()
             .map(|timestamp| timestamp.to_string()),
     }
+}
+
+fn merge_current_events(
+    incidents: Vec<WorkspaceRuntimeIncident>,
+    current: &[PodEvent],
+) -> Vec<PodEvent> {
+    let mut events = incidents
+        .into_iter()
+        .filter(|event| event.category != RuntimeEventCategory::Other)
+        .map(pod_event_from_incident)
+        .collect::<Vec<_>>();
+    for event in &mut events {
+        if let Some(live) = current
+            .iter()
+            .find(|live| live.category == event.category && live.observed_at == event.observed_at)
+        {
+            event.reason = live.reason.clone();
+            event.component = live.component.clone();
+        }
+    }
+    events
 }
 
 fn gibibytes(value: u64) -> u64 {

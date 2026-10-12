@@ -77,6 +77,12 @@ pub(super) fn pod_runtime(pod: &Pod) -> PodRuntime {
         .as_ref()
         .and_then(|status| status.container_statuses.as_ref());
     PodRuntime {
+        startup: super::startup::pod_startup(pod),
+        containers: statuses
+            .into_iter()
+            .flatten()
+            .map(super::startup::container_runtime)
+            .collect(),
         name: pod.metadata.name.clone().unwrap_or_default(),
         phase: pod.status.as_ref().and_then(|status| status.phase.clone()),
         ready: statuses.is_some_and(|statuses| {
@@ -97,7 +103,39 @@ pub(super) fn pod_event(event: Event) -> PodEvent {
         .as_ref()
         .and_then(|series| series.count)
         .or(event.count);
+    let last_observed_at = event
+        .series
+        .as_ref()
+        .and_then(|series| series.last_observed_time.as_ref())
+        .map(|time| time.0.to_string())
+        .or_else(|| event.last_timestamp.as_ref().map(|time| time.0.to_string()))
+        .or_else(|| observed_at.clone());
+    let component = event
+        .involved_object
+        .field_path
+        .as_deref()
+        .and_then(|field| {
+            field
+                .strip_prefix("spec.containers{")
+                .or_else(|| field.strip_prefix("spec.initContainers{"))
+        })
+        .and_then(|field| field.strip_suffix('}'))
+        .filter(|name| {
+            matches!(
+                *name,
+                "workspace"
+                    | "ttyd"
+                    | "buildkitd"
+                    | "workspace-scratch-init"
+                    | "workspace-bootstrap"
+                    | "buildkit-bootstrap"
+            )
+        })
+        .map(str::to_owned);
     PodEvent {
+        reason: super::startup::safe_reason(event.reason.as_deref()).map(str::to_owned),
+        component,
+        last_observed_at,
         category: runtime_event_category(event.reason.as_deref(), event.message.as_deref()),
         count,
         observed_at,

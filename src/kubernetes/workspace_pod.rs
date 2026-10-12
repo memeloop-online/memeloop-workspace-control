@@ -174,7 +174,7 @@ impl<'a> WorkspacePod<'a> {
                     ]),
                 }),
                 initial_delay_seconds: Some(1),
-                period_seconds: Some(10),
+                period_seconds: Some(2),
                 timeout_seconds: Some(1),
                 success_threshold: Some(1),
                 failure_threshold: Some(3),
