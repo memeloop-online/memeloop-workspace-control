@@ -32,8 +32,13 @@ async fn migrate_sqlite(pool: &SqlitePool, applied_at: i64) -> Result<(), Storag
         24 => {
             upgrade_sqlite_v24_to_v25(&mut transaction, applied_at).await?;
             upgrade_sqlite_home_pvc(&mut transaction, applied_at).await?;
+            upgrade_sqlite_runtime_categories(&mut transaction, applied_at).await?;
         }
-        25 => upgrade_sqlite_home_pvc(&mut transaction, applied_at).await?,
+        25 => {
+            upgrade_sqlite_home_pvc(&mut transaction, applied_at).await?;
+            upgrade_sqlite_runtime_categories(&mut transaction, applied_at).await?;
+        }
+        26 => upgrade_sqlite_runtime_categories(&mut transaction, applied_at).await?,
         0 if has_application_tables == 0 => {
             for statement in schema::BASELINE.iter().chain(schema::HOME_PVC_MIGRATION) {
                 sqlx::query(statement).execute(&mut *transaction).await?;
@@ -79,8 +84,13 @@ async fn migrate_postgres(
         24 => {
             upgrade_postgres_v24_to_v25(&mut transaction, applied_at).await?;
             upgrade_postgres_home_pvc(&mut transaction, applied_at).await?;
+            upgrade_postgres_runtime_categories(&mut transaction, applied_at).await?;
         }
-        25 => upgrade_postgres_home_pvc(&mut transaction, applied_at).await?,
+        25 => {
+            upgrade_postgres_home_pvc(&mut transaction, applied_at).await?;
+            upgrade_postgres_runtime_categories(&mut transaction, applied_at).await?;
+        }
+        26 => upgrade_postgres_runtime_categories(&mut transaction, applied_at).await?,
         0 if has_application_tables == 0 => {
             for statement in schema::BASELINE.iter().chain(schema::HOME_PVC_MIGRATION) {
                 sqlx::query(statement).execute(&mut *transaction).await?;
@@ -149,7 +159,7 @@ async fn upgrade_sqlite_home_pvc(
         sqlx::query(statement).execute(&mut **transaction).await?;
     }
     sqlx::query("INSERT INTO schema_migrations (version, applied_at) VALUES (?1, ?2)")
-        .bind(schema::SCHEMA_VERSION)
+        .bind(26_i64)
         .bind(applied_at)
         .execute(&mut **transaction)
         .await?;
@@ -163,6 +173,50 @@ async fn upgrade_postgres_home_pvc(
     for statement in schema::HOME_PVC_MIGRATION {
         sqlx::query(statement).execute(&mut **transaction).await?;
     }
+    sqlx::query("INSERT INTO schema_migrations (version, applied_at) VALUES ($1, $2)")
+        .bind(26_i64)
+        .bind(applied_at)
+        .execute(&mut **transaction)
+        .await?;
+    Ok(())
+}
+
+async fn upgrade_sqlite_runtime_categories(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    applied_at: i64,
+) -> Result<(), StorageError> {
+    let create = schema::RUNTIME_INCIDENTS_TABLE.replacen(
+        "CREATE TABLE workspace_runtime_incidents",
+        "CREATE TABLE workspace_runtime_incidents_new",
+        1,
+    );
+    sqlx::query(&create).execute(&mut **transaction).await?;
+    for statement in [
+        "INSERT INTO workspace_runtime_incidents_new SELECT * FROM workspace_runtime_incidents",
+        "DROP TABLE workspace_runtime_incidents",
+        "ALTER TABLE workspace_runtime_incidents_new RENAME TO workspace_runtime_incidents",
+        "CREATE INDEX workspace_runtime_incidents_recent_idx ON workspace_runtime_incidents (installation_id, workspace_id, last_seen_at, observed_at)",
+    ] {
+        sqlx::query(statement).execute(&mut **transaction).await?;
+    }
+    sqlx::query("INSERT INTO schema_migrations (version, applied_at) VALUES (?1, ?2)")
+        .bind(schema::SCHEMA_VERSION)
+        .bind(applied_at)
+        .execute(&mut **transaction)
+        .await?;
+    Ok(())
+}
+
+async fn upgrade_postgres_runtime_categories(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    applied_at: i64,
+) -> Result<(), StorageError> {
+    sqlx::query("ALTER TABLE workspace_runtime_incidents DROP CONSTRAINT workspace_runtime_incidents_category_check")
+        .execute(&mut **transaction)
+        .await?;
+    sqlx::query("ALTER TABLE workspace_runtime_incidents ADD CONSTRAINT workspace_runtime_incidents_category_check CHECK (category IN ('ephemeral_storage', 'memory_pressure', 'pid_pressure', 'disk_pressure', 'evicted', 'temporary_storage_provisioning', 'temporary_storage_attachment', 'volume_unavailable', 'container_backoff', 'image_pull', 'scheduling', 'health_check', 'other'))")
+        .execute(&mut **transaction)
+        .await?;
     sqlx::query("INSERT INTO schema_migrations (version, applied_at) VALUES ($1, $2)")
         .bind(schema::SCHEMA_VERSION)
         .bind(applied_at)
@@ -189,123 +243,5 @@ fn unix_timestamp() -> Result<i64, StorageError> {
 }
 
 #[cfg(test)]
-mod current_tests {
-    use super::*;
-    use crate::config::InstallationId;
-
-    #[tokio::test]
-    async fn fresh_sqlite_bootstraps_current_schema_and_reaccepts_it() {
-        let database = Database::connect("sqlite::memory:", "schema-test".parse().unwrap())
-            .await
-            .unwrap();
-        database.migrate().await.unwrap();
-        assert_eq!(
-            database.schema_version().await.unwrap(),
-            schema::SCHEMA_VERSION
-        );
-        database.migrate().await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn unsupported_sqlite_versions_are_rejected_without_conversion() {
-        for version in [20, 21, 22, 23] {
-            let installation: InstallationId = "schema-test".parse().unwrap();
-            let database = Database::connect("sqlite::memory:", installation)
-                .await
-                .unwrap();
-            let Database::Sqlite { pool, .. } = &database else {
-                unreachable!()
-            };
-            sqlx::query(schema::MIGRATION_TABLE)
-                .execute(pool)
-                .await
-                .unwrap();
-            sqlx::query("INSERT INTO schema_migrations (version, applied_at) VALUES (?1, 1)")
-                .bind(version)
-                .execute(pool)
-                .await
-                .unwrap();
-            assert!(matches!(
-                database.migrate().await,
-                Err(StorageError::UnsupportedDatabaseVersion)
-            ));
-            assert_eq!(database.schema_version().await.unwrap(), version);
-        }
-    }
-
-    #[tokio::test]
-    async fn postgres_accepts_only_fresh_or_current_schema_when_configured() {
-        let Ok(url) = std::env::var("MWC_TEST_POSTGRES_URL") else {
-            eprintln!("skipping PostgreSQL migration test: MWC_TEST_POSTGRES_URL is not set");
-            return;
-        };
-        let admin = sqlx::postgres::PgPoolOptions::new()
-            .max_connections(1)
-            .connect(&url)
-            .await
-            .unwrap();
-        let fresh_schema = format!("mwc_schema_fresh_{}", uuid::Uuid::now_v7().simple());
-        let fresh = postgres_database(&url, &fresh_schema, None).await;
-        fresh.migrate().await.unwrap();
-        assert_eq!(
-            fresh.schema_version().await.unwrap(),
-            schema::SCHEMA_VERSION
-        );
-        fresh.migrate().await.unwrap();
-        drop(fresh);
-        for version in [20, 21, 22, 23] {
-            let name = format!("mwc_schema_old_{}", uuid::Uuid::now_v7().simple());
-            let database = postgres_database(&url, &name, Some(version)).await;
-            assert!(matches!(
-                database.migrate().await,
-                Err(StorageError::UnsupportedDatabaseVersion)
-            ));
-            assert_eq!(database.schema_version().await.unwrap(), version);
-            drop(database);
-            sqlx::query(&format!("DROP SCHEMA {name} CASCADE"))
-                .execute(&admin)
-                .await
-                .unwrap();
-        }
-        sqlx::query(&format!("DROP SCHEMA {fresh_schema} CASCADE"))
-            .execute(&admin)
-            .await
-            .unwrap();
-        admin.close().await;
-    }
-
-    async fn postgres_database(url: &str, schema_name: &str, version: Option<i64>) -> Database {
-        let admin = sqlx::postgres::PgPoolOptions::new()
-            .max_connections(1)
-            .connect(url)
-            .await
-            .unwrap();
-        sqlx::query(&format!("CREATE SCHEMA {schema_name}"))
-            .execute(&admin)
-            .await
-            .unwrap();
-        admin.close().await;
-        let mut scoped = url::Url::parse(url).unwrap();
-        scoped
-            .query_pairs_mut()
-            .append_pair("options", &format!("-c search_path={schema_name}"));
-        let database = Database::connect(scoped.as_str(), "schema-pg".parse().unwrap())
-            .await
-            .unwrap();
-        if let Some(version) = version {
-            let Database::Postgres { pool, .. } = &database else {
-                unreachable!()
-            };
-            sqlx::query(schema::MIGRATION_TABLE)
-                .execute(pool)
-                .await
-                .unwrap();
-            sqlx::query("INSERT INTO schema_migrations (version, applied_at) VALUES ($1, 1)")
-                .bind(version)
-                .execute(pool)
-                .await
-                .unwrap();
-        }
-        database
-    }
-}
+#[path = "migration_tests.rs"]
+mod current_tests;
