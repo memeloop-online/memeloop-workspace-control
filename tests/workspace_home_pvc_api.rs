@@ -676,7 +676,7 @@ async fn downgrade_binding_schema(database: &Database) {
         "ALTER TABLE workspaces DROP COLUMN home_pvc_name",
         "ALTER TABLE workspaces DROP COLUMN home_pvc_uid",
         "ALTER TABLE workspaces DROP COLUMN home_pvc_capacity_gib",
-        "DELETE FROM schema_migrations WHERE version = 26",
+        "DELETE FROM schema_migrations WHERE version >= 26",
         "INSERT INTO schema_migrations (version, applied_at) VALUES (25, 1)",
     ];
     for statement in statements {
@@ -697,7 +697,7 @@ async fn sqlite_v25_upgrade_preserves_workspace_and_does_not_bind_or_change_a_te
     downgrade_binding_schema(&fixture.database).await;
     fixture.database.migrate().await.unwrap();
     fixture.database.migrate().await.unwrap();
-    assert_eq!(fixture.database.schema_version().await.unwrap(), 26);
+    assert_eq!(fixture.database.schema_version().await.unwrap(), 27);
     let stored = fixture
         .database
         .get_workspace(fixture.workspace.id)
