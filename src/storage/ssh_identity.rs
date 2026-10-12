@@ -50,7 +50,15 @@ impl Database {
         }
         let mut private = PrivateKey::random(&mut OsRng, Algorithm::Ed25519)
             .map_err(|_| StorageError::InvalidSshIdentity)?;
-        private.set_comment(format!("mwc-workspace-{workspace_id}"));
+        let label = match self.get_workspace(workspace_id).await {
+            Ok(workspace) => crate::ssh_connection::alias(&workspace.name, &workspace.short_id),
+            Err(StorageError::WorkspaceNotFound) => crate::ssh_connection::alias(
+                "",
+                &crate::workspace_runtime::workspace_short_id_for(workspace_id),
+            ),
+            Err(error) => return Err(error),
+        };
+        private.set_comment(label);
         let private_key = private
             .to_openssh(LineEnding::LF)
             .map_err(|_| StorageError::InvalidSshIdentity)?;

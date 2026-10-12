@@ -156,6 +156,7 @@ fn warning_events(events: Vec<Event>) -> Vec<PodEvent> {
         .into_iter()
         .filter(|event| event.type_.as_deref() == Some("Warning"))
         .map(pod_event)
+        .filter(|event| event.category != RuntimeEventCategory::Other)
         .collect::<Vec<_>>();
     newest_events(&mut events, 50);
     events

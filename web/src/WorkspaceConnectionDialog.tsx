@@ -3,18 +3,21 @@ import { Button, Caption1, Dialog, DialogBody, DialogContent, DialogSurface, Dia
 import { CopyRegular, DismissRegular, PlugConnectedRegular } from "@fluentui/react-icons";
 import { useI18n } from "./i18n";
 import type { WorkspaceSshConnection } from "./types";
+import { knownHostsEntry } from "./workspaceStartup";
 import { useWorkspaceStyles } from "./workspaces/workspaceStyles";
 
 interface Props {
   connection: WorkspaceSshConnection;
+  /** @deprecated Retained for caller compatibility; the host key alias comes from the connection. */
   shortId: string;
   hostKey: { algorithm: string; public_key: string; fingerprint: string } | null;
 }
 
-export function WorkspaceConnectionDialog({ connection, shortId, hostKey }: Props) {
+export function WorkspaceConnectionDialog({ connection, hostKey }: Props) {
   const { t } = useI18n();
   const styles = useWorkspaceStyles();
   const [open, setOpen] = useState(false);
+  const knownHosts = hostKey ? knownHostsEntry(connection, hostKey.public_key) : null;
 
   function openDialog() {
     setOpen(true);
@@ -39,8 +42,12 @@ export function WorkspaceConnectionDialog({ connection, shortId, hostKey }: Prop
             {hostKey && <section className={styles.dialogSection}>
               <Title3>{t("sshHostKey")}</Title3>
               <Caption1>{t("sshHostKeyHelp")}</Caption1>
+              <dl className={styles.dialogFacts}>
+                <Fact label={t("sshHostKeyAlias")} value={connection.host_key_alias ?? connection.alias} code styles={styles} />
+                <Fact label={t("sshHostKeyFingerprint")} value={hostKey.fingerprint} code styles={styles} />
+              </dl>
               <CopyBlock label={t("copyHostKey")} value={hostKey.public_key} />
-              <CopyBlock label={t("copyKnownHostsEntry")} value={knownHostsEntry(shortId, hostKey)} multiline />
+              {knownHosts && <CopyBlock label={t("copyKnownHostsEntry")} value={knownHosts} multiline />}
             </section>}
             <section className={styles.dialogSection}>
               <Title3>{t("sshConfig")}</Title3>
@@ -56,10 +63,6 @@ export function WorkspaceConnectionDialog({ connection, shortId, hostKey }: Prop
       </DialogSurface>
     </Dialog>
   </>;
-}
-
-function knownHostsEntry(shortId: string, hostKey: { public_key: string }): string {
-  return `workspace-${shortId} ${hostKey.public_key}`;
 }
 
 function CopyBlock({ label, value, multiline = false }: { label: string; value: string; multiline?: boolean }) {

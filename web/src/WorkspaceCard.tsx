@@ -3,7 +3,7 @@ import { Badge, Button, Caption1, Divider, Spinner, Text, Title3, Tooltip } from
 import { ArrowClockwiseRegular, ChevronDownRegular, ChevronUpRegular, DeleteRegular, DesktopRegular, LocationRegular, PlayRegular, StopRegular, WindowConsoleRegular } from "@fluentui/react-icons";
 import { useI18n } from "./i18n";
 import type { Locale, MessageKey } from "./i18n";
-import type { AvailableNodePool, WorkspaceResponse, WorkspaceRuntime, WorkspaceRuntimeEvent } from "./types";
+import type { AvailableNodePool, WorkspaceResponse, WorkspaceRuntime, WorkspaceRuntimeEvent, WorkspaceRuntimePod } from "./types";
 import { WorkspaceConnectionDialog } from "./WorkspaceConnectionDialog";
 import { WorkspacePortMappings } from "./WorkspacePortMappings";
 import type { ApiClient } from "./api";
@@ -14,6 +14,7 @@ import { ResourceMeter, WorkspaceStatusCard } from "./shared";
 import { aggregateRuntimeUsage, formatCpuMillis, formatMemoryMiB, parseCpuMillis, parseMemoryMiB, usagePercent } from "./workspaceMetrics";
 import { StorageMeter } from "./workspaces/StorageMeter";
 import { useWorkspaceStyles } from "./workspaces/workspaceStyles";
+import { containerNameLabelKey, containerStateLabelKey, formatDurationSeconds, startupStageLabelKey } from "./workspaceStartup";
 
 type WorkspaceAction = "start" | "stop" | "restart" | "delete";
 type DetailView = "status" | "events";
@@ -144,7 +145,61 @@ function RuntimeStatus({ id, runtime }: { id: string; runtime: WorkspaceRuntime 
 function EventLog({ id, runtime, locale }: { id: string; runtime: WorkspaceRuntime; locale: Locale }) {
   const { t } = useI18n();
   const styles = useWorkspaceStyles();
-  return <section id={id} className={styles.statusPanel} aria-label={t("eventLog")}><Title3 as="h3">{t("eventLog")}</Title3>{runtime.events.length === 0 && <Text>{t("noEvents")}</Text>}<div className={styles.eventList}>{runtime.events.slice(0, 12).map((event, index) => <article className={styles.event} key={`${event.observed_at}-${event.category}-${index}`}><Text weight="semibold">{t(eventCategoryKeys[event.category].label)}</Text><Text>{t(eventCategoryKeys[event.category].description)}</Text><Caption1 className={styles.eventMeta}>{t("observedAt")} {formatTimestamp(event.observed_at, locale)} · {t("eventCount")} {event.count ?? 1}</Caption1></article>)}</div></section>;
+  const startupPods = runtime.pods.filter((pod) => pod.startup || (pod.containers && pod.containers.length > 0));
+  return <section id={id} className={styles.statusPanel} aria-label={t("eventLog")}>
+    <Title3 as="h3">{t("eventLog")}</Title3>
+    {startupPods.map((pod) => <StartupSummary key={pod.name} pod={pod} />)}
+    {runtime.events.length === 0 && <Text>{t("noEvents")}</Text>}
+    <div className={styles.eventList}>{runtime.events.slice(0, 12).map((event, index) => <EventEntry key={`${event.observed_at}-${event.category}-${index}`} event={event} locale={locale} />)}</div>
+  </section>;
+}
+
+function EventEntry({ event, locale }: { event: WorkspaceRuntimeEvent; locale: Locale }) {
+  const { t } = useI18n();
+  const styles = useWorkspaceStyles();
+  const keys = eventCategoryKeys[event.category] ?? eventCategoryKeys.other;
+  const showLast = event.last_observed_at && event.last_observed_at !== event.observed_at;
+  return <article className={styles.event}>
+    <Text weight="semibold">{t(keys.label)}</Text>
+    <Text>{t(keys.description)}</Text>
+    <Caption1 className={styles.eventMeta}>
+      {t("observedAt")} {formatTimestamp(event.observed_at, locale)}
+      {showLast && <> · {t("eventLastObserved")} {formatTimestamp(event.last_observed_at ?? null, locale)}</>}
+      {" · "}{t("eventCount")} {event.count ?? 1}
+      {event.component && <> · {t("eventComponent")} <span className={styles.code}>{event.component}</span></>}
+      {event.reason && <> · {t("eventReason")} <span className={styles.code}>{event.reason}</span></>}
+    </Caption1>
+  </article>;
+}
+
+function StartupSummary({ pod }: { pod: WorkspaceRuntimePod }) {
+  const { t } = useI18n();
+  const styles = useWorkspaceStyles();
+  const startup = pod.startup;
+  const containers = pod.containers ?? [];
+  return <section className={styles.event} aria-label={`${t("startupTiming")} ${pod.name}`}>
+    <div className={styles.panelHeading}>
+      <Text weight="semibold">{t("startupTiming")} <span className={styles.code}>{pod.name}</span></Text>
+      {startup?.total_seconds != null && <Badge appearance="tint" color="informative">{t("startupReadyIn")} {formatDurationSeconds(startup.total_seconds)}</Badge>}
+    </div>
+    {startup && startup.stages.length > 0 && <div className={styles.podGrid}>{startup.stages.map((stage, index) => {
+      const labelKey = startupStageLabelKey(stage.name) ?? containerNameLabelKey(stage.name);
+      return <div className={styles.podRow} key={`${stage.name}-${index}`}>
+        <Text>{labelKey ? t(labelKey) : stage.name}</Text>
+        <Caption1>{formatDurationSeconds(stage.duration_seconds)}</Caption1>
+      </div>;
+    })}</div>}
+    {containers.length > 0 && <div className={styles.podGrid}>{containers.map((container) => {
+      const nameKey = containerNameLabelKey(container.name);
+      const stateKey = containerStateLabelKey(container.state);
+      return <div className={styles.podRow} key={container.name}>
+        <Text>{nameKey ? t(nameKey) : <span className={styles.code}>{container.name}</span>}</Text>
+        <Text>{stateKey ? t(stateKey) : container.state}</Text>
+        <Badge appearance="tint" color={container.ready ? "success" : "danger"}>{container.ready ? t("ready") : t("notReady")}</Badge>
+        <Caption1>{container.restarts} {t("restarts")}{container.reason ? ` · ${container.reason}` : ""}{container.exit_code != null ? ` · ${t("exitCode")} ${container.exit_code}` : ""}</Caption1>
+      </div>;
+    })}</div>}
+  </section>;
 }
 
 const eventCategoryKeys: Record<WorkspaceRuntimeEvent["category"], { label: MessageKey; description: MessageKey }> = {
@@ -156,6 +211,10 @@ const eventCategoryKeys: Record<WorkspaceRuntimeEvent["category"], { label: Mess
   ephemeral_storage: { label: "eventCategoryEphemeralStorage", description: "eventCategoryEphemeralStorageDescription" },
   memory_pressure: { label: "eventCategoryMemoryPressure", description: "eventCategoryMemoryPressureDescription" },
   pid_pressure: { label: "eventCategoryPidPressure", description: "eventCategoryPidPressureDescription" },
+  container_backoff: { label: "eventCategoryContainerBackoff", description: "eventCategoryContainerBackoffDescription" },
+  image_pull: { label: "eventCategoryImagePull", description: "eventCategoryImagePullDescription" },
+  scheduling: { label: "eventCategoryScheduling", description: "eventCategorySchedulingDescription" },
+  health_check: { label: "eventCategoryHealthCheck", description: "eventCategoryHealthCheckDescription" },
   other: { label: "eventCategoryOther", description: "eventCategoryOtherDescription" },
 };
 

@@ -1407,7 +1407,7 @@ fn node_template_reuses_the_existing_image_with_platform_bootstrap() {
             .as_slice()
         )
     );
-    assert_eq!(readiness.period_seconds, Some(10));
+    assert_eq!(readiness.period_seconds, Some(2));
     assert!(dev.volume_mounts.as_ref().unwrap().iter().any(|mount| {
         mount.name == names.resources.data_claim_template && mount.mount_path == "/home/user"
     }));

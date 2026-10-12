@@ -7,9 +7,11 @@ container="${container}-proxy"
 ln -s server.crt "${tmp_dir}/tls.crt"
 ln -s server.key "${tmp_dir}/tls.key"
 ln -s client-ca.crt "${tmp_dir}/ca.crt"
-mkdir "${tmp_dir}/routes"
+mkdir -p "${tmp_dir}/routes/revision-1"
 mapping_host='p-00000000000000000000000000000000.ports.example.invalid'
-printf '%s\n' 'localhost 3000;' "\"${mapping_host}\" 3000;" > "${tmp_dir}/routes/ports.conf"
+printf '%s\n' 'localhost 3000;' "\"${mapping_host}\" 3000;" > "${tmp_dir}/routes/revision-1/ports.conf"
+ln -s revision-1 "${tmp_dir}/routes/..data"
+ln -s ..data/ports.conf "${tmp_dir}/routes/ports.conf"
 printf '%s\n' \
     'pid /tmp/mwc-origin.pid;' \
     'events {}' \
@@ -22,7 +24,7 @@ docker run --detach --rm --name "${container}" --publish 127.0.0.1::8443 \
     --volume "${tmp_dir}:/etc/mwc-ttyd-tls:ro" \
     --volume "${tmp_dir}/routes:/etc/mwc-http-routes:ro" \
     --entrypoint /bin/sh "${image}" -ec \
-    'nginx -c /fixtures/origin.conf; exec nginx -c /etc/mwc-http-proxy.conf -g "daemon off;"' \
+    'nginx -c /fixtures/origin.conf; exec /usr/local/bin/mwc-ttyd-start --port 7681 sh' \
     >/dev/null
 
 port=''
@@ -72,3 +74,38 @@ for address in localhost 127.0.0.1; do
         || fail 'proxy did not recover after negative checks'
 done
 printf '%s\n' 'HTTP proxy mTLS and route allowlist image test passed'
+
+# Exercise the production supervisor repeatedly: the old initial HUP killed
+# nginx before its handlers were installed, and cleanup then killed ttyd.
+for _ in $(seq 1 5); do
+    docker restart "${container}" >/dev/null
+    sleep 3
+    port="$(docker port "${container}" 8443/tcp | sed -n 's/.*:\([0-9][0-9]*\)$/\1/p')"
+    [[ "$(docker inspect -f '{{.State.Running}}' "${container}")" == true ]] \
+        || fail 'Web Shell supervisor exited during cold startup'
+    [[ "$(proxy_request localhost trusted localhost)" == 200 ]] \
+        || fail 'HTTP proxy failed after supervisor startup'
+done
+
+mkdir "${tmp_dir}/routes/revision-2"
+printf '%s\n' 'localhost 3000;' > "${tmp_dir}/routes/revision-2/ports.conf"
+ln -s revision-2 "${tmp_dir}/routes/..data-new"
+mv -Tf "${tmp_dir}/routes/..data-new" "${tmp_dir}/routes/..data"
+# nginx briefly drains the old worker generation during a graceful reload.
+# Require stable revocation across new connections, rather than one lucky response.
+revoked=0
+for _ in $(seq 1 15); do
+    if [[ "$(proxy_request localhost trusted "${mapping_host}")" == 404 ]]; then
+        revoked=$((revoked + 1))
+    else
+        revoked=0
+    fi
+    [[ "${revoked}" -ge 3 ]] && break
+    sleep 1
+done
+[[ "${revoked}" -ge 3 ]] || fail 'route revocation did not stabilize' 
+[[ "$(proxy_request localhost trusted "${mapping_host}")" == 404 ]] \
+    || fail 'supervisor kept a revoked HTTP route'
+[[ "$(proxy_request localhost trusted localhost)" == 200 ]] \
+    || fail 'route reload interrupted the retained upstream'
+printf '%s\n' 'Web Shell supervisor startup and projected route reload test passed'

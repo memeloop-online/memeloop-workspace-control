@@ -67,7 +67,7 @@ pub(super) async fn workspace_response(
         })
         .flatten();
     let injection_sources = injection_sources(state, &workspace).await?;
-    let workspace_host_key = if connectable {
+    let mut workspace_host_key = if connectable {
         state
             .database
             .workspace_ssh_public_identity(workspace.id)
@@ -75,16 +75,22 @@ pub(super) async fn workspace_response(
     } else {
         None
     };
+    normalize_host_key(&workspace, workspace_host_key.as_mut())?;
     let jump_host_key = (connectable && workspace.template.access_mode == AccessMode::Public)
         .then(|| state.jump_host_public_key.clone())
         .flatten();
-    let ssh_connection = structured_ssh_connection(
+    let mut ssh_connection = structured_ssh_connection(
         &workspace,
         internal_endpoint.as_ref(),
         ssh_command.as_ref(),
         ssh_config.as_ref(),
         connectable,
     );
+    if let Some(connection) = ssh_connection.as_mut() {
+        connection.known_hosts_entry = workspace_host_key
+            .as_ref()
+            .map(|key| format!("{} {}", connection.host_key_alias, key.public_key));
+    }
     let desktop = if let Some(endpoint) = workspace.template.desktop.as_ref() {
         let mappings = state.database.list_port_mappings(workspace.id).await?;
         if let Some(mapping) = mappings
@@ -133,6 +139,18 @@ pub(super) async fn workspace_response(
         jump_host_key,
         desktop,
     })
+}
+
+fn normalize_host_key(
+    workspace: &Workspace,
+    key: Option<&mut crate::storage::WorkspaceSshPublicIdentity>,
+) -> Result<(), ApiError> {
+    if let Some(key) = key {
+        let alias = crate::ssh_connection::alias(&workspace.name, &workspace.short_id);
+        key.public_key = crate::ssh_connection::public_key_with_comment(&key.public_key, &alias)
+            .ok_or(ApiError::BadRequest("workspace host key is invalid"))?;
+    }
+    Ok(())
 }
 
 fn desktop_mapping_is_connectable(workspace_connectable: bool, mapping_status: &str) -> bool {
@@ -203,41 +221,28 @@ fn ssh_commands(
     };
     let user = workspace.template.workspace_user.as_str();
     let short = workspace.short_id.as_str();
-    let alias = ssh_config_alias(&workspace.name, short);
+    let alias = crate::ssh_connection::alias(&workspace.name, short);
     match (workspace.template.access_mode, public_host) {
         (AccessMode::Public, Some(jump_host)) => {
             let jump_login = format!("access+{short}@{jump_host}");
             (
-                Some(format!("ssh -J {jump_login} -p {port} {user}@{host}")),
                 Some(format!(
-                    "Host {alias}\n  HostName {host}\n  Port {port}\n  User {user}\n  ProxyJump {jump_login}\n  HostKeyAlias workspace-{short}\n"
+                    "ssh -o HostKeyAlias={alias} -J {jump_login} -p {port} {user}@{host}"
+                )),
+                Some(format!(
+                    "Host {alias}\n  HostName {host}\n  Port {port}\n  User {user}\n  ProxyJump {jump_login}\n  HostKeyAlias {alias}\n"
                 )),
             )
         }
         (AccessMode::Internal, _) => (
-            Some(format!("ssh -p {port} {user}@{host}")),
             Some(format!(
-                "Host {alias}\n  HostName {host}\n  Port {port}\n  User {user}\n  HostKeyAlias workspace-{short}\n"
+                "ssh -o HostKeyAlias={alias} -p {port} {user}@{host}"
+            )),
+            Some(format!(
+                "Host {alias}\n  HostName {host}\n  Port {port}\n  User {user}\n  HostKeyAlias {alias}\n"
             )),
         ),
         (AccessMode::Public, None) => (None, None),
-    }
-}
-
-fn ssh_config_alias(name: &str, short_id: &str) -> String {
-    let mut slug = String::new();
-    for character in name.chars().take(48) {
-        if character.is_alphanumeric() || character == '-' || character == '_' {
-            slug.push(character);
-        } else if !slug.ends_with('-') {
-            slug.push('-');
-        }
-    }
-    let slug = slug.trim_matches('-');
-    if slug.is_empty() {
-        format!("mwc-{short_id}")
-    } else {
-        format!("mwc-{slug}-{short_id}")
     }
 }
 
@@ -255,10 +260,12 @@ fn structured_ssh_connection(
     if !connectable {
         return None;
     }
-    let alias = ssh_config_alias(&workspace.name, &workspace.short_id);
+    let alias = crate::ssh_connection::alias(&workspace.name, &workspace.short_id);
     Some(WorkspaceSshConnection {
         display_name: workspace.name.clone(),
         alias: alias.clone(),
+        host_key_alias: alias.clone(),
+        known_hosts_entry: None,
         hostname: hostname.clone(),
         port: *port,
         user: workspace.template.workspace_user.clone(),
@@ -325,18 +332,21 @@ mod tests {
     #[test]
     fn ssh_alias_includes_safe_workspace_name_and_stable_short_id() {
         assert_eq!(
-            ssh_config_alias("tidgi-app-dev", "a53b69fc"),
+            crate::ssh_connection::alias("tidgi-app-dev", "a53b69fc"),
             "mwc-tidgi-app-dev-a53b69fc"
         );
         assert_eq!(
-            ssh_config_alias("知识库 项目", "a53b69fc"),
+            crate::ssh_connection::alias("知识库 项目", "a53b69fc"),
             "mwc-知识库-项目-a53b69fc"
         );
         assert_eq!(
-            ssh_config_alias("bad\nHost *\nProxyCommand evil", "a53b69fc"),
+            crate::ssh_connection::alias("bad\nHost *\nProxyCommand evil", "a53b69fc"),
             "mwc-bad-Host-ProxyCommand-evil-a53b69fc"
         );
-        assert_eq!(ssh_config_alias("  /  ", "a53b69fc"), "mwc-a53b69fc");
+        assert_eq!(
+            crate::ssh_connection::alias("  /  ", "a53b69fc"),
+            "mwc-a53b69fc"
+        );
     }
 
     #[test]
