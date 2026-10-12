@@ -80,6 +80,7 @@ printf '%s\n' 'HTTP proxy mTLS and route allowlist image test passed'
 for _ in $(seq 1 5); do
     docker restart "${container}" >/dev/null
     sleep 3
+    port="$(docker port "${container}" 8443/tcp | sed -n 's/.*:\([0-9][0-9]*\)$/\1/p')"
     [[ "$(docker inspect -f '{{.State.Running}}' "${container}")" == true ]] \
         || fail 'Web Shell supervisor exited during cold startup'
     [[ "$(proxy_request localhost trusted localhost)" == 200 ]] \
