@@ -91,10 +91,19 @@ mkdir "${tmp_dir}/routes/revision-2"
 printf '%s\n' 'localhost 3000;' > "${tmp_dir}/routes/revision-2/ports.conf"
 ln -s revision-2 "${tmp_dir}/routes/..data-new"
 mv -Tf "${tmp_dir}/routes/..data-new" "${tmp_dir}/routes/..data"
-for _ in $(seq 1 10); do
-    [[ "$(proxy_request localhost trusted "${mapping_host}")" == 404 ]] && break
+# nginx briefly drains the old worker generation during a graceful reload.
+# Require stable revocation across new connections, rather than one lucky response.
+revoked=0
+for _ in $(seq 1 15); do
+    if [[ "$(proxy_request localhost trusted "${mapping_host}")" == 404 ]]; then
+        revoked=$((revoked + 1))
+    else
+        revoked=0
+    fi
+    [[ "${revoked}" -ge 3 ]] && break
     sleep 1
 done
+[[ "${revoked}" -ge 3 ]] || fail 'route revocation did not stabilize' 
 [[ "$(proxy_request localhost trusted "${mapping_host}")" == 404 ]] \
     || fail 'supervisor kept a revoked HTTP route'
 [[ "$(proxy_request localhost trusted localhost)" == 200 ]] \
