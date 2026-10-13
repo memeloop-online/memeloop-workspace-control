@@ -50,7 +50,7 @@ impl WorkspaceReconcileHandler {
                 "storage migration phase exceeded its 24-hour deadline",
             ))
         } else {
-            self.advance_storage_shrink(&workspace, &mut operation, now)
+            self.advance_storage_shrink(&workspace, &mut operation, job, now)
                 .await
         };
         match result {
@@ -95,6 +95,7 @@ impl WorkspaceReconcileHandler {
         &self,
         workspace: &Workspace,
         operation: &mut StorageShrinkOperation,
+        job: &ClaimedJob,
         now: i64,
     ) -> Result<(), JobHandlerError> {
         use StorageShrinkPhase as Phase;
@@ -292,11 +293,11 @@ impl WorkspaceReconcileHandler {
                         return pending("starting workspace with verified replacement volumes");
                     }
                     if workspace.state != WorkspaceState::Ready {
-                        self.reconcile_workspace(workspace).await?;
+                        self.reconcile_workspace(workspace, job).await?;
                         return pending("waiting for workspace recovery readiness");
                     }
                 } else {
-                    self.reconcile_workspace(workspace).await?;
+                    self.reconcile_workspace(workspace, job).await?;
                 }
                 operation.phase = Phase::Completed;
                 operation.reclaimable = true;
