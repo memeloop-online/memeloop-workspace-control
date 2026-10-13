@@ -28,6 +28,10 @@ spec:
         {{- include "mwc.labels" . | nindent 8 }}
     spec:
       serviceAccountName: {{ include "mwc.name" . }}
+      {{- with .Values.controlPlane.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       securityContext:
         runAsNonRoot: true
         seccompProfile:
@@ -138,6 +142,14 @@ spec:
             {{- if .Values.workspace.scratchStorageClassName }}
             - name: MWC_SCRATCH_STORAGE_CLASS_NAME
               value: {{ .Values.workspace.scratchStorageClassName | quote }}
+            {{- end }}
+            {{- if .Values.workspace.storageShrink.helperImage }}
+            - name: MWC_STORAGE_SHRINK_IMAGE
+              value: {{ .Values.workspace.storageShrink.helperImage | quote }}
+            - name: MWC_STORAGE_SHRINK_XATTR_POLICY
+              value: {{ .Values.workspace.storageShrink.xattrPolicy | quote }}
+            - name: MWC_LONGHORN_NAMESPACE
+              value: {{ .Values.workspace.storageShrink.longhornNamespace | quote }}
             {{- end }}
             - name: MWC_ENCRYPTION_KEY
               valueFrom:

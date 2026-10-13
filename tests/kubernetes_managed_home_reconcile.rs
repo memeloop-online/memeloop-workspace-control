@@ -240,6 +240,7 @@ fn workspace() -> Workspace {
         name: "managed-home".to_owned(),
         template_id: Some(Uuid::now_v7()),
         home_volume_binding: None,
+        scratch_volume_binding: None,
         node_pool: "default".to_owned(),
         template: WorkspaceTemplateSpec::standard(
             "example/workspace:1",

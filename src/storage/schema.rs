@@ -1,4 +1,10 @@
-pub(super) const SCHEMA_VERSION: i64 = 27;
+pub(super) const SCHEMA_VERSION: i64 = 28;
+
+pub(super) const STORAGE_SHRINK_MIGRATION: &[&str] = &[
+    "ALTER TABLE workspaces ADD COLUMN scratch_volume_binding_json TEXT",
+    "CREATE TABLE workspace_storage_shrinks (id TEXT PRIMARY KEY, installation_id TEXT NOT NULL, workspace_id TEXT NOT NULL, operation_json TEXT NOT NULL, active BIGINT NOT NULL CHECK (active IN (0, 1)), created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE)",
+    "CREATE UNIQUE INDEX workspace_storage_shrinks_active_idx ON workspace_storage_shrinks (installation_id, workspace_id) WHERE active = 1",
+];
 
 pub(super) const HOME_PVC_MIGRATION: &[&str] = &[
     "ALTER TABLE workspaces ADD COLUMN home_pvc_namespace TEXT",

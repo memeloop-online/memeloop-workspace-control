@@ -224,6 +224,10 @@ async fn apply_sqlite(
     actor: Uuid,
     now: i64,
 ) -> Result<(), StorageError> {
+    if matches!(transition, StoredTransition::Action(_)) {
+        super::workspace_storage_shrink::guard_sqlite(connection, installation_id, workspace.id)
+            .await?;
+    }
     let prior_state = workspace.state;
     workspace.state = transition.next_state(prior_state)?;
     if transition.enqueues_reconcile() {
@@ -263,6 +267,10 @@ async fn apply_postgres(
     actor: Uuid,
     now: i64,
 ) -> Result<(), StorageError> {
+    if matches!(transition, StoredTransition::Action(_)) {
+        super::workspace_storage_shrink::guard_postgres(connection, installation_id, workspace.id)
+            .await?;
+    }
     let prior_state = workspace.state;
     workspace.state = transition.next_state(prior_state)?;
     if transition.enqueues_reconcile() {

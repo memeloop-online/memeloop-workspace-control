@@ -255,6 +255,7 @@ fn workspace_volumes(
             ..Volume::default()
         },
         scratch_volume(
+            workspace.scratch_volume_binding.as_ref(),
             policy.temporary_storage_gib,
             scratch_storage_class_name,
             stable_labels,
@@ -288,10 +289,21 @@ fn workspace_volumes(
 }
 
 fn scratch_volume(
+    binding: Option<&crate::workspaces::WorkspaceHomeVolumeBinding>,
     size_gib: u64,
     storage_class_name: Option<&str>,
     stable_labels: &BTreeMap<String, String>,
 ) -> Volume {
+    if let Some(binding) = binding {
+        return Volume {
+            name: "workspace-scratch".to_owned(),
+            persistent_volume_claim: Some(PersistentVolumeClaimVolumeSource {
+                claim_name: binding.claim_name.clone(),
+                read_only: Some(false),
+            }),
+            ..Volume::default()
+        };
+    }
     // An unset platform class deliberately preserves bounded node-local disk compatibility.
     if storage_class_name.is_none() {
         return Volume {

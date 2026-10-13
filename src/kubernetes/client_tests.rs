@@ -200,6 +200,7 @@ mod coordinator_tests {
             name: "test".to_owned(),
             template_id: None,
             home_volume_binding: None,
+            scratch_volume_binding: None,
             node_pool: "default".to_owned(),
             runtime: WorkspaceRuntimeIdentity,
             template: WorkspaceTemplateSpec::standard(
@@ -233,7 +234,7 @@ mod coordinator_tests {
     }
 
     #[tokio::test]
-    async fn bound_home_is_retained_even_when_its_name_matches_the_legacy_generated_claim() {
+    async fn bound_home_is_retained_even_when_its_name_matches_the_existing_generated_claim() {
         let mut workspace = workspace(workspace_id());
         bind_home(&mut workspace, "workspace-data-w-8000000000000001-0");
         let mock = Arc::new(WorkspaceDeleteMock::new("public-a", workspace.id));

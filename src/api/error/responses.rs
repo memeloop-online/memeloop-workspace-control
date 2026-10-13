@@ -203,6 +203,21 @@ fn workspace_storage_response(error: &StorageError) -> Option<ErrorResponse> {
             "invalid_workspace_temporary_storage",
             "temporary storage must be between 1 and 2048 GiB",
         ),
+        StorageError::WorkspaceStorageShrinkConflict => response(
+            StatusCode::CONFLICT,
+            "workspace_storage_shrink_conflict",
+            "workspace storage migration is active or the workspace generation/state has changed",
+        ),
+        StorageError::WorkspaceStorageShrinkUnavailable => response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "workspace_storage_shrink_unavailable",
+            "an administrator must configure MWC_STORAGE_SHRINK_IMAGE with a reviewed sha256 digest and MWC_STORAGE_SHRINK_XATTR_POLICY=posix-user",
+        ),
+        StorageError::InvalidWorkspaceStorageShrink => response(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "invalid_workspace_storage_shrink",
+            "provide a positive storage target smaller than current capacity and larger than offline usage",
+        ),
         StorageError::WorkspaceTemporaryStorageUpdateConflict => response(
             StatusCode::CONFLICT,
             "workspace_temporary_storage_update_conflict",

@@ -36,6 +36,7 @@ const WORKSPACE_COLUMNS: &[&str] = &[
     "home_pvc_namespace",
     "home_pvc_uid",
     "home_pvc_capacity_gib",
+    "scratch_volume_binding_json",
 ];
 
 pub(super) fn validate(

@@ -7,7 +7,7 @@ use super::{
     ErrorBody, ErrorEnvelope, admin, auth, catalog, events, injections, node_pools,
     organization_usage, organizations, plugins, port_mappings, runtime, ssh, system, user_quota,
     web_shell, webhooks, workspace_home_capacity, workspace_home_pvc, workspace_image_update,
-    workspace_placement, workspace_scratch_resize, workspaces,
+    workspace_placement, workspace_scratch_resize, workspace_storage_shrink, workspaces,
 };
 
 #[derive(OpenApi)]
@@ -75,6 +75,9 @@ use super::{
         workspace_home_pvc::update,
         workspace_home_capacity::update,
         workspace_scratch_resize::update,
+        workspace_storage_shrink::create,
+        workspace_storage_shrink::get,
+        workspace_storage_shrink::confirm,
         workspace_placement::update,
         port_mappings::list,
         port_mappings::create,
@@ -93,6 +96,12 @@ use super::{
         InstallationId,
         DatabaseMode,
         crate::storage::Principal,
+        crate::storage::StorageShrinkRequest,
+        crate::storage::StorageShrinkOperation,
+        crate::storage::StorageShrinkPhase,
+        crate::storage::StorageShrinkVolume,
+        crate::storage::StorageVolumeIdentity,
+        workspace_storage_shrink::ConfirmStorageShrinkRequest,
         crate::storage::Organization,
         crate::storage::OrganizationPage,
         crate::storage::UserSummary,

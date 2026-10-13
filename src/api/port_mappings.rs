@@ -469,6 +469,7 @@ mod tests {
             node_pool: "default".to_owned(),
             runtime: crate::workspace_runtime::WorkspaceRuntimeIdentity,
             home_volume_binding: None,
+            scratch_volume_binding: None,
             template,
             state: crate::workspaces::WorkspaceState::Ready,
             generation: 1,

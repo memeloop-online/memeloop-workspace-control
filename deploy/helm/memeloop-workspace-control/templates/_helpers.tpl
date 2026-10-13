@@ -61,6 +61,15 @@ app.kubernetes.io/instance: {{ include "mwc.name" . }}
 {{- if and .Values.workspace.scratchStorageClassName (or (gt (len .Values.workspace.scratchStorageClassName) 253) (not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$" .Values.workspace.scratchStorageClassName))) -}}
 {{- fail "workspace.scratchStorageClassName must be a lower-case DNS subdomain of at most 253 characters" -}}
 {{- end -}}
+{{- if and .Values.workspace.storageShrink.helperImage (not (regexMatch "^[^@[:space:]]+@sha256:[0-9a-f]{64}$" .Values.workspace.storageShrink.helperImage)) -}}
+{{- fail "workspace.storageShrink.helperImage must be an administrator-reviewed image pinned by sha256 digest" -}}
+{{- end -}}
+{{- if and .Values.workspace.storageShrink.helperImage (ne .Values.workspace.storageShrink.xattrPolicy "posix-user") -}}
+{{- fail "workspace.storageShrink.xattrPolicy must explicitly be posix-user when shrink is enabled" -}}
+{{- end -}}
+{{- if and .Values.workspace.storageShrink.helperImage (or (gt (len .Values.workspace.storageShrink.longhornNamespace) 63) (not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" .Values.workspace.storageShrink.longhornNamespace))) -}}
+{{- fail "workspace.storageShrink.longhornNamespace must be a Kubernetes namespace name" -}}
+{{- end -}}
 {{- if and (eq .Values.mode "postgresql") .Values.autoscaling.enabled -}}
 {{- $cpuRequest := dig "requests" "cpu" "" .Values.resources -}}
 {{- $memoryRequest := dig "requests" "memory" "" .Values.resources -}}

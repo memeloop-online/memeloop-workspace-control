@@ -97,7 +97,7 @@ impl ControlPlaneJobHandler {
 impl JobHandler for ControlPlaneJobHandler {
     async fn handle(&self, job: &ClaimedJob) -> Result<(), JobHandlerError> {
         match job.kind.as_str() {
-            "reconcile_workspace" => {
+            "reconcile_workspace" | "workspace_storage_shrink" => {
                 self.workspace
                     .as_ref()
                     .ok_or_else(|| {
@@ -115,8 +115,10 @@ impl JobHandler for ControlPlaneJobHandler {
     }
 
     async fn on_terminal_failure(&self, job: &ClaimedJob, now: i64) -> Result<(), StorageError> {
-        if job.kind == "reconcile_workspace"
-            && let Some(workspace) = self.workspace.as_ref()
+        if matches!(
+            job.kind.as_str(),
+            "reconcile_workspace" | "workspace_storage_shrink"
+        ) && let Some(workspace) = self.workspace.as_ref()
         {
             workspace.on_terminal_failure(job, now).await?;
         }

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { canManageOrganization, canManageOtherUserApiKeys, canManageSystem } from "./permissions.ts";
+import { canManageOrganization, canManageOtherUserApiKeys, canManageSystem, canShrinkWorkspaceStorage } from "./permissions.ts";
 import type { Principal } from "./types.ts";
 
 const principal: Principal = {
@@ -36,4 +36,18 @@ test("other-user API-key configuration requires an unrestricted system administr
   assert.equal(canManageOtherUserApiKeys({ ...administrator, api_key_scopes: ["manage_api_keys"] }), false);
   assert.equal(canManageOtherUserApiKeys({ ...administrator, api_key_scopes: ["manage_system"] }), false);
   assert.equal(canManageOtherUserApiKeys({ ...administrator, allowed_template_ids: [] }), false);
+});
+
+test("storage shrink follows the workspace management policy, not system-admin only", () => {
+  const workspace = { owner_id: "user-1", organization_id: "org-1" };
+  const owner: Principal = { ...principal, system_admin: false, api_key_scopes: ["change_workspace_state"] };
+  assert.equal(canShrinkWorkspaceStorage(owner, workspace), true);
+  const organizationAdmin: Principal = { ...owner, user_id: "user-2", memberships: [{ organization_id: "org-1", role: "organization_admin" }] };
+  assert.equal(canShrinkWorkspaceStorage(organizationAdmin, workspace), true);
+  const systemAdmin: Principal = { ...owner, user_id: "user-3", system_admin: true };
+  assert.equal(canShrinkWorkspaceStorage(systemAdmin, workspace), true);
+  const otherMember: Principal = { ...owner, user_id: "user-4", memberships: [{ organization_id: "org-1", role: "member" }] };
+  assert.equal(canShrinkWorkspaceStorage(otherMember, workspace), false);
+  const ownerWithoutScope: Principal = { ...owner, api_key_scopes: [] };
+  assert.equal(canShrinkWorkspaceStorage(ownerWithoutScope, workspace), false);
 });

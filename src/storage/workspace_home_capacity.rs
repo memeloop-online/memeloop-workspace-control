@@ -104,6 +104,8 @@ async fn update_sqlite(
     snapshot_yaml: &str,
     update: HomeCapacityCorrection<'_>,
 ) -> Result<(), StorageError> {
+    super::workspace_storage_shrink::guard_sqlite(connection, installation_id, workspace.id)
+        .await?;
     ensure_stopped_at_generation(workspace, update.expected_generation)?;
     let previous_storage_gib = workspace.template.resources.disk_gib;
     let snapshot_yaml = apply_resize(workspace, snapshot_yaml, update.disk_gib, update.now)?;
@@ -138,6 +140,8 @@ async fn update_postgres(
     snapshot_yaml: &str,
     update: HomeCapacityCorrection<'_>,
 ) -> Result<(), StorageError> {
+    super::workspace_storage_shrink::guard_postgres(connection, installation_id, workspace.id)
+        .await?;
     ensure_stopped_at_generation(workspace, update.expected_generation)?;
     let previous_storage_gib = workspace.template.resources.disk_gib;
     let snapshot_yaml = apply_resize(workspace, snapshot_yaml, update.disk_gib, update.now)?;

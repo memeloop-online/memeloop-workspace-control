@@ -219,6 +219,18 @@ impl ResourceBuilder {
                 return Err(BuildError::HomeVolumeCapacityMismatch);
             }
         }
+        if workspace
+            .scratch_volume_binding
+            .as_ref()
+            .is_some_and(|binding| {
+                !binding.is_valid()
+                    || binding.namespace != workspace.runtime.namespace()
+                    || binding.capacity_gib
+                        != workspace.template.storage_policy.temporary_storage_gib
+            })
+        {
+            return Err(BuildError::InvalidScratchVolumeBinding);
+        }
         Ok(())
     }
 
@@ -421,6 +433,10 @@ pub enum BuildError {
     InvalidHomeVolumeIdentity,
     #[error("bound Home capacity must be positive and match the persisted workspace disk capacity")]
     HomeVolumeCapacityMismatch,
+    #[error(
+        "scratch binding must have a valid namespace, claim UID and capacity matching the temporary storage policy"
+    )]
+    InvalidScratchVolumeBinding,
     #[error(transparent)]
     Config(#[from] crate::config::ConfigError),
     #[error(transparent)]

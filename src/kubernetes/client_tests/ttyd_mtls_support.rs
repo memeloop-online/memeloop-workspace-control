@@ -115,6 +115,7 @@ pub(super) fn workspace() -> Workspace {
         name: "test".to_owned(),
         template_id: None,
         home_volume_binding: None,
+        scratch_volume_binding: None,
         node_pool: "default".to_owned(),
         runtime: WorkspaceRuntimeIdentity,
         template: WorkspaceTemplateSpec::standard(

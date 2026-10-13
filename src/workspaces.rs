@@ -61,6 +61,8 @@ pub struct Workspace {
     pub runtime: WorkspaceRuntimeIdentity,
     #[serde(default)]
     pub home_volume_binding: Option<WorkspaceHomeVolumeBinding>,
+    #[serde(default)]
+    pub scratch_volume_binding: Option<WorkspaceHomeVolumeBinding>,
     #[serde(flatten)]
     pub template: WorkspaceTemplateSpec,
     pub state: WorkspaceState,

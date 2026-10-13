@@ -28,7 +28,7 @@ async fn migrate_sqlite(pool: &SqlitePool, applied_at: i64) -> Result<(), Storag
         .await?;
     let version = current_sqlite_version(&mut transaction).await?;
     match version {
-        schema::SCHEMA_VERSION => {}
+        schema::SCHEMA_VERSION | 27 => {}
         24 => {
             upgrade_sqlite_v24_to_v25(&mut transaction, applied_at).await?;
             upgrade_sqlite_home_pvc(&mut transaction, applied_at).await?;
@@ -40,7 +40,11 @@ async fn migrate_sqlite(pool: &SqlitePool, applied_at: i64) -> Result<(), Storag
         }
         26 => upgrade_sqlite_runtime_categories(&mut transaction, applied_at).await?,
         0 if has_application_tables == 0 => {
-            for statement in schema::BASELINE.iter().chain(schema::HOME_PVC_MIGRATION) {
+            for statement in schema::BASELINE
+                .iter()
+                .chain(schema::HOME_PVC_MIGRATION)
+                .chain(schema::STORAGE_SHRINK_MIGRATION)
+            {
                 sqlx::query(statement).execute(&mut *transaction).await?;
             }
             sqlx::query("INSERT INTO schema_migrations (version, applied_at) VALUES (?1, ?2)")
@@ -50,6 +54,16 @@ async fn migrate_sqlite(pool: &SqlitePool, applied_at: i64) -> Result<(), Storag
                 .await?;
         }
         _ => return Err(StorageError::UnsupportedDatabaseVersion),
+    }
+    if version != 0 && version < schema::SCHEMA_VERSION {
+        for statement in schema::STORAGE_SHRINK_MIGRATION {
+            sqlx::query(statement).execute(&mut *transaction).await?;
+        }
+        sqlx::query("INSERT INTO schema_migrations (version, applied_at) VALUES (?1, ?2)")
+            .bind(schema::SCHEMA_VERSION)
+            .bind(applied_at)
+            .execute(&mut *transaction)
+            .await?;
     }
     transaction.commit().await?;
     Ok(())
@@ -80,7 +94,7 @@ async fn migrate_postgres(
             .fetch_one(&mut *transaction)
             .await?;
     match version {
-        schema::SCHEMA_VERSION => {}
+        schema::SCHEMA_VERSION | 27 => {}
         24 => {
             upgrade_postgres_v24_to_v25(&mut transaction, applied_at).await?;
             upgrade_postgres_home_pvc(&mut transaction, applied_at).await?;
@@ -92,7 +106,11 @@ async fn migrate_postgres(
         }
         26 => upgrade_postgres_runtime_categories(&mut transaction, applied_at).await?,
         0 if has_application_tables == 0 => {
-            for statement in schema::BASELINE.iter().chain(schema::HOME_PVC_MIGRATION) {
+            for statement in schema::BASELINE
+                .iter()
+                .chain(schema::HOME_PVC_MIGRATION)
+                .chain(schema::STORAGE_SHRINK_MIGRATION)
+            {
                 sqlx::query(statement).execute(&mut *transaction).await?;
             }
             sqlx::query("INSERT INTO schema_migrations (version, applied_at) VALUES ($1, $2)")
@@ -102,6 +120,16 @@ async fn migrate_postgres(
                 .await?;
         }
         _ => return Err(StorageError::UnsupportedDatabaseVersion),
+    }
+    if version != 0 && version < schema::SCHEMA_VERSION {
+        for statement in schema::STORAGE_SHRINK_MIGRATION {
+            sqlx::query(statement).execute(&mut *transaction).await?;
+        }
+        sqlx::query("INSERT INTO schema_migrations (version, applied_at) VALUES ($1, $2)")
+            .bind(schema::SCHEMA_VERSION)
+            .bind(applied_at)
+            .execute(&mut *transaction)
+            .await?;
     }
     transaction.commit().await?;
     Ok(())
@@ -200,7 +228,7 @@ async fn upgrade_sqlite_runtime_categories(
         sqlx::query(statement).execute(&mut **transaction).await?;
     }
     sqlx::query("INSERT INTO schema_migrations (version, applied_at) VALUES (?1, ?2)")
-        .bind(schema::SCHEMA_VERSION)
+        .bind(27_i64)
         .bind(applied_at)
         .execute(&mut **transaction)
         .await?;
@@ -218,7 +246,7 @@ async fn upgrade_postgres_runtime_categories(
         .execute(&mut **transaction)
         .await?;
     sqlx::query("INSERT INTO schema_migrations (version, applied_at) VALUES ($1, $2)")
-        .bind(schema::SCHEMA_VERSION)
+        .bind(27_i64)
         .bind(applied_at)
         .execute(&mut **transaction)
         .await?;

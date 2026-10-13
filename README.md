@@ -15,6 +15,8 @@ authenticated port mappings.
 - **Workspace lifecycle** — template-based create, start, stop, restart, and
   delete, with persistent home volumes, bounded temporary storage, and
   node-pool scheduling.
+- **Storage shrink** — offline, checksum-verified Home and CSI scratch migration,
+  automatic recovery, and consent-based source reclamation. See [the guide](docs/storage-shrink.md).
 - **Environment variables and files** — organization, user, and workspace scopes with
   encrypted storage and organization-locked items.
 - **Workspace access** — OpenSSH, a web terminal, and authenticated HTTPS

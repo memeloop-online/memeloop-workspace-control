@@ -99,6 +99,7 @@ async fn update_sqlite(
     snapshot: &str,
     update: &BindingUpdate<'_>,
 ) -> Result<(), StorageError> {
+    super::workspace_storage_shrink::guard_sqlite(connection, installation, workspace.id).await?;
     ensure_state(workspace, update)?;
     if update.adopt_ready {
         let active: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM jobs WHERE workspace_id = ?1 AND kind = 'reconcile_workspace' AND status = 'running'")
@@ -134,6 +135,7 @@ async fn update_postgres(
     snapshot: &str,
     update: &BindingUpdate<'_>,
 ) -> Result<(), StorageError> {
+    super::workspace_storage_shrink::guard_postgres(connection, installation, workspace.id).await?;
     ensure_state(workspace, update)?;
     if update.adopt_ready {
         let active: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM jobs WHERE workspace_id = $1 AND kind = 'reconcile_workspace' AND status = 'running'")

@@ -44,6 +44,7 @@ mod workspace_image_update;
 mod workspace_injection_refs;
 mod workspace_placement_update;
 mod workspace_scratch_resize;
+mod workspace_storage_shrink;
 mod workspace_store;
 
 pub use admin_store::{
@@ -80,6 +81,11 @@ pub use user_settings::{
 pub use web_shell::{IssuedWebShellTicket, WebShellIdentity};
 pub use webhook_store::{CreateWebhookSubscription, WebhookDelivery, WebhookSubscriptionSummary};
 pub use workspace_injection_refs::WorkspaceInjectionRefs;
+pub(crate) use workspace_storage_shrink::ShrinkWorkspaceUpdate;
+pub use workspace_storage_shrink::StorageVolumeIdentity;
+pub use workspace_storage_shrink::{
+    StorageShrinkOperation, StorageShrinkPhase, StorageShrinkRequest, StorageShrinkVolume,
+};
 pub use workspace_store::{
     AdmittedWorkspaceCreation, CreateWorkspace, WorkspacePage, WorkspaceUsageSummary,
 };

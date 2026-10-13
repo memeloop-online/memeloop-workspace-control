@@ -97,6 +97,8 @@ async fn update_sqlite(
     snapshot_yaml: &str,
     update: ImageUpdate<'_>,
 ) -> Result<(), StorageError> {
+    super::workspace_storage_shrink::guard_sqlite(connection, installation_id, workspace.id)
+        .await?;
     ensure_stopped_at_generation(workspace, update.expected_generation)?;
     ensure_image_allowed_sqlite(connection, installation_id, update.image).await?;
     let snapshot_yaml = apply_image(workspace, snapshot_yaml, update.image, update.now)?;
@@ -131,6 +133,8 @@ async fn update_postgres(
     snapshot_yaml: &str,
     update: ImageUpdate<'_>,
 ) -> Result<(), StorageError> {
+    super::workspace_storage_shrink::guard_postgres(connection, installation_id, workspace.id)
+        .await?;
     ensure_stopped_at_generation(workspace, update.expected_generation)?;
     ensure_image_allowed_postgres(connection, installation_id, update.image).await?;
     let snapshot_yaml = apply_image(workspace, snapshot_yaml, update.image, update.now)?;
