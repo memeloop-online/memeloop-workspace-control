@@ -73,6 +73,10 @@ test("any field error holds back the whole request", () => {
   assert.equal(result.targets, null);
   assert.equal(result.homeError, "notSmaller");
   assert.equal(result.temporaryError, undefined);
+  const invalid = validateStorageShrink("abc", "40", home, temporary);
+  assert.equal(invalid.homeError, "invalid");
+  assert.equal(invalid.temporaryError, undefined);
+  assert.equal(invalid.targets, null);
 });
 
 test("phases report active until completed or failed", () => {

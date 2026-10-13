@@ -58,8 +58,8 @@ export function validateStorageShrink(
     return { homeError, temporaryError, empty, targets: null };
   }
   const targets: { home_gib?: number; temporary_storage_gib?: number } = {};
-  if (homeParsed !== undefined) targets.home_gib = homeParsed;
-  if (temporaryParsed !== undefined) targets.temporary_storage_gib = temporaryParsed;
+  if (homeParsed !== undefined && homeParsed !== null) targets.home_gib = homeParsed;
+  if (temporaryParsed !== undefined && temporaryParsed !== null) targets.temporary_storage_gib = temporaryParsed;
   return { empty, targets };
 }
 
