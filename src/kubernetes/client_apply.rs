@@ -40,12 +40,11 @@ impl KubernetesCoordinator {
         }
         self.verify_home_volume_binding(workspace).await?;
         self.apply_namespace(workspace, desired).await?;
-        self.apply_access_identity(namespace_name, workspace, desired)
-            .await?;
-        self.apply_injections(workspace, &desired.injections)
-            .await?;
-        self.apply_workspace_identity(namespace_name, workspace, desired)
-            .await?;
+        tokio::try_join!(
+            self.apply_access_identity(namespace_name, workspace, desired),
+            self.apply_injections(workspace, &desired.injections),
+            self.apply_workspace_identity(namespace_name, workspace, desired),
+        )?;
         // Publish isolation intent before creating any workspace containers. Policy acceptance
         // is not an enforcement acknowledgement; node-level acceptance must verify convergence.
         self.apply_network(namespace_name, workspace, desired)
@@ -220,6 +219,7 @@ impl KubernetesCoordinator {
                 .await?;
         }
         let stateful_sets = Api::<StatefulSet>::namespaced(self.client.clone(), namespace_name);
+        let mut stateful_set = desired.stateful_set.clone();
         if let Some(existing) = stateful_sets.get_opt(&names.stateful_set).await? {
             self.builder
                 .verify_delete_ownership(&existing.metadata, workspace_id)?;
@@ -232,14 +232,11 @@ impl KubernetesCoordinator {
             if existing.metadata.deletion_timestamp.is_some() {
                 return Err(ReconcileError::StatefulSetRecreationPending);
             }
+            preserve_claim_storage_classes(&mut stateful_set, &existing);
         }
         self.verify_home_volume_binding(workspace).await?;
         let stateful_set_result = stateful_sets
-            .patch(
-                &names.stateful_set,
-                &apply,
-                &Patch::Apply(&desired.stateful_set),
-            )
+            .patch(&names.stateful_set, &apply, &Patch::Apply(&stateful_set))
             .await;
         if let Err(error) = stateful_set_result {
             if immutable_stateful_set_update(&error) {
@@ -425,6 +422,33 @@ impl KubernetesCoordinator {
     }
 }
 
+// A changed installation default applies only when provisioning a new Home.
+// Updating an existing claim template would force an unnecessary Pod recreation.
+fn preserve_claim_storage_classes(desired: &mut StatefulSet, existing: &StatefulSet) {
+    let Some(claims) = desired
+        .spec
+        .as_mut()
+        .and_then(|spec| spec.volume_claim_templates.as_mut())
+    else {
+        return;
+    };
+    let existing_claims = existing
+        .spec
+        .as_ref()
+        .and_then(|spec| spec.volume_claim_templates.as_ref());
+    for claim in claims {
+        if let Some(existing) = existing_claims.into_iter().flatten().find(|existing| {
+            claim.metadata.name.is_some() && existing.metadata.name == claim.metadata.name
+        }) && let Some(spec) = claim.spec.as_mut()
+        {
+            spec.storage_class_name = existing
+                .spec
+                .as_ref()
+                .and_then(|spec| spec.storage_class_name.clone());
+        }
+    }
+}
+
 fn immutable_stateful_set_update(error: &kube::Error) -> bool {
     let kube::Error::Api(response) = error else {
         return false;
@@ -467,7 +491,69 @@ fn immutable_stateful_set_status(code: u16, reason: &str, message: &str) -> bool
 
 #[cfg(test)]
 mod immutable_stateful_set_tests {
-    use super::immutable_stateful_set_status;
+    use super::{immutable_stateful_set_status, preserve_claim_storage_classes};
+    use k8s_openapi::api::{
+        apps::v1::{StatefulSet, StatefulSetSpec},
+        core::v1::{PersistentVolumeClaim, PersistentVolumeClaimSpec},
+    };
+
+    fn workload(class: Option<&str>, claim_name: &str) -> StatefulSet {
+        StatefulSet {
+            spec: Some(StatefulSetSpec {
+                replicas: Some(1),
+                volume_claim_templates: Some(vec![PersistentVolumeClaim {
+                    metadata: kube::api::ObjectMeta {
+                        name: Some(claim_name.to_owned()),
+                        ..Default::default()
+                    },
+                    spec: Some(PersistentVolumeClaimSpec {
+                        storage_class_name: class.map(str::to_owned),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }]),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn changed_default_preserves_an_existing_home_class_and_other_updates() {
+        for original in [Some("original-home"), None] {
+            let existing = workload(original, "workspace-data");
+            let mut desired = workload(Some("new-default"), "workspace-data");
+            desired.spec.as_mut().unwrap().replicas = Some(0);
+            preserve_claim_storage_classes(&mut desired, &existing);
+            let spec = desired.spec.unwrap();
+            assert_eq!(spec.replicas, Some(0));
+            assert_eq!(
+                spec.volume_claim_templates.unwrap()[0]
+                    .spec
+                    .as_ref()
+                    .unwrap()
+                    .storage_class_name
+                    .as_deref(),
+                original
+            );
+        }
+    }
+
+    #[test]
+    fn newly_introduced_claim_keeps_the_new_default() {
+        let existing = workload(Some("original-home"), "another-claim");
+        let mut desired = workload(Some("new-default"), "workspace-data");
+        preserve_claim_storage_classes(&mut desired, &existing);
+        assert_eq!(
+            desired.spec.unwrap().volume_claim_templates.unwrap()[0]
+                .spec
+                .as_ref()
+                .unwrap()
+                .storage_class_name
+                .as_deref(),
+            Some("new-default")
+        );
+    }
 
     #[test]
     fn recognizes_only_immutable_stateful_set_updates() {

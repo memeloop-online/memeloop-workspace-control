@@ -412,3 +412,84 @@ async fn terminal_workspace_failure_ignores_stale_generation() {
         1
     );
 }
+
+struct CheckpointHandler;
+
+impl JobHandler for CheckpointHandler {
+    async fn handle(&self, job: &ClaimedJob) -> Result<(), JobHandlerError> {
+        assert_eq!(job.payload["generation"], 17);
+        if job.payload["reconciled_generation"] == 17 {
+            assert_eq!(job.attempts, 1);
+            return Ok(());
+        }
+        let mut payload = job.payload.clone();
+        payload["reconciled_generation"] = 17.into();
+        Err(JobHandlerError::PendingWithCheckpoint {
+            message: "waiting for readiness".to_owned(),
+            payload,
+        })
+    }
+}
+
+#[tokio::test]
+async fn readiness_checkpoint_survives_worker_restart_and_retries_after_one_second() {
+    let database = database().await;
+    database
+        .enqueue_job(
+            NewJob {
+                kind: "test".to_owned(),
+                workspace_id: None,
+                payload: json!({"generation":17}),
+                available_at: 100,
+            },
+            100,
+        )
+        .await
+        .unwrap();
+    let worker = JobWorker::new(
+        database.clone(),
+        Arc::new(CheckpointHandler),
+        "owner-a".to_owned(),
+    );
+    assert!(worker.run_once(100).await.unwrap());
+    assert!(!worker.run_once(100).await.unwrap());
+    let restarted = JobWorker::new(database, Arc::new(CheckpointHandler), "owner-b".to_owned());
+    assert!(restarted.run_once(101).await.unwrap());
+    assert!(!restarted.run_once(102).await.unwrap());
+}
+
+#[tokio::test]
+async fn checkpoint_rejects_a_wrong_lease_owner_without_changing_payload() {
+    let database = database().await;
+    let id = database
+        .enqueue_job(
+            NewJob {
+                kind: "test".to_owned(),
+                workspace_id: None,
+                payload: json!({"generation":17}),
+                available_at: 100,
+            },
+            100,
+        )
+        .await
+        .unwrap();
+    database
+        .claim_job("owner-a", 100, Duration::from_secs(60))
+        .await
+        .unwrap()
+        .unwrap();
+    let result = database
+        .save_job_checkpoint(id, "owner-b", &json!({"generation":18}), 100)
+        .await;
+    assert!(matches!(result, Err(StorageError::LeaseNotOwned(actual)) if actual == id));
+    database
+        .defer_job_without_attempt(id, "owner-a", 101, 100)
+        .await
+        .unwrap();
+    let job = database
+        .claim_job("owner-c", 101, Duration::from_secs(60))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(job.payload, json!({"generation":17}));
+}
