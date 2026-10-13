@@ -288,6 +288,32 @@ impl Database {
         Ok(())
     }
 
+    pub async fn save_job_checkpoint(
+        &self,
+        job_id: Uuid,
+        lease_owner: &str,
+        payload: &serde_json::Value,
+        now: i64,
+    ) -> Result<(), StorageError> {
+        let payload_json = serde_json::to_string(payload)?;
+        let affected = match self {
+            Self::Sqlite { pool, installation_id } => sqlx::query(
+                "UPDATE jobs SET payload_json = ?1, updated_at = ?2 WHERE id = ?3 AND installation_id = ?4 AND status = 'running' AND lease_owner = ?5",
+            )
+            .bind(&payload_json).bind(now).bind(job_id.to_string()).bind(installation_id.as_str()).bind(lease_owner)
+            .execute(pool).await?.rows_affected(),
+            Self::Postgres { pool, installation_id } => sqlx::query(
+                "UPDATE jobs SET payload_json = $1, updated_at = $2 WHERE id = $3 AND installation_id = $4 AND status = 'running' AND lease_owner = $5",
+            )
+            .bind(&payload_json).bind(now).bind(job_id.to_string()).bind(installation_id.as_str()).bind(lease_owner)
+            .execute(pool).await?.rows_affected(),
+        };
+        if affected != 1 {
+            return Err(StorageError::LeaseNotOwned(job_id));
+        }
+        Ok(())
+    }
+
     pub async fn defer_job_without_attempt(
         &self,
         job_id: Uuid,

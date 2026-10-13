@@ -32,12 +32,23 @@ impl WorkspaceReconcileHandler {
         }
     }
 
-    async fn reconcile_workspace(&self, workspace: &Workspace) -> Result<(), JobHandlerError> {
+    async fn reconcile_workspace(
+        &self,
+        workspace: &Workspace,
+        job: &ClaimedJob,
+    ) -> Result<(), JobHandlerError> {
         if workspace.state == WorkspaceState::Deleted {
             return Ok(());
         }
         if workspace.state == WorkspaceState::Deleting {
             return self.reconcile_deletion(workspace).await;
+        }
+
+        if startup_checkpoint_matches(workspace, job, unix_timestamp()?) {
+            return self
+                .observe_workspace(workspace)
+                .await
+                .map_err(|error| checkpoint_error(error, job, workspace, None));
         }
 
         let resolved = self.resolve_workspace_injections(workspace).await?;
@@ -96,6 +107,13 @@ impl WorkspaceReconcileHandler {
             .await
             .map_err(job_error)?;
 
+        let reconciled_at = unix_timestamp()?;
+        self.observe_workspace(workspace)
+            .await
+            .map_err(|error| checkpoint_error(error, job, workspace, Some(reconciled_at)))
+    }
+
+    async fn observe_workspace(&self, workspace: &Workspace) -> Result<(), JobHandlerError> {
         match workspace.state {
             WorkspaceState::Provisioning
             | WorkspaceState::Starting
@@ -318,6 +336,42 @@ fn normalize_ssh_target(
     item.group = Some(login_user.to_owned());
 }
 
+fn startup_checkpoint_matches(workspace: &Workspace, job: &ClaimedJob, now: i64) -> bool {
+    matches!(
+        workspace.state,
+        WorkspaceState::Provisioning
+            | WorkspaceState::Starting
+            | WorkspaceState::Restarting
+            | WorkspaceState::Stopping
+    ) && job
+        .payload
+        .get("reconciled_generation")
+        .and_then(serde_json::Value::as_u64)
+        == Some(workspace.generation)
+        && job
+            .payload
+            .get("reconciled_at")
+            .and_then(serde_json::Value::as_i64)
+            .is_some_and(|at| (0..60).contains(&now.saturating_sub(at)))
+}
+
+fn checkpoint_error(
+    error: JobHandlerError,
+    job: &ClaimedJob,
+    workspace: &Workspace,
+    reconciled_at: Option<i64>,
+) -> JobHandlerError {
+    let JobHandlerError::Pending(message) = error else {
+        return error;
+    };
+    let mut payload = job.payload.clone();
+    if let Some(at) = reconciled_at {
+        payload["reconciled_generation"] = workspace.generation.into();
+        payload["reconciled_at"] = at.into();
+    }
+    JobHandlerError::PendingWithCheckpoint { message, payload }
+}
+
 impl JobHandler for WorkspaceReconcileHandler {
     async fn handle(&self, job: &ClaimedJob) -> Result<(), JobHandlerError> {
         if job.kind != "reconcile_workspace" {
@@ -337,7 +391,7 @@ impl JobHandler for WorkspaceReconcileHandler {
             }
             Err(error) => return Err(job_error(error)),
         };
-        self.reconcile_workspace(&workspace).await
+        self.reconcile_workspace(&workspace, job).await
     }
 
     async fn on_terminal_failure(&self, job: &ClaimedJob, now: i64) -> Result<(), StorageError> {
