@@ -229,6 +229,7 @@ export interface ScalingStatus {
   database_mode: "sqlite" | "postgres";
   configured_replicas: number;
   schema_version: number;
+  job_worker_concurrency: number;
   jobs: { pending: number; running: number; completed: number; failed: number };
 }
 

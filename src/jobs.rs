@@ -14,12 +14,18 @@ const PENDING_JOB_DELAY_SECONDS: i64 = 5;
 pub use kubernetes::WorkspaceReconcileHandler;
 pub use webhook::{ControlPlaneJobHandler, WebhookDeliveryHandler};
 
-#[allow(async_fn_in_trait)]
 pub trait JobHandler: Send + Sync + 'static {
-    async fn handle(&self, job: &ClaimedJob) -> Result<(), JobHandlerError>;
+    fn handle(
+        &self,
+        job: &ClaimedJob,
+    ) -> impl std::future::Future<Output = Result<(), JobHandlerError>> + Send;
 
-    async fn on_terminal_failure(&self, _job: &ClaimedJob, _now: i64) -> Result<(), StorageError> {
-        Ok(())
+    fn on_terminal_failure(
+        &self,
+        _job: &ClaimedJob,
+        _now: i64,
+    ) -> impl std::future::Future<Output = Result<(), StorageError>> + Send {
+        async { Ok(()) }
     }
 }
 
@@ -185,6 +191,94 @@ impl<H: JobHandler> JobWorker<H> {
         }
     }
 
+    /// The installation setting changes admission live. Idle slots only wait on watch channels;
+    /// in-flight work drains when concurrency decreases or the process shuts down.
+    pub async fn run_pool_until_shutdown(
+        &self,
+        mut shutdown: watch::Receiver<bool>,
+    ) -> Result<(), JobWorkerError> {
+        let initial = self.database.job_worker_concurrency().await?;
+        let (admission, receiver) = watch::channel(usize::from(initial));
+        let (stop, stopped) = watch::channel(false);
+        let mut tasks = tokio::task::JoinSet::new();
+        for slot in 0..usize::from(crate::storage::MAX_JOB_WORKER_CONCURRENCY) {
+            let worker = Self {
+                database: self.database.clone(),
+                handler: self.handler.clone(),
+                lease_owner: format!("{}:worker-{slot}", self.lease_owner),
+                poll_interval: self.poll_interval,
+                job_lease_duration: self.job_lease_duration,
+                workspace_lease_duration: self.workspace_lease_duration,
+            };
+            let concurrency = receiver.clone();
+            let shutdown = shutdown.clone();
+            let stop = stopped.clone();
+            tasks
+                .spawn(async move { worker.run_admitted(slot, concurrency, shutdown, stop).await });
+        }
+        let mut refresh = tokio::time::interval(self.poll_interval);
+        refresh.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let result = loop {
+            if *shutdown.borrow() {
+                break Ok(());
+            }
+            tokio::select! {
+                _ = refresh.tick() => {
+                    match self.database.job_worker_concurrency().await {
+                        Ok(value) => { admission.send_if_modified(|current| {
+                            let changed = *current != usize::from(value);
+                            *current = usize::from(value);
+                            changed
+                        }); }
+                        Err(error) => break Err(JobWorkerError::Storage(error)),
+                    }
+                }
+                changed = shutdown.changed() => {
+                    if changed.is_err() || *shutdown.borrow() { break Ok(()); }
+                }
+                Some(completed) = tasks.join_next() => {
+                    break completed.map_err(JobWorkerError::Task).and_then(|result| result);
+                }
+            }
+        };
+        let _ = stop.send(true);
+        while let Some(completed) = tasks.join_next().await {
+            completed.map_err(JobWorkerError::Task)??;
+        }
+        result
+    }
+
+    async fn run_admitted(
+        &self,
+        slot: usize,
+        mut concurrency: watch::Receiver<usize>,
+        mut shutdown: watch::Receiver<bool>,
+        mut stop: watch::Receiver<bool>,
+    ) -> Result<(), JobWorkerError> {
+        loop {
+            if *shutdown.borrow() || *stop.borrow() {
+                return Ok(());
+            }
+            let admitted = slot < *concurrency.borrow();
+            if admitted && self.run_once(unix_timestamp()?).await? {
+                continue;
+            }
+            let active = slot < *concurrency.borrow();
+            tokio::select! {
+                () = tokio::time::sleep(self.poll_interval), if active => {},
+                changed = concurrency.changed() => {
+                    if changed.is_err() { return Ok(()); }
+                },
+                changed = stop.changed() => {
+                    if changed.is_err() || *stop.borrow() { return Ok(()); }
+                },
+                changed = shutdown.changed() => {
+                    if changed.is_err() || *shutdown.borrow() { return Ok(()); }
+                }
+            }
+        }
+    }
+
     pub async fn run_until_shutdown(
         &self,
         mut shutdown: watch::Receiver<bool>,
@@ -237,6 +331,8 @@ pub enum JobHandlerError {
 
 #[derive(Debug, Error)]
 pub enum JobWorkerError {
+    #[error(transparent)]
+    Task(#[from] tokio::task::JoinError),
     #[error(transparent)]
     Storage(#[from] StorageError),
     #[error("system clock is invalid")]

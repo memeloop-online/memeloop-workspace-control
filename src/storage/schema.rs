@@ -1,4 +1,8 @@
-pub(super) const SCHEMA_VERSION: i64 = 28;
+pub(super) const RUNTIME_SETTINGS_MIGRATION: &[&str] = &[
+    "CREATE TABLE installation_runtime_settings (installation_id TEXT PRIMARY KEY, job_worker_concurrency BIGINT NOT NULL CHECK (job_worker_concurrency BETWEEN 1 AND 256), updated_at BIGINT NOT NULL)",
+];
+
+pub(super) const SCHEMA_VERSION: i64 = 29;
 
 pub(super) const STORAGE_SHRINK_MIGRATION: &[&str] = &[
     "ALTER TABLE workspaces ADD COLUMN scratch_volume_binding_json TEXT",

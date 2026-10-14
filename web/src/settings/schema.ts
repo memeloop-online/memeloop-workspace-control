@@ -32,12 +32,25 @@ export const settingsSections: readonly SettingsSection[] = [
   { id: "templates", category: "organization", title: "templates", keywords: ["template", "workspace", "cluster"], available: manageOrganization },
   { id: "webhooks", category: "organization", title: "webhook", keywords: ["webhook", "url", "secret", "event_prefix"], available: manageOrganization },
   { id: "images", category: "system", title: "imageAllowlist", keywords: ["oci", "image", "allowlist", "enabled"], available: systemAdmin },
-  { id: "scaling", category: "system", title: "scaling", keywords: ["database", "replicas", "jobs", "schema_version"], available: systemAdmin },
+  { id: "scaling", category: "system", title: "scaling", keywords: ["database", "replicas", "jobs", "schema_version", "job_worker_concurrency", "concurrency", "worker"], available: systemAdmin },
 ];
+
+export const JOB_WORKER_CONCURRENCY_MIN = 1;
+export const JOB_WORKER_CONCURRENCY_MAX = 256;
+export const JOB_WORKER_CONCURRENCY_DEFAULT = 32;
+
+export class InvalidJobWorkerConcurrency extends Error {}
+
+export function parseJobWorkerConcurrency(value: string): number {
+  const trimmed = value.trim();
+  const parsed = Number(trimmed);
+  if (!trimmed || !Number.isSafeInteger(parsed) || parsed < JOB_WORKER_CONCURRENCY_MIN || parsed > JOB_WORKER_CONCURRENCY_MAX) throw new InvalidJobWorkerConcurrency();
+  return parsed;
+}
 
 export function visibleSettingsSections(principal: Principal, organizationId: string, category: SettingsCategory | "all", query: string, t: (key: MessageKey) => string): SettingsSection[] {
   const terms = query.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
   return settingsSections.filter((section) => section.available(principal, organizationId) && (category === "all" || section.category === category) && terms.every((term) => [section.id, t(section.title), section.description ? t(section.description) : "", ...section.keywords, ...section.keywords.filter((word) => word in keywordLabels).map((word) => t(keywordLabels[word as keyof typeof keywordLabels])), ...settingsFields.filter((field) => field.section === section.id).flatMap((field) => [field.key, t(field.label), field.description ? t(field.description) : "", ...(field.options ?? []).flatMap((option) => [option.value, t(option.label)])])].join(" ").toLocaleLowerCase().includes(term)));
 }
 
-const keywordLabels = { organizationName: "organizationSettings", createOrganization: "createOrganization", deleteOrganization: "deleteOrganization", editQuota: "editQuota", stateCount: "stateCount", createUser: "createUser", userApiCredentials: "userApiCredentials", revokeApiKey: "revokeApiKey", avatar: "avatarUrl", displayName: "displayName", theme: "appearanceSettings", language: "language", copy: "copy", cpu: "cpu", memory: "memory", gpu: "gpu", disk: "disk" } as const;
+const keywordLabels = { organizationName: "organizationSettings", createOrganization: "createOrganization", deleteOrganization: "deleteOrganization", editQuota: "editQuota", stateCount: "stateCount", createUser: "createUser", userApiCredentials: "userApiCredentials", revokeApiKey: "revokeApiKey", avatar: "avatarUrl", displayName: "displayName", theme: "appearanceSettings", language: "language", copy: "copy", cpu: "cpu", memory: "memory", gpu: "gpu", disk: "disk", job_worker_concurrency: "jobWorkerConcurrency", concurrency: "jobWorkerConcurrency", worker: "jobWorkerConcurrency" } as const;

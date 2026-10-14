@@ -28,6 +28,7 @@ import { workspaceStateCounts } from "./admin/workspaceSummary";
 import { AdminCard, SaveButton, useAdminStyles } from "./admin/fluentAdmin";
 import type { ApiClient } from "./api";
 import type { SettingsSectionId } from "./settings/schema";
+import { JOB_WORKER_CONCURRENCY_MAX, JOB_WORKER_CONCURRENCY_MIN, parseJobWorkerConcurrency } from "./settings/schema";
 import { ConfirmDialog } from "./components/ConfirmDialog";
 import { Page } from "./design-system/Page";
 import { canManageOrganization, canManageOtherUserApiKeys, canManageSystem, hasApiKeyScope } from "./permissions";
@@ -81,6 +82,9 @@ export function AdminPanel({ api, principal, organizationId, onError, onOrganiza
   const [newOrganizationName, setNewOrganizationName] = useState("");
   const [editingQuota, setEditingQuota] = useState(false);
   const [quotaDraft, setQuotaDraft] = useState<ResourceDraft>(() => resourceDraft(DEFAULT_QUOTA));
+  const [editingScaling, setEditingScaling] = useState(false);
+  const [scalingDraft, setScalingDraft] = useState("");
+  const [scalingSaving, setScalingSaving] = useState(false);
   const [directoryVersion, setDirectoryVersion] = useState(0);
   const [showCreateUser, setShowCreateUser] = useState(false);
   const [workspaceSummary, setWorkspaceSummary] = useState<WorkspaceSummary | null>(null);
@@ -209,6 +213,26 @@ export function AdminPanel({ api, principal, organizationId, onError, onOrganiza
     }
   }
 
+  async function saveScaling() {
+    let jobWorkerConcurrency: number;
+    try {
+      jobWorkerConcurrency = parseJobWorkerConcurrency(scalingDraft);
+    } catch {
+      onError(t("invalidJobWorkerConcurrency"));
+      return;
+    }
+    if (scalingSaving) return;
+    setScalingSaving(true);
+    try {
+      setScaling(await api.updateScaling(jobWorkerConcurrency));
+      setEditingScaling(false);
+    } catch (error) {
+      onError(message(error, t("requestFailed")));
+    } finally {
+      setScalingSaving(false);
+    }
+  }
+
   async function editUserQuota(userId: string) {
     try {
       const current = await api.userQuota(userId);
@@ -264,7 +288,7 @@ export function AdminPanel({ api, principal, organizationId, onError, onOrganiza
           <DataGridBody<[string, number]>>{({ item }) => <DataGridRow<[string, number]>>{(column) => <DataGridCell>{column.renderCell(item)}</DataGridCell>}</DataGridRow>}</DataGridBody>
         </DataGrid>
       </AdminCard></section>}
-      {show("scaling") && scaling && <section data-testid="settings-section-scaling"> <AdminCard title={t("scaling")}><dl className={styles.definitionList}><div className={styles.definitionItem}><dt className={styles.definitionTerm}>{t("database")}</dt><dd className={styles.definitionValue}>{scaling.database_mode}</dd></div><div className={styles.definitionItem}><dt className={styles.definitionTerm}>{t("replicas")}</dt><dd className={styles.definitionValue}>{scaling.configured_replicas}</dd></div><div className={styles.definitionItem}><dt className={styles.definitionTerm}>{t("jobs")}</dt><dd className={styles.definitionValue}>{scaling.jobs.pending} {t("pendingJobs")} · {scaling.jobs.running} {t("runningJobs")}</dd></div><div className={styles.definitionItem}><dt className={styles.definitionTerm}>{t("schema")}</dt><dd className={styles.definitionValue}>v{scaling.schema_version}</dd></div></dl></AdminCard></section>}
+      {show("scaling") && scaling && <section data-testid="settings-section-scaling"><ScalingCard scaling={scaling} editing={editingScaling} draft={scalingDraft} saving={scalingSaving} onEdit={() => { setScalingDraft(String(scaling.job_worker_concurrency)); setEditingScaling(true); }} onCancel={() => setEditingScaling(false)} onSave={() => void saveScaling()} onDraftChange={setScalingDraft} /></section>}
       {show("organization-management") && <section data-testid="settings-section-organization-management"><OrganizationManager organization={currentOrganization} organizationName={organizationName} newOrganizationName={newOrganizationName} canCreate={canManageGlobalState} canEdit={canManageQuota} canDelete={canManageGlobalState} onOrganizationNameChange={setOrganizationName} onNewOrganizationNameChange={setNewOrganizationName} onSave={() => void saveOrganization()} onDelete={() => setConfirmOrganizationDelete(true)} onCreate={() => void createOrganization()} /></section>}
 
       {show("users") && (canManageMembers || canManageOtherApiKeys) && <section data-testid="settings-section-users" className={styles.wide}><AdminCard title={t("usersRoles")} action={canManageGlobalState ? <Button icon={<AddRegular />} aria-expanded={showCreateUser} onClick={() => setShowCreateUser((visible) => !visible)}>{t("createUser")}</Button> : undefined}>{canManageGlobalState && showCreateUser && <CreateUserForm api={api} principal={principal} organizationId={organizationId} onCancel={() => setShowCreateUser(false)} onError={onError} onCreated={async () => { setShowCreateUser(false); setDirectoryVersion((value) => value + 1); await refresh(); }} />}<UsersDirectory api={api} organizationId={organizationId} principal={principal} canListUsers={principal.system_admin} canManageUsers={canManageGlobalState} canEditMembership={canManageMembers} canEditQuota={canManageGlobalState} refreshVersion={directoryVersion} onError={onError} onEditQuota={(userId) => void editUserQuota(userId)} /></AdminCard></section>}
@@ -288,6 +312,12 @@ function IdentityQuotaCard({ principal, quota, canManageQuota, editingQuota, quo
 
 function ResourceInput({ label, value, min, step, onChange }: { label: string; value: string; min: number; step: number; onChange: (value: string) => void }) {
   return <Field label={label} required><Input type="number" inputMode="numeric" min={min} step={step} value={value} onChange={(event) => onChange(event.target.value)} /></Field>;
+}
+
+function ScalingCard({ scaling, editing, draft, saving, onEdit, onCancel, onSave, onDraftChange }: { scaling: ScalingStatus; editing: boolean; draft: string; saving: boolean; onEdit: () => void; onCancel: () => void; onSave: () => void; onDraftChange: (value: string) => void }) {
+  const { t } = useI18n();
+  const styles = useAdminStyles();
+  return <AdminCard title={t("scaling")}><dl className={styles.definitionList}><div className={styles.definitionItem}><dt className={styles.definitionTerm}>{t("database")}</dt><dd className={styles.definitionValue}>{scaling.database_mode}</dd></div><div className={styles.definitionItem}><dt className={styles.definitionTerm}>{t("replicas")}</dt><dd className={styles.definitionValue}>{scaling.configured_replicas}</dd></div><div className={styles.definitionItem}><dt className={styles.definitionTerm}>{t("jobs")}</dt><dd className={styles.definitionValue}>{scaling.jobs.pending} {t("pendingJobs")} · {scaling.jobs.running} {t("runningJobs")}</dd></div><div className={styles.definitionItem}><dt className={styles.definitionTerm}>{t("schema")}</dt><dd className={styles.definitionValue}>v{scaling.schema_version}</dd></div><div className={styles.definitionItem}><dt className={styles.definitionTerm}>{t("jobWorkerConcurrency")}</dt><dd className={styles.definitionValue}>{scaling.job_worker_concurrency}</dd></div></dl>{editing ? <div className={styles.stack}><Field label={t("jobWorkerConcurrency")} hint={t("jobWorkerConcurrencyHelp")} required><Input type="number" inputMode="numeric" min={JOB_WORKER_CONCURRENCY_MIN} max={JOB_WORKER_CONCURRENCY_MAX} step={1} value={draft} onChange={(event) => onDraftChange(event.target.value)} /></Field><div className={styles.actions}><SaveButton disabled={saving} onClick={onSave}>{saving ? t("saving") : t("saveScaling")}</SaveButton><Button appearance="secondary" disabled={saving} onClick={onCancel}>{t("cancel")}</Button></div></div> : <Button onClick={onEdit}>{t("editScaling")}</Button>}</AdminCard>;
 }
 
 function ImageAllowlist({ images, image, adding, busyImage, onImageChange, onAllow, onToggle }: { images: ImagePolicy[]; image: string; adding: boolean; busyImage: string | null; onImageChange: (value: string) => void; onAllow: () => void; onToggle: (policy: ImagePolicy) => void }) {

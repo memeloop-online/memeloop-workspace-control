@@ -35,7 +35,10 @@ pub(super) use settings::{
     CreatedApiKeyResponse, UpdateUserProfileRequest, UserProfileResponse, create_api_key,
     delete_api_key, get_api_key_token, get_profile, list_api_keys, update_profile,
 };
-pub(super) use system::{__path_scaling, ScalingResponse, scaling};
+pub(super) use system::{
+    __path_scaling, __path_update_scaling, ScalingResponse, UpdateScalingRequest, scaling,
+    update_scaling,
+};
 pub(super) use users::{
     __path_create_user, __path_list_users_page, __path_update_user, CreateUserRequest, PageQuery,
     UpdateUserRequest, create_user, list_users_page, update_user,

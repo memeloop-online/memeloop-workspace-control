@@ -493,3 +493,183 @@ async fn checkpoint_rejects_a_wrong_lease_owner_without_changing_payload() {
         .unwrap();
     assert_eq!(job.payload, json!({"generation":17}));
 }
+
+struct PoolBarrierHandler {
+    calls: AtomicUsize,
+    barrier: tokio::sync::Barrier,
+}
+
+impl JobHandler for PoolBarrierHandler {
+    async fn handle(&self, _job: &ClaimedJob) -> Result<(), JobHandlerError> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        self.barrier.wait().await;
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn worker_pool_runs_four_jobs_and_drains_in_flight_work_on_shutdown() {
+    let database = database().await;
+    database.set_job_worker_concurrency(4, 100).await.unwrap();
+    for _ in 0..5 {
+        database
+            .enqueue_job(
+                NewJob {
+                    kind: "test".to_owned(),
+                    workspace_id: None,
+                    payload: json!({}),
+                    available_at: 100,
+                },
+                100,
+            )
+            .await
+            .unwrap();
+    }
+    let handler = Arc::new(PoolBarrierHandler {
+        calls: AtomicUsize::new(0),
+        barrier: tokio::sync::Barrier::new(5),
+    });
+    let worker = JobWorker::new(database.clone(), handler.clone(), "pool".to_owned());
+    let (shutdown, receiver) = tokio::sync::watch::channel(false);
+    let task = tokio::spawn(async move { worker.run_pool_until_shutdown(receiver).await });
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while handler.calls.load(Ordering::SeqCst) < 4 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    // Stop admitting new jobs before allowing the four in-flight jobs to finish.
+    shutdown.send(true).unwrap();
+    handler.barrier.wait().await;
+    tokio::time::timeout(Duration::from_secs(5), task)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(handler.calls.load(Ordering::SeqCst), 4);
+    let counts = database.job_counts().await.unwrap();
+    assert_eq!(counts.completed, 4);
+    assert_eq!(counts.pending, 1);
+    assert_eq!(counts.running, 0);
+}
+
+struct LeaseBlockingHandler {
+    entered: tokio::sync::Notify,
+    release: tokio::sync::Notify,
+    calls: AtomicUsize,
+}
+
+impl JobHandler for LeaseBlockingHandler {
+    async fn handle(&self, _job: &ClaimedJob) -> Result<(), JobHandlerError> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        self.entered.notify_one();
+        self.release.notified().await;
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn distinct_worker_owners_cannot_execute_the_same_workspace_concurrently() {
+    let (database, _, workspace_id, _) = workspace_database().await;
+    let pool = match &database {
+        Database::Sqlite { pool, .. } => pool,
+        Database::Postgres { .. } => unreachable!(),
+    };
+    sqlx::query("DELETE FROM jobs").execute(pool).await.unwrap();
+    for _ in 0..2 {
+        database
+            .enqueue_job(
+                NewJob {
+                    kind: "test".to_owned(),
+                    workspace_id: Some(workspace_id),
+                    payload: json!({}),
+                    available_at: 100,
+                },
+                100,
+            )
+            .await
+            .unwrap();
+    }
+    let handler = Arc::new(LeaseBlockingHandler {
+        entered: tokio::sync::Notify::new(),
+        release: tokio::sync::Notify::new(),
+        calls: AtomicUsize::new(0),
+    });
+    let first = JobWorker::new(
+        database.clone(),
+        handler.clone(),
+        "pool:worker-0".to_owned(),
+    );
+    let second = JobWorker::new(
+        database.clone(),
+        handler.clone(),
+        "pool:worker-1".to_owned(),
+    );
+    let task = tokio::spawn(async move { first.run_once(100).await });
+    tokio::time::timeout(Duration::from_secs(5), handler.entered.notified())
+        .await
+        .unwrap();
+    assert!(second.run_once(100).await.unwrap());
+    assert_eq!(handler.calls.load(Ordering::SeqCst), 1);
+    let counts = database.job_counts().await.unwrap();
+    assert_eq!(counts.running, 1);
+    assert_eq!(counts.pending, 1);
+    handler.release.notify_one();
+    assert!(task.await.unwrap().unwrap());
+    assert_eq!(database.job_counts().await.unwrap().completed, 1);
+}
+
+#[tokio::test]
+async fn worker_pool_admits_more_jobs_when_persisted_concurrency_changes() {
+    let database = database().await;
+    assert_eq!(database.job_worker_concurrency().await.unwrap(), 32);
+    database.set_job_worker_concurrency(1, 100).await.unwrap();
+    for _ in 0..2 {
+        database
+            .enqueue_job(
+                NewJob {
+                    kind: "test".to_owned(),
+                    workspace_id: None,
+                    payload: json!({}),
+                    available_at: 100,
+                },
+                100,
+            )
+            .await
+            .unwrap();
+    }
+    let handler = Arc::new(PoolBarrierHandler {
+        calls: AtomicUsize::new(0),
+        barrier: tokio::sync::Barrier::new(3),
+    });
+    let worker = JobWorker::new(database.clone(), handler.clone(), "dynamic".to_owned());
+    let (shutdown, receiver) = tokio::sync::watch::channel(false);
+    let task = tokio::spawn(async move { worker.run_pool_until_shutdown(receiver).await });
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while handler.calls.load(Ordering::SeqCst) < 1 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    database.set_job_worker_concurrency(2, 101).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while handler.calls.load(Ordering::SeqCst) < 2 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    shutdown.send(true).unwrap();
+    handler.barrier.wait().await;
+    task.await.unwrap().unwrap();
+    assert_eq!(database.job_counts().await.unwrap().completed, 2);
+    for invalid in [0, 257] {
+        assert!(matches!(
+            database.set_job_worker_concurrency(invalid, 102).await,
+            Err(StorageError::InvalidJobWorkerConcurrency)
+        ));
+    }
+    assert_eq!(database.job_worker_concurrency().await.unwrap(), 2);
+}
