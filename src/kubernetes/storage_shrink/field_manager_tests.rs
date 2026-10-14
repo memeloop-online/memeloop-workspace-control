@@ -30,7 +30,7 @@ enum WorkloadPatch {
 fn mock_coordinator(patch: WorkloadPatch) -> (KubernetesCoordinator, Workspace, CapturedRequests) {
     let workspace = super::workspace();
     let builder = ResourceBuilder {
-        installation_id: "shrink-field-manager-test".parse().unwrap(),
+        installation_id: "shrink-field-manager".parse().unwrap(),
         ttyd_image: "example/ttyd:1".to_owned(),
         buildkit_image: "moby/buildkit:test".to_owned(),
         ttyd_mtls: None,
