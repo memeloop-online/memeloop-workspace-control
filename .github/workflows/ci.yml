@@ -141,7 +141,13 @@ jobs:
         run: |
           docker build --tag mwc-storage-shrink-ci images/storage-shrink
           docker run --rm --entrypoint /bin/bash \
+            --cap-drop ALL \
+            --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add FOWNER --cap-add FSETID \
+            --network none \
             -v "$PWD/src/kubernetes/storage_shrink/preflight.sh:/runtime-preflight.sh:ro" \
+            -v "$PWD/src/kubernetes/storage_shrink/measure.sh:/runtime-measure.sh:ro" \
+            -v "$PWD/src/kubernetes/storage_shrink/copy.sh:/runtime-copy.sh:ro" \
+            -v "$PWD/src/kubernetes/storage_shrink/verify.sh:/runtime-verify.sh:ro" \
             -v "$PWD/images/storage-shrink/ci-preflight.sh:/ci-preflight.sh:ro" \
             mwc-storage-shrink-ci -ec '
               install -m 0666 /dev/null /dev/termination-log
@@ -634,7 +640,13 @@ jobs:
             echo "- Verify later: \`gh attestation verify oci://${IMAGE_NAME}@${PUBLISHED_DIGEST} --repo ${GITHUB_REPOSITORY}\`"
           } >> "${GITHUB_STEP_SUMMARY}"
           docker run --rm --entrypoint /bin/bash \
+            --cap-drop ALL \
+            --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add FOWNER --cap-add FSETID \
+            --network none \
             -v "$PWD/src/kubernetes/storage_shrink/preflight.sh:/runtime-preflight.sh:ro" \
+            -v "$PWD/src/kubernetes/storage_shrink/measure.sh:/runtime-measure.sh:ro" \
+            -v "$PWD/src/kubernetes/storage_shrink/copy.sh:/runtime-copy.sh:ro" \
+            -v "$PWD/src/kubernetes/storage_shrink/verify.sh:/runtime-verify.sh:ro" \
             -v "$PWD/images/storage-shrink/ci-preflight.sh:/ci-preflight.sh:ro" \
             "${IMAGE_NAME}@${PUBLISHED_DIGEST}" -ec '
               install -m 0666 /dev/null /dev/termination-log

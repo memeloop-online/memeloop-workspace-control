@@ -758,7 +758,7 @@ impl KubernetesCoordinator {
                         && policy.when_deleted.as_deref() == Some("Retain")
                 });
             if !retained {
-                sets.patch(&names.stateful_set, &PatchParams::default(), &Patch::Merge(&json!({"metadata": {"uid": set.metadata.uid, "resourceVersion": set.metadata.resource_version}, "spec": {"persistentVolumeClaimRetentionPolicy": {"whenScaled":"Retain", "whenDeleted":"Retain"}}}))).await.map_err(safe_error)?;
+                sets.patch(&names.stateful_set, &PatchParams::apply(super::FIELD_MANAGER), &Patch::Merge(&json!({"metadata": {"uid": set.metadata.uid, "resourceVersion": set.metadata.resource_version}, "spec": {"persistentVolumeClaimRetentionPolicy": {"whenScaled":"Retain", "whenDeleted":"Retain"}}}))).await.map_err(safe_error)?;
                 return Ok(false);
             }
             if set
@@ -841,7 +841,7 @@ impl KubernetesCoordinator {
                         && policy.when_deleted.as_deref() == Some("Retain")
                 })
             {
-                sets.patch(&names.stateful_set, &PatchParams::default(), &Patch::Merge(&json!({"metadata": {"uid": set.metadata.uid, "resourceVersion": set.metadata.resource_version}, "spec": {"persistentVolumeClaimRetentionPolicy": {"whenScaled":"Retain", "whenDeleted":"Retain"}}}))).await.map_err(safe_error)?;
+                sets.patch(&names.stateful_set, &PatchParams::apply(super::FIELD_MANAGER), &Patch::Merge(&json!({"metadata": {"uid": set.metadata.uid, "resourceVersion": set.metadata.resource_version}, "spec": {"persistentVolumeClaimRetentionPolicy": {"whenScaled":"Retain", "whenDeleted":"Retain"}}}))).await.map_err(safe_error)?;
                 return Ok(false);
             }
             if set
@@ -871,7 +871,7 @@ impl KubernetesCoordinator {
                 }
             }
             if set.spec.as_ref().and_then(|spec| spec.replicas) != Some(0) {
-                sets.patch(&names.stateful_set, &PatchParams::default(), &Patch::Merge(&json!({"metadata": {"uid": set.metadata.uid, "resourceVersion": set.metadata.resource_version}, "spec": {"replicas": 0}}))).await.map_err(safe_error)?;
+                sets.patch(&names.stateful_set, &PatchParams::apply(super::FIELD_MANAGER), &Patch::Merge(&json!({"metadata": {"uid": set.metadata.uid, "resourceVersion": set.metadata.resource_version}, "spec": {"replicas": 0}}))).await.map_err(safe_error)?;
                 return Ok(false);
             }
         }

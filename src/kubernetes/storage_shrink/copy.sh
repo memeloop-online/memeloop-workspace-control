@@ -26,7 +26,7 @@ PYTHON
 )
 test "$TARGET_BYTES" -gt "$used_bytes"
 available_bytes=$(df -B1 --output=avail /destination | tail -1 | tr -d '[:space:]')
-available_inodes=$(df -i --output=iavail /destination | tail -1 | tr -d '[:space:]')
+available_inodes=$(df --output=iavail /destination | tail -1 | tr -d '[:space:]')
 test "$available_bytes" -gt "$copy_bytes"
 test "$available_inodes" -gt "$used_inodes"
 tar --create --file=- --format=pax --directory=/source --one-file-system --sparse --xattrs --xattrs-include='*' --acls --numeric-owner . 2>/tmp/copy-source-errors \
