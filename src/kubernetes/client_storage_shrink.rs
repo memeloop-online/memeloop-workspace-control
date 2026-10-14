@@ -1079,7 +1079,7 @@ impl KubernetesCoordinator {
             &image,
         )?;
         validate_helper_spec(&pod, &desired)?;
-        self.helper_pod_result(workspace, operation, role, stage, &pod, &volume, &name)
+        self.helper_pod_result(workspace, operation, role, stage, &pod, &volume)
             .await
     }
 
@@ -1091,8 +1091,12 @@ impl KubernetesCoordinator {
         stage: ShrinkPodStage,
         pod: &Pod,
         volume: &StorageShrinkVolume,
-        name: &str,
     ) -> Result<Option<ShrinkUsage>, String> {
+        let name = pod
+            .metadata
+            .name
+            .as_deref()
+            .ok_or("helper Pod name is missing")?;
         let uid = pod
             .metadata
             .uid
