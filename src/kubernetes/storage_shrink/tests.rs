@@ -222,6 +222,7 @@ fn canonical_helper_validation_rejects_command_env_and_security_drift() {
         "approved-image",
     )
     .unwrap();
+    validate_helper_spec(&server_defaulted_helper(desired.clone()), &desired).unwrap();
     let mut tampered = server_defaulted_helper(desired.clone());
     tampered.spec.as_mut().unwrap().containers[0].command = Some(vec!["/bin/sh".to_owned()]);
     assert!(validate_helper_spec(&tampered, &desired).is_err());
@@ -245,6 +246,43 @@ fn canonical_helper_validation_rejects_command_env_and_security_drift() {
         .as_mut()
         .unwrap()[0]
         .read_only = None;
+    assert!(validate_helper_spec(&tampered, &desired).is_err());
+}
+
+#[test]
+fn rejects_api_mutable_image_and_container_injection() {
+    let workspace = workspace();
+    let operation = operation(&workspace);
+    let desired = migration_pod(
+        &operation,
+        metadata("copy"),
+        ShrinkPodStage::Copy,
+        &binding("source", 60),
+        Some(&binding("destination", 20)),
+        "approved-image",
+    )
+    .unwrap();
+    validate_helper_spec(&server_defaulted_helper(desired.clone()), &desired).unwrap();
+    let mut tampered = server_defaulted_helper(desired.clone());
+    tampered.spec.as_mut().unwrap().containers[0].image =
+        Some("reviewed.example/helper:swapped".to_owned());
+    assert!(validate_helper_spec(&tampered, &desired).is_err());
+    let injected_init: k8s_openapi::api::core::v1::Container = serde_json::from_value(json!({
+        "name": "injected-init",
+        "image": "reviewed.example/helper:swapped"
+    }))
+    .unwrap();
+    let mut tampered = server_defaulted_helper(desired.clone());
+    tampered.spec.as_mut().unwrap().init_containers = Some(vec![injected_init]);
+    assert!(validate_helper_spec(&tampered, &desired).is_err());
+    let injected_debug: k8s_openapi::api::core::v1::EphemeralContainer =
+        serde_json::from_value(json!({
+            "name": "injected-debug",
+            "image": "reviewed.example/helper:swapped"
+        }))
+        .unwrap();
+    let mut tampered = server_defaulted_helper(desired.clone());
+    tampered.spec.as_mut().unwrap().ephemeral_containers = Some(vec![injected_debug]);
     assert!(validate_helper_spec(&tampered, &desired).is_err());
 }
 
