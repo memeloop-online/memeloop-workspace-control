@@ -441,6 +441,10 @@ fn unrelated_apply_entries_are_ignored_and_empty_subresource_is_accepted() {
     });
     let mut old_version = source["metadata"]["managedFields"][0].clone();
     old_version["apiVersion"] = json!("apps/v1beta1");
+    old_version["fieldsV1"] = json!({
+        "f:metadata": {"f:annotations": {"f:old-version-note": {}}}
+    });
+    source["metadata"]["annotations"]["old-version-note"] = json!("unrelated");
     source["metadata"]["managedFields"]
         .as_array_mut()
         .unwrap()
@@ -746,6 +750,20 @@ fn retention_changes_preserve_other_owned_raw_policy_fields() {
         apply["spec"]["persistentVolumeClaimRetentionPolicy"],
         json!({"whenDeleted": "Retain", "whenScaled": "Retain", "futureOwnedHint": "keep"})
     );
+}
+
+#[test]
+fn previous_api_version_replica_ownership_is_not_unrelated() {
+    for stop in [false, true] {
+        let mut source = fixture();
+        let mut other = source["metadata"]["managedFields"][0].clone();
+        other["apiVersion"] = json!("apps/v1beta1");
+        source["metadata"]["managedFields"]
+            .as_array_mut()
+            .unwrap()
+            .push(other);
+        assert!(retained(source, stop).is_err());
+    }
 }
 
 #[test]
