@@ -66,6 +66,121 @@ target_bytes="$(df -B1 --output=size /source | tail -1 | tr -d '[:space:]')"
 TARGET_BYTES="${target_bytes}" bash /runtime-copy.sh
 TARGET_BYTES="${target_bytes}" bash /runtime-verify.sh
 
+TARGET_BYTES="${target_bytes}" python3 -I - <<'PYTHON'
+import os
+import stat
+import subprocess
+
+def verify(policy, succeeds, label):
+    environment = os.environ.copy()
+    environment.pop("MOUNT_ROOT_MTIME_POLICY", None)
+    if policy is not None:
+        environment["MOUNT_ROOT_MTIME_POLICY"] = policy
+    result = subprocess.run(
+        ["bash", "/runtime-verify.sh"],
+        env=environment,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    if (result.returncode == 0) != succeeds:
+        raise RuntimeError(f"{label}: unexpected verification exit code {result.returncode}")
+
+def reject_change(label, change, restore):
+    try:
+        change()
+        verify("longhorn-probe", False, label)
+    finally:
+        restore()
+    verify("longhorn-probe", True, f"{label} restored")
+
+root = "/destination"
+root_metadata = os.lstat(root)
+try:
+    os.utime(root, ns=(root_metadata.st_atime_ns, root_metadata.st_mtime_ns + 1000000000))
+    verify(None, False, "default policy rejects mount-root mtime mismatch")
+    verify("strict", False, "strict policy rejects mount-root mtime mismatch")
+    verify("unknown", False, "unknown policy rejects mount-root mtime mismatch")
+    verify("longhorn-probe", True, "longhorn-probe allows mount-root mtime mismatch")
+finally:
+    os.utime(root, ns=(root_metadata.st_atime_ns, root_metadata.st_mtime_ns))
+
+verify(None, True, "mount-root mtime restored")
+verify("strict", True, "strict policy accepts restored mount-root mtime")
+verify("unknown", False, "unknown policy rejects matching fixtures")
+
+for path, label in (
+    ("/destination/dir/plain", "child file mtime mismatch"),
+    ("/destination/dir", "child directory mtime mismatch"),
+    ("/destination/symlink", "symlink mtime mismatch"),
+):
+    metadata = os.lstat(path)
+    reject_change(
+        label,
+        lambda: os.utime(path, ns=(metadata.st_atime_ns, metadata.st_mtime_ns + 1000000000),
+                         follow_symlinks=False),
+        lambda: os.utime(path, ns=(metadata.st_atime_ns, metadata.st_mtime_ns),
+                         follow_symlinks=False),
+    )
+
+reject_change(
+    "mount-root mode mismatch",
+    lambda: os.chmod(root, stat.S_IMODE(root_metadata.st_mode) ^ stat.S_IXOTH),
+    lambda: os.chmod(root, stat.S_IMODE(root_metadata.st_mode)),
+)
+reject_change(
+    "mount-root uid mismatch",
+    lambda: os.chown(root, root_metadata.st_uid + 1, -1),
+    lambda: os.chown(root, root_metadata.st_uid, -1),
+)
+reject_change(
+    "mount-root gid mismatch",
+    lambda: os.chown(root, -1, root_metadata.st_gid + 1),
+    lambda: os.chown(root, -1, root_metadata.st_gid),
+)
+
+attribute = "user.mwc-preflight"
+root_attribute = (
+    os.getxattr(root, attribute, follow_symlinks=False)
+    if attribute in os.listxattr(root, follow_symlinks=False) else None
+)
+reject_change(
+    "mount-root user xattr mismatch",
+    lambda: os.setxattr(root, attribute, (root_attribute or b"") + b"changed",
+                       follow_symlinks=False),
+    lambda: os.removexattr(root, attribute, follow_symlinks=False)
+    if root_attribute is None else os.setxattr(root, attribute, root_attribute,
+                                              follow_symlinks=False),
+)
+
+for path, attribute, label in (
+    ("/destination/dir/data", "system.posix_acl_access", "child file ACL mismatch"),
+    ("/destination/dir", "system.posix_acl_default", "child directory default ACL mismatch"),
+):
+    original_acl = os.getxattr(path, attribute, follow_symlinks=False)
+    reject_change(
+        label,
+        lambda: os.removexattr(path, attribute, follow_symlinks=False),
+        lambda: os.setxattr(path, attribute, original_acl, follow_symlinks=False),
+    )
+
+path = "/destination/dir/plain"
+metadata = os.lstat(path)
+with open(path, "rb") as content:
+    original_content = content.read()
+try:
+    with open(path, "r+b") as content:
+        content.write(bytes([original_content[0] ^ 1]))
+    os.utime(path, ns=(metadata.st_atime_ns, metadata.st_mtime_ns), follow_symlinks=False)
+    verify("longhorn-probe", False, "same-size child content mismatch with preserved mtime")
+finally:
+    with open(path, "r+b") as content:
+        content.write(original_content)
+    os.utime(path, ns=(metadata.st_atime_ns, metadata.st_mtime_ns), follow_symlinks=False)
+
+verify(None, True, "restored fixtures pass default verification")
+PYTHON
+
 python3 -I - <<'PYTHON'
 import hashlib
 import os
