@@ -11,6 +11,9 @@ use uuid::Uuid;
 #[path = "field_manager_tests.rs"]
 mod field_manager;
 
+#[path = "workload_apply_tests.rs"]
+mod workload_apply;
+
 fn workspace() -> Workspace {
     let id = Uuid::now_v7();
     Workspace {

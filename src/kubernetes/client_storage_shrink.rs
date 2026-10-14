@@ -27,6 +27,14 @@ use crate::{
 const OPERATION_LABEL: &str = "workspace.memeloop.dev/storage-shrink";
 const COMPONENT_LABEL: &str = "app.kubernetes.io/component";
 
+#[path = "storage_shrink/workload_apply.rs"]
+mod workload_apply;
+
+struct ShrinkWorkload {
+    set: StatefulSet,
+    current: serde_json::Value,
+}
+
 #[derive(Clone, Copy)]
 pub(crate) enum ShrinkPodStage {
     Preflight,
@@ -61,6 +69,45 @@ pub(crate) struct ShrinkUsage {
 }
 
 impl KubernetesCoordinator {
+    async fn shrink_workload(
+        &self,
+        workspace: &Workspace,
+        name: &str,
+    ) -> Result<Option<ShrinkWorkload>, String> {
+        let request = axum::http::Request::get(format!(
+            "/apis/apps/v1/namespaces/{}/statefulsets/{name}",
+            workspace.runtime.namespace()
+        ))
+        .body(Vec::new())
+        .map_err(safe_error)?;
+        let current = match self.client.request::<serde_json::Value>(request).await {
+            Ok(current) => current,
+            Err(kube::Error::Api(error)) if error.code == 404 => return Ok(None),
+            Err(error) => return Err(safe_error(error)),
+        };
+        let set = serde_json::from_value(current.clone()).map_err(safe_error)?;
+        Ok(Some(ShrinkWorkload { set, current }))
+    }
+
+    async fn apply_shrink_workload(
+        &self,
+        workspace: &Workspace,
+        apply: &serde_json::Value,
+    ) -> Result<(), String> {
+        let name = apply["metadata"]["name"]
+            .as_str()
+            .ok_or("workspace apply name is missing")?;
+        Api::<StatefulSet>::namespaced(self.client.clone(), workspace.runtime.namespace())
+            .patch(
+                name,
+                &PatchParams::apply(super::FIELD_MANAGER),
+                &Patch::Apply(apply),
+            )
+            .await
+            .map_err(safe_error)?;
+        Ok(())
+    }
+
     pub(super) async fn verify_scratch_volume_binding(
         &self,
         workspace: &Workspace,
@@ -741,12 +788,8 @@ impl KubernetesCoordinator {
             .runtime_names(workspace)
             .map_err(safe_error)?
             .resources;
-        let sets =
-            Api::<StatefulSet>::namespaced(self.client.clone(), workspace.runtime.namespace());
-        let set = sets
-            .get_opt(&names.stateful_set)
-            .await
-            .map_err(safe_error)?;
+        let workload = self.shrink_workload(workspace, &names.stateful_set).await?;
+        let set = workload.as_ref().map(|workload| &workload.set);
         if let Some(set) = &set {
             self.shrink_owned(&set.metadata, workspace)?;
             let retained = set
@@ -757,8 +800,15 @@ impl KubernetesCoordinator {
                     policy.when_scaled.as_deref() == Some("Retain")
                         && policy.when_deleted.as_deref() == Some("Retain")
                 });
+            let apply = workload_apply::retained_workload_apply(
+                &workload
+                    .as_ref()
+                    .ok_or("workspace workload disappeared")?
+                    .current,
+                false,
+            )?;
             if !retained {
-                sets.patch(&names.stateful_set, &PatchParams::apply(super::FIELD_MANAGER), &Patch::Merge(&json!({"metadata": {"uid": set.metadata.uid, "resourceVersion": set.metadata.resource_version}, "spec": {"persistentVolumeClaimRetentionPolicy": {"whenScaled":"Retain", "whenDeleted":"Retain"}}}))).await.map_err(safe_error)?;
+                self.apply_shrink_workload(workspace, &apply).await?;
                 return Ok(false);
             }
             if set
@@ -824,13 +874,8 @@ impl KubernetesCoordinator {
             .runtime_names(workspace)
             .map_err(safe_error)?
             .resources;
-        let sets =
-            Api::<StatefulSet>::namespaced(self.client.clone(), workspace.runtime.namespace());
-        if let Some(set) = sets
-            .get_opt(&names.stateful_set)
-            .await
-            .map_err(safe_error)?
-        {
+        if let Some(workload) = self.shrink_workload(workspace, &names.stateful_set).await? {
+            let set = &workload.set;
             self.shrink_owned(&set.metadata, workspace)?;
             if !set
                 .spec
@@ -841,7 +886,8 @@ impl KubernetesCoordinator {
                         && policy.when_deleted.as_deref() == Some("Retain")
                 })
             {
-                sets.patch(&names.stateful_set, &PatchParams::apply(super::FIELD_MANAGER), &Patch::Merge(&json!({"metadata": {"uid": set.metadata.uid, "resourceVersion": set.metadata.resource_version}, "spec": {"persistentVolumeClaimRetentionPolicy": {"whenScaled":"Retain", "whenDeleted":"Retain"}}}))).await.map_err(safe_error)?;
+                let apply = workload_apply::retained_workload_apply(&workload.current, false)?;
+                self.apply_shrink_workload(workspace, &apply).await?;
                 return Ok(false);
             }
             if set
@@ -871,7 +917,8 @@ impl KubernetesCoordinator {
                 }
             }
             if set.spec.as_ref().and_then(|spec| spec.replicas) != Some(0) {
-                sets.patch(&names.stateful_set, &PatchParams::apply(super::FIELD_MANAGER), &Patch::Merge(&json!({"metadata": {"uid": set.metadata.uid, "resourceVersion": set.metadata.resource_version}, "spec": {"replicas": 0}}))).await.map_err(safe_error)?;
+                let apply = workload_apply::retained_workload_apply(&workload.current, true)?;
+                self.apply_shrink_workload(workspace, &apply).await?;
                 return Ok(false);
             }
         }

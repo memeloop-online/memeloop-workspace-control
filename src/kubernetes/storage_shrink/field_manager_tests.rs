@@ -18,7 +18,14 @@ use crate::{kubernetes::ResourceBuilder, workspaces::Workspace};
 
 use super::super::KubernetesCoordinator;
 
-type CapturedRequests = Arc<Mutex<Vec<(String, String, Value)>>>;
+struct CapturedRequest {
+    method: String,
+    uri: String,
+    content_type: Option<String>,
+    payload: Value,
+}
+
+type CapturedRequests = Arc<Mutex<Vec<CapturedRequest>>>;
 
 #[derive(Clone, Copy)]
 enum WorkloadPatch {
@@ -27,7 +34,49 @@ enum WorkloadPatch {
     StopReplicas,
 }
 
-fn mock_coordinator(patch: WorkloadPatch) -> (KubernetesCoordinator, Workspace, CapturedRequests) {
+fn owned_fields(value: &Value, field: &str) -> Value {
+    match value {
+        Value::Object(object) => Value::Object(
+            object
+                .iter()
+                .map(|(name, value)| (format!("f:{name}"), owned_fields(value, name)))
+                .collect(),
+        ),
+        Value::Array(items)
+            if matches!(
+                field,
+                "containers" | "initContainers" | "env" | "ports" | "volumes" | "volumeMounts"
+            ) =>
+        {
+            Value::Object(
+                items
+                    .iter()
+                    .map(|item| {
+                        let selector = match field {
+                            "ports" => json!({
+                                "containerPort": item["containerPort"],
+                                "protocol": item.get("protocol").cloned().unwrap_or(json!("TCP"))
+                            }),
+                            "volumeMounts" => json!({"mountPath": item["mountPath"]}),
+                            _ => json!({"name": item["name"]}),
+                        };
+                        let mut fields = owned_fields(item, "");
+                        fields
+                            .as_object_mut()
+                            .unwrap()
+                            .insert(".".to_owned(), json!({}));
+                        (format!("k:{selector}"), fields)
+                    })
+                    .collect(),
+            )
+        }
+        _ => json!({}),
+    }
+}
+
+fn mock_coordinator(
+    patch: WorkloadPatch,
+) -> (KubernetesCoordinator, Workspace, CapturedRequests, Value) {
     let workspace = super::workspace();
     let builder = ResourceBuilder {
         installation_id: "shrink-field-manager".parse().unwrap(),
@@ -56,6 +105,7 @@ fn mock_coordinator(patch: WorkloadPatch) -> (KubernetesCoordinator, Workspace, 
         observed_generation: Some(1),
         ..Default::default()
     });
+    stateful_set.spec.as_mut().unwrap().replicas = Some(3);
     stateful_set
         .spec
         .as_mut()
@@ -65,7 +115,67 @@ fn mock_coordinator(patch: WorkloadPatch) -> (KubernetesCoordinator, Workspace, 
             when_deleted: Some("Retain".to_owned()),
             when_scaled: Some("Retain".to_owned()),
         });
-    let response = serde_json::to_value(stateful_set).unwrap();
+    for container in &mut stateful_set
+        .spec
+        .as_mut()
+        .unwrap()
+        .template
+        .spec
+        .as_mut()
+        .unwrap()
+        .containers
+    {
+        for port in container.ports.iter_mut().flatten() {
+            if port.protocol.is_none() {
+                port.protocol = Some("TCP".to_owned());
+            }
+        }
+    }
+    let source = serde_json::to_value(stateful_set).unwrap();
+    let fields = json!({
+        "f:metadata": {"f:labels": owned_fields(&source["metadata"]["labels"], "labels")},
+        "f:spec": owned_fields(&source["spec"], "spec")
+    });
+    let mut response = source.clone();
+    response["metadata"]["annotations"] = json!({"foreign.example/private": "do-not-copy"});
+    response["spec"]["revisionHistoryLimit"] = json!(21);
+    response["spec"]["template"]["spec"]["priorityClassName"] = json!("foreign-priority");
+    let container = &mut response["spec"]["template"]["spec"]["containers"][0];
+    if container.get("env").is_none() {
+        container["env"] = json!([]);
+    }
+    container["env"].as_array_mut().unwrap().push(json!({
+        "name": "FOREIGN_INJECTED", "value": "not-owned"
+    }));
+    let container_selector = format!("k:{}", json!({"name": container["name"]}));
+    response["metadata"]["managedFields"] = json!([
+        {
+            "manager": "memeloop-workspace-control", "operation": "Apply",
+            "apiVersion": "apps/v1", "fieldsType": "FieldsV1", "fieldsV1": fields
+        },
+        {
+            "manager": "foreign-injector", "operation": "Update", "apiVersion": "apps/v1",
+            "fieldsType": "FieldsV1", "fieldsV1": {
+                "f:metadata": {"f:annotations": {"f:foreign.example/private": {}}},
+                "f:spec": {
+                    "f:revisionHistoryLimit": {},
+                    "f:template": {"f:spec": {
+                        "f:priorityClassName": {},
+                        "f:containers": {(container_selector): {
+                            "f:env": {"k:{\"name\":\"FOREIGN_INJECTED\"}": {
+                                ".": {}, "f:name": {}, "f:value": {}
+                            }}
+                        }}
+                    }}
+                }
+            }
+        },
+        {
+            "manager": "kube-controller-manager", "operation": "Update",
+            "apiVersion": "apps/v1", "subresource": "status", "fieldsType": "FieldsV1",
+            "fieldsV1": {"f:status": {"f:observedGeneration": {}}}
+        }
+    ]);
     let replies = Arc::new(Mutex::new(VecDeque::from([response.clone(), response])));
     let requests = CapturedRequests::default();
     let captured = requests.clone();
@@ -80,11 +190,15 @@ fn mock_coordinator(patch: WorkloadPatch) -> (KubernetesCoordinator, Workspace, 
             } else {
                 serde_json::from_slice(&body).unwrap()
             };
-            captured.lock().unwrap().push((
-                parts.method.to_string(),
-                parts.uri.to_string(),
+            captured.lock().unwrap().push(CapturedRequest {
+                method: parts.method.to_string(),
+                uri: parts.uri.to_string(),
+                content_type: parts
+                    .headers
+                    .get("content-type")
+                    .map(|value| value.to_str().unwrap().to_owned()),
                 payload,
-            ));
+            });
             let reply = replies
                 .lock()
                 .unwrap()
@@ -104,11 +218,12 @@ fn mock_coordinator(patch: WorkloadPatch) -> (KubernetesCoordinator, Workspace, 
         KubernetesCoordinator::new(client, builder),
         workspace,
         requests,
+        source,
     )
 }
 
 async fn assert_workload_patch(patch: WorkloadPatch) {
-    let (coordinator, workspace, requests) = mock_coordinator(patch);
+    let (coordinator, workspace, requests, source) = mock_coordinator(patch);
     let operation = super::operation(&workspace);
     let result = match patch {
         WorkloadPatch::RetainSources => {
@@ -125,27 +240,53 @@ async fn assert_workload_patch(patch: WorkloadPatch) {
     assert!(!result.unwrap());
     let requests = requests.lock().unwrap();
     assert_eq!(requests.len(), 2);
-    assert_eq!(requests[0].0, "GET");
-    let (method, uri, payload) = &requests[1];
-    assert_eq!(method, "PATCH");
-    let query = uri.split_once('?').unwrap().1;
+    assert_eq!(requests[0].method, "GET");
+    let request = &requests[1];
+    assert_eq!(request.method, "PATCH");
+    assert_eq!(
+        request.content_type.as_deref(),
+        Some("application/apply-patch+yaml")
+    );
+    assert_eq!(
+        request.uri.split('?').next(),
+        requests[0].uri.split('?').next()
+    );
+    let query = request.uri.split_once('?').unwrap().1;
     assert!(
         query
             .split('&')
             .any(|parameter| { parameter == "fieldManager=memeloop-workspace-control" })
     );
     assert!(!query.split('&').any(|parameter| parameter == "force=true"));
-    let spec = match patch {
-        WorkloadPatch::StopReplicas => json!({"replicas": 0}),
-        WorkloadPatch::RetainSources | WorkloadPatch::StopRetention => {
-            json!({"persistentVolumeClaimRetentionPolicy": {
-                "whenScaled": "Retain", "whenDeleted": "Retain"
-            }})
-        }
-    };
+    let mut spec = source["spec"].clone();
+    spec["persistentVolumeClaimRetentionPolicy"] = json!({
+        "whenScaled": "Retain", "whenDeleted": "Retain"
+    });
+    if matches!(patch, WorkloadPatch::StopReplicas) {
+        spec["replicas"] = json!(0);
+    }
+    let payload = &request.payload;
+    assert_eq!(payload["spec"]["template"], source["spec"]["template"]);
+    assert_eq!(payload["spec"]["selector"], source["spec"]["selector"]);
+    assert_eq!(
+        payload["spec"]["serviceName"],
+        source["spec"]["serviceName"]
+    );
+    assert_eq!(
+        payload["spec"]["volumeClaimTemplates"],
+        source["spec"]["volumeClaimTemplates"]
+    );
     assert_eq!(
         payload,
-        &json!({"metadata": {"uid": "set-uid", "resourceVersion": "17"}, "spec": spec})
+        &json!({
+            "apiVersion": "apps/v1", "kind": "StatefulSet",
+            "metadata": {
+                "name": source["metadata"]["name"],
+                "namespace": source["metadata"]["namespace"],
+                "uid": "set-uid", "resourceVersion": "17", "labels": source["metadata"]["labels"]
+            },
+            "spec": spec
+        })
     );
 }
 
