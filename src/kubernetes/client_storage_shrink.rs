@@ -1287,6 +1287,27 @@ impl KubernetesCoordinator {
     }
 }
 
+fn mount_root_mtime_policy(
+    operation: &StorageShrinkOperation,
+    source: &WorkspaceHomeVolumeBinding,
+) -> &'static str {
+    let source_identity = [&operation.home, &operation.temporary]
+        .into_iter()
+        .find(|volume| {
+            volume.source.as_ref().is_some_and(|binding| {
+                binding.namespace == source.namespace
+                    && binding.claim_name == source.claim_name
+                    && binding.claim_uid == source.claim_uid
+            })
+        })
+        .and_then(|volume| volume.source_volume.as_ref());
+    if source_identity.is_some_and(|identity| identity.csi_driver == "driver.longhorn.io") {
+        "longhorn-probe"
+    } else {
+        "strict"
+    }
+}
+
 fn migration_pod(
     operation: &StorageShrinkOperation,
     metadata: ObjectMeta,
@@ -1295,6 +1316,11 @@ fn migration_pod(
     destination: Option<&WorkspaceHomeVolumeBinding>,
     image: &str,
 ) -> Result<Pod, String> {
+    let root_mtime_policy = if matches!(stage, ShrinkPodStage::Verify) {
+        mount_root_mtime_policy(operation, source)
+    } else {
+        "strict"
+    };
     let mut volumes = vec![
         json!({"name":"source","persistentVolumeClaim":{"claimName":source.claim_name,"readOnly":true}}),
         json!({"name":"tmp","emptyDir":{"medium":"Memory","sizeLimit":"128Mi"}}),
@@ -1311,7 +1337,7 @@ fn migration_pod(
         volumes.push(json!({"name":"destination","persistentVolumeClaim":{"claimName":destination.claim_name,"readOnly":matches!(stage, ShrinkPodStage::Verify).then_some(true)}}));
         mounts.push(json!({"name":"destination","mountPath":"/destination","readOnly":matches!(stage, ShrinkPodStage::Verify).then_some(true)}));
     }
-    serde_json::from_value(json!({"apiVersion":"v1","kind":"Pod","metadata":metadata,"spec":{"restartPolicy":"Never","activeDeadlineSeconds":86400,"automountServiceAccountToken":false,"enableServiceLinks":false,"securityContext":{"runAsUser":0,"runAsGroup":0,"seccompProfile":{"type":"RuntimeDefault"}},"containers":[{"name":"migrate","image":image,"command":["/bin/bash","-c"],"args":[stage.script()],"env":[{"name":"TARGET_BYTES","value":destination.map(|binding| (binding.capacity_gib * (1 << 30)).to_string()).unwrap_or_else(|| "0".to_owned())},{"name":"OPERATION_ID","value":operation.id.to_string()}],"securityContext":{"allowPrivilegeEscalation":false,"privileged":false,"readOnlyRootFilesystem":true,"capabilities":{"drop":["ALL"],"add":["CHOWN","DAC_OVERRIDE","FOWNER","FSETID"]}},"resources":{"requests":{"cpu":"100m","memory":"128Mi"},"limits":{"cpu":"1000m","memory":"512Mi"}},"terminationMessagePolicy":"File","volumeMounts":mounts}],"volumes":volumes}})).map_err(safe_error)
+    serde_json::from_value(json!({"apiVersion":"v1","kind":"Pod","metadata":metadata,"spec":{"restartPolicy":"Never","activeDeadlineSeconds":86400,"automountServiceAccountToken":false,"enableServiceLinks":false,"securityContext":{"runAsUser":0,"runAsGroup":0,"seccompProfile":{"type":"RuntimeDefault"}},"containers":[{"name":"migrate","image":image,"command":["/bin/bash","-c"],"args":[stage.script()],"env":[{"name":"TARGET_BYTES","value":destination.map(|binding| (binding.capacity_gib * (1 << 30)).to_string()).unwrap_or_else(|| "0".to_owned())},{"name":"OPERATION_ID","value":operation.id.to_string()},{"name":"MOUNT_ROOT_MTIME_POLICY","value":root_mtime_policy}],"securityContext":{"allowPrivilegeEscalation":false,"privileged":false,"readOnlyRootFilesystem":true,"capabilities":{"drop":["ALL"],"add":["CHOWN","DAC_OVERRIDE","FOWNER","FSETID"]}},"resources":{"requests":{"cpu":"100m","memory":"128Mi"},"limits":{"cpu":"1000m","memory":"512Mi"}},"terminationMessagePolicy":"File","volumeMounts":mounts}],"volumes":volumes}})).map_err(safe_error)
 }
 
 fn parse_usage_evidence(status: Option<&PodStatus>) -> Result<ShrinkUsage, String> {

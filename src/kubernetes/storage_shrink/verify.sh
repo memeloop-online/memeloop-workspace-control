@@ -32,6 +32,9 @@ import stat
 
 source_links = {}
 destination_links = {}
+root_mtime_policy = os.environ.get("MOUNT_ROOT_MTIME_POLICY", "strict")
+if root_mtime_policy not in ("strict", "longhorn-probe"):
+    raise RuntimeError("unsupported mount-root mtime policy")
 
 def digest(path):
     checksum = hashlib.sha256()
@@ -49,10 +52,11 @@ def attributes(path):
 def verify(source, destination):
     source_stat = os.lstat(source)
     destination_stat = os.lstat(destination)
-    assert (source_stat.st_mode, source_stat.st_uid, source_stat.st_gid,
-            source_stat.st_mtime_ns) == (destination_stat.st_mode,
-            destination_stat.st_uid, destination_stat.st_gid,
-            destination_stat.st_mtime_ns), "metadata mismatch"
+    assert (source_stat.st_mode, source_stat.st_uid, source_stat.st_gid) == (
+            destination_stat.st_mode, destination_stat.st_uid,
+            destination_stat.st_gid), "metadata mismatch"
+    if source != "/source" or root_mtime_policy != "longhorn-probe":
+        assert source_stat.st_mtime_ns == destination_stat.st_mtime_ns, "mtime mismatch"
     assert attributes(source) == attributes(destination), "xattrs/ACL mismatch"
     if not stat.S_ISDIR(source_stat.st_mode):
         assert source_stat.st_nlink == destination_stat.st_nlink, "hardlink count mismatch"

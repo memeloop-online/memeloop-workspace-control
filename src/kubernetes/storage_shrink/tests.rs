@@ -77,6 +77,107 @@ fn metadata(name: &str) -> ObjectMeta {
 }
 
 #[test]
+fn root_mtime_policy_is_scoped_to_the_discovered_source_identity() {
+    let workspace = workspace();
+    let mut operation = operation(&workspace);
+    let source = binding("source", 60);
+    assert_eq!(mount_root_mtime_policy(&operation, &source), "strict");
+    operation.home.source = Some(source.clone());
+    operation.home.source_volume = Some(StorageVolumeIdentity {
+        pv_name: "source-pv".to_owned(),
+        pv_uid: "pv-uid".to_owned(),
+        csi_driver: "driver.longhorn.io".to_owned(),
+        csi_volume_handle: "backend-volume".to_owned(),
+        storage_class_name: "longhorn".to_owned(),
+        longhorn_namespace: Some("longhorn-system".to_owned()),
+        longhorn_volume_uid: Some("longhorn-uid".to_owned()),
+    });
+    assert_eq!(
+        mount_root_mtime_policy(&operation, &source),
+        "longhorn-probe"
+    );
+    let pod = migration_pod(
+        &operation,
+        metadata("verify"),
+        ShrinkPodStage::Verify,
+        &source,
+        Some(&binding("destination", 20)),
+        "approved-image",
+    )
+    .unwrap();
+    assert_eq!(
+        pod.spec.unwrap().containers[0]
+            .env
+            .as_ref()
+            .unwrap()
+            .iter()
+            .find(|variable| variable.name == "MOUNT_ROOT_MTIME_POLICY")
+            .unwrap()
+            .value
+            .as_deref(),
+        Some("longhorn-probe")
+    );
+    for change in ["namespace", "name", "uid"] {
+        let mut unrelated = source.clone();
+        match change {
+            "namespace" => unrelated.namespace = "foreign".to_owned(),
+            "name" => unrelated.claim_name = "foreign".to_owned(),
+            _ => unrelated.claim_uid = "foreign".to_owned(),
+        }
+        assert_eq!(mount_root_mtime_policy(&operation, &unrelated), "strict");
+    }
+    for driver in ["topolvm.io", "unknown", ""] {
+        operation.home.source_volume.as_mut().unwrap().csi_driver = driver.to_owned();
+        assert_eq!(mount_root_mtime_policy(&operation, &source), "strict");
+    }
+    operation.temporary = operation.home.clone();
+    operation.home.source = None;
+    operation
+        .temporary
+        .source_volume
+        .as_mut()
+        .unwrap()
+        .csi_driver = "driver.longhorn.io".to_owned();
+    assert_eq!(
+        mount_root_mtime_policy(&operation, &source),
+        "longhorn-probe"
+    );
+}
+
+#[test]
+fn root_mtime_policy_cannot_be_injected_into_an_unrecognized_source_helper() {
+    let workspace = workspace();
+    let operation = operation(&workspace);
+    for stage in [
+        ShrinkPodStage::Preflight,
+        ShrinkPodStage::Measure,
+        ShrinkPodStage::Copy,
+        ShrinkPodStage::Verify,
+    ] {
+        let desired = migration_pod(
+            &operation,
+            metadata(stage.name()),
+            stage,
+            &binding("source", 60),
+            Some(&binding("destination", 20)),
+            "approved-image",
+        )
+        .unwrap();
+        let mut tampered = server_defaulted_helper(desired.clone());
+        let policy = tampered.spec.as_mut().unwrap().containers[0]
+            .env
+            .as_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|variable| variable.name == "MOUNT_ROOT_MTIME_POLICY")
+            .unwrap();
+        assert_eq!(policy.value.as_deref(), Some("strict"));
+        policy.value = Some("longhorn-probe".to_owned());
+        assert!(validate_helper_spec(&tampered, &desired).is_err());
+    }
+}
+
+#[test]
 fn helper_has_read_only_source_and_no_workspace_credentials() {
     let workspace = workspace();
     let operation = operation(&workspace);
