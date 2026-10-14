@@ -123,7 +123,10 @@ fn organization_routes(router: ApiRouter) -> ApiRouter {
             get(user_quota::get).put(user_quota::set),
         )
         .route("/api/v1/audit", get(admin::audit))
-        .route("/api/v1/admin/scaling", get(admin::scaling))
+        .route(
+            "/api/v1/admin/scaling",
+            get(admin::scaling).put(admin::update_scaling),
+        )
         .route("/api/v1/admin/node-pools", get(admin::list_node_pools))
         .route(
             "/api/v1/admin/node-pools/{name}",

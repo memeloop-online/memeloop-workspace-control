@@ -52,6 +52,30 @@ test("organization usage summary uses the dedicated aggregate endpoint", async (
   } finally { globalThis.fetch = originalFetch; }
 });
 
+test("scaling updates send the job worker concurrency and return the refreshed status", async () => {
+  const originalFetch = globalThis.fetch;
+  const requests: Array<{ input: RequestInfo | URL; init?: RequestInit }> = [];
+  globalThis.fetch = async (input, init) => {
+    requests.push({ input, init });
+    return Response.json({
+      database_mode: "sqlite",
+      configured_replicas: 1,
+      schema_version: 12,
+      job_worker_concurrency: 64,
+      jobs: { pending: 0, running: 0, completed: 0, failed: 0 },
+    });
+  };
+  try {
+    const status = await new ApiClient("operator-token").updateScaling(64);
+    assert.equal(status.job_worker_concurrency, 64);
+    assert.equal(String(requests[0]?.input), "/api/v1/admin/scaling");
+    assert.equal(requests[0]?.init?.method, "PUT");
+    assert.deepEqual(JSON.parse(String(requests[0]?.init?.body)), { job_worker_concurrency: 64 });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("workspace runtime payload preserves the scheduled Kubernetes node name", async () => {
   const originalFetch = globalThis.fetch;
   let request = "";

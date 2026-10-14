@@ -237,6 +237,7 @@ const IMPORT_ORDER: &[&str] = &[
     "webhook_subscriptions",
     "workspace_ssh_identities",
     "workspace_tombstones",
+    "installation_runtime_settings",
     "jobs",
     "events",
 ];
@@ -267,6 +268,7 @@ const IMPORT_DESTINATION_DATA_TABLES: &[&str] = &[
     "webhook_subscriptions",
     "workspace_ssh_identities",
     "workspace_tombstones",
+    "installation_runtime_settings",
     "jobs",
     "workspace_leases",
     "events",
@@ -281,6 +283,10 @@ const IMPORT_DESTINATION_DATA_TABLES: &[&str] = &[
 ];
 
 const EXPORT_QUERIES: &[(&str, &str)] = &[
+    (
+        "installation_runtime_settings",
+        "SELECT json_object('installation_id', installation_id, 'job_worker_concurrency', job_worker_concurrency, 'updated_at', updated_at) item FROM installation_runtime_settings WHERE installation_id = ?1",
+    ),
     (
         "users",
         "SELECT json_object('id', id, 'installation_id', installation_id, 'display_name', display_name, 'token_hash', token_hash, 'system_admin', system_admin, 'disabled', disabled, 'created_at', created_at, 'avatar_url', avatar_url) item FROM users WHERE installation_id = ?1 ORDER BY id",

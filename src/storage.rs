@@ -27,6 +27,7 @@ mod plugin_package_store;
 mod plugin_store;
 mod port_mappings;
 mod runtime_incidents;
+mod runtime_settings;
 mod schema;
 mod ssh_access;
 mod ssh_identity;
@@ -69,6 +70,7 @@ pub use port_mappings::{IssuedPortMappingTicket, PortMapping, hash_secret, valid
 pub use runtime_incidents::{
     NewWorkspaceRuntimeIncident, RuntimeEventCategory, WorkspaceRuntimeIncident,
 };
+pub use runtime_settings::{DEFAULT_JOB_WORKER_CONCURRENCY, MAX_JOB_WORKER_CONCURRENCY};
 pub use ssh_access::SshAccessCandidate;
 pub use ssh_identity::{WorkspaceSshIdentity, WorkspaceSshPublicIdentity};
 pub use template_store::{CreateWorkspaceTemplate, WorkspaceTemplate};

@@ -13,6 +13,8 @@ pub enum StorageError {
     Json(#[from] serde_json::Error),
     #[error(transparent)]
     Uuid(#[from] uuid::Error),
+    #[error("job worker concurrency must be between 1 and 256")]
+    InvalidJobWorkerConcurrency,
     #[error("lease owner must not be empty")]
     EmptyLeaseOwner,
     #[error("lease duration overflowed")]

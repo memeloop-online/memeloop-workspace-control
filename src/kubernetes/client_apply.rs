@@ -263,15 +263,19 @@ impl KubernetesCoordinator {
                 .and_then(|spec| spec.volume_claim_templates.as_ref())
                 .and_then(|claims| claims.first())
                 .and_then(|claim| claim.metadata.labels.as_ref());
-            persistent_volume_claims
-                .patch(
-                    &pvc_name,
-                    &PatchParams::default(),
-                    &Patch::Merge(&serde_json::json!({
-                        "metadata": {"labels": claim_labels}
-                    })),
-                )
-                .await?;
+            if claim_labels_need_update(&existing, claim_labels) {
+                // StatefulSet-created claims already carry these labels. Avoid an unnecessary
+                // write while the scheduler is updating the claim during VolumeBinding.
+                persistent_volume_claims
+                    .patch(
+                        &pvc_name,
+                        &PatchParams::default(),
+                        &Patch::Merge(&serde_json::json!({
+                            "metadata": {"labels": claim_labels}
+                        })),
+                    )
+                    .await?;
+            }
         }
         if matches!(
             workspace.state,
@@ -424,6 +428,22 @@ impl KubernetesCoordinator {
 
 // A changed installation default applies only when provisioning a new Home.
 // Updating an existing claim template would force an unnecessary Pod recreation.
+fn claim_labels_need_update(
+    existing: &PersistentVolumeClaim,
+    desired: Option<&std::collections::BTreeMap<String, String>>,
+) -> bool {
+    desired.is_some_and(|labels| {
+        labels.iter().any(|(key, value)| {
+            existing
+                .metadata
+                .labels
+                .as_ref()
+                .and_then(|current| current.get(key))
+                != Some(value)
+        })
+    })
+}
+
 fn preserve_claim_storage_classes(desired: &mut StatefulSet, existing: &StatefulSet) {
     let Some(claims) = desired
         .spec
@@ -491,7 +511,9 @@ fn immutable_stateful_set_status(code: u16, reason: &str, message: &str) -> bool
 
 #[cfg(test)]
 mod immutable_stateful_set_tests {
-    use super::{immutable_stateful_set_status, preserve_claim_storage_classes};
+    use super::{
+        claim_labels_need_update, immutable_stateful_set_status, preserve_claim_storage_classes,
+    };
     use k8s_openapi::api::{
         apps::v1::{StatefulSet, StatefulSetSpec},
         core::v1::{PersistentVolumeClaim, PersistentVolumeClaimSpec},
@@ -516,6 +538,30 @@ mod immutable_stateful_set_tests {
             }),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn matching_claim_labels_do_not_write_during_volume_binding() {
+        let desired =
+            std::collections::BTreeMap::from([("owner".to_owned(), "workspace".to_owned())]);
+        let mut existing = PersistentVolumeClaim::default();
+        assert!(claim_labels_need_update(&existing, Some(&desired)));
+        existing.metadata.labels = Some(desired.clone());
+        existing
+            .metadata
+            .labels
+            .as_mut()
+            .unwrap()
+            .insert("scheduler".to_owned(), "extra".to_owned());
+        assert!(!claim_labels_need_update(&existing, Some(&desired)));
+        assert!(!claim_labels_need_update(&existing, None));
+        existing
+            .metadata
+            .labels
+            .as_mut()
+            .unwrap()
+            .insert("owner".to_owned(), "stale".to_owned());
+        assert!(claim_labels_need_update(&existing, Some(&desired)));
     }
 
     #[test]

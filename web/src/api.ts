@@ -252,6 +252,12 @@ export class ApiClient {
     return this.request("/api/v1/admin/scaling");
   }
 
+  updateScaling(jobWorkerConcurrency: number): Promise<ScalingStatus> {
+    return this.request("/api/v1/admin/scaling", {
+      method: "PUT", body: JSON.stringify({ job_worker_concurrency: jobWorkerConcurrency }), idempotent: true,
+    });
+  }
+
   images(): Promise<ImagePolicy[]> {
     return this.request("/api/v1/admin/images");
   }

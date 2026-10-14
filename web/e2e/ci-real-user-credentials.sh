@@ -111,3 +111,11 @@ target_user_id=$(jq --exit-status --raw-output '.id' <<<"$target_json")
     E2E_ORGANIZATION_ID="$organization_id" \
     node --test e2e/production-settings-schema.test.mjs
 ) 2>&1 | tee "$log_dir/settings-schema-e2e.log"
+
+(
+  cd web
+  E2E_LOCAL_BACKEND=1 \
+    E2E_BASE_URL=http://127.0.0.1:18080 \
+    E2E_ADMIN_TOKEN="$admin_token" \
+    node --test e2e/production-scaling-concurrency.test.mjs
+) 2>&1 | tee "$log_dir/scaling-concurrency-e2e.log"
