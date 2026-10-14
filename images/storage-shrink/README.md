@@ -22,9 +22,12 @@ Re-verify the amd64 digest through the official Docker Hub registry read-only
 API (`/v2/library/debian/manifests/bookworm-slim`) before bumping the pin.
 
 `ci-preflight.sh` runs inside the image in CI (against the local build in the
-verify job and against the published digest in the publish job) and proves GNU
-tar, Python 3 and GNU coreutils with working user xattr, POSIX ACL, sparse-file
-and hardlink support before any migration may be enabled.
+verify job and against the published digest in the publish job). It executes the
+actual runtime preflight, measure, copy and verify scripts with networking disabled
+and the migration capability set. Fixtures cover user xattrs, access/default POSIX
+ACLs, numeric ownership, nanosecond mtime, sparse files, hardlinks and symlinks.
+This validates the scripts and toolchain, not isolated CSI mounts or the complete
+workspace stop/recovery flow; live disposable-volume acceptance is still required.
 
 The helper includes Bash, GNU tar, Python 3 and coreutils. It receives no injected
 workspace credentials and no service-account token. It copies a read-only source

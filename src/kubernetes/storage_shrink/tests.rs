@@ -8,6 +8,9 @@ use crate::{
 };
 use uuid::Uuid;
 
+#[path = "field_manager_tests.rs"]
+mod field_manager;
+
 fn workspace() -> Workspace {
     let id = Uuid::now_v7();
     Workspace {
