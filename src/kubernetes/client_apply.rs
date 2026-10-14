@@ -9,6 +9,9 @@ use kube::{
     Api,
     api::{DeleteParams, Patch, PatchParams},
 };
+use serde::{Serialize, de::DeserializeOwned};
+use std::fmt::Debug;
+use uuid::Uuid;
 
 use super::super::{DesiredResources, InjectionMaterialization};
 use super::{
@@ -154,40 +157,24 @@ impl KubernetesCoordinator {
         desired: &DesiredResources,
     ) -> Result<(), ReconcileError> {
         let workspace_id = workspace.id;
-        let apply = PatchParams::apply(FIELD_MANAGER);
         let runtime_names = self.builder.runtime_names(workspace)?;
         let names = &runtime_names.resources;
         let secrets = Api::<Secret>::namespaced(self.client.clone(), namespace_name);
-        verify_existing(
-            &secrets,
-            &names.ssh_identity_secret,
-            &self.builder,
-            workspace_id,
-        )
-        .await?;
-        secrets
-            .patch(
-                &names.ssh_identity_secret,
-                &apply,
-                &Patch::Apply(&desired.ssh_identity),
-            )
-            .await?;
-
         let config_maps = Api::<ConfigMap>::namespaced(self.client.clone(), namespace_name);
-        verify_existing(
-            &config_maps,
-            &names.workspace_config,
-            &self.builder,
-            workspace_id,
-        )
-        .await?;
-        config_maps
-            .patch(
+        tokio::try_join!(
+            self.apply_owned(
+                &secrets,
+                &names.ssh_identity_secret,
+                &desired.ssh_identity,
+                workspace_id,
+            ),
+            self.apply_owned(
+                &config_maps,
                 &names.workspace_config,
-                &apply,
-                &Patch::Apply(&desired.workspace_config),
-            )
-            .await?;
+                &desired.workspace_config,
+                workspace_id,
+            ),
+        )?;
         Ok(())
     }
 
@@ -369,59 +356,56 @@ impl KubernetesCoordinator {
         if namespace != workspace.runtime.namespace() {
             return Err(ReconcileError::RuntimeIdentityMismatch);
         }
-        let apply = PatchParams::apply(FIELD_MANAGER);
         let secrets = Api::<Secret>::namespaced(self.client.clone(), namespace);
-        verify_existing(
-            &secrets,
-            &names.environment_secret,
-            &self.builder,
-            workspace_id,
-        )
-        .await?;
-        secrets
-            .patch(
-                &names.environment_secret,
-                &apply,
-                &Patch::Apply(&materialization.environment_secret),
-            )
-            .await?;
-        verify_existing(&secrets, &names.files_secret, &self.builder, workspace_id).await?;
-        secrets
-            .patch(
-                &names.files_secret,
-                &apply,
-                &Patch::Apply(&materialization.file_secret),
-            )
-            .await?;
         let config_maps = Api::<ConfigMap>::namespaced(self.client.clone(), namespace);
-        verify_existing(
-            &config_maps,
-            &names.environment_config_map,
-            &self.builder,
-            workspace_id,
-        )
-        .await?;
-        config_maps
-            .patch(
+        // These projected inputs are independent. Join all writes before policies/workloads,
+        // retaining the ownership check for each object even when other writes succeed first.
+        tokio::try_join!(
+            self.apply_owned(
+                &secrets,
+                &names.environment_secret,
+                &materialization.environment_secret,
+                workspace_id,
+            ),
+            self.apply_owned(
+                &secrets,
+                &names.files_secret,
+                &materialization.file_secret,
+                workspace_id,
+            ),
+            self.apply_owned(
+                &config_maps,
                 &names.environment_config_map,
-                &apply,
-                &Patch::Apply(&materialization.environment_config_map),
-            )
-            .await?;
-        verify_existing(
-            &config_maps,
-            &names.files_config_map,
-            &self.builder,
-            workspace_id,
+                &materialization.environment_config_map,
+                workspace_id,
+            ),
+            self.apply_owned(
+                &config_maps,
+                &names.files_config_map,
+                &materialization.file_config_map,
+                workspace_id,
+            ),
+        )?;
+        Ok(())
+    }
+
+    async fn apply_owned<K>(
+        &self,
+        api: &Api<K>,
+        name: &str,
+        desired: &K,
+        workspace_id: Uuid,
+    ) -> Result<(), ReconcileError>
+    where
+        K: Clone + Debug + DeserializeOwned + Serialize,
+    {
+        verify_existing(api, name, &self.builder, workspace_id).await?;
+        api.patch(
+            name,
+            &PatchParams::apply(FIELD_MANAGER),
+            &Patch::Apply(desired),
         )
         .await?;
-        config_maps
-            .patch(
-                &names.files_config_map,
-                &apply,
-                &Patch::Apply(&materialization.file_config_map),
-            )
-            .await?;
         Ok(())
     }
 }

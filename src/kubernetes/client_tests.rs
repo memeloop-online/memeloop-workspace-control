@@ -59,6 +59,151 @@ mod coordinator_tests {
         workspaces::{AccessMode, Workspace, WorkspaceHomeVolumeBinding, WorkspaceState},
     };
 
+    fn startup_input_paths(builder: &ResourceBuilder, workspace: &Workspace) -> Vec<String> {
+        let names = builder.runtime_names(workspace).unwrap().resources;
+        let namespace = workspace.runtime.namespace();
+        [
+            ("secrets", names.environment_secret),
+            ("secrets", names.files_secret),
+            ("secrets", names.ssh_identity_secret),
+            ("configmaps", names.environment_config_map),
+            ("configmaps", names.files_config_map),
+            ("configmaps", names.workspace_config),
+        ]
+        .into_iter()
+        .map(|(kind, name)| format!("/api/v1/namespaces/{namespace}/{kind}/{name}"))
+        .collect()
+    }
+
+    #[tokio::test]
+    async fn startup_inputs_progress_concurrently_and_all_finish_before_network_or_workload() {
+        use http_body_util::BodyExt;
+        use std::sync::atomic::AtomicUsize;
+        use std::time::Duration;
+        use tokio::sync::Barrier;
+
+        let workspace = workspace(workspace_id());
+        let builder =
+            workspace_coordinator(Arc::new(WorkspaceDeleteMock::new("public-a", workspace.id)))
+                .builder;
+        let inputs = Arc::new(startup_input_paths(&builder, &workspace));
+        let barrier = Arc::new(Barrier::new(inputs.len()));
+        let completed = Arc::new(AtomicUsize::new(0));
+        let service = service_fn(move |request: Request<kube::client::Body>| {
+            let inputs = inputs.clone();
+            let barrier = barrier.clone();
+            let completed = completed.clone();
+            async move {
+                if request.method() == Method::GET {
+                    return Ok::<_, Infallible>(not_found());
+                }
+                assert_eq!(request.method(), Method::PATCH);
+                let path = request.uri().path().to_owned();
+                let body: serde_json::Value = serde_json::from_slice(
+                    &request.into_body().collect().await.unwrap().to_bytes(),
+                )
+                .unwrap();
+                if inputs.contains(&path) {
+                    // A serial implementation cannot release this gate. This also blocks
+                    // policy/workload publication while any projected input is unfinished.
+                    barrier.wait().await;
+                    completed.fetch_add(1, Ordering::SeqCst);
+                } else if path.contains("/networkpolicies/") || path.contains("/statefulsets/") {
+                    assert_eq!(completed.load(Ordering::SeqCst), inputs.len());
+                }
+                Ok(json_response(StatusCode::OK, body))
+            }
+        });
+        let coordinator =
+            KubernetesCoordinator::new(kube::Client::new(service, "default"), builder);
+        tokio::time::timeout(Duration::from_secs(3), coordinator.reconcile(&workspace))
+            .await
+            .expect("independent startup inputs must not wait for another input's API response")
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn failed_or_foreign_startup_input_blocks_workload_and_can_be_retried() {
+        use http_body_util::BodyExt;
+
+        for foreign in [false, true] {
+            let workspace = workspace(workspace_id());
+            let builder =
+                workspace_coordinator(Arc::new(WorkspaceDeleteMock::new("public-a", workspace.id)))
+                    .builder;
+            let blocked = startup_input_paths(&builder, &workspace)[1].clone();
+            let fail = Arc::new(AtomicBool::new(true));
+            let requests = Arc::new(Mutex::new(Vec::new()));
+            let service = service_fn({
+                let fail = fail.clone();
+                let requests = requests.clone();
+                move |request: Request<kube::client::Body>| {
+                    let fail = fail.clone();
+                    let requests = requests.clone();
+                    let blocked = blocked.clone();
+                    async move {
+                        let method = request.method().clone();
+                        let path = request.uri().path().to_owned();
+                        requests
+                            .lock()
+                            .unwrap()
+                            .push((method.clone(), path.clone()));
+                        if method == Method::GET {
+                            if foreign && path == blocked && fail.load(Ordering::SeqCst) {
+                                return Ok::<_, Infallible>(json_response(
+                                    StatusCode::OK,
+                                    serde_json::json!({
+                                        "apiVersion": "meta.k8s.io/v1",
+                                        "kind": "PartialObjectMetadata",
+                                        "metadata": {"labels": ownership_labels("another-installation", workspace.id)},
+                                    }),
+                                ));
+                            }
+                            return Ok(not_found());
+                        }
+                        assert_eq!(method, Method::PATCH);
+                        if foreign && path == blocked {
+                            assert!(
+                                !fail.load(Ordering::SeqCst),
+                                "foreign input must never be overwritten"
+                            );
+                        }
+                        if !foreign && path == blocked && fail.load(Ordering::SeqCst) {
+                            return Ok(json_response(
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                serde_json::json!({
+                                    "apiVersion": "v1", "kind": "Status", "status": "Failure",
+                                    "code": 500, "reason": "InternalError", "message": "transient failure",
+                                }),
+                            ));
+                        }
+                        let body: serde_json::Value = serde_json::from_slice(
+                            &request.into_body().collect().await.unwrap().to_bytes(),
+                        )
+                        .unwrap();
+                        Ok(json_response(StatusCode::OK, body))
+                    }
+                }
+            });
+            let coordinator =
+                KubernetesCoordinator::new(kube::Client::new(service, "default"), builder);
+            let error = coordinator.reconcile(&workspace).await.unwrap_err();
+            if foreign {
+                assert!(matches!(error, ReconcileError::Ownership(_)));
+            } else {
+                assert!(matches!(error, ReconcileError::Kubernetes(_)));
+            }
+            assert!(requests.lock().unwrap().iter().all(|(_, path)| {
+                !path.contains("/networkpolicies/") && !path.contains("/statefulsets/")
+            }));
+            fail.store(false, Ordering::SeqCst);
+            coordinator.reconcile(&workspace).await.unwrap();
+            assert!(requests.lock().unwrap().iter().any(|(method, path)| {
+                *method == Method::PATCH && path.contains("/statefulsets/")
+            }));
+        }
+    }
+
     #[test]
     fn restart_deletes_only_a_pod_from_an_older_generation() {
         let pod = |generation: Option<&str>| Pod {
