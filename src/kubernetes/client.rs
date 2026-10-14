@@ -26,7 +26,11 @@ mod apply;
 mod delete;
 #[path = "client_home_volume.rs"]
 mod home_volume;
+#[path = "client_storage_shrink.rs"]
+mod storage_shrink;
 pub use home_volume::home_volume_capacity_bytes;
+pub(crate) use storage_shrink::storage_shrink_image;
+pub(crate) use storage_shrink::{ShrinkPodStage, ShrinkUsage};
 
 #[derive(Clone)]
 pub struct KubernetesCoordinator {
@@ -180,6 +184,8 @@ pub enum ReconcileError {
         claim_name: String,
         reason: &'static str,
     },
+    #[error("bound scratch PVC {claim_name} is unavailable or its UID/capacity/ownership changed")]
+    InvalidScratchVolumeBinding { claim_name: String },
     #[error(transparent)]
     Build(#[from] BuildError),
     #[error(transparent)]

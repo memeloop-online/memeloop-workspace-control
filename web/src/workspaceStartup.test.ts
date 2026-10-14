@@ -31,10 +31,10 @@ test("uses the backend-provided known_hosts entry and it matches the alias", () 
 });
 
 test("composes the known_hosts entry from the host key alias as fallback", () => {
-  const legacy = { alias: "mwc-demo-a1b2c3d4", host_key_alias: undefined, known_hosts_entry: undefined };
-  assert.equal(knownHostsEntry(legacy, "ssh-ed25519 KEY"), "mwc-demo-a1b2c3d4 ssh-ed25519 KEY");
-  assert.equal(knownHostsEntry({ ...legacy, host_key_alias: "mwc-demo-a1b2c3d4" }, "ssh-ed25519 KEY"), "mwc-demo-a1b2c3d4 ssh-ed25519 KEY");
-  assert.equal(knownHostsEntry(legacy, null), null);
+  const aliasOnly = { alias: "mwc-demo-a1b2c3d4", host_key_alias: undefined, known_hosts_entry: undefined };
+  assert.equal(knownHostsEntry(aliasOnly, "ssh-ed25519 KEY"), "mwc-demo-a1b2c3d4 ssh-ed25519 KEY");
+  assert.equal(knownHostsEntry({ ...aliasOnly, host_key_alias: "mwc-demo-a1b2c3d4" }, "ssh-ed25519 KEY"), "mwc-demo-a1b2c3d4 ssh-ed25519 KEY");
+  assert.equal(knownHostsEntry(aliasOnly, null), null);
 });
 
 test("host key alias matches the HostKeyAlias line in the SSH config", () => {

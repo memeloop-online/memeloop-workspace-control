@@ -390,6 +390,75 @@ export interface WorkspaceStorageTelemetry {
   backing: "persistent_volume" | "ephemeral_volume" | "node_local" | "unknown";
 }
 
+export interface StorageShrinkRequest {
+  home_gib?: number;
+  temporary_storage_gib?: number;
+  expected_generation: number;
+  reclaim_source?: boolean;
+}
+
+export type StorageShrinkPhase =
+  | "queued"
+  | "stopping"
+  | "measuring"
+  | "copying"
+  | "verifying"
+  | "switching"
+  | "resuming"
+  | "rolling_back"
+  | "completed"
+  | "failed"
+  | "reclaiming"
+  | "reclaimed";
+
+export interface WorkspaceHomeVolumeBinding {
+  namespace: string;
+  claim_name: string;
+  claim_uid: string;
+  capacity_gib: number;
+}
+
+export interface StorageVolumeIdentity {
+  pv_name: string;
+  pv_uid: string;
+  csi_driver: string;
+  csi_volume_handle: string;
+  storage_class_name: string;
+  longhorn_namespace: string | null;
+  longhorn_volume_uid: string | null;
+}
+
+export interface StorageShrinkVolume {
+  target_gib: number | null;
+  source: WorkspaceHomeVolumeBinding | null;
+  destination: WorkspaceHomeVolumeBinding | null;
+  used_bytes: number | null;
+  used_inodes: number | null;
+  verified: boolean;
+  source_volume: StorageVolumeIdentity | null;
+  destination_volume: StorageVolumeIdentity | null;
+}
+
+export interface StorageShrinkOperation {
+  id: string;
+  workspace_id: string;
+  phase: StorageShrinkPhase;
+  error: string | null;
+  home: StorageShrinkVolume;
+  temporary: StorageShrinkVolume;
+  resume: boolean;
+  created_at: number;
+  updated_at: number;
+  actor_user_id: string;
+  request: StorageShrinkRequest;
+  original_home_gib: number;
+  original_temporary_storage_gib: number;
+  switched: boolean;
+  sources_retained: boolean;
+  reclaimable: boolean;
+  helper_pod_uids: Record<string, string>;
+}
+
 export interface WorkspaceRuntimeEntry {
   workspace_id: string;
   runtime: WorkspaceRuntime;

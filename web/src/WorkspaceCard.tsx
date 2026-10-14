@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { Badge, Button, Caption1, Divider, Spinner, Text, Title3, Tooltip } from "@fluentui/react-components";
-import { ArrowClockwiseRegular, ChevronDownRegular, ChevronUpRegular, DeleteRegular, DesktopRegular, LocationRegular, PlayRegular, StopRegular, WindowConsoleRegular } from "@fluentui/react-icons";
+import { ArrowClockwiseRegular, ChevronDownRegular, ChevronUpRegular, DeleteRegular, DesktopRegular, LocationRegular, PlayRegular, SaveRegular, StopRegular, WindowConsoleRegular } from "@fluentui/react-icons";
 import { useI18n } from "./i18n";
 import type { Locale, MessageKey } from "./i18n";
 import type { AvailableNodePool, WorkspaceResponse, WorkspaceRuntime, WorkspaceRuntimeEvent, WorkspaceRuntimePod } from "./types";
@@ -29,15 +29,17 @@ interface Props {
   onOpenShell: (id: string) => Promise<void>;
   onRequestRuntime: (id: string) => Promise<void>;
   onChangePlacement: (item: WorkspaceResponse) => void;
+  onShrinkStorage: (item: WorkspaceResponse) => void;
   onError: (message: string) => void;
   canConnect: boolean;
   canChangeState: boolean;
   canDelete: boolean;
   canChangePlacement: boolean;
+  canShrinkStorage: boolean;
   templateName?: string;
 }
 
-export function WorkspaceCard({ api, item, runtime, nodePools, busyAction, onAction, onOpenShell, onRequestRuntime, onChangePlacement, onError, canConnect, canChangeState, canDelete, canChangePlacement, templateName }: Props) {
+export function WorkspaceCard({ api, item, runtime, nodePools, busyAction, onAction, onOpenShell, onRequestRuntime, onChangePlacement, onShrinkStorage, onError, canConnect, canChangeState, canDelete, canChangePlacement, canShrinkStorage, templateName }: Props) {
   const { locale, t } = useI18n();
   const styles = useWorkspaceStyles();
   const [detailView, setDetailView] = useState<DetailView | null>(null);
@@ -94,6 +96,7 @@ export function WorkspaceCard({ api, item, runtime, nodePools, busyAction, onAct
           {canChangeState && running && <Button appearance="subtle" icon={<ArrowClockwiseRegular />} onClick={() => onAction(item, "restart")}>{t("restart")}</Button>}
           {canChangeState && (workspace.state === "stopped" || workspace.state === "failed") && <Button appearance="primary" icon={<PlayRegular />} onClick={() => onAction(item, "start")}>{t("start")}</Button>}
           {canChangePlacement && stopped && <Button appearance="subtle" icon={<LocationRegular />} onClick={() => onChangePlacement(item)}>{t("changeLocation")}</Button>}
+          {canShrinkStorage && (running || stopped) && <Button appearance="subtle" icon={<SaveRegular />} onClick={() => onShrinkStorage(item)}>{t("shrinkStorage")}</Button>}
         </>}
       </div>
       <div className={styles.toolbarGroupEnd}>

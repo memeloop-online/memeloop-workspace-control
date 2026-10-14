@@ -11,7 +11,7 @@ use crate::{
 
 pub(crate) const WORKSPACE_COLUMNS: &str = "id, short_id, organization_id, owner_id, name, \
     template_id, template_snapshot_yaml, node_pool, state, \
-    generation, created_at, updated_at, home_pvc_namespace, home_pvc_name, home_pvc_uid, home_pvc_capacity_gib";
+    generation, created_at, updated_at, home_pvc_namespace, home_pvc_name, home_pvc_uid, home_pvc_capacity_gib, scratch_volume_binding_json";
 
 pub(crate) fn select_workspace_sql(installation: &str, id: &str) -> String {
     format!(
@@ -100,6 +100,10 @@ where
         node_pool: row.try_get("node_pool")?,
         runtime,
         home_volume_binding,
+        scratch_volume_binding: row
+            .try_get::<Option<String>, _>("scratch_volume_binding_json")?
+            .map(|json| serde_json::from_str(&json))
+            .transpose()?,
         template: document.spec,
         state: WorkspaceState::from_database(&state)
             .ok_or(StorageError::UnknownWorkspaceState(state))?,

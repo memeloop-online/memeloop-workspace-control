@@ -4,6 +4,7 @@ const sidebars = {
     'intro',
     'quickstart',
     'workspaces',
+    'storage-shrink',
     'credentials-and-files',
     'access',
     'settings',

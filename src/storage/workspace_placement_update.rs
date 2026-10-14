@@ -91,6 +91,8 @@ async fn update_sqlite(
     snapshot_yaml: &str,
     update: &PlacementUpdate<'_>,
 ) -> Result<(), StorageError> {
+    super::workspace_storage_shrink::guard_sqlite(connection, installation_id, workspace.id)
+        .await?;
     ensure_stopped_at_generation(workspace, update.expected_generation)?;
     let placement = current_placement_sqlite(connection, installation_id, workspace).await?;
     let selected = super::node_pool_store::select_node_pool_sqlite(
@@ -132,6 +134,8 @@ async fn update_postgres(
     snapshot_yaml: &str,
     update: &PlacementUpdate<'_>,
 ) -> Result<(), StorageError> {
+    super::workspace_storage_shrink::guard_postgres(connection, installation_id, workspace.id)
+        .await?;
     ensure_stopped_at_generation(workspace, update.expected_generation)?;
     let placement = current_placement_postgres(connection, installation_id, workspace).await?;
     let selected = super::node_pool_store::select_node_pool_postgres(

@@ -125,7 +125,8 @@ jobs:
       - name: Enforce the current data-model vocabulary
         run: |
           for prohibited in 'leg''acy' 'leg''acy_v1' 'pre''fixed_v2' 'runtime''_profile'; do
-            if rg -n -i --glob '!target/**' --glob '!node_modules/**' -e "${prohibited}" .; then
+            if git grep -n -i -e "${prohibited}" -- \
+              . ':(exclude)Cargo.lock' ':(exclude,glob)**/package-lock.json'; then
               echo "obsolete data-model vocabulary found" >&2
               exit 1
             fi
@@ -136,6 +137,17 @@ jobs:
         run: |
           docker build --tag mwc-ttyd-ci images/ttyd-ssh
           bash tests/ttyd_mtls.sh mwc-ttyd-ci
+      - name: Verify storage shrink helper toolchain
+        run: |
+          docker build --tag mwc-storage-shrink-ci images/storage-shrink
+          docker run --rm --entrypoint /bin/bash \
+            -v "$PWD/src/kubernetes/storage_shrink/preflight.sh:/runtime-preflight.sh:ro" \
+            -v "$PWD/images/storage-shrink/ci-preflight.sh:/ci-preflight.sh:ro" \
+            mwc-storage-shrink-ci -ec '
+              install -m 0666 /dev/null /dev/termination-log
+              bash /runtime-preflight.sh
+              bash /ci-preflight.sh
+            '
       - name: Enforce production maintainability limits
         run: >-
           cargo clippy --locked --lib --bins --all-features --
@@ -530,6 +542,10 @@ jobs:
             context: images/ttyd-ssh
             dockerfile: images/ttyd-ssh/Dockerfile
             description: Stock ttyd with the standard OpenSSH client
+          - suffix: -storage-shrink
+            context: images/storage-shrink
+            dockerfile: images/storage-shrink/Dockerfile
+            description: Digest-pinned storage shrink migration helper
     env:
       IMAGE_NAME: ghcr.io/${{ github.repository }}${{ matrix.suffix }}
     steps:
@@ -605,6 +621,26 @@ jobs:
           PUBLISHED_DIGEST: ${{ steps.push.outputs.digest }}
         run: |
           bash tests/kali_browser_desktop_smoke.sh "${IMAGE_NAME}@${PUBLISHED_DIGEST}"
+      - name: Verify published storage shrink helper toolchain
+        if: matrix.suffix == '-storage-shrink'
+        env:
+          PUBLISHED_DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          echo "::notice title=Storage shrink helper published::${IMAGE_NAME}@${PUBLISHED_DIGEST}"
+          {
+            echo "### Storage shrink helper image"
+            echo "- Published digest: \`${IMAGE_NAME}@${PUBLISHED_DIGEST}\`"
+            echo "- Provenance attestation is pushed for this digest by the attest-build-provenance step"
+            echo "- Verify later: \`gh attestation verify oci://${IMAGE_NAME}@${PUBLISHED_DIGEST} --repo ${GITHUB_REPOSITORY}\`"
+          } >> "${GITHUB_STEP_SUMMARY}"
+          docker run --rm --entrypoint /bin/bash \
+            -v "$PWD/src/kubernetes/storage_shrink/preflight.sh:/runtime-preflight.sh:ro" \
+            -v "$PWD/images/storage-shrink/ci-preflight.sh:/ci-preflight.sh:ro" \
+            "${IMAGE_NAME}@${PUBLISHED_DIGEST}" -ec '
+              install -m 0666 /dev/null /dev/termination-log
+              bash /runtime-preflight.sh
+              bash /ci-preflight.sh
+            '
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-name: ${{ env.IMAGE_NAME }}

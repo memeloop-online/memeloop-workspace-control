@@ -11,6 +11,7 @@ impl KubernetesCoordinator {
         workspace: &Workspace,
     ) -> Result<(), ReconcileError> {
         self.builder.validate_home_volume_binding(workspace)?;
+        self.verify_scratch_volume_binding(workspace).await?;
         let Some(binding) = &workspace.home_volume_binding else {
             return Ok(());
         };

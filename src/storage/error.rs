@@ -64,6 +64,16 @@ pub enum StorageError {
     UnknownRuntimeIncidentCategory(String),
     #[error("workspace was not found")]
     WorkspaceNotFound,
+    #[error("workspace has an active storage migration; retry after it finishes")]
+    WorkspaceStorageShrinkConflict,
+    #[error(
+        "at least one storage target must be positive, smaller than the current capacity, and larger than measured usage"
+    )]
+    InvalidWorkspaceStorageShrink,
+    #[error(
+        "storage shrink requires an administrator-approved digest-pinned helper image and explicit POSIX/user xattr policy"
+    )]
+    WorkspaceStorageShrinkUnavailable,
     #[error("workspace HTTP port must be allowed and between 1 and 65535")]
     InvalidPortMappingPort,
     #[error("workspace port mapping display name is invalid")]

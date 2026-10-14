@@ -149,7 +149,10 @@ async fn sqlite_v26_preserves_events_and_accepts_new_categories() {
     }
     migrate_sqlite(pool, 100).await.unwrap();
     migrate_sqlite(pool, 101).await.unwrap();
-    assert_eq!(database.schema_version().await.unwrap(), 27);
+    assert_eq!(
+        database.schema_version().await.unwrap(),
+        schema::SCHEMA_VERSION
+    );
     let existing: (i64, i64) = sqlx::query_as(
         "SELECT count, last_seen_at FROM workspace_runtime_incidents WHERE id = 'existing'",
     )
@@ -204,7 +207,10 @@ async fn postgres_v26_preserves_events_and_accepts_new_categories() {
     }
     migrate_postgres(pool, installation_id, 100).await.unwrap();
     migrate_postgres(pool, installation_id, 101).await.unwrap();
-    assert_eq!(database.schema_version().await.unwrap(), 27);
+    assert_eq!(
+        database.schema_version().await.unwrap(),
+        schema::SCHEMA_VERSION
+    );
     let existing: (i64, i64) = sqlx::query_as(
         "SELECT count, last_seen_at FROM workspace_runtime_incidents WHERE id = 'existing'",
     )

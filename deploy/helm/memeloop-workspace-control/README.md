@@ -68,6 +68,22 @@ SQLite uses the `sqlite.size` and `sqlite.storageClassName` settings. Set
 `sqlite.existingClaim` on a fresh installation to mount a pre-created claim;
 it cannot be combined with `sqlite.storageClassName`.
 
+### Storage shrink
+
+Build and review the dedicated helper in `images/storage-shrink` in image CI.
+Configure `workspace.storageShrink.helperImage` with its exact `@sha256:` image
+reference and explicitly set `workspace.storageShrink.xattrPolicy: posix-user`.
+There is no workspace-image fallback and no runtime package installation.
+Leaving these unset makes the shrink creation endpoint return `503`, without
+stopping workspaces. The chart validates digest/policy and conditionally grants
+PV `get/patch/delete`, StorageClass `get`, and Longhorn Volume `get` to the control
+plane. The helper receives none of these permissions or a service-account token.
+
+`workspace.storageShrink.longhornNamespace` defaults to `longhorn-system`.
+Home and scratch must use filesystem CSI volumes; live scratch is retained before
+Pod scale-down. Read [the product guide](../../../docs/storage-shrink.md) for
+one-click `reclaim_source`, retained-backup confirmation and xattr limitations.
+
 ## Access
 
 Access features appear in the console when their values and template settings

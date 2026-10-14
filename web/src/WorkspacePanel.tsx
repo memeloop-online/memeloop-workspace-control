@@ -4,10 +4,11 @@ import { Button, Field, Input, MessageBar, MessageBarBody, Spinner, Text } from 
 import { AddRegular, ChevronLeftRegular, ChevronRightRegular, DismissRegular, SearchRegular } from "@fluentui/react-icons";
 import type { ApiClient } from "./api";
 import { useI18n } from "./i18n";
-import { canManageSystem, hasApiKeyScope } from "./permissions";
+import { canManageSystem, canShrinkWorkspaceStorage, hasApiKeyScope } from "./permissions";
 import { ConfirmDialog } from "./components/ConfirmDialog";
 import { WorkspaceCard } from "./WorkspaceCard";
 import { WorkspacePlacementDialog } from "./workspaces/WorkspacePlacementDialog";
+import { StorageShrinkDialog } from "./workspaces/StorageShrinkDialog";
 import { previousWorkspaceCursor } from "./workspacePaging";
 import { reserveWebShellWindow } from "./workspaceShell";
 import { aggregateRuntimeUsage } from "./workspaceMetrics";
@@ -70,6 +71,7 @@ export function WorkspacePanel(props: Props) {
   const [pendingCreate, setPendingCreate] = useState<CreateWorkspace | null>(null);
   const [placementTarget, setPlacementTarget] = useState<WorkspaceResponse | null>(null);
   const [placementBusy, setPlacementBusy] = useState(false);
+  const [shrinkTargetId, setShrinkTargetId] = useState<string | null>(null);
   const [actionBusy, setActionBusy] = useState(false);
   const generation = useRef(0);
   const requestActive = useRef(false);
@@ -86,6 +88,7 @@ export function WorkspacePanel(props: Props) {
   scopeRef.current = scope;
   const scopeIsCurrent = loadedScope === scope;
   const workspaces = scopeIsCurrent ? items : EMPTY_WORKSPACES;
+  const shrinkItem = shrinkTargetId ? workspaces.find((item) => item.workspace.id === shrinkTargetId) ?? null : null;
   const runtimeKey = workspaces.map(({ workspace }) => `${workspace.id}:${workspace.state}`).join(",");
   activeIdsRef.current = workspaces.map(({ workspace }) => workspace.id);
   const selectedTemplate = templates.find((template) => template.id === templateId);
@@ -274,6 +277,11 @@ export function WorkspacePanel(props: Props) {
     setResourceDraft((current) => current ? { ...current, [key]: Number.isFinite(parsed) ? Math.max(0, Math.trunc(parsed)) : 0 } : current);
   }
 
+  async function refreshAfterShrink() {
+    await props.onRefresh();
+    await loadPage(cursorRef.current, scopeRef.current);
+  }
+
   function setReferenceMode(explicit: boolean) {
     setExplicitInjectionRefs(explicit);
     if (explicit) { setOrganizationRefs([]); setUserRefs([]); }
@@ -352,9 +360,10 @@ export function WorkspacePanel(props: Props) {
     <div ref={listAnchorRef} className={styles.list} aria-busy={props.busy || loading}>
       {workspaces.length === 0 && loading && <div className={styles.empty} role="status"><Spinner label={t("loadingWorkspaces")} /></div>}
       {workspaces.length === 0 && !loading && scopeIsCurrent && <div className={styles.empty}>{debouncedSearch.trim() ? t("noMatchingWorkspaces") : t("noWorkspaces")}</div>}
-      {workspaces.map((item) => <WorkspaceCard key={item.workspace.id} api={props.api} item={item} runtime={runtime[item.workspace.id]} nodePools={nodePools} busyAction={activeAction?.workspaceId === item.workspace.id ? activeAction.action : null} onAction={requestAction} onOpenShell={openShell} onRequestRuntime={refreshRuntime} onError={props.onError} canConnect={canConnect} canChangeState={canChangeState} canDelete={canDelete} canChangePlacement={canChangePlacement} onChangePlacement={setPlacementTarget} templateName={templates.find((template) => template.id === item.workspace.template_id)?.name} />)}
+      {workspaces.map((item) => <WorkspaceCard key={item.workspace.id} api={props.api} item={item} runtime={runtime[item.workspace.id]} nodePools={nodePools} busyAction={activeAction?.workspaceId === item.workspace.id ? activeAction.action : null} onAction={requestAction} onOpenShell={openShell} onRequestRuntime={refreshRuntime} onError={props.onError} canConnect={canConnect} canChangeState={canChangeState} canDelete={canDelete} canChangePlacement={canChangePlacement} canShrinkStorage={canShrinkWorkspaceStorage(props.principal, item.workspace)} onChangePlacement={setPlacementTarget} onShrinkStorage={(target) => setShrinkTargetId(target.workspace.id)} templateName={templates.find((template) => template.id === item.workspace.template_id)?.name} />)}
     </div>
     <WorkspacePlacementDialog item={placementTarget} nodePools={nodePools} busy={placementBusy} onClose={() => !placementBusy && setPlacementTarget(null)} onConfirm={(nextNodePool) => placementTarget && void submitPlacement(placementTarget, nextNodePool)} />
+    <StorageShrinkDialog api={props.api} item={shrinkItem} runtime={shrinkItem ? runtime[shrinkItem.workspace.id] : undefined} onClose={() => setShrinkTargetId(null)} onSettled={refreshAfterShrink} />
     <ConfirmDialog open={pendingAction !== null} title={pendingAction ? t(pendingAction.action) : ""} description={actionDescription} details={pendingAction?.item.workspace.name} confirmLabel={pendingAction ? t(pendingAction.action) : ""} cancelLabel={t("cancel")} busy={actionBusy} danger={pendingAction?.action === "delete"} onClose={() => !actionBusy && setPendingAction(null)} onConfirm={() => pendingAction && void executeAction(pendingAction.item, pendingAction.action)} />
     <ConfirmDialog open={pendingCreate !== null} title={t("submitCreate")} description={t("workspaceHighRiskConfirm")} details={pendingCreate?.name} confirmLabel={t("submitCreate")} cancelLabel={t("cancel")} busy={submitting} danger onClose={() => !submitting && setPendingCreate(null)} onConfirm={() => pendingCreate && void submitCreate(pendingCreate)} />
   </Page>;

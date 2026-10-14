@@ -59,6 +59,7 @@ fn workspace(state: WorkspaceState) -> Workspace {
         name: "test-workspace".to_owned(),
         template_id: Some(Uuid::now_v7()),
         home_volume_binding: None,
+        scratch_volume_binding: None,
         node_pool: "default".to_owned(),
         runtime: WorkspaceRuntimeIdentity::new(id, &short_id).unwrap(),
         template: WorkspaceTemplateSpec::standard(

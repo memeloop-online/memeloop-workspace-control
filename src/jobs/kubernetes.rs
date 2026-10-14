@@ -10,6 +10,9 @@ use crate::{
     workspaces::{Workspace, WorkspaceObservation, WorkspaceState},
 };
 
+#[path = "storage_shrink.rs"]
+mod storage_shrink;
+
 pub struct WorkspaceReconcileHandler {
     database: Database,
     cipher: EnvelopeCipher,
@@ -152,6 +155,21 @@ impl WorkspaceReconcileHandler {
     }
 
     async fn reconcile_deletion(&self, workspace: &Workspace) -> Result<(), JobHandlerError> {
+        let mut operations = self
+            .database
+            .list_storage_shrinks(workspace.id)
+            .await
+            .map_err(job_error)?;
+        for operation in &mut operations {
+            self.coordinator
+                .capture_shrink_cleanup_identities(workspace, operation)
+                .await
+                .map_err(job_error)?;
+            self.database
+                .save_storage_shrink_cleanup_identity(operation)
+                .await
+                .map_err(job_error)?;
+        }
         match self
             .coordinator
             .delete_or_confirm(workspace)
@@ -159,6 +177,16 @@ impl WorkspaceReconcileHandler {
             .map_err(job_error)?
         {
             DeleteProgress::Gone => {
+                if !self
+                    .coordinator
+                    .delete_workspace_shrink_storage(workspace, &operations)
+                    .await
+                    .map_err(job_error)?
+                {
+                    return Err(JobHandlerError::Pending(
+                        "waiting for storage-shrink bindings and backups to be deleted".to_owned(),
+                    ));
+                }
                 self.record_observation(workspace, WorkspaceObservation::Deleted)
                     .await?;
                 Ok(())
@@ -374,6 +402,9 @@ fn checkpoint_error(
 
 impl JobHandler for WorkspaceReconcileHandler {
     async fn handle(&self, job: &ClaimedJob) -> Result<(), JobHandlerError> {
+        if job.kind == "workspace_storage_shrink" {
+            return self.handle_storage_shrink(job).await;
+        }
         if job.kind != "reconcile_workspace" {
             return Err(JobHandlerError::Failed(format!(
                 "unsupported background job kind {}",
@@ -391,10 +422,21 @@ impl JobHandler for WorkspaceReconcileHandler {
             }
             Err(error) => return Err(job_error(error)),
         };
+        if self
+            .database
+            .storage_shrink_active(workspace_id)
+            .await
+            .map_err(job_error)?
+        {
+            return Ok(());
+        }
         self.reconcile_workspace(&workspace, job).await
     }
 
     async fn on_terminal_failure(&self, job: &ClaimedJob, now: i64) -> Result<(), StorageError> {
+        if job.kind == "workspace_storage_shrink" {
+            return self.storage_shrink_terminal_failure(job, now).await;
+        }
         if job.kind != "reconcile_workspace" {
             return Ok(());
         }

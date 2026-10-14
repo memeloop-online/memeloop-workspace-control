@@ -670,12 +670,14 @@ async fn postgres_binding_competition_is_atomic_and_survives_database_reconnect(
 
 async fn downgrade_binding_schema(database: &Database) {
     let statements = [
+        "DROP TABLE workspace_storage_shrinks",
         "DROP INDEX workspace_home_pvc_name_idx",
         "DROP INDEX workspace_home_pvc_uid_idx",
         "ALTER TABLE workspaces DROP COLUMN home_pvc_namespace",
         "ALTER TABLE workspaces DROP COLUMN home_pvc_name",
         "ALTER TABLE workspaces DROP COLUMN home_pvc_uid",
         "ALTER TABLE workspaces DROP COLUMN home_pvc_capacity_gib",
+        "ALTER TABLE workspaces DROP COLUMN scratch_volume_binding_json",
         "DELETE FROM schema_migrations WHERE version >= 26",
         "INSERT INTO schema_migrations (version, applied_at) VALUES (25, 1)",
     ];
@@ -697,13 +699,14 @@ async fn sqlite_v25_upgrade_preserves_workspace_and_does_not_bind_or_change_a_te
     downgrade_binding_schema(&fixture.database).await;
     fixture.database.migrate().await.unwrap();
     fixture.database.migrate().await.unwrap();
-    assert_eq!(fixture.database.schema_version().await.unwrap(), 27);
+    assert_eq!(fixture.database.schema_version().await.unwrap(), 28);
     let stored = fixture
         .database
         .get_workspace(fixture.workspace.id)
         .await
         .unwrap();
     assert_eq!(stored, fixture.workspace);
+    assert!(stored.scratch_volume_binding.is_none());
     let mut document = serde_json::to_value(WorkspaceTemplateDocument::new(
         "unsafe binding",
         stored.template,

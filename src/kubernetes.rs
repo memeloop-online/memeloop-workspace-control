@@ -21,10 +21,12 @@ mod workload;
 mod workspace_pod;
 
 pub use builder::{BuildError, DesiredResources, ResourceBuilder};
+pub(crate) use client::storage_shrink_image;
 pub use client::{
     DeleteProgress, KubernetesCoordinator, ReconcileError, home_volume_capacity_bytes,
     workspace_ssh_node_port,
 };
+pub(crate) use client::{ShrinkPodStage, ShrinkUsage};
 pub use egress_refresh::{
     DynamicEgressRefresh, DynamicEgressRefreshConfig, DynamicEgressRefreshError,
 };

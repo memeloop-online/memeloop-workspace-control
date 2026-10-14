@@ -30,6 +30,13 @@ Workspaces support four actions, in the console or through
 Workspace state changes are streamed to clients over the SSE endpoint
 `GET /api/v1/events`.
 
+## Storage shrink
+
+For capacity reductions that preserve Home and CSI scratch contents, see
+[Shrink workspace storage](storage-shrink.md). Operations stop and restore the
+workspace automatically and optionally reclaim old backend allocations after
+verification and recovery.
+
 ## Templates
 
 Templates define a class of workspaces. Key fields of `spec`:

@@ -228,6 +228,7 @@ const IMPORT_ORDER: &[&str] = &[
     "workspace_templates",
     "workspace_template_node_pools",
     "workspaces",
+    "workspace_storage_shrinks",
     "workspace_runtime_incidents",
     "workspace_port_mappings",
     "workspace_injection_refs",
@@ -255,6 +256,7 @@ const IMPORT_DESTINATION_DATA_TABLES: &[&str] = &[
     "workspace_templates",
     "workspace_template_node_pools",
     "workspaces",
+    "workspace_storage_shrinks",
     "workspace_runtime_incidents",
     "workspace_port_mappings",
     "workspace_port_mapping_tickets",
@@ -325,7 +327,11 @@ const EXPORT_QUERIES: &[(&str, &str)] = &[
     ),
     (
         "workspaces",
-        "SELECT json_object('id', id, 'installation_id', installation_id, 'short_id', short_id, 'organization_id', organization_id, 'owner_id', owner_id, 'name', name, 'template_id', template_id, 'image', image, 'access_mode', access_mode, 'state', state, 'cpu_millis', cpu_millis, 'memory_mib', memory_mib, 'gpu_count', gpu_count, 'disk_gib', disk_gib, 'temporary_storage_gib', temporary_storage_gib, 'node_pool', node_pool, 'generation', generation, 'created_at', created_at, 'updated_at', updated_at, 'deleted_at', deleted_at, 'template_snapshot_yaml', template_snapshot_yaml, 'home_pvc_namespace', home_pvc_namespace, 'home_pvc_name', home_pvc_name, 'home_pvc_uid', home_pvc_uid, 'home_pvc_capacity_gib', home_pvc_capacity_gib) item FROM workspaces WHERE installation_id = ?1 ORDER BY id",
+        "SELECT json_object('id', id, 'installation_id', installation_id, 'short_id', short_id, 'organization_id', organization_id, 'owner_id', owner_id, 'name', name, 'template_id', template_id, 'image', image, 'access_mode', access_mode, 'state', state, 'cpu_millis', cpu_millis, 'memory_mib', memory_mib, 'gpu_count', gpu_count, 'disk_gib', disk_gib, 'temporary_storage_gib', temporary_storage_gib, 'node_pool', node_pool, 'generation', generation, 'created_at', created_at, 'updated_at', updated_at, 'deleted_at', deleted_at, 'template_snapshot_yaml', template_snapshot_yaml, 'home_pvc_namespace', home_pvc_namespace, 'home_pvc_name', home_pvc_name, 'home_pvc_uid', home_pvc_uid, 'home_pvc_capacity_gib', home_pvc_capacity_gib, 'scratch_volume_binding_json', scratch_volume_binding_json) item FROM workspaces WHERE installation_id = ?1 ORDER BY id",
+    ),
+    (
+        "workspace_storage_shrinks",
+        "SELECT json_object('id', id, 'installation_id', installation_id, 'workspace_id', workspace_id, 'operation_json', operation_json, 'active', active, 'created_at', created_at, 'updated_at', updated_at) item FROM workspace_storage_shrinks WHERE installation_id = ?1 ORDER BY id",
     ),
     (
         "workspace_runtime_incidents",

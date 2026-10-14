@@ -97,6 +97,8 @@ async fn update_sqlite(
     snapshot_yaml: &str,
     update: ScratchResize,
 ) -> Result<(), StorageError> {
+    super::workspace_storage_shrink::guard_sqlite(connection, installation_id, workspace.id)
+        .await?;
     ensure_stopped_at_generation(workspace, update.expected_generation)?;
     let previous_storage_gib = workspace.template.storage_policy.temporary_storage_gib;
     let snapshot_yaml = apply_resize(
@@ -136,6 +138,8 @@ async fn update_postgres(
     snapshot_yaml: &str,
     update: ScratchResize,
 ) -> Result<(), StorageError> {
+    super::workspace_storage_shrink::guard_postgres(connection, installation_id, workspace.id)
+        .await?;
     ensure_stopped_at_generation(workspace, update.expected_generation)?;
     let previous_storage_gib = workspace.template.storage_policy.temporary_storage_gib;
     let snapshot_yaml = apply_resize(
@@ -183,6 +187,13 @@ fn apply_resize(
     temporary_storage_gib: u64,
     now: i64,
 ) -> Result<String, StorageError> {
+    if workspace
+        .scratch_volume_binding
+        .as_ref()
+        .is_some_and(|binding| binding.capacity_gib != temporary_storage_gib)
+    {
+        return Err(StorageError::WorkspaceTemporaryStorageUpdateConflict);
+    }
     let mut snapshot = WorkspaceTemplateDocument::parse(snapshot_yaml)
         .map_err(|_| StorageError::InvalidWorkspace)?;
     snapshot.spec.storage_policy.temporary_storage_gib = temporary_storage_gib;

@@ -20,6 +20,8 @@ import type {
   ResolvedInjection,
   Role,
   ScalingStatus,
+  StorageShrinkOperation,
+  StorageShrinkRequest,
   StoredInjection,
   UserProfile,
   UserSummary,
@@ -213,6 +215,27 @@ export class ApiClient {
   updateWorkspacePlacement(workspaceId: string, input: { node_pool: string; expected_generation: number }): Promise<WorkspaceResponse> {
     return this.request(`/api/v1/workspaces/${workspaceId}/placement`, {
       method: "PUT", body: JSON.stringify(input), idempotent: true,
+    });
+  }
+
+  startStorageShrink(workspaceId: string, input: StorageShrinkRequest): Promise<StorageShrinkOperation> {
+    return this.request(`/api/v1/workspaces/${workspaceId}/storage-shrink`, {
+      method: "POST", body: JSON.stringify(input), idempotent: true,
+    });
+  }
+
+  async storageShrinkOperation(workspaceId: string): Promise<StorageShrinkOperation | null> {
+    try {
+      return await this.request(`/api/v1/workspaces/${workspaceId}/storage-shrink`);
+    } catch (error) {
+      if ((error as { status?: number } | null)?.status === 404) return null;
+      throw error;
+    }
+  }
+
+  confirmStorageShrinkReclaim(workspaceId: string, operationId: string): Promise<StorageShrinkOperation> {
+    return this.request(`/api/v1/workspaces/${workspaceId}/storage-shrink/confirm`, {
+      method: "POST", body: JSON.stringify({ operation_id: operationId }), idempotent: true,
     });
   }
 
