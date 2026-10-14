@@ -455,6 +455,7 @@ async fn management_api_enforces_system_and_organization_boundaries() {
     }));
 
     let scaling = app
+        .clone()
         .oneshot(
             authenticated(Request::get("/api/v1/admin/scaling"), ADMIN_TOKEN)
                 .body(Body::empty())
@@ -466,7 +467,31 @@ async fn management_api_enforces_system_and_organization_boundaries() {
     let scaling: Value = body_json(scaling).await;
     assert_eq!(scaling["database_mode"], "sqlite");
     assert_eq!(scaling["configured_replicas"], 1);
-    assert_eq!(scaling["schema_version"], 28);
+    assert_eq!(scaling["schema_version"], 29);
+    assert_eq!(scaling["job_worker_concurrency"], 32);
+    for (token, concurrency, expected) in [
+        (MEMBER_TOKEN, 64, StatusCode::FORBIDDEN),
+        (ADMIN_TOKEN, 0, StatusCode::BAD_REQUEST),
+        (ADMIN_TOKEN, 257, StatusCode::BAD_REQUEST),
+        (ADMIN_TOKEN, 64, StatusCode::OK),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                authenticated(Request::put("/api/v1/admin/scaling"), token)
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({"job_worker_concurrency": concurrency}).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected);
+        if expected == StatusCode::OK {
+            assert_eq!(body_json(response).await["job_worker_concurrency"], 64);
+        }
+    }
 }
 
 #[tokio::test]

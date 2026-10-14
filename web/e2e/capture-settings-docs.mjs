@@ -99,7 +99,7 @@ function fixture(path) {
   }];
   if (path === "/api/v1/webhooks" || path === "/api/v1/admin/images") return [];
   if (path === "/api/v1/node-pools") return [{ name: "default", display_name: "Demo pool" }];
-  if (path === "/api/v1/admin/scaling") return { database_mode: "sqlite", configured_replicas: 1, schema_version: 1, jobs: { pending: 0, running: 0, completed: 0, failed: 0 } };
+  if (path === "/api/v1/admin/scaling") return { database_mode: "sqlite", configured_replicas: 1, schema_version: 1, job_worker_concurrency: 32, jobs: { pending: 0, running: 0, completed: 0, failed: 0 } };
   if (path === "/api/v1/audit") return { items: [], next_offset: null };
   return undefined;
 }

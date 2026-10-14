@@ -80,8 +80,7 @@ async fn stopped_managed_home_recreates_only_sts_and_preserves_existing_pvc() {
             "delete-sts",
             "get-absent-sts",
             "create-sts",
-            "get-pvc",
-            "patch-pvc-labels"
+            "get-pvc"
         ]
     );
     let recreated = state.sts.as_ref().unwrap();

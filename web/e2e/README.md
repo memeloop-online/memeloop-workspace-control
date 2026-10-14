@@ -14,4 +14,6 @@ The token must belong to an unrestricted system administrator with `manage_syste
 
 CI runs separate system-administrator-to-target-user and organization-administrator-self-service flows against an ephemeral loopback backend through `ci-real-user-credentials.sh`. It permits `http://127.0.0.1` only when `E2E_LOCAL_BACKEND=1`; deployed acceptance remains HTTPS-only. The helper uses a temporary SQLite database, fixture-only random tokens, and `MWC_KUBERNETES_ENABLED=0`.
 
+The same helper also runs `production-scaling-concurrency.test.mjs`, which edits the system Scaling job worker concurrency through the real UI, verifies the API read-back and persistence across reload, and restores the original value in cleanup. It exercises only the ephemeral CI backend.
+
 Set `E2E_NODE_WORKSPACE_ID` to a running workspace in the selected organization to compare its runtime node with the workspace-list label. The injection editor test changes only an unsaved browser draft; it does not write an injection.

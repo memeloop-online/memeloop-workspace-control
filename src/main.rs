@@ -89,7 +89,7 @@ async fn serve(config: AppConfig, database: Database) -> Result<(), Box<dyn std:
         internal_listener_address(kubernetes_enabled, diagnostics_enabled)?;
     let worker_handle = worker.map(|worker| {
         let shutdown = shutdown_tx.subscribe();
-        tokio::spawn(async move { worker.run_until_shutdown(shutdown).await })
+        tokio::spawn(async move { worker.run_pool_until_shutdown(shutdown).await })
     });
     let internal_handle = start_internal_listener(
         internal_listen_address,

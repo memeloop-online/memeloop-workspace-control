@@ -249,3 +249,36 @@ async fn postgres_v26_preserves_events_and_accepts_new_categories() {
         .await
         .unwrap();
 }
+
+#[tokio::test]
+async fn sqlite_v28_adds_runtime_settings_without_reapplying_storage_shrink_columns() {
+    let database = Database::connect("sqlite::memory:", "runtime-upgrade".parse().unwrap())
+        .await
+        .unwrap();
+    database.migrate().await.unwrap();
+    let Database::Sqlite { pool, .. } = &database else {
+        unreachable!()
+    };
+    sqlx::query("DROP TABLE installation_runtime_settings")
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM schema_migrations")
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO schema_migrations (version, applied_at) VALUES (28, 1)")
+        .execute(pool)
+        .await
+        .unwrap();
+    database.migrate().await.unwrap();
+    assert_eq!(database.job_worker_concurrency().await.unwrap(), 32);
+    database.set_job_worker_concurrency(100, 2).await.unwrap();
+    database.migrate().await.unwrap();
+    assert_eq!(database.job_worker_concurrency().await.unwrap(), 100);
+    let snapshot = database.export_snapshot(3).await.unwrap();
+    assert_eq!(
+        snapshot.tables["installation_runtime_settings"][0]["job_worker_concurrency"],
+        100
+    );
+}

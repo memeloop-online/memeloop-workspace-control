@@ -671,6 +671,7 @@ async fn postgres_binding_competition_is_atomic_and_survives_database_reconnect(
 async fn downgrade_binding_schema(database: &Database) {
     let statements = [
         "DROP TABLE workspace_storage_shrinks",
+        "DROP TABLE installation_runtime_settings",
         "DROP INDEX workspace_home_pvc_name_idx",
         "DROP INDEX workspace_home_pvc_uid_idx",
         "ALTER TABLE workspaces DROP COLUMN home_pvc_namespace",
@@ -699,7 +700,7 @@ async fn sqlite_v25_upgrade_preserves_workspace_and_does_not_bind_or_change_a_te
     downgrade_binding_schema(&fixture.database).await;
     fixture.database.migrate().await.unwrap();
     fixture.database.migrate().await.unwrap();
-    assert_eq!(fixture.database.schema_version().await.unwrap(), 28);
+    assert_eq!(fixture.database.schema_version().await.unwrap(), 29);
     let stored = fixture
         .database
         .get_workspace(fixture.workspace.id)

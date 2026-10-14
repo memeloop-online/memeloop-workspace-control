@@ -28,7 +28,7 @@ async fn migrate_sqlite(pool: &SqlitePool, applied_at: i64) -> Result<(), Storag
         .await?;
     let version = current_sqlite_version(&mut transaction).await?;
     match version {
-        schema::SCHEMA_VERSION | 27 => {}
+        schema::SCHEMA_VERSION | 28 | 27 => {}
         24 => {
             upgrade_sqlite_v24_to_v25(&mut transaction, applied_at).await?;
             upgrade_sqlite_home_pvc(&mut transaction, applied_at).await?;
@@ -44,6 +44,7 @@ async fn migrate_sqlite(pool: &SqlitePool, applied_at: i64) -> Result<(), Storag
                 .iter()
                 .chain(schema::HOME_PVC_MIGRATION)
                 .chain(schema::STORAGE_SHRINK_MIGRATION)
+                .chain(schema::RUNTIME_SETTINGS_MIGRATION)
             {
                 sqlx::query(statement).execute(&mut *transaction).await?;
             }
@@ -56,7 +57,12 @@ async fn migrate_sqlite(pool: &SqlitePool, applied_at: i64) -> Result<(), Storag
         _ => return Err(StorageError::UnsupportedDatabaseVersion),
     }
     if version != 0 && version < schema::SCHEMA_VERSION {
-        for statement in schema::STORAGE_SHRINK_MIGRATION {
+        if version < 28 {
+            for statement in schema::STORAGE_SHRINK_MIGRATION {
+                sqlx::query(statement).execute(&mut *transaction).await?;
+            }
+        }
+        for statement in schema::RUNTIME_SETTINGS_MIGRATION {
             sqlx::query(statement).execute(&mut *transaction).await?;
         }
         sqlx::query("INSERT INTO schema_migrations (version, applied_at) VALUES (?1, ?2)")
@@ -94,7 +100,7 @@ async fn migrate_postgres(
             .fetch_one(&mut *transaction)
             .await?;
     match version {
-        schema::SCHEMA_VERSION | 27 => {}
+        schema::SCHEMA_VERSION | 28 | 27 => {}
         24 => {
             upgrade_postgres_v24_to_v25(&mut transaction, applied_at).await?;
             upgrade_postgres_home_pvc(&mut transaction, applied_at).await?;
@@ -110,6 +116,7 @@ async fn migrate_postgres(
                 .iter()
                 .chain(schema::HOME_PVC_MIGRATION)
                 .chain(schema::STORAGE_SHRINK_MIGRATION)
+                .chain(schema::RUNTIME_SETTINGS_MIGRATION)
             {
                 sqlx::query(statement).execute(&mut *transaction).await?;
             }
@@ -122,7 +129,12 @@ async fn migrate_postgres(
         _ => return Err(StorageError::UnsupportedDatabaseVersion),
     }
     if version != 0 && version < schema::SCHEMA_VERSION {
-        for statement in schema::STORAGE_SHRINK_MIGRATION {
+        if version < 28 {
+            for statement in schema::STORAGE_SHRINK_MIGRATION {
+                sqlx::query(statement).execute(&mut *transaction).await?;
+            }
+        }
+        for statement in schema::RUNTIME_SETTINGS_MIGRATION {
             sqlx::query(statement).execute(&mut *transaction).await?;
         }
         sqlx::query("INSERT INTO schema_migrations (version, applied_at) VALUES ($1, $2)")
