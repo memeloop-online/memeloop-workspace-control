@@ -21,7 +21,7 @@ pub(super) fn retained_workload_apply(current: &Value, stop: bool) -> Result<Val
         return Err(INVALID_FIELDS.to_owned());
     }
     validate_replica_ownership(managers)?;
-    let mut apply = project_owned_fields(&current, fields, 0)?;
+    let mut apply = project_owned_fields(current, fields, 0)?;
     let root = apply.as_object_mut().ok_or(INVALID_FIELDS)?;
     if root.keys().any(|key| key != "metadata" && key != "spec") {
         return Err(INVALID_FIELDS.to_owned());
