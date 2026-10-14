@@ -202,14 +202,14 @@ impl Database {
                     if existing.source != captured.source || existing.destination.is_some() && existing.destination != captured.destination {
                         return Err(StorageError::WorkspaceStorageShrinkConflict);
                     }
-                    if existing.destination.is_none() {
-                        if let Some(binding) = captured.destination.as_ref() {
-                            if !binding.is_valid() || binding.namespace != workspace.runtime.namespace()
-                                || binding.claim_name != format!("shrink-{}-{role}", operation.id.simple())
-                                || Some(binding.capacity_gib) != existing.target_gib
-                            { return Err(StorageError::WorkspaceStorageShrinkConflict); }
-                            existing.destination = Some(binding.clone());
-                        }
+                    if existing.destination.is_none()
+                        && let Some(binding) = captured.destination.as_ref()
+                    {
+                        if !binding.is_valid() || binding.namespace != workspace.runtime.namespace()
+                            || binding.claim_name != format!("shrink-{}-{role}", operation.id.simple())
+                            || Some(binding.capacity_gib) != existing.target_gib
+                        { return Err(StorageError::WorkspaceStorageShrinkConflict); }
+                        existing.destination = Some(binding.clone());
                     }
                     if existing.source_volume.is_none() { existing.source_volume = captured.source_volume.clone(); }
                     if existing.destination_volume.is_none() { existing.destination_volume = captured.destination_volume.clone(); }
@@ -428,30 +428,7 @@ impl Database {
                 if previous.is_none() { return Err(StorageError::WorkspaceStorageShrinkConflict); }
                 if !matches!(update, ShrinkWorkspaceUpdate::None) {
                     let mut document: WorkspaceTemplateDocument = serde_yaml_ng::from_str(&yaml).map_err(|_| StorageError::InvalidWorkspace)?;
-                    match update {
-                        ShrinkWorkspaceUpdate::Stopping => {
-                            workspace.state = WorkspaceState::Stopping;
-                            if !operation.switched { workspace.scratch_volume_binding = operation.temporary.source.clone(); }
-                        }
-                        ShrinkWorkspaceUpdate::Stopped => workspace.state = WorkspaceState::Stopped,
-                        ShrinkWorkspaceUpdate::Switch | ShrinkWorkspaceUpdate::Rollback => {
-                            let switching = matches!(update, ShrinkWorkspaceUpdate::Switch);
-                            if switching && (operation.home.target_gib.is_some() && !operation.home.verified || operation.temporary.target_gib.is_some() && !operation.temporary.verified) {
-                                return Err(StorageError::InvalidWorkspaceStorageShrink);
-                            }
-                            if switching {
-                                validate_verified_destination(&operation.home)?;
-                                validate_verified_destination(&operation.temporary)?;
-                            }
-                            workspace.home_volume_binding = if switching { operation.home.destination.clone().or(operation.home.source.clone()) } else { operation.home.source.clone() };
-                            workspace.scratch_volume_binding = if switching { operation.temporary.destination.clone().or(operation.temporary.source.clone()) } else { operation.temporary.source.clone() };
-                            document.spec.resources.disk_gib = if switching { operation.home.target_gib.unwrap_or(operation.original_home_gib) } else { operation.original_home_gib };
-                            document.spec.storage_policy.temporary_storage_gib = if switching { operation.temporary.target_gib.unwrap_or(operation.original_temporary_storage_gib) } else { operation.original_temporary_storage_gib };
-                            workspace.state = WorkspaceState::Stopped;
-                        }
-                        ShrinkWorkspaceUpdate::Resume => workspace.state = WorkspaceState::Starting,
-                        ShrinkWorkspaceUpdate::None => unreachable!(),
-                    }
+                    apply_shrink_workspace_update(&mut workspace, &mut document, operation, update)?;
                     let home = workspace.home_volume_binding.as_ref();
                     sqlx::query("UPDATE workspaces SET state = $1, home_pvc_namespace = $2, home_pvc_name = $3, home_pvc_uid = $4, home_pvc_capacity_gib = $5, scratch_volume_binding_json = $6, disk_gib = $7, temporary_storage_gib = $8, template_snapshot_yaml = $9, generation = generation + 1, updated_at = $10 WHERE installation_id = $11 AND id = $12")
                         .bind(workspace.state.as_str()).bind(home.map(|binding| binding.namespace.as_str())).bind(home.map(|binding| binding.claim_name.as_str())).bind(home.map(|binding| binding.claim_uid.as_str())).bind(home.map(|binding| binding.capacity_gib as i64))
@@ -519,6 +496,74 @@ impl StorageShrinkOperation {
             helper_pod_uids: Default::default(),
         }
     }
+}
+
+fn apply_shrink_workspace_update(
+    workspace: &mut Workspace,
+    document: &mut WorkspaceTemplateDocument,
+    operation: &StorageShrinkOperation,
+    update: ShrinkWorkspaceUpdate,
+) -> Result<(), StorageError> {
+    match update {
+        ShrinkWorkspaceUpdate::Stopping => {
+            workspace.state = WorkspaceState::Stopping;
+            if !operation.switched {
+                workspace.scratch_volume_binding = operation.temporary.source.clone();
+            }
+        }
+        ShrinkWorkspaceUpdate::Stopped => workspace.state = WorkspaceState::Stopped,
+        ShrinkWorkspaceUpdate::Switch | ShrinkWorkspaceUpdate::Rollback => {
+            let switching = matches!(update, ShrinkWorkspaceUpdate::Switch);
+            if switching
+                && (operation.home.target_gib.is_some() && !operation.home.verified
+                    || operation.temporary.target_gib.is_some() && !operation.temporary.verified)
+            {
+                return Err(StorageError::InvalidWorkspaceStorageShrink);
+            }
+            if switching {
+                validate_verified_destination(&operation.home)?;
+                validate_verified_destination(&operation.temporary)?;
+            }
+            workspace.home_volume_binding = if switching {
+                operation
+                    .home
+                    .destination
+                    .clone()
+                    .or(operation.home.source.clone())
+            } else {
+                operation.home.source.clone()
+            };
+            workspace.scratch_volume_binding = if switching {
+                operation
+                    .temporary
+                    .destination
+                    .clone()
+                    .or(operation.temporary.source.clone())
+            } else {
+                operation.temporary.source.clone()
+            };
+            document.spec.resources.disk_gib = if switching {
+                operation
+                    .home
+                    .target_gib
+                    .unwrap_or(operation.original_home_gib)
+            } else {
+                operation.original_home_gib
+            };
+            document.spec.storage_policy.temporary_storage_gib = if switching {
+                operation
+                    .temporary
+                    .target_gib
+                    .unwrap_or(operation.original_temporary_storage_gib)
+            } else {
+                operation.original_temporary_storage_gib
+            };
+            workspace.state = WorkspaceState::Stopped;
+        }
+        ShrinkWorkspaceUpdate::Resume => workspace.state = WorkspaceState::Starting,
+        ShrinkWorkspaceUpdate::None => unreachable!(),
+    }
+    Ok(())
 }
 
 fn validate_verified_destination(volume: &StorageShrinkVolume) -> Result<(), StorageError> {

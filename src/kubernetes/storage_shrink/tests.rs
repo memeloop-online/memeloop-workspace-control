@@ -61,11 +61,20 @@ fn operation(workspace: &Workspace) -> StorageShrinkOperation {
     )
 }
 
+fn metadata(name: &str) -> ObjectMeta {
+    ObjectMeta {
+        name: Some(name.to_owned()),
+        namespace: Some(crate::workspace_runtime::WORKSPACE_NAMESPACE.to_owned()),
+        labels: Some(BTreeMap::new()),
+        ..Default::default()
+    }
+}
+
 #[test]
 fn helper_has_read_only_source_and_no_workspace_credentials() {
     let workspace = workspace();
     let operation = operation(&workspace);
-    let pod = migration_pod(&workspace, &operation, "helper", BTreeMap::new(), ShrinkPodStage::Copy, &binding("source", 60), Some(&binding("destination", 20)), "reviewed.example/helper@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap();
+    let pod = migration_pod(&operation, metadata("helper"), ShrinkPodStage::Copy, &binding("source", 60), Some(&binding("destination", 20)), "reviewed.example/helper@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap();
     let spec = pod.spec.as_ref().unwrap();
     assert_eq!(spec.automount_service_account_token, Some(false));
     assert_eq!(spec.containers.len(), 1);
@@ -127,10 +136,8 @@ fn preflight_has_no_persistent_mounts_and_verify_is_read_only() {
     let source = binding("source", 60);
     let destination = binding("destination", 20);
     let preflight = migration_pod(
-        &workspace,
         &operation,
-        "preflight",
-        BTreeMap::new(),
+        metadata("preflight"),
         ShrinkPodStage::Preflight,
         &source,
         None,
@@ -147,10 +154,8 @@ fn preflight_has_no_persistent_mounts_and_verify_is_read_only() {
             .all(|volume| volume.persistent_volume_claim.is_none())
     );
     let verify = migration_pod(
-        &workspace,
         &operation,
-        "verify",
-        BTreeMap::new(),
+        metadata("verify"),
         ShrinkPodStage::Verify,
         &source,
         Some(&destination),

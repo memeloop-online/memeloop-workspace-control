@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use k8s_openapi::{
     api::{
         apps::v1::StatefulSet,
-        core::v1::{PersistentVolume, PersistentVolumeClaim, Pod},
+        core::v1::{PersistentVolume, PersistentVolumeClaim, Pod, PodStatus},
         networking::v1::NetworkPolicy,
         storage::v1::StorageClass,
     },
@@ -20,7 +20,7 @@ use serde_json::json;
 use super::super::{OWNER_INSTALLATION_LABEL, STORAGE_ROLE_LABEL, WORKSPACE_ID_LABEL};
 use super::{KubernetesCoordinator, home_volume_capacity_bytes};
 use crate::{
-    storage::{StorageShrinkOperation, StorageVolumeIdentity},
+    storage::{StorageShrinkOperation, StorageShrinkVolume, StorageVolumeIdentity},
     workspaces::{Workspace, WorkspaceHomeVolumeBinding},
 };
 
@@ -154,61 +154,16 @@ impl KubernetesCoordinator {
         if let Some(volume) = volume.as_ref() {
             validate_pv_identity(volume, binding, identity)?;
         }
-        if let (Some(namespace), Some(expected_uid)) =
-            (&identity.longhorn_namespace, &identity.longhorn_volume_uid)
+        if let Some(waiting) = self
+            .check_longhorn_backend(identity, &claim, &volume)
+            .await?
         {
-            let backend = Api::<DynamicObject>::namespaced_with(
-                self.client.clone(),
-                namespace,
-                &longhorn_resource(),
-            );
-            if let Some(longhorn) = backend
-                .get_opt(&identity.csi_volume_handle)
-                .await
-                .map_err(safe_error)?
-            {
-                if longhorn.metadata.uid.as_ref() != Some(expected_uid) {
-                    return Err("Longhorn Volume UID changed; refusing reclamation".to_owned());
-                }
-                if claim.is_none() && volume.is_none() {
-                    return Ok(false);
-                }
-            }
-        } else if identity.csi_driver == "driver.longhorn.io" {
-            return Err(
-                "Longhorn backend identity was not recorded; refusing reclamation".to_owned(),
-            );
+            return Ok(waiting);
         }
         let Some(claim) = claim else {
             if let Some(volume) = volume.as_ref() {
-                if volume
-                    .spec
-                    .as_ref()
-                    .and_then(|spec| spec.persistent_volume_reclaim_policy.as_deref())
-                    != Some("Delete")
-                {
-                    volumes.patch(&identity.pv_name, &PatchParams::default(), &Patch::Merge(&json!({"metadata":{"uid":identity.pv_uid,"resourceVersion":volume.metadata.resource_version},"spec":{"persistentVolumeReclaimPolicy":"Delete"}}))).await.map_err(safe_error)?;
-                } else if volume
-                    .status
-                    .as_ref()
-                    .and_then(|status| status.phase.as_deref())
-                    .is_some_and(|phase| matches!(phase, "Released" | "Failed"))
-                    && volume.metadata.deletion_timestamp.is_none()
-                {
-                    volumes
-                        .delete(
-                            &identity.pv_name,
-                            &DeleteParams {
-                                preconditions: Some(Preconditions {
-                                    uid: Some(identity.pv_uid.clone()),
-                                    resource_version: volume.metadata.resource_version.clone(),
-                                }),
-                                ..DeleteParams::default()
-                            },
-                        )
-                        .await
-                        .map_err(safe_error)?;
-                }
+                self.delete_released_volume(&volumes, volume, identity)
+                    .await?;
                 return Ok(false);
             }
             return Ok(true);
@@ -220,24 +175,7 @@ impl KubernetesCoordinator {
             return Ok(false);
         }
         self.shrink_owned(&claim.metadata, workspace)?;
-        let pods = Api::<Pod>::namespaced(self.client.clone(), workspace.runtime.namespace());
-        for pod in pods
-            .list(&ListParams::default())
-            .await
-            .map_err(safe_error)?
-            .items
-        {
-            if pod.spec.as_ref().is_some_and(|spec| {
-                spec.volumes.iter().flatten().any(|volume| {
-                    volume
-                        .persistent_volume_claim
-                        .as_ref()
-                        .is_some_and(|claim| claim.claim_name == binding.claim_name)
-                })
-            }) {
-                return Err("retained claim is still mounted; refusing reclamation".to_owned());
-            }
-        }
+        self.ensure_claim_unmounted(workspace, binding).await?;
         let volume = volume
             .as_ref()
             .ok_or("source claim's verified PV disappeared before reclamation")?;
@@ -264,6 +202,103 @@ impl KubernetesCoordinator {
             .await
             .map_err(safe_error)?;
         Ok(false)
+    }
+
+    async fn check_longhorn_backend(
+        &self,
+        identity: &StorageVolumeIdentity,
+        claim: &Option<PersistentVolumeClaim>,
+        volume: &Option<PersistentVolume>,
+    ) -> Result<Option<bool>, String> {
+        if let (Some(namespace), Some(expected_uid)) =
+            (&identity.longhorn_namespace, &identity.longhorn_volume_uid)
+        {
+            let backend = Api::<DynamicObject>::namespaced_with(
+                self.client.clone(),
+                namespace,
+                &longhorn_resource(),
+            );
+            if let Some(longhorn) = backend
+                .get_opt(&identity.csi_volume_handle)
+                .await
+                .map_err(safe_error)?
+            {
+                if longhorn.metadata.uid.as_ref() != Some(expected_uid) {
+                    return Err("Longhorn Volume UID changed; refusing reclamation".to_owned());
+                }
+                if claim.is_none() && volume.is_none() {
+                    return Ok(Some(false));
+                }
+            }
+        } else if identity.csi_driver == "driver.longhorn.io" {
+            return Err(
+                "Longhorn backend identity was not recorded; refusing reclamation".to_owned(),
+            );
+        }
+        Ok(None)
+    }
+
+    async fn delete_released_volume(
+        &self,
+        volumes: &Api<PersistentVolume>,
+        volume: &PersistentVolume,
+        identity: &StorageVolumeIdentity,
+    ) -> Result<(), String> {
+        if volume
+            .spec
+            .as_ref()
+            .and_then(|spec| spec.persistent_volume_reclaim_policy.as_deref())
+            != Some("Delete")
+        {
+            volumes.patch(&identity.pv_name, &PatchParams::default(), &Patch::Merge(&json!({"metadata":{"uid":identity.pv_uid,"resourceVersion":volume.metadata.resource_version},"spec":{"persistentVolumeReclaimPolicy":"Delete"}}))).await.map_err(safe_error)?;
+        } else if volume
+            .status
+            .as_ref()
+            .and_then(|status| status.phase.as_deref())
+            .is_some_and(|phase| matches!(phase, "Released" | "Failed"))
+            && volume.metadata.deletion_timestamp.is_none()
+        {
+            volumes
+                .delete(
+                    &identity.pv_name,
+                    &DeleteParams {
+                        preconditions: Some(Preconditions {
+                            uid: Some(identity.pv_uid.clone()),
+                            resource_version: volume.metadata.resource_version.clone(),
+                        }),
+                        ..DeleteParams::default()
+                    },
+                )
+                .await
+                .map_err(safe_error)?;
+        }
+        Ok(())
+    }
+
+    async fn ensure_claim_unmounted(
+        &self,
+        workspace: &Workspace,
+        binding: &WorkspaceHomeVolumeBinding,
+    ) -> Result<(), String> {
+        let pods = Api::<Pod>::namespaced(self.client.clone(), workspace.runtime.namespace());
+        for pod in pods
+            .list(&ListParams::default())
+            .await
+            .map_err(safe_error)?
+            .items
+        {
+            if pod.spec.as_ref().is_some_and(|spec| {
+                spec.volumes.iter().flatten().any(|volume| {
+                    volume
+                        .persistent_volume_claim
+                        .as_ref()
+                        .is_some_and(|claim| claim.claim_name == binding.claim_name)
+                })
+            }) {
+                return Err("retained claim is still mounted; refusing reclamation".to_owned());
+            }
+        }
+        Ok(())
     }
 
     pub(crate) async fn reclaim_shrink_sources(
@@ -326,39 +361,39 @@ impl KubernetesCoordinator {
             ("home", &mut operation.home),
             ("temporary", &mut operation.temporary),
         ] {
-            if let Some(target_gib) = selected.target_gib {
-                if selected.destination.is_none() {
-                    let name = format!("shrink-{}-{role}", operation.id.simple());
-                    if let Some(claim) = claims.get_opt(&name).await.map_err(safe_error)? {
-                        self.shrink_owned(&claim.metadata, workspace)?;
-                        let labels = claim
+            if let Some(target_gib) = selected.target_gib
+                && selected.destination.is_none()
+            {
+                let name = format!("shrink-{}-{role}", operation.id.simple());
+                if let Some(claim) = claims.get_opt(&name).await.map_err(safe_error)? {
+                    self.shrink_owned(&claim.metadata, workspace)?;
+                    let labels = claim
+                        .metadata
+                        .labels
+                        .as_ref()
+                        .ok_or("destination labels missing")?;
+                    if labels.get(OPERATION_LABEL) != Some(&operation.id.to_string())
+                        || labels.get(STORAGE_ROLE_LABEL).map(String::as_str) != Some(role)
+                        || claim
                             .metadata
-                            .labels
+                            .owner_references
                             .as_ref()
-                            .ok_or("destination labels missing")?;
-                        if labels.get(OPERATION_LABEL) != Some(&operation.id.to_string())
-                            || labels.get(STORAGE_ROLE_LABEL).map(String::as_str) != Some(role)
-                            || claim
-                                .metadata
-                                .owner_references
-                                .as_ref()
-                                .is_some_and(|owners| !owners.is_empty())
-                        {
-                            return Err("unrecorded destination has invalid ownership".to_owned());
-                        }
-                        let binding = WorkspaceHomeVolumeBinding {
-                            namespace: workspace.runtime.namespace().to_owned(),
-                            claim_name: name,
-                            claim_uid: claim
-                                .metadata
-                                .uid
-                                .clone()
-                                .ok_or("destination UID is missing")?,
-                            capacity_gib: target_gib,
-                        };
-                        self.shrink_claim(workspace, &binding, false).await?;
-                        selected.destination = Some(binding);
+                            .is_some_and(|owners| !owners.is_empty())
+                    {
+                        return Err("unrecorded destination has invalid ownership".to_owned());
                     }
+                    let binding = WorkspaceHomeVolumeBinding {
+                        namespace: workspace.runtime.namespace().to_owned(),
+                        claim_name: name,
+                        claim_uid: claim
+                            .metadata
+                            .uid
+                            .clone()
+                            .ok_or("destination UID is missing")?,
+                        capacity_gib: target_gib,
+                    };
+                    self.shrink_claim(workspace, &binding, false).await?;
+                    selected.destination = Some(binding);
                 }
             }
             for (binding, identity, destination) in [
@@ -433,12 +468,12 @@ impl KubernetesCoordinator {
                     operation.temporary.destination_volume.as_ref(),
                 ),
             ] {
-                if let (Some(binding), Some(identity)) = (binding, identity) {
-                    if seen.insert(binding.claim_uid.clone()) {
-                        complete &= self
-                            .delete_shrink_claim(workspace, binding, identity)
-                            .await?;
-                    }
+                if let (Some(binding), Some(identity)) = (binding, identity)
+                    && seen.insert(binding.claim_uid.clone())
+                {
+                    complete &= self
+                        .delete_shrink_claim(workspace, binding, identity)
+                        .await?;
                 }
             }
             for selected in [&operation.home, &operation.temporary] {
@@ -617,53 +652,8 @@ impl KubernetesCoordinator {
             return Err("Home target is not smaller than actual source capacity".to_owned());
         }
         if operation.temporary.source.is_none() {
-            let pods = Api::<Pod>::namespaced(self.client.clone(), workspace.runtime.namespace());
-            if let Some(pod) = pods
-                .get_opt(&names.pod_ordinal_zero())
-                .await
-                .map_err(safe_error)?
-            {
-                self.shrink_owned(&pod.metadata, workspace)?;
-                let scratch = pod
-                    .spec
-                    .as_ref()
-                    .and_then(|spec| spec.volumes.as_ref())
-                    .and_then(|volumes| {
-                        volumes
-                            .iter()
-                            .find(|volume| volume.name == "workspace-scratch")
-                    })
-                    .ok_or("workspace scratch volume is missing")?;
-                let claim_name = if let Some(source) = scratch.persistent_volume_claim.as_ref() {
-                    source.claim_name.clone()
-                } else if scratch.ephemeral.is_some() {
-                    format!("{}-workspace-scratch", names.pod_ordinal_zero())
-                } else {
-                    return Err("safe offline shrink requires CSI scratch; node-local emptyDir cannot be preserved by stopping a Pod".to_owned());
-                };
-                let claim = claims.get(&claim_name).await.map_err(safe_error)?;
-                self.shrink_owned(&claim.metadata, workspace)?;
-                if scratch.ephemeral.is_some()
-                    && !claim
-                        .metadata
-                        .owner_references
-                        .as_ref()
-                        .is_some_and(|owners| {
-                            owners.iter().any(|owner| {
-                                owner.kind == "Pod"
-                                    && Some(owner.uid.as_str()) == pod.metadata.uid.as_deref()
-                                    && owner.name == names.pod_ordinal_zero()
-                            })
-                        })
-                {
-                    return Err(
-                        "scratch claim is not owned by the validated workspace Pod UID".to_owned(),
-                    );
-                }
-                operation.temporary.source = Some(binding_from_claim(&claim, workspace)?);
-            } else if operation.temporary.target_gib.is_some() {
-                return Err("stopped workspace has no retained scratch claim; start it before requesting a scratch shrink".to_owned());
-            }
+            self.discover_scratch_source(workspace, operation, &names.pod_ordinal_zero())
+                .await?;
         }
         if let Some(scratch) = operation.temporary.source.as_ref() {
             self.shrink_claim(workspace, scratch, true).await?;
@@ -682,6 +672,62 @@ impl KubernetesCoordinator {
                 );
             }
         }
+        Ok(())
+    }
+
+    async fn discover_scratch_source(
+        &self,
+        workspace: &Workspace,
+        operation: &mut StorageShrinkOperation,
+        pod_name: &str,
+    ) -> Result<(), String> {
+        let claims = Api::<PersistentVolumeClaim>::namespaced(
+            self.client.clone(),
+            workspace.runtime.namespace(),
+        );
+        let pods = Api::<Pod>::namespaced(self.client.clone(), workspace.runtime.namespace());
+        let Some(pod) = pods.get_opt(pod_name).await.map_err(safe_error)? else {
+            if operation.temporary.target_gib.is_some() {
+                return Err("stopped workspace has no retained scratch claim; start it before requesting a scratch shrink".to_owned());
+            }
+            return Ok(());
+        };
+        self.shrink_owned(&pod.metadata, workspace)?;
+        let scratch = pod
+            .spec
+            .as_ref()
+            .and_then(|spec| spec.volumes.as_ref())
+            .and_then(|volumes| {
+                volumes
+                    .iter()
+                    .find(|volume| volume.name == "workspace-scratch")
+            })
+            .ok_or("workspace scratch volume is missing")?;
+        let claim_name = if let Some(source) = scratch.persistent_volume_claim.as_ref() {
+            source.claim_name.clone()
+        } else if scratch.ephemeral.is_some() {
+            format!("{pod_name}-workspace-scratch")
+        } else {
+            return Err("safe offline shrink requires CSI scratch; node-local emptyDir cannot be preserved by stopping a Pod".to_owned());
+        };
+        let claim = claims.get(&claim_name).await.map_err(safe_error)?;
+        self.shrink_owned(&claim.metadata, workspace)?;
+        if scratch.ephemeral.is_some()
+            && !claim
+                .metadata
+                .owner_references
+                .as_ref()
+                .is_some_and(|owners| {
+                    owners.iter().any(|owner| {
+                        owner.kind == "Pod"
+                            && Some(owner.uid.as_str()) == pod.metadata.uid.as_deref()
+                            && owner.name == pod_name
+                    })
+                })
+        {
+            return Err("scratch claim is not owned by the validated workspace Pod UID".to_owned());
+        }
+        operation.temporary.source = Some(binding_from_claim(&claim, workspace)?);
         Ok(())
     }
 
@@ -829,6 +875,14 @@ impl KubernetesCoordinator {
                 return Ok(false);
             }
         }
+        self.migration_claims_detached(workspace, operation).await
+    }
+
+    async fn migration_claims_detached(
+        &self,
+        workspace: &Workspace,
+        operation: &StorageShrinkOperation,
+    ) -> Result<bool, String> {
         let pods = Api::<Pod>::namespaced(self.client.clone(), workspace.runtime.namespace());
         let list = pods
             .list(&ListParams::default())
@@ -958,10 +1012,10 @@ impl KubernetesCoordinator {
             .ok_or("migration source is missing")?;
         let image = storage_shrink_image().map_err(safe_error)?;
         self.shrink_claim(workspace, source, true).await?;
-        if !matches!(stage, ShrinkPodStage::Preflight) {
-            if let Some(destination) = volume.destination.as_ref() {
-                self.shrink_claim(workspace, destination, false).await?;
-            }
+        if !matches!(stage, ShrinkPodStage::Preflight)
+            && let Some(destination) = volume.destination.as_ref()
+        {
+            self.shrink_claim(workspace, destination, false).await?;
         }
         let pods = Api::<Pod>::namespaced(self.client.clone(), workspace.runtime.namespace());
         let name = format!("shrink-{}-{role}-{}", operation.id.simple(), stage.name());
@@ -971,35 +1025,17 @@ impl KubernetesCoordinator {
         let pod = match pods.get_opt(&name).await.map_err(safe_error)? {
             Some(pod) => pod,
             None => {
-                let policies = Api::<NetworkPolicy>::namespaced(
-                    self.client.clone(),
-                    workspace.runtime.namespace(),
-                );
-                let policy_name = format!("shrink-{}", operation.id.simple());
-                if let Some(policy) = policies.get_opt(&policy_name).await.map_err(safe_error)? {
-                    self.shrink_owned(&policy.metadata, workspace)?;
-                    if policy
-                        .metadata
-                        .labels
-                        .as_ref()
-                        .and_then(|labels| labels.get(OPERATION_LABEL))
-                        != Some(&operation.id.to_string())
-                    {
-                        return Err("migration network policy ownership changed".to_owned());
-                    }
-                    validate_helper_policy(&policy, operation)?;
-                } else {
-                    let policy: NetworkPolicy = serde_json::from_value(json!({"apiVersion":"networking.k8s.io/v1","kind":"NetworkPolicy","metadata":{"name":policy_name,"namespace":workspace.runtime.namespace(),"labels":labels},"spec":{"podSelector":{"matchLabels":{OPERATION_LABEL:operation.id.to_string()}},"policyTypes":["Ingress","Egress"],"ingress":[],"egress":[]}})).map_err(safe_error)?;
-                    policies
-                        .create(&PostParams::default(), &policy)
-                        .await
-                        .map_err(safe_error)?;
-                }
+                self.ensure_helper_policy(workspace, operation, &labels)
+                    .await?;
+                let metadata = ObjectMeta {
+                    name: Some(name.clone()),
+                    namespace: Some(workspace.runtime.namespace().to_owned()),
+                    labels: Some(labels),
+                    ..Default::default()
+                };
                 let desired = migration_pod(
-                    workspace,
                     operation,
-                    &name,
-                    labels,
+                    metadata,
                     stage,
                     source,
                     volume.destination.as_ref(),
@@ -1028,17 +1064,35 @@ impl KubernetesCoordinator {
             .map_err(safe_error)?;
         self.shrink_owned(&policy.metadata, workspace)?;
         validate_helper_policy(&policy, operation)?;
+        let metadata = ObjectMeta {
+            name: Some(name.clone()),
+            namespace: Some(workspace.runtime.namespace().to_owned()),
+            labels: Some(pod.metadata.labels.clone().unwrap_or_default()),
+            ..Default::default()
+        };
         let desired = migration_pod(
-            workspace,
             operation,
-            &name,
-            pod.metadata.labels.clone().unwrap_or_default(),
+            metadata,
             stage,
             source,
             volume.destination.as_ref(),
             &image,
         )?;
         validate_helper_spec(&pod, &desired)?;
+        self.helper_pod_result(workspace, operation, role, stage, &pod, &volume, &name)
+            .await
+    }
+
+    async fn helper_pod_result(
+        &self,
+        workspace: &Workspace,
+        operation: &mut StorageShrinkOperation,
+        role: &str,
+        stage: ShrinkPodStage,
+        pod: &Pod,
+        volume: &StorageShrinkVolume,
+        name: &str,
+    ) -> Result<Option<ShrinkUsage>, String> {
         let uid = pod
             .metadata
             .uid
@@ -1046,31 +1100,22 @@ impl KubernetesCoordinator {
             .ok_or("helper Pod UID is missing")?;
         let expected_uid = operation
             .helper_pod_uids
-            .entry(name.clone())
+            .entry(name.to_owned())
             .or_insert_with(|| uid.clone());
         if *expected_uid != uid {
             return Err("helper Pod UID changed; refusing its verification evidence".to_owned());
         }
-        let status = pod.status.as_ref();
-        match status.and_then(|status| status.phase.as_deref()) {
+        match pod
+            .status
+            .as_ref()
+            .and_then(|status| status.phase.as_deref())
+        {
             Some("Succeeded") => {
-                let message = status
-                    .and_then(|status| status.container_statuses.as_ref())
-                    .and_then(|containers| {
-                        containers
-                            .iter()
-                            .find(|container| container.name == "migrate")
-                    })
-                    .and_then(|container| container.state.as_ref())
-                    .and_then(|state| state.terminated.as_ref())
-                    .and_then(|terminated| terminated.message.as_ref())
-                    .ok_or("copy Pod did not publish its verification result")?;
-                let usage: ShrinkUsage = serde_json::from_str(message)
-                    .map_err(|_| "copy Pod returned invalid usage evidence".to_owned())?;
-                if !matches!(stage, ShrinkPodStage::Preflight) {
-                    if let Some(destination) = volume.destination.as_ref() {
-                        self.shrink_claim(workspace, destination, true).await?;
-                    }
+                let usage = parse_usage_evidence(pod.status.as_ref())?;
+                if !matches!(stage, ShrinkPodStage::Preflight)
+                    && let Some(destination) = volume.destination.as_ref()
+                {
+                    self.shrink_claim(workspace, destination, true).await?;
                 }
                 Ok(Some(usage))
             }
@@ -1080,6 +1125,37 @@ impl KubernetesCoordinator {
             )),
             _ => Ok(None),
         }
+    }
+
+    async fn ensure_helper_policy(
+        &self,
+        workspace: &Workspace,
+        operation: &StorageShrinkOperation,
+        labels: &BTreeMap<String, String>,
+    ) -> Result<(), String> {
+        let policies =
+            Api::<NetworkPolicy>::namespaced(self.client.clone(), workspace.runtime.namespace());
+        let policy_name = format!("shrink-{}", operation.id.simple());
+        if let Some(policy) = policies.get_opt(&policy_name).await.map_err(safe_error)? {
+            self.shrink_owned(&policy.metadata, workspace)?;
+            if policy
+                .metadata
+                .labels
+                .as_ref()
+                .and_then(|labels| labels.get(OPERATION_LABEL))
+                != Some(&operation.id.to_string())
+            {
+                return Err("migration network policy ownership changed".to_owned());
+            }
+            validate_helper_policy(&policy, operation)?;
+        } else {
+            let policy: NetworkPolicy = serde_json::from_value(json!({"apiVersion":"networking.k8s.io/v1","kind":"NetworkPolicy","metadata":{"name":policy_name,"namespace":workspace.runtime.namespace(),"labels":labels},"spec":{"podSelector":{"matchLabels":{OPERATION_LABEL:operation.id.to_string()}},"policyTypes":["Ingress","Egress"],"ingress":[],"egress":[]}})).map_err(safe_error)?;
+            policies
+                .create(&PostParams::default(), &policy)
+                .await
+                .map_err(safe_error)?;
+        }
+        Ok(())
     }
 
     pub(crate) async fn remove_shrink_helpers(
@@ -1160,12 +1236,9 @@ impl KubernetesCoordinator {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn migration_pod(
-    workspace: &Workspace,
     operation: &StorageShrinkOperation,
-    name: &str,
-    labels: BTreeMap<String, String>,
+    metadata: ObjectMeta,
     stage: ShrinkPodStage,
     source: &WorkspaceHomeVolumeBinding,
     destination: Option<&WorkspaceHomeVolumeBinding>,
@@ -1187,7 +1260,22 @@ fn migration_pod(
         volumes.push(json!({"name":"destination","persistentVolumeClaim":{"claimName":destination.claim_name,"readOnly":matches!(stage, ShrinkPodStage::Verify)}}));
         mounts.push(json!({"name":"destination","mountPath":"/destination","readOnly":matches!(stage, ShrinkPodStage::Verify)}));
     }
-    serde_json::from_value(json!({"apiVersion":"v1","kind":"Pod","metadata":{"name":name,"namespace":workspace.runtime.namespace(),"labels":labels},"spec":{"restartPolicy":"Never","activeDeadlineSeconds":86400,"automountServiceAccountToken":false,"enableServiceLinks":false,"securityContext":{"runAsUser":0,"runAsGroup":0,"seccompProfile":{"type":"RuntimeDefault"}},"containers":[{"name":"migrate","image":image,"command":["/bin/bash","-c"],"args":[stage.script()],"env":[{"name":"TARGET_BYTES","value":destination.map(|binding| (binding.capacity_gib * (1 << 30)).to_string()).unwrap_or_default()},{"name":"OPERATION_ID","value":operation.id.to_string()}],"securityContext":{"allowPrivilegeEscalation":false,"privileged":false,"readOnlyRootFilesystem":true,"capabilities":{"drop":["ALL"],"add":["CHOWN","DAC_OVERRIDE","FOWNER","FSETID"]}},"resources":{"requests":{"cpu":"100m","memory":"128Mi"},"limits":{"cpu":"1000m","memory":"512Mi"}},"terminationMessagePolicy":"File","volumeMounts":mounts}],"volumes":volumes}})).map_err(safe_error)
+    serde_json::from_value(json!({"apiVersion":"v1","kind":"Pod","metadata":metadata,"spec":{"restartPolicy":"Never","activeDeadlineSeconds":86400,"automountServiceAccountToken":false,"enableServiceLinks":false,"securityContext":{"runAsUser":0,"runAsGroup":0,"seccompProfile":{"type":"RuntimeDefault"}},"containers":[{"name":"migrate","image":image,"command":["/bin/bash","-c"],"args":[stage.script()],"env":[{"name":"TARGET_BYTES","value":destination.map(|binding| (binding.capacity_gib * (1 << 30)).to_string()).unwrap_or_default()},{"name":"OPERATION_ID","value":operation.id.to_string()}],"securityContext":{"allowPrivilegeEscalation":false,"privileged":false,"readOnlyRootFilesystem":true,"capabilities":{"drop":["ALL"],"add":["CHOWN","DAC_OVERRIDE","FOWNER","FSETID"]}},"resources":{"requests":{"cpu":"100m","memory":"128Mi"},"limits":{"cpu":"1000m","memory":"512Mi"}},"terminationMessagePolicy":"File","volumeMounts":mounts}],"volumes":volumes}})).map_err(safe_error)
+}
+
+fn parse_usage_evidence(status: Option<&PodStatus>) -> Result<ShrinkUsage, String> {
+    let message = status
+        .and_then(|status| status.container_statuses.as_ref())
+        .and_then(|containers| {
+            containers
+                .iter()
+                .find(|container| container.name == "migrate")
+        })
+        .and_then(|container| container.state.as_ref())
+        .and_then(|state| state.terminated.as_ref())
+        .and_then(|terminated| terminated.message.as_ref())
+        .ok_or("copy Pod did not publish its verification result")?;
+    serde_json::from_str(message).map_err(|_| "copy Pod returned invalid usage evidence".to_owned())
 }
 
 fn binding_from_claim(

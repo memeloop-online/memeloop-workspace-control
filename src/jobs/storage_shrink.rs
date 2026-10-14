@@ -100,281 +100,341 @@ impl WorkspaceReconcileHandler {
     ) -> Result<(), JobHandlerError> {
         use StorageShrinkPhase as Phase;
         match operation.phase {
-            Phase::Queued => {
-                self.coordinator
-                    .discover_shrink_sources(workspace, operation)
-                    .await
-                    .map_err(job_error)?;
-                self.database
-                    .save_storage_shrink(operation, ShrinkWorkspaceUpdate::None)
-                    .await
-                    .map_err(job_error)?;
-                if self
-                    .run_shrink_pod(workspace, operation, "home", ShrinkPodStage::Preflight, now)
-                    .await?
-                    .is_none()
-                {
-                    return pending("checking migration tools before stopping the workspace");
-                }
-                if !self
-                    .coordinator
-                    .retain_shrink_sources(workspace, operation)
-                    .await
-                    .map_err(job_error)?
-                {
-                    return pending(
-                        "waiting for the StatefulSet controller to observe Retain before removing GC owners",
-                    );
-                }
-                operation.phase = Phase::Stopping;
-                operation.updated_at = now;
-                self.database
-                    .save_storage_shrink(operation, ShrinkWorkspaceUpdate::Stopping)
-                    .await
-                    .map_err(job_error)?;
-            }
-            Phase::Stopping => {
-                if !self
-                    .coordinator
-                    .stop_for_storage_shrink(workspace, operation)
-                    .await
-                    .map_err(job_error)?
-                {
-                    return pending("waiting for workspace Pod termination and volume exclusivity");
-                }
-                operation.phase = Phase::Measuring;
-                operation.updated_at = now;
-                self.database
-                    .save_storage_shrink(operation, ShrinkWorkspaceUpdate::Stopped)
-                    .await
-                    .map_err(job_error)?;
-            }
-            Phase::Measuring => {
-                for role in ["home", "temporary"] {
-                    if volume(operation, role).target_gib.is_none()
-                        || volume(operation, role).used_bytes.is_some()
-                    {
-                        continue;
-                    }
-                    let Some(usage) = self
-                        .run_shrink_pod(workspace, operation, role, ShrinkPodStage::Measure, now)
-                        .await?
-                    else {
-                        return pending("measuring offline storage usage");
-                    };
-                    let selected = volume_mut(operation, role);
-                    selected.used_bytes = Some(usage.used_bytes);
-                    selected.used_inodes = Some(usage.used_inodes);
-                    if selected
-                        .target_gib
-                        .and_then(|target| target.checked_mul(1 << 30))
-                        .is_none_or(|bytes| bytes <= usage.used_bytes)
-                    {
-                        return Err(job_error(format!(
-                            "{role} target must be strictly larger than offline used bytes ({})",
-                            usage.used_bytes
-                        )));
-                    }
-                    operation.updated_at = now;
-                    self.database
-                        .save_storage_shrink(operation, ShrinkWorkspaceUpdate::None)
-                        .await
-                        .map_err(job_error)?;
-                }
-                for role in ["home", "temporary"] {
-                    let selected = volume(operation, role);
-                    if let Some(target) = selected.target_gib {
-                        if selected.destination.is_none() {
-                            let source = selected
-                                .source
-                                .as_ref()
-                                .ok_or_else(|| job_error("source claim is missing"))?;
-                            let destination = self
-                                .coordinator
-                                .create_shrink_destination(
-                                    workspace, operation, role, source, target,
-                                )
-                                .await
-                                .map_err(job_error)?;
-                            volume_mut(operation, role).destination = Some(destination);
-                        }
-                    }
-                }
-                operation.phase = Phase::Copying;
-                operation.updated_at = now;
-                self.database
-                    .save_storage_shrink(operation, ShrinkWorkspaceUpdate::None)
-                    .await
-                    .map_err(job_error)?;
-            }
+            Phase::Queued => self.advance_queued(workspace, operation, now).await,
+            Phase::Stopping => self.advance_stopping(workspace, operation, now).await,
+            Phase::Measuring => self.advance_measuring(workspace, operation, now).await,
             Phase::Copying | Phase::Verifying => {
-                let stage = if operation.phase == Phase::Copying {
-                    ShrinkPodStage::Copy
-                } else {
-                    ShrinkPodStage::Verify
-                };
-                for role in ["home", "temporary"] {
-                    if volume(operation, role).target_gib.is_none() {
-                        continue;
-                    }
-                    let Some(usage) = self
-                        .run_shrink_pod(workspace, operation, role, stage, now)
-                        .await?
-                    else {
-                        return pending("offline copy/checksum verification is running");
-                    };
-                    if volume(operation, role).used_bytes != Some(usage.used_bytes)
-                        || volume(operation, role).used_inodes != Some(usage.used_inodes)
-                    {
-                        return Err(job_error(
-                            "source usage changed while the workspace was offline",
-                        ));
-                    }
-                    if operation.phase == Phase::Verifying {
-                        let destination = volume(operation, role)
-                            .destination
-                            .as_ref()
-                            .ok_or_else(|| job_error("destination binding is missing"))?;
-                        let identity = self
-                            .coordinator
-                            .shrink_volume_identity(workspace, destination)
-                            .await
-                            .map_err(job_error)?;
-                        volume_mut(operation, role).destination_volume = Some(identity);
-                        volume_mut(operation, role).verified = true;
-                    }
-                }
-                operation.phase = if operation.phase == Phase::Copying {
-                    Phase::Verifying
-                } else {
-                    Phase::Switching
-                };
-                operation.updated_at = now;
-                self.database
-                    .save_storage_shrink(operation, ShrinkWorkspaceUpdate::None)
+                self.advance_copying_or_verifying(workspace, operation, now)
                     .await
-                    .map_err(job_error)?;
             }
-            Phase::Switching => {
-                if !self
-                    .coordinator
-                    .remove_shrink_helpers(workspace, operation)
-                    .await
-                    .map_err(job_error)?
-                {
-                    return pending(
-                        "unmounting copy/verification Pods before the atomic binding exchange",
-                    );
-                }
-                if !self
-                    .coordinator
-                    .stop_for_storage_shrink(workspace, operation)
-                    .await
-                    .map_err(job_error)?
-                {
-                    return pending("waiting for exclusive offline claims before switching");
-                }
-                operation.switched = true;
-                operation.phase = Phase::Resuming;
-                operation.updated_at = now;
-                self.database
-                    .save_storage_shrink(operation, ShrinkWorkspaceUpdate::Switch)
-                    .await
-                    .map_err(job_error)?;
-            }
-            Phase::Resuming => {
-                if operation.resume {
-                    if workspace.state == WorkspaceState::Stopped {
-                        operation.updated_at = now;
-                        self.database
-                            .save_storage_shrink(operation, ShrinkWorkspaceUpdate::Resume)
-                            .await
-                            .map_err(job_error)?;
-                        return pending("starting workspace with verified replacement volumes");
-                    }
-                    if workspace.state != WorkspaceState::Ready {
-                        self.reconcile_workspace(workspace, job).await?;
-                        return pending("waiting for workspace recovery readiness");
-                    }
-                } else {
-                    self.reconcile_workspace(workspace, job).await?;
-                }
-                operation.phase = Phase::Completed;
-                operation.reclaimable = true;
-                if operation.request.reclaim_source {
-                    operation.phase = Phase::Reclaiming;
-                }
-                operation.updated_at = now;
-                self.database
-                    .save_storage_shrink(operation, ShrinkWorkspaceUpdate::None)
-                    .await
-                    .map_err(job_error)?;
-                if operation.phase == Phase::Reclaiming {
-                    return pending(
-                        "recovered workspace is ready; reclaiming sources under the original explicit consent",
-                    );
-                }
-                return Ok(());
-            }
-            Phase::RollingBack => {
-                if !self
-                    .coordinator
-                    .remove_shrink_helpers(workspace, operation)
-                    .await
-                    .map_err(job_error)?
-                {
-                    return pending("removing migration Pods before recovery");
-                }
-                if !self
-                    .coordinator
-                    .stop_for_storage_shrink(workspace, operation)
-                    .await
-                    .map_err(job_error)?
-                {
-                    return pending(
-                        "waiting for offline recovery; source and destination claims are retained",
-                    );
-                }
-                operation.phase = Phase::Failed;
-                operation.updated_at = now;
-                let update = if operation.switched {
-                    ShrinkWorkspaceUpdate::Stopped
-                } else {
-                    ShrinkWorkspaceUpdate::Rollback
-                };
-                self.database
-                    .save_storage_shrink(operation, update)
-                    .await
-                    .map_err(job_error)?;
-                return Ok(());
-            }
-            Phase::Reclaiming => {
-                if operation.resume && workspace.state != WorkspaceState::Ready {
-                    return Err(job_error(
-                        "workspace must be Ready before confirmed source reclamation",
-                    ));
-                }
-                if !self
-                    .coordinator
-                    .reclaim_shrink_sources(workspace, operation)
-                    .await
-                    .map_err(job_error)?
-                {
-                    return pending("waiting for UID-verified source PVC reclamation");
-                }
-                operation.phase = Phase::Reclaimed;
-                operation.sources_retained = false;
-                operation.reclaimable = false;
-                operation.updated_at = now;
-                self.database
-                    .save_storage_shrink(operation, ShrinkWorkspaceUpdate::None)
-                    .await
-                    .map_err(job_error)?;
-                return Ok(());
-            }
-            Phase::Completed | Phase::Failed | Phase::Reclaimed => return Ok(()),
+            Phase::Switching => self.advance_switching(workspace, operation, now).await,
+            Phase::Resuming => self.advance_resuming(workspace, operation, job, now).await,
+            Phase::RollingBack => self.advance_rolling_back(workspace, operation, now).await,
+            Phase::Reclaiming => self.advance_reclaiming(workspace, operation, now).await,
+            Phase::Completed | Phase::Failed | Phase::Reclaimed => Ok(()),
         }
+    }
+
+    async fn advance_queued(
+        &self,
+        workspace: &Workspace,
+        operation: &mut StorageShrinkOperation,
+        now: i64,
+    ) -> Result<(), JobHandlerError> {
+        self.coordinator
+            .discover_shrink_sources(workspace, operation)
+            .await
+            .map_err(job_error)?;
+        self.database
+            .save_storage_shrink(operation, ShrinkWorkspaceUpdate::None)
+            .await
+            .map_err(job_error)?;
+        if self
+            .run_shrink_pod(workspace, operation, "home", ShrinkPodStage::Preflight, now)
+            .await?
+            .is_none()
+        {
+            return pending("checking migration tools before stopping the workspace");
+        }
+        if !self
+            .coordinator
+            .retain_shrink_sources(workspace, operation)
+            .await
+            .map_err(job_error)?
+        {
+            return pending(
+                "waiting for the StatefulSet controller to observe Retain before removing GC owners",
+            );
+        }
+        operation.phase = StorageShrinkPhase::Stopping;
+        operation.updated_at = now;
+        self.database
+            .save_storage_shrink(operation, ShrinkWorkspaceUpdate::Stopping)
+            .await
+            .map_err(job_error)?;
         pending("storage migration advanced to its next durable phase")
+    }
+
+    async fn advance_stopping(
+        &self,
+        workspace: &Workspace,
+        operation: &mut StorageShrinkOperation,
+        now: i64,
+    ) -> Result<(), JobHandlerError> {
+        if !self
+            .coordinator
+            .stop_for_storage_shrink(workspace, operation)
+            .await
+            .map_err(job_error)?
+        {
+            return pending("waiting for workspace Pod termination and volume exclusivity");
+        }
+        operation.phase = StorageShrinkPhase::Measuring;
+        operation.updated_at = now;
+        self.database
+            .save_storage_shrink(operation, ShrinkWorkspaceUpdate::Stopped)
+            .await
+            .map_err(job_error)?;
+        pending("storage migration advanced to its next durable phase")
+    }
+
+    async fn advance_measuring(
+        &self,
+        workspace: &Workspace,
+        operation: &mut StorageShrinkOperation,
+        now: i64,
+    ) -> Result<(), JobHandlerError> {
+        for role in ["home", "temporary"] {
+            if volume(operation, role).target_gib.is_none()
+                || volume(operation, role).used_bytes.is_some()
+            {
+                continue;
+            }
+            let Some(usage) = self
+                .run_shrink_pod(workspace, operation, role, ShrinkPodStage::Measure, now)
+                .await?
+            else {
+                return pending("measuring offline storage usage");
+            };
+            let selected = volume_mut(operation, role);
+            selected.used_bytes = Some(usage.used_bytes);
+            selected.used_inodes = Some(usage.used_inodes);
+            if selected
+                .target_gib
+                .and_then(|target| target.checked_mul(1 << 30))
+                .is_none_or(|bytes| bytes <= usage.used_bytes)
+            {
+                return Err(job_error(format!(
+                    "{role} target must be strictly larger than offline used bytes ({})",
+                    usage.used_bytes
+                )));
+            }
+            operation.updated_at = now;
+            self.database
+                .save_storage_shrink(operation, ShrinkWorkspaceUpdate::None)
+                .await
+                .map_err(job_error)?;
+        }
+        for role in ["home", "temporary"] {
+            let selected = volume(operation, role);
+            if let Some(target) = selected.target_gib
+                && selected.destination.is_none()
+            {
+                let source = selected
+                    .source
+                    .as_ref()
+                    .ok_or_else(|| job_error("source claim is missing"))?;
+                let destination = self
+                    .coordinator
+                    .create_shrink_destination(workspace, operation, role, source, target)
+                    .await
+                    .map_err(job_error)?;
+                volume_mut(operation, role).destination = Some(destination);
+            }
+        }
+        operation.phase = StorageShrinkPhase::Copying;
+        operation.updated_at = now;
+        self.database
+            .save_storage_shrink(operation, ShrinkWorkspaceUpdate::None)
+            .await
+            .map_err(job_error)?;
+        pending("storage migration advanced to its next durable phase")
+    }
+
+    async fn advance_copying_or_verifying(
+        &self,
+        workspace: &Workspace,
+        operation: &mut StorageShrinkOperation,
+        now: i64,
+    ) -> Result<(), JobHandlerError> {
+        let stage = if operation.phase == StorageShrinkPhase::Copying {
+            ShrinkPodStage::Copy
+        } else {
+            ShrinkPodStage::Verify
+        };
+        for role in ["home", "temporary"] {
+            if volume(operation, role).target_gib.is_none() {
+                continue;
+            }
+            let Some(usage) = self
+                .run_shrink_pod(workspace, operation, role, stage, now)
+                .await?
+            else {
+                return pending("offline copy/checksum verification is running");
+            };
+            if volume(operation, role).used_bytes != Some(usage.used_bytes)
+                || volume(operation, role).used_inodes != Some(usage.used_inodes)
+            {
+                return Err(job_error(
+                    "source usage changed while the workspace was offline",
+                ));
+            }
+            if operation.phase == StorageShrinkPhase::Verifying {
+                let destination = volume(operation, role)
+                    .destination
+                    .as_ref()
+                    .ok_or_else(|| job_error("destination binding is missing"))?;
+                let identity = self
+                    .coordinator
+                    .shrink_volume_identity(workspace, destination)
+                    .await
+                    .map_err(job_error)?;
+                volume_mut(operation, role).destination_volume = Some(identity);
+                volume_mut(operation, role).verified = true;
+            }
+        }
+        operation.phase = if operation.phase == StorageShrinkPhase::Copying {
+            StorageShrinkPhase::Verifying
+        } else {
+            StorageShrinkPhase::Switching
+        };
+        operation.updated_at = now;
+        self.database
+            .save_storage_shrink(operation, ShrinkWorkspaceUpdate::None)
+            .await
+            .map_err(job_error)?;
+        pending("storage migration advanced to its next durable phase")
+    }
+
+    async fn advance_switching(
+        &self,
+        workspace: &Workspace,
+        operation: &mut StorageShrinkOperation,
+        now: i64,
+    ) -> Result<(), JobHandlerError> {
+        if !self
+            .coordinator
+            .remove_shrink_helpers(workspace, operation)
+            .await
+            .map_err(job_error)?
+        {
+            return pending("unmounting copy/verification Pods before the atomic binding exchange");
+        }
+        if !self
+            .coordinator
+            .stop_for_storage_shrink(workspace, operation)
+            .await
+            .map_err(job_error)?
+        {
+            return pending("waiting for exclusive offline claims before switching");
+        }
+        operation.switched = true;
+        operation.phase = StorageShrinkPhase::Resuming;
+        operation.updated_at = now;
+        self.database
+            .save_storage_shrink(operation, ShrinkWorkspaceUpdate::Switch)
+            .await
+            .map_err(job_error)?;
+        pending("storage migration advanced to its next durable phase")
+    }
+
+    async fn advance_resuming(
+        &self,
+        workspace: &Workspace,
+        operation: &mut StorageShrinkOperation,
+        job: &ClaimedJob,
+        now: i64,
+    ) -> Result<(), JobHandlerError> {
+        if operation.resume {
+            if workspace.state == WorkspaceState::Stopped {
+                operation.updated_at = now;
+                self.database
+                    .save_storage_shrink(operation, ShrinkWorkspaceUpdate::Resume)
+                    .await
+                    .map_err(job_error)?;
+                return pending("starting workspace with verified replacement volumes");
+            }
+            if workspace.state != WorkspaceState::Ready {
+                self.reconcile_workspace(workspace, job).await?;
+                return pending("waiting for workspace recovery readiness");
+            }
+        } else {
+            self.reconcile_workspace(workspace, job).await?;
+        }
+        operation.phase = StorageShrinkPhase::Completed;
+        operation.reclaimable = true;
+        if operation.request.reclaim_source {
+            operation.phase = StorageShrinkPhase::Reclaiming;
+        }
+        operation.updated_at = now;
+        self.database
+            .save_storage_shrink(operation, ShrinkWorkspaceUpdate::None)
+            .await
+            .map_err(job_error)?;
+        if operation.phase == StorageShrinkPhase::Reclaiming {
+            return pending(
+                "recovered workspace is ready; reclaiming sources under the original explicit consent",
+            );
+        }
+        Ok(())
+    }
+
+    async fn advance_rolling_back(
+        &self,
+        workspace: &Workspace,
+        operation: &mut StorageShrinkOperation,
+        now: i64,
+    ) -> Result<(), JobHandlerError> {
+        if !self
+            .coordinator
+            .remove_shrink_helpers(workspace, operation)
+            .await
+            .map_err(job_error)?
+        {
+            return pending("removing migration Pods before recovery");
+        }
+        if !self
+            .coordinator
+            .stop_for_storage_shrink(workspace, operation)
+            .await
+            .map_err(job_error)?
+        {
+            return pending(
+                "waiting for offline recovery; source and destination claims are retained",
+            );
+        }
+        operation.phase = StorageShrinkPhase::Failed;
+        operation.updated_at = now;
+        let update = if operation.switched {
+            ShrinkWorkspaceUpdate::Stopped
+        } else {
+            ShrinkWorkspaceUpdate::Rollback
+        };
+        self.database
+            .save_storage_shrink(operation, update)
+            .await
+            .map_err(job_error)?;
+        Ok(())
+    }
+
+    async fn advance_reclaiming(
+        &self,
+        workspace: &Workspace,
+        operation: &mut StorageShrinkOperation,
+        now: i64,
+    ) -> Result<(), JobHandlerError> {
+        if operation.resume && workspace.state != WorkspaceState::Ready {
+            return Err(job_error(
+                "workspace must be Ready before confirmed source reclamation",
+            ));
+        }
+        if !self
+            .coordinator
+            .reclaim_shrink_sources(workspace, operation)
+            .await
+            .map_err(job_error)?
+        {
+            return pending("waiting for UID-verified source PVC reclamation");
+        }
+        operation.phase = StorageShrinkPhase::Reclaimed;
+        operation.sources_retained = false;
+        operation.reclaimable = false;
+        operation.updated_at = now;
+        self.database
+            .save_storage_shrink(operation, ShrinkWorkspaceUpdate::None)
+            .await
+            .map_err(job_error)?;
+        Ok(())
     }
 
     async fn finish_preflight_failure(
