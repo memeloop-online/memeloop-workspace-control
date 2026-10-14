@@ -82,7 +82,8 @@ mod coordinator_tests {
         use std::time::Duration;
         use tokio::sync::Barrier;
 
-        let workspace = workspace(workspace_id());
+        let mut workspace = workspace(workspace_id());
+        workspace.state = WorkspaceState::Starting;
         let builder =
             workspace_coordinator(Arc::new(WorkspaceDeleteMock::new("public-a", workspace.id)))
                 .builder;
@@ -127,7 +128,8 @@ mod coordinator_tests {
         use http_body_util::BodyExt;
 
         for foreign in [false, true] {
-            let workspace = workspace(workspace_id());
+            let mut workspace = workspace(workspace_id());
+            workspace.state = WorkspaceState::Starting;
             let builder =
                 workspace_coordinator(Arc::new(WorkspaceDeleteMock::new("public-a", workspace.id)))
                     .builder;
