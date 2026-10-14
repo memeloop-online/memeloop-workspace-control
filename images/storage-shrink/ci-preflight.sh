@@ -6,8 +6,9 @@ for tool in tar python3 du df cut tail tr install ln mktemp truncate sha256sum; 
   command -v "$tool" >/dev/null
 done
 tar --version | grep -i 'GNU tar'
+tar_help="$(tar --help)"
 for option in --sparse --xattrs --acls --numeric-owner --one-file-system; do
-  tar --help | grep -q -- "${option}"
+  grep -q -- "${option}" <<<"${tar_help}"
 done
 
 work="$(mktemp -d)"
