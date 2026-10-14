@@ -129,6 +129,125 @@ fn helper_has_read_only_source_and_no_workspace_credentials() {
     assert!(validate_helper_spec(&tampered, &pod).is_err());
 }
 
+fn server_defaulted_helper(mut pod: Pod) -> Pod {
+    let spec = pod.spec.as_mut().unwrap();
+    for variable in spec.containers[0].env.as_mut().unwrap() {
+        if variable.value.as_deref() == Some("") {
+            variable.value = None;
+        }
+    }
+    for volume in spec.volumes.as_mut().unwrap() {
+        if let Some(claim) = volume.persistent_volume_claim.as_mut()
+            && claim.read_only == Some(false)
+        {
+            claim.read_only = None;
+        }
+    }
+    for mount in spec.containers[0].volume_mounts.as_mut().unwrap() {
+        if mount.read_only == Some(false) {
+            mount.read_only = None;
+        }
+    }
+    pod
+}
+
+#[test]
+fn helper_manifests_survive_api_server_scalar_omission() {
+    let workspace = workspace();
+    let operation = operation(&workspace);
+    let source = binding("source", 60);
+    let destination = binding("destination", 20);
+    for stage in [
+        ShrinkPodStage::Preflight,
+        ShrinkPodStage::Measure,
+        ShrinkPodStage::Copy,
+        ShrinkPodStage::Verify,
+    ] {
+        let target =
+            matches!(stage, ShrinkPodStage::Copy | ShrinkPodStage::Verify).then_some(&destination);
+        let desired = migration_pod(
+            &operation,
+            metadata(stage.name()),
+            stage,
+            &source,
+            target,
+            "approved-image",
+        )
+        .unwrap();
+        let expected_bytes = target.map_or_else(
+            || "0".to_owned(),
+            |binding| (binding.capacity_gib * (1 << 30)).to_string(),
+        );
+        let spec = desired.spec.as_ref().unwrap();
+        assert_eq!(
+            spec.containers[0].env.as_ref().unwrap()[0].value.as_deref(),
+            Some(expected_bytes.as_str())
+        );
+        if target.is_some() {
+            let expected_read_only = matches!(stage, ShrinkPodStage::Verify).then_some(true);
+            let claim = spec
+                .volumes
+                .as_ref()
+                .unwrap()
+                .iter()
+                .find(|volume| volume.name == "destination")
+                .unwrap()
+                .persistent_volume_claim
+                .as_ref()
+                .unwrap();
+            assert_eq!(claim.read_only, expected_read_only);
+            let mount = spec.containers[0]
+                .volume_mounts
+                .as_ref()
+                .unwrap()
+                .iter()
+                .find(|mount| mount.name == "destination")
+                .unwrap();
+            assert_eq!(mount.read_only, expected_read_only);
+        }
+        validate_helper_spec(&server_defaulted_helper(desired.clone()), &desired).unwrap();
+    }
+}
+
+#[test]
+fn canonical_helper_validation_rejects_command_env_and_security_drift() {
+    let workspace = workspace();
+    let operation = operation(&workspace);
+    let desired = migration_pod(
+        &operation,
+        metadata("copy"),
+        ShrinkPodStage::Copy,
+        &binding("source", 60),
+        Some(&binding("destination", 20)),
+        "approved-image",
+    )
+    .unwrap();
+    let mut tampered = server_defaulted_helper(desired.clone());
+    tampered.spec.as_mut().unwrap().containers[0].command = Some(vec!["/bin/sh".to_owned()]);
+    assert!(validate_helper_spec(&tampered, &desired).is_err());
+    let mut tampered = server_defaulted_helper(desired.clone());
+    tampered.spec.as_mut().unwrap().containers[0]
+        .env
+        .as_mut()
+        .unwrap()[0]
+        .value = Some("1".to_owned());
+    assert!(validate_helper_spec(&tampered, &desired).is_err());
+    let mut tampered = server_defaulted_helper(desired.clone());
+    tampered.spec.as_mut().unwrap().containers[0]
+        .security_context
+        .as_mut()
+        .unwrap()
+        .privileged = Some(true);
+    assert!(validate_helper_spec(&tampered, &desired).is_err());
+    let mut tampered = server_defaulted_helper(desired.clone());
+    tampered.spec.as_mut().unwrap().containers[0]
+        .volume_mounts
+        .as_mut()
+        .unwrap()[0]
+        .read_only = None;
+    assert!(validate_helper_spec(&tampered, &desired).is_err());
+}
+
 #[test]
 fn preflight_has_no_persistent_mounts_and_verify_is_read_only() {
     let workspace = workspace();
