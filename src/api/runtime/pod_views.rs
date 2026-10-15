@@ -257,6 +257,33 @@ mod tests {
     }
 
     #[test]
+    fn lifecycle_events_keep_the_reason_without_exposing_raw_messages() {
+        for reason in [
+            "Started",
+            "Killing",
+            "SandboxChanged",
+            "SuccessfulAttachVolume",
+        ] {
+            let event = pod_event(Event {
+                reason: Some(reason.to_owned()),
+                message: Some("private runtime diagnostics must remain hidden".to_owned()),
+                ..Event::default()
+            });
+            assert_eq!(event.reason.as_deref(), Some(reason));
+            assert!(
+                !serde_json::to_string(&event)
+                    .unwrap()
+                    .contains("private runtime")
+            );
+        }
+        let event = pod_event(Event {
+            reason: Some("arbitrary sensitive diagnostics".to_owned()),
+            ..Event::default()
+        });
+        assert!(event.reason.is_none());
+    }
+
+    #[test]
     fn events_are_sorted_before_the_limit_is_applied() {
         let mut events = vec![
             pod_event_at("2026-08-28T08:00:00Z"),
