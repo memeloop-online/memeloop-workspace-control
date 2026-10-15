@@ -85,7 +85,7 @@ impl KubernetesCoordinator {
             ),
             observe_apply_stage(
                 workspace,
-                "ssh_identity",
+                "workspace_identity",
                 self.apply_workspace_identity(namespace_name, workspace, desired)
             ),
         )?;
