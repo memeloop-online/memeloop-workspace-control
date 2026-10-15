@@ -673,3 +673,108 @@ async fn worker_pool_admits_more_jobs_when_persisted_concurrency_changes() {
     }
     assert_eq!(database.job_worker_concurrency().await.unwrap(), 2);
 }
+
+#[derive(Clone, Copy)]
+enum SlowOutcome {
+    Retry,
+    Pending,
+    Checkpoint,
+    Success,
+}
+
+struct SlowHandler(SlowOutcome);
+
+impl JobHandler for SlowHandler {
+    async fn handle(&self, _job: &ClaimedJob) -> Result<(), JobHandlerError> {
+        // Longer than the initial retry and checkpoint delays: using the claim
+        // timestamp would make both deadlines expire before this call returns.
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        match self.0 {
+            SlowOutcome::Retry => Err(JobHandlerError::Failed("transient".to_owned())),
+            SlowOutcome::Pending => Err(JobHandlerError::Pending("waiting".to_owned())),
+            SlowOutcome::Checkpoint => Err(JobHandlerError::PendingWithCheckpoint {
+                message: "applied".to_owned(),
+                payload: json!({"stage":"applied"}),
+            }),
+            SlowOutcome::Success => Ok(()),
+        }
+    }
+}
+
+async fn assert_slow_job_deadline(outcome: SlowOutcome, delay: Option<i64>) {
+    let database = database().await;
+    let id = database
+        .enqueue_job(
+            NewJob {
+                kind: "slow".to_owned(),
+                workspace_id: None,
+                payload: json!({}),
+                available_at: 100,
+            },
+            100,
+        )
+        .await
+        .unwrap();
+    let worker = JobWorker::new(
+        database.clone(),
+        Arc::new(SlowHandler(outcome)),
+        "slow-owner".to_owned(),
+    );
+    assert!(worker.run_once(100).await.unwrap());
+    let pool = match &database {
+        Database::Sqlite { pool, .. } => pool,
+        Database::Postgres { .. } => unreachable!(),
+    };
+    let (updated_at, available_at, status, attempts): (i64, i64, String, i64) =
+        sqlx::query_as("SELECT updated_at, available_at, status, attempts FROM jobs WHERE id = ?1")
+            .bind(id.to_string())
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    assert!(
+        updated_at >= 103,
+        "completion time must include external work"
+    );
+    if let Some(delay) = delay {
+        assert_eq!(status, "pending");
+        assert_eq!(available_at, updated_at + delay);
+        assert!(
+            database
+                .claim_job("probe", available_at - 1, Duration::from_secs(60))
+                .await
+                .unwrap()
+                .is_none()
+        );
+        let retried = database
+            .claim_job("probe", available_at, Duration::from_secs(60))
+            .await
+            .unwrap()
+            .unwrap();
+        if matches!(outcome, SlowOutcome::Checkpoint) {
+            assert_eq!(retried.payload, json!({"stage":"applied"}));
+        }
+        assert_eq!(attempts, i64::from(matches!(outcome, SlowOutcome::Retry)));
+    } else {
+        assert_eq!(status, "completed");
+    }
+}
+
+#[tokio::test]
+async fn slow_failure_receives_full_backoff_after_execution() {
+    assert_slow_job_deadline(SlowOutcome::Retry, Some(2)).await;
+}
+
+#[tokio::test]
+async fn slow_pending_receives_full_readiness_delay_after_execution() {
+    assert_slow_job_deadline(SlowOutcome::Pending, Some(5)).await;
+}
+
+#[tokio::test]
+async fn slow_checkpoint_survives_until_its_post_execution_deadline() {
+    assert_slow_job_deadline(SlowOutcome::Checkpoint, Some(1)).await;
+}
+
+#[tokio::test]
+async fn slow_success_records_completion_after_execution() {
+    assert_slow_job_deadline(SlowOutcome::Success, None).await;
+}
