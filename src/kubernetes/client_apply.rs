@@ -10,7 +10,7 @@ use kube::{
     api::{DeleteParams, Patch, PatchParams},
 };
 use serde::{Serialize, de::DeserializeOwned};
-use std::fmt::Debug;
+use std::{fmt::Debug, future::Future, time::Instant};
 use uuid::Uuid;
 
 use super::super::{DesiredResources, InjectionMaterialization};
@@ -25,6 +25,25 @@ mod envoy_filter;
 mod http_proxy;
 #[path = "client_apply/port_mappings.rs"]
 mod port_mappings;
+
+// Record only phase names, identity and timing; injection values and API bodies stay out of logs.
+async fn observe_apply_stage<T, E>(
+    workspace: &Workspace,
+    phase: &'static str,
+    operation: impl Future<Output = Result<T, E>>,
+) -> Result<T, E> {
+    let started = Instant::now();
+    let result = operation.await;
+    tracing::info!(
+        workspace_id = %workspace.id,
+        generation = workspace.generation,
+        phase,
+        elapsed_ms = started.elapsed().as_secs_f64() * 1000.0,
+        success = result.is_ok(),
+        "workspace resource apply stage completed"
+    );
+    result
+}
 
 impl KubernetesCoordinator {
     pub(super) async fn apply_desired(
@@ -41,19 +60,49 @@ impl KubernetesCoordinator {
         if namespace_name != workspace.runtime.namespace() {
             return Err(ReconcileError::RuntimeIdentityMismatch);
         }
-        self.verify_home_volume_binding(workspace).await?;
-        self.apply_namespace(workspace, desired).await?;
+        observe_apply_stage(
+            workspace,
+            "home_binding",
+            self.verify_home_volume_binding(workspace),
+        )
+        .await?;
+        observe_apply_stage(
+            workspace,
+            "namespace",
+            self.apply_namespace(workspace, desired),
+        )
+        .await?;
         tokio::try_join!(
-            self.apply_access_identity(namespace_name, workspace, desired),
-            self.apply_injections(workspace, &desired.injections),
-            self.apply_workspace_identity(namespace_name, workspace, desired),
+            observe_apply_stage(
+                workspace,
+                "access_identity",
+                self.apply_access_identity(namespace_name, workspace, desired)
+            ),
+            observe_apply_stage(
+                workspace,
+                "injections",
+                self.apply_injections(workspace, &desired.injections)
+            ),
+            observe_apply_stage(
+                workspace,
+                "ssh_identity",
+                self.apply_workspace_identity(namespace_name, workspace, desired)
+            ),
         )?;
         // Publish isolation intent before creating any workspace containers. Policy acceptance
         // is not an enforcement acknowledgement; node-level acceptance must verify convergence.
-        self.apply_network(namespace_name, workspace, desired)
-            .await?;
-        self.apply_workload(namespace_name, workspace, desired)
-            .await
+        observe_apply_stage(
+            workspace,
+            "network",
+            self.apply_network(namespace_name, workspace, desired),
+        )
+        .await?;
+        observe_apply_stage(
+            workspace,
+            "workload",
+            self.apply_workload(namespace_name, workspace, desired),
+        )
+        .await
     }
 
     async fn apply_namespace(
@@ -189,10 +238,12 @@ impl KubernetesCoordinator {
         let names = &runtime_names.resources;
         let apply = PatchParams::apply(FIELD_MANAGER);
         let services = Api::<Service>::namespaced(self.client.clone(), namespace_name);
-        verify_existing(&services, &names.service, &self.builder, workspace_id).await?;
-        services
-            .patch(&names.service, &apply, &Patch::Apply(&desired.service))
-            .await?;
+        observe_apply_stage(
+            workspace,
+            "service",
+            self.apply_owned(&services, &names.service, &desired.service, workspace_id),
+        )
+        .await?;
         if let Some(service) = &desired.internal_ssh_service {
             verify_existing(&services, &names.ssh_service, &self.builder, workspace_id).await?;
             services
@@ -222,9 +273,12 @@ impl KubernetesCoordinator {
             preserve_claim_storage_classes(&mut stateful_set, &existing);
         }
         self.verify_home_volume_binding(workspace).await?;
-        let stateful_set_result = stateful_sets
-            .patch(&names.stateful_set, &apply, &Patch::Apply(&stateful_set))
-            .await;
+        let stateful_set_result = observe_apply_stage(
+            workspace,
+            "stateful_set",
+            stateful_sets.patch(&names.stateful_set, &apply, &Patch::Apply(&stateful_set)),
+        )
+        .await;
         if let Err(error) = stateful_set_result {
             if immutable_stateful_set_update(&error) {
                 self.verify_home_volume_binding(workspace).await?;
