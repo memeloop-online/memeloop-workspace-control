@@ -206,6 +206,205 @@ mod coordinator_tests {
         }
     }
 
+    fn ready_pod_fixture() -> (Workspace, serde_json::Value, serde_json::Value) {
+        let mut workspace = workspace(workspace_id());
+        workspace.state = WorkspaceState::Starting;
+        let builder =
+            workspace_coordinator(Arc::new(WorkspaceDeleteMock::new("public-a", workspace.id)))
+                .builder;
+        let names = builder.runtime_names(&workspace).unwrap().resources;
+        let desired = builder.build(&workspace).unwrap();
+        let mut stateful_set = serde_json::to_value(desired.stateful_set).unwrap();
+        stateful_set["metadata"]["uid"] = serde_json::json!("current-sts-uid");
+        stateful_set["metadata"]["generation"] = serde_json::json!(10);
+        stateful_set["status"] = serde_json::json!({
+            "observedGeneration": 10, "replicas": 1, "readyReplicas": 0,
+            "updatedReplicas": 1, "currentRevision": "previous-revision",
+            "updateRevision": "current-revision",
+        });
+        let mut metadata = stateful_set["spec"]["template"]["metadata"].clone();
+        metadata["name"] = serde_json::json!(names.pod_ordinal_zero());
+        metadata["namespace"] = serde_json::json!(workspace.runtime.namespace());
+        metadata["labels"]["controller-revision-hash"] = serde_json::json!("current-revision");
+        metadata["ownerReferences"] = serde_json::json!([{
+            "apiVersion": "apps/v1", "kind": "StatefulSet", "name": names.stateful_set,
+            "uid": "current-sts-uid", "controller": true,
+        }]);
+        let pod = serde_json::json!({
+            "apiVersion": "v1", "kind": "Pod", "metadata": metadata,
+            "status": {"phase": "Running", "conditions": [{"type": "Ready", "status": "True"}]},
+        });
+        (workspace, stateful_set, pod)
+    }
+
+    async fn observe_ready_fixture(
+        workspace: &Workspace,
+        stateful_set: serde_json::Value,
+        pod: Option<serde_json::Value>,
+        expected: i32,
+    ) -> (Result<bool, ReconcileError>, Vec<String>) {
+        let builder =
+            workspace_coordinator(Arc::new(WorkspaceDeleteMock::new("public-a", workspace.id)))
+                .builder;
+        let paths = Arc::new(Mutex::new(Vec::new()));
+        let service = service_fn({
+            let paths = paths.clone();
+            move |request: Request<kube::client::Body>| {
+                assert_eq!(request.method(), Method::GET);
+                let path = request.uri().path().to_owned();
+                paths.lock().unwrap().push(path.clone());
+                let response = if path.contains("/statefulsets/") {
+                    json_response(StatusCode::OK, stateful_set.clone())
+                } else {
+                    assert!(path.contains("/pods/"));
+                    pod.clone()
+                        .map_or_else(not_found, |pod| json_response(StatusCode::OK, pod))
+                };
+                async move { Ok::<_, Infallible>(response) }
+            }
+        });
+        let coordinator =
+            KubernetesCoordinator::new(kube::Client::new(service, "default"), builder);
+        let result = coordinator.has_observed_replicas(workspace, expected).await;
+        let requests = paths.lock().unwrap().clone();
+        (result, requests)
+    }
+
+    #[tokio::test]
+    async fn current_ready_pod_does_not_wait_for_stateful_set_aggregate_status() {
+        let (workspace, stateful_set, pod) = ready_pod_fixture();
+        let (result, requests) =
+            observe_ready_fixture(&workspace, stateful_set, Some(pod), 1).await;
+        assert!(result.unwrap());
+        assert_eq!(requests.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn direct_readiness_rejects_stale_terminating_or_unready_workloads() {
+        let (workspace, stateful_set, pod) = ready_pod_fixture();
+        let (missing, _) = observe_ready_fixture(&workspace, stateful_set.clone(), None, 1).await;
+        assert!(!missing.unwrap());
+        for (pointer, value) in [
+            ("/status/observedGeneration", serde_json::json!(9)),
+            ("/status/updateRevision", serde_json::Value::Null),
+            ("/metadata/uid", serde_json::Value::Null),
+            ("/spec/replicas", serde_json::json!(0)),
+            (
+                "/metadata/deletionTimestamp",
+                serde_json::json!("2026-10-15T00:00:00Z"),
+            ),
+            (
+                "/spec/template/metadata/annotations/workspace.memeloop.dev~1generation",
+                serde_json::json!("2"),
+            ),
+        ] {
+            let mut stale = stateful_set.clone();
+            if pointer == "/metadata/deletionTimestamp" {
+                stale["metadata"]["deletionTimestamp"] = value;
+            } else {
+                *stale.pointer_mut(pointer).unwrap() = value;
+            }
+            let (result, _) = observe_ready_fixture(&workspace, stale, Some(pod.clone()), 1).await;
+            assert!(
+                !result.unwrap(),
+                "accepted stale StatefulSet field {pointer}"
+            );
+        }
+        for (pointer, value) in [
+            (
+                "/metadata/ownerReferences/0/uid",
+                serde_json::json!("replaced-sts-uid"),
+            ),
+            (
+                "/metadata/ownerReferences/0/name",
+                serde_json::json!("another-stateful-set"),
+            ),
+            (
+                "/metadata/ownerReferences/0/controller",
+                serde_json::json!(false),
+            ),
+            (
+                "/metadata/ownerReferences/0/kind",
+                serde_json::json!("ReplicaSet"),
+            ),
+            (
+                "/metadata/ownerReferences/0/apiVersion",
+                serde_json::json!("apps/v1beta1"),
+            ),
+            (
+                "/metadata/labels/controller-revision-hash",
+                serde_json::json!("previous-revision"),
+            ),
+            (
+                "/metadata/labels/controller-revision-hash",
+                serde_json::Value::Null,
+            ),
+            (
+                "/metadata/annotations/workspace.memeloop.dev~1generation",
+                serde_json::json!("2"),
+            ),
+            (
+                "/metadata/annotations/workspace.memeloop.dev~1generation",
+                serde_json::Value::Null,
+            ),
+            (
+                "/metadata/deletionTimestamp",
+                serde_json::json!("2026-10-15T00:00:00Z"),
+            ),
+            ("/status/phase", serde_json::json!("Pending")),
+            ("/status/conditions/0/status", serde_json::json!("False")),
+            ("/status/conditions", serde_json::json!([])),
+        ] {
+            let mut stale = pod.clone();
+            if pointer == "/metadata/deletionTimestamp" {
+                stale["metadata"]["deletionTimestamp"] = value;
+            } else if value.is_null() {
+                let (parent, key) = pointer.rsplit_once('/').unwrap();
+                stale
+                    .pointer_mut(parent)
+                    .unwrap()
+                    .as_object_mut()
+                    .unwrap()
+                    .remove(&key.replace("~1", "/").replace("~0", "~"));
+            } else {
+                *stale.pointer_mut(pointer).unwrap() = value;
+            }
+            let (result, _) =
+                observe_ready_fixture(&workspace, stateful_set.clone(), Some(stale), 1).await;
+            assert!(!result.unwrap(), "accepted stale Pod field {pointer}");
+        }
+    }
+
+    #[tokio::test]
+    async fn direct_readiness_rejects_foreign_objects_and_preserves_scale_to_zero() {
+        let (workspace, stateful_set, pod) = ready_pod_fixture();
+        for foreign_pod in [false, true] {
+            let mut stateful_set = stateful_set.clone();
+            let mut pod = pod.clone();
+            let foreign = if foreign_pod {
+                &mut pod
+            } else {
+                &mut stateful_set
+            };
+            foreign["metadata"]["labels"]["workspace.memeloop.dev/owner-installation"] =
+                serde_json::json!("other-installation");
+            let (result, _) = observe_ready_fixture(&workspace, stateful_set, Some(pod), 1).await;
+            assert!(matches!(result, Err(ReconcileError::Ownership(_))));
+        }
+        for replicas in [1, 0] {
+            let mut stateful_set = stateful_set.clone();
+            stateful_set["status"]["replicas"] = serde_json::json!(replicas);
+            let (result, requests) =
+                observe_ready_fixture(&workspace, stateful_set, Some(pod.clone()), 0).await;
+            assert_eq!(result.unwrap(), replicas == 0);
+            assert_eq!(
+                requests.len(),
+                1,
+                "scale-to-zero must use StatefulSet observation"
+            );
+        }
+    }
+
     #[test]
     fn restart_deletes_only_a_pod_from_an_older_generation() {
         let pod = |generation: Option<&str>| Pod {

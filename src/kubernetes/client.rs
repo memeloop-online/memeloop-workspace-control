@@ -94,7 +94,7 @@ impl KubernetesCoordinator {
         else {
             return Ok(false);
         };
-        let Some(status) = stateful_set.status else {
+        let Some(status) = stateful_set.status.as_ref() else {
             return Ok(false);
         };
         if status.observed_generation.unwrap_or_default()
@@ -105,11 +105,76 @@ impl KubernetesCoordinator {
         if expected == 0 {
             return Ok(status.replicas == 0);
         }
-        Ok(status.replicas == expected
+        if status.replicas == expected
             && status.ready_replicas.unwrap_or_default() == expected
             && status.updated_replicas.unwrap_or_default() == expected
             && status.current_revision.is_some()
-            && status.current_revision == status.update_revision)
+            && status.current_revision == status.update_revision
+        {
+            return Ok(true);
+        }
+        // StatefulSet aggregate status can lag behind an already Ready Pod. Use direct
+        // observation only for the current single-replica workload revision; generation,
+        // ownership and deletion guards prevent a previous Pod from satisfying a restart.
+        let Some(spec) = stateful_set.spec.as_ref() else {
+            return Ok(false);
+        };
+        let Some(revision) = status.update_revision.as_deref() else {
+            return Ok(false);
+        };
+        let Some(uid) = stateful_set.metadata.uid.as_deref() else {
+            return Ok(false);
+        };
+        if expected != 1
+            || stateful_set.metadata.generation.is_none()
+            || status.observed_generation.is_none()
+            || spec.replicas != Some(1)
+            || stateful_set.metadata.deletion_timestamp.is_some()
+            || spec.template.metadata.as_ref().is_none_or(|metadata| {
+                metadata.annotations.as_ref().is_none_or(|annotations| {
+                    annotations.get("workspace.memeloop.dev/generation")
+                        != Some(&workspace.generation.to_string())
+                })
+            })
+        {
+            return Ok(false);
+        }
+        self.builder
+            .verify_delete_ownership(&stateful_set.metadata, workspace.id)?;
+        let Some(pod) = Api::<Pod>::namespaced(self.client.clone(), namespace_name)
+            .get_opt(&names.resources.pod_ordinal_zero())
+            .await?
+        else {
+            return Ok(false);
+        };
+        self.builder
+            .verify_delete_ownership(&pod.metadata, workspace.id)?;
+        Ok(pod.metadata.deletion_timestamp.is_none()
+            && !restart_generation_is_stale(&pod, workspace.generation)
+            && pod
+                .metadata
+                .owner_references
+                .as_ref()
+                .is_some_and(|owners| {
+                    owners.iter().any(|owner| {
+                        owner.controller == Some(true)
+                            && owner.api_version == "apps/v1"
+                            && owner.kind == "StatefulSet"
+                            && owner.name == names.resources.stateful_set
+                            && owner.uid == uid
+                    })
+                })
+            && pod.metadata.labels.as_ref().is_some_and(|labels| {
+                labels.get("controller-revision-hash").map(String::as_str) == Some(revision)
+            })
+            && pod.status.as_ref().is_some_and(|status| {
+                status.phase.as_deref() == Some("Running")
+                    && status.conditions.as_ref().is_some_and(|conditions| {
+                        conditions.iter().any(|condition| {
+                            condition.type_ == "Ready" && condition.status == "True"
+                        })
+                    })
+            }))
     }
 }
 
