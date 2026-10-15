@@ -227,7 +227,7 @@ impl KubernetesCoordinator {
         Ok(())
     }
 
-    async fn apply_workload(
+    async fn apply_workspace_services(
         &self,
         namespace_name: &str,
         workspace: &Workspace,
@@ -256,6 +256,25 @@ impl KubernetesCoordinator {
                 .delete(&names.ssh_service, &DeleteParams::default())
                 .await?;
         }
+        Ok(())
+    }
+
+    async fn apply_workload(
+        &self,
+        namespace_name: &str,
+        workspace: &Workspace,
+        desired: &DesiredResources,
+    ) -> Result<(), ReconcileError> {
+        let workspace_id = workspace.id;
+        let runtime_names = self.builder.runtime_names(workspace)?;
+        let names = &runtime_names.resources;
+        let apply = PatchParams::apply(FIELD_MANAGER);
+        observe_apply_stage(
+            workspace,
+            "services",
+            self.apply_workspace_services(namespace_name, workspace, desired),
+        )
+        .await?;
         let stateful_sets = Api::<StatefulSet>::namespaced(self.client.clone(), namespace_name);
         let mut stateful_set = desired.stateful_set.clone();
         if let Some(existing) = stateful_sets.get_opt(&names.stateful_set).await? {
