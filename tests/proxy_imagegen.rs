@@ -3,6 +3,7 @@
 
 #[test]
 fn injected_image_generation_works_with_shell_tools() {
+    let mut failures = Vec::new();
     for args in [
         vec!["bash", "-n", "skills/proxy-imagegen/scripts/generate.sh"],
         vec!["shellcheck", "skills/proxy-imagegen/scripts/generate.sh"],
@@ -14,12 +15,14 @@ fn injected_image_generation_works_with_shell_tools() {
             .current_dir(env!("CARGO_MANIFEST_DIR"))
             .output()
             .expect("CI must provide Bash, shellcheck, curl, jq and Node");
-        assert!(
-            output.status.success(),
-            "{} failed:\n{}\n{}",
-            args.join(" "),
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
+        if !output.status.success() {
+            failures.push(format!(
+                "{} failed:\n{}\n{}",
+                args.join(" "),
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
     }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }

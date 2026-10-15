@@ -36,11 +36,13 @@ done
 for dependency in curl jq awk base64 od mktemp; do
     command -v "$dependency" >/dev/null || fail "Missing dependency: $dependency"
 done
-expand_home() { case "$1" in '~/'*) printf '%s/%s' "$HOME" "${1:2}" ;; *) printf '%s' "$1" ;; esac; }
+expand_home() { case "$1" in \~/*) printf '%s/%s' "$HOME" "${1:2}" ;; *) printf '%s' "$1" ;; esac; }
 config=$(expand_home "$config"); auth=$(expand_home "$auth"); output=$(expand_home "$output")
 [[ -r $config && -r $auth ]] || fail 'Codex config.toml or auth.json is unreadable'
 work=$(mktemp -d)
 curl_pid=''; writer_pid=''
+# Invoked indirectly by the EXIT trap.
+# shellcheck disable=SC2317
 cleanup() {
     if [[ -n $curl_pid ]]; then kill "$curl_pid" 2>/dev/null || true; wait "$curl_pid" 2>/dev/null || true; fi
     if [[ -n $writer_pid ]]; then kill "$writer_pid" 2>/dev/null || true; wait "$writer_pid" 2>/dev/null || true; fi
@@ -119,8 +121,10 @@ handle_event() {
     kind=$(jq -r 'if type == "object" then .type // "" else "" end | select(type == "string")' "$work/event.json" 2>/dev/null) || return 0
     case "$kind" in
         response.output_item.done)
-            jq -er '.item | select(.type == "image_generation_call") | .result | select(type == "string" and length > 0)' \
-                "$work/event.json" >"$work/candidate" 2>/dev/null && mv "$work/candidate" "$work/image.b64" || true ;;
+            if jq -er '.item | select(.type == "image_generation_call") | .result | select(type == "string" and length > 0)' \
+                "$work/event.json" >"$work/candidate" 2>/dev/null; then
+                mv "$work/candidate" "$work/image.b64"
+            fi ;;
         response.completed)
             if jq -er '[.response.output[]? | select(.type == "image_generation_call") | .result |
                     select(type == "string" and length > 0)][0] // empty' \
