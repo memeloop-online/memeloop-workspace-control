@@ -133,7 +133,7 @@ handle_event() {
 }
 
 for ((attempt=1; attempt<=attempts; attempt++)); do
-    rm -f "$work/image.b64" "$work/stream" "$work/headers"
+    rm -f "$work/image.b64" "$work/stream" "$work/headers" "$work/curl.pid"
     mkfifo "$work/stream"
     completed=0; stream_failed=0; event_data=''
     # The writer opens the FIFO before invoking curl, so every transport failure

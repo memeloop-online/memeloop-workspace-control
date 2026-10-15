@@ -6,6 +6,7 @@ fn injected_image_generation_works_with_shell_tools() {
     for args in [
         vec!["bash", "-n", "skills/proxy-imagegen/scripts/generate.sh"],
         vec!["shellcheck", "skills/proxy-imagegen/scripts/generate.sh"],
+        vec!["shellcheck", "skills/proxy-imagegen/scripts/generate.ps1"],
         vec!["node", "--test", "tests/proxy_imagegen.mjs"],
     ] {
         let output = std::process::Command::new(args[0])

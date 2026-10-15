@@ -161,3 +161,11 @@ test('unsupported config fails before making a request', async (t) => {
   const r = await f.run(); assert.equal(r.code, 1); assert.equal(f.requests.length, 0);
   assert.match(r.stderr, /TOML/);
 });
+
+// Old installed skill instructions can still execute the previous path.
+test('old executor path delegates to the Bash executor', async () => {
+  const child = spawn('bash', [resolve('skills/proxy-imagegen/scripts/generate.ps1'), '--help']);
+  let text = ''; child.stdout.on('data', (d) => { text += d; });
+  assert.equal(await new Promise((done) => child.on('exit', done)), 0);
+  assert.match(text, /No Python is required/);
+});
