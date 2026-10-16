@@ -257,12 +257,21 @@ mod tests {
     }
 
     #[test]
-    fn lifecycle_events_keep_the_reason_without_exposing_raw_messages() {
+    fn known_events_keep_the_reason_without_exposing_raw_messages() {
         for reason in [
             "Started",
             "Killing",
             "SandboxChanged",
             "SuccessfulAttachVolume",
+            "FailedSync",
+            "NodeNotReady",
+            "FailedPostStartHook",
+            "FailedCreatePodSandBox",
+            "FailedCreatePodSandbox",
+            "FailedCreate",
+            "FailedBinding",
+            "DeadlineExceeded",
+            "ExceededGracePeriod",
         ] {
             let event = pod_event(Event {
                 reason: Some(reason.to_owned()),
