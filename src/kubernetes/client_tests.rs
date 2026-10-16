@@ -75,8 +75,23 @@ mod coordinator_tests {
         .collect()
     }
 
+    fn startup_prerequisite_paths(builder: &ResourceBuilder, workspace: &Workspace) -> Vec<String> {
+        let mut paths = startup_input_paths(builder, workspace);
+        let names = builder.runtime_names(workspace).unwrap().resources;
+        let namespace = workspace.runtime.namespace();
+        paths.push(format!(
+            "/apis/networking.k8s.io/v1/namespaces/{namespace}/networkpolicies/{}",
+            names.network_policy
+        ));
+        paths.push(format!(
+            "/api/v1/namespaces/{namespace}/services/{}",
+            names.service
+        ));
+        paths
+    }
+
     #[tokio::test]
-    async fn startup_inputs_progress_concurrently_and_all_finish_before_network_or_workload() {
+    async fn startup_prerequisites_progress_concurrently_before_routes_or_workload() {
         use http_body_util::BodyExt;
         use std::sync::atomic::AtomicUsize;
         use std::time::Duration;
@@ -84,10 +99,11 @@ mod coordinator_tests {
 
         let mut workspace = workspace(workspace_id());
         workspace.state = WorkspaceState::Starting;
-        let builder =
+        let mut builder =
             workspace_coordinator(Arc::new(WorkspaceDeleteMock::new("public-a", workspace.id)))
                 .builder;
-        let inputs = Arc::new(startup_input_paths(&builder, &workspace));
+        builder.web_shell_domain = Some("shell.example.invalid".to_owned());
+        let inputs = Arc::new(startup_prerequisite_paths(&builder, &workspace));
         let barrier = Arc::new(Barrier::new(inputs.len()));
         let completed = Arc::new(AtomicUsize::new(0));
         let service = service_fn(move |request: Request<kube::client::Body>| {
@@ -105,11 +121,11 @@ mod coordinator_tests {
                 )
                 .unwrap();
                 if inputs.contains(&path) {
-                    // A serial implementation cannot release this gate. This also blocks
-                    // policy/workload publication while any projected input is unfinished.
+                    // Policy and Services must progress while projected inputs are pending.
+                    // Routes and workload publication must wait for every prerequisite.
                     barrier.wait().await;
                     completed.fetch_add(1, Ordering::SeqCst);
-                } else if path.contains("/networkpolicies/") || path.contains("/statefulsets/") {
+                } else if path.contains("/ingresses/") || path.contains("/statefulsets/") {
                     assert_eq!(completed.load(Ordering::SeqCst), inputs.len());
                 }
                 Ok(json_response(StatusCode::OK, body))
@@ -119,21 +135,24 @@ mod coordinator_tests {
             KubernetesCoordinator::new(kube::Client::new(service, "default"), builder);
         tokio::time::timeout(Duration::from_secs(3), coordinator.reconcile(&workspace))
             .await
-            .expect("independent startup inputs must not wait for another input's API response")
+            .expect("independent startup prerequisites must not wait for another API response")
             .unwrap();
     }
 
     #[tokio::test]
-    async fn failed_or_foreign_startup_input_blocks_workload_and_can_be_retried() {
+    async fn failed_or_foreign_prerequisite_blocks_routes_and_workload_and_can_be_retried() {
         use http_body_util::BodyExt;
 
-        for foreign in [false, true] {
+        for (blocked_index, foreign) in
+            (0..8).flat_map(|index| [false, true].map(|foreign| (index, foreign)))
+        {
             let mut workspace = workspace(workspace_id());
             workspace.state = WorkspaceState::Starting;
-            let builder =
+            let mut builder =
                 workspace_coordinator(Arc::new(WorkspaceDeleteMock::new("public-a", workspace.id)))
                     .builder;
-            let blocked = startup_input_paths(&builder, &workspace)[1].clone();
+            builder.web_shell_domain = Some("shell.example.invalid".to_owned());
+            let blocked = startup_prerequisite_paths(&builder, &workspace)[blocked_index].clone();
             let fail = Arc::new(AtomicBool::new(true));
             let requests = Arc::new(Mutex::new(Vec::new()));
             let service = service_fn({
@@ -196,7 +215,7 @@ mod coordinator_tests {
                 assert!(matches!(error, ReconcileError::Kubernetes(_)));
             }
             assert!(requests.lock().unwrap().iter().all(|(_, path)| {
-                !path.contains("/networkpolicies/") && !path.contains("/statefulsets/")
+                !path.contains("/ingresses/") && !path.contains("/statefulsets/")
             }));
             fail.store(false, Ordering::SeqCst);
             coordinator.reconcile(&workspace).await.unwrap();

@@ -88,9 +88,21 @@ impl KubernetesCoordinator {
                 "workspace_identity",
                 self.apply_workspace_identity(namespace_name, workspace, desired)
             ),
+            observe_apply_stage(
+                workspace,
+                "network_policy",
+                self.apply_network_policy(namespace_name, workspace, desired)
+            ),
+            observe_apply_stage(
+                workspace,
+                "services",
+                self.apply_workspace_services(namespace_name, workspace, desired)
+            ),
         )?;
-        // Publish isolation intent before creating any workspace containers. Policy acceptance
-        // is not an enforcement acknowledgement; node-level acceptance must verify convergence.
+        // Inputs, access identity, isolation intent and Services must all be accepted before
+        // publishing routes or creating containers. They do not depend on each other's API
+        // responses. Policy acceptance is not an enforcement acknowledgement; node-level
+        // acceptance must still verify convergence.
         observe_apply_stage(
             workspace,
             "network",
@@ -269,12 +281,6 @@ impl KubernetesCoordinator {
         let runtime_names = self.builder.runtime_names(workspace)?;
         let names = &runtime_names.resources;
         let apply = PatchParams::apply(FIELD_MANAGER);
-        observe_apply_stage(
-            workspace,
-            "services",
-            self.apply_workspace_services(namespace_name, workspace, desired),
-        )
-        .await?;
         let stateful_sets = Api::<StatefulSet>::namespaced(self.client.clone(), namespace_name);
         let mut stateful_set = desired.stateful_set.clone();
         if let Some(existing) = stateful_sets.get_opt(&names.stateful_set).await? {
@@ -355,7 +361,7 @@ impl KubernetesCoordinator {
         Ok(())
     }
 
-    async fn apply_network(
+    async fn apply_network_policy(
         &self,
         namespace_name: &str,
         workspace: &Workspace,
@@ -381,6 +387,19 @@ impl KubernetesCoordinator {
                 &Patch::Apply(&desired.network_policy),
             )
             .await?;
+        Ok(())
+    }
+
+    async fn apply_network(
+        &self,
+        namespace_name: &str,
+        workspace: &Workspace,
+        desired: &DesiredResources,
+    ) -> Result<(), ReconcileError> {
+        let workspace_id = workspace.id;
+        let apply = PatchParams::apply(FIELD_MANAGER);
+        let runtime_names = self.builder.runtime_names(workspace)?;
+        let names = &runtime_names.resources;
         if self.builder.ttyd_mtls.is_some() && desired.web_shell_ingress.is_some() {
             self.apply_web_shell_envoy_filter(workspace, desired)
                 .await?;
