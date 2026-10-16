@@ -15,6 +15,7 @@ import { aggregateRuntimeUsage, formatCpuMillis, formatMemoryMiB, parseCpuMillis
 import { StorageMeter } from "./workspaces/StorageMeter";
 import { useWorkspaceStyles } from "./workspaces/workspaceStyles";
 import { containerNameLabelKey, containerStateLabelKey, formatDurationSeconds, startupStageLabelKey } from "./workspaceStartup";
+import { eventPresentationKeys } from "./workspaceEvents";
 
 type WorkspaceAction = "start" | "stop" | "restart" | "delete";
 type DetailView = "status" | "events";
@@ -160,7 +161,7 @@ function EventLog({ id, runtime, locale }: { id: string; runtime: WorkspaceRunti
 function EventEntry({ event, locale }: { event: WorkspaceRuntimeEvent; locale: Locale }) {
   const { t } = useI18n();
   const styles = useWorkspaceStyles();
-  const keys = eventCategoryKeys[event.category] ?? eventCategoryKeys.other;
+  const keys = eventPresentationKeys(event);
   const showLast = event.last_observed_at && event.last_observed_at !== event.observed_at;
   return <article className={styles.event}>
     <Text weight="semibold">{t(keys.label)}</Text>
@@ -204,22 +205,6 @@ function StartupSummary({ pod }: { pod: WorkspaceRuntimePod }) {
     })}</div>}
   </section>;
 }
-
-const eventCategoryKeys: Record<WorkspaceRuntimeEvent["category"], { label: MessageKey; description: MessageKey }> = {
-  disk_pressure: { label: "eventCategoryDiskPressure", description: "eventCategoryDiskPressureDescription" },
-  evicted: { label: "eventCategoryEvicted", description: "eventCategoryEvictedDescription" },
-  temporary_storage_provisioning: { label: "eventCategoryTemporaryStorageProvisioning", description: "eventCategoryTemporaryStorageProvisioningDescription" },
-  temporary_storage_attachment: { label: "eventCategoryTemporaryStorageAttachment", description: "eventCategoryTemporaryStorageAttachmentDescription" },
-  volume_unavailable: { label: "eventCategoryVolumeUnavailable", description: "eventCategoryVolumeUnavailableDescription" },
-  ephemeral_storage: { label: "eventCategoryEphemeralStorage", description: "eventCategoryEphemeralStorageDescription" },
-  memory_pressure: { label: "eventCategoryMemoryPressure", description: "eventCategoryMemoryPressureDescription" },
-  pid_pressure: { label: "eventCategoryPidPressure", description: "eventCategoryPidPressureDescription" },
-  container_backoff: { label: "eventCategoryContainerBackoff", description: "eventCategoryContainerBackoffDescription" },
-  image_pull: { label: "eventCategoryImagePull", description: "eventCategoryImagePullDescription" },
-  scheduling: { label: "eventCategoryScheduling", description: "eventCategorySchedulingDescription" },
-  health_check: { label: "eventCategoryHealthCheck", description: "eventCategoryHealthCheckDescription" },
-  other: { label: "eventCategoryOther", description: "eventCategoryOtherDescription" },
-};
 
 function workspaceTransition(state: string): { action: WorkspaceAction; label: MessageKey } | null {
   const transitions: Record<string, { action: WorkspaceAction; label: MessageKey }> = {
