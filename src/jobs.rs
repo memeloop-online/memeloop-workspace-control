@@ -51,6 +51,7 @@ impl<H: JobHandler> JobWorker<H> {
     }
 
     pub async fn run_once(&self, now: i64) -> Result<bool, JobWorkerError> {
+        let started = std::time::Instant::now();
         let Some(job) = self
             .database
             .claim_job(&self.lease_owner, now, self.job_lease_duration)
@@ -69,19 +70,24 @@ impl<H: JobHandler> JobWorker<H> {
                 )
                 .await?
         {
+            let finished_at = execution_finished_at(now, started.elapsed());
             self.database
                 .defer_job_without_attempt(
                     job.id,
                     &self.lease_owner,
-                    now.saturating_add(PENDING_JOB_DELAY_SECONDS),
-                    now,
+                    finished_at.saturating_add(PENDING_JOB_DELAY_SECONDS),
+                    finished_at,
                 )
                 .await?;
             return Ok(true);
         }
 
         let result = self.handle_with_lease_heartbeat(&job).await?;
-        let persistence_result = self.persist_job_result(&job, result, now).await;
+        // Slow external calls must not consume the following retry/readiness delay.
+        // Anchor elapsed monotonic time to the caller's clock, including synthetic
+        // clocks used by deterministic queue callers.
+        let finished_at = execution_finished_at(now, started.elapsed());
+        let persistence_result = self.persist_job_result(&job, result, finished_at).await;
         if let Some(workspace_id) = job.workspace_id {
             self.database
                 .release_workspace_lease(workspace_id, &self.lease_owner)
@@ -301,6 +307,10 @@ impl<H: JobHandler> JobWorker<H> {
             }
         }
     }
+}
+
+fn execution_finished_at(started_at: i64, elapsed: Duration) -> i64 {
+    started_at.saturating_add(i64::try_from(elapsed.as_secs()).unwrap_or(i64::MAX))
 }
 
 fn retry_delay(attempts: i64) -> i64 {
