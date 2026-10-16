@@ -228,7 +228,8 @@ pub(super) async fn replace(
         (status = 400, body = super::ErrorEnvelope),
         (status = 401, body = super::ErrorEnvelope),
         (status = 403, body = super::ErrorEnvelope),
-        (status = 409, body = super::ErrorEnvelope)
+        (status = 409, body = super::ErrorEnvelope),
+        (status = 422, description = "Template missing, disabled, or outside the organization", body = super::ErrorEnvelope)
     )
 )]
 pub(super) async fn preview(

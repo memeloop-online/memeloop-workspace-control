@@ -214,7 +214,7 @@ async fn creation_preview_rejects_disabled_foreign_and_token_restricted_template
         ))
         .await
         .unwrap();
-    assert_eq!(foreign.status(), StatusCode::NOT_FOUND);
+    assert_eq!(foreign.status(), StatusCode::UNPROCESSABLE_ENTITY);
     database
         .set_workspace_template_enabled(templates[1].id, false, true, 6)
         .await
@@ -231,7 +231,7 @@ async fn creation_preview_rejects_disabled_foreign_and_token_restricted_template
         ))
         .await
         .unwrap();
-    assert_eq!(disabled.status(), StatusCode::NOT_FOUND);
+    assert_eq!(disabled.status(), StatusCode::UNPROCESSABLE_ENTITY);
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
