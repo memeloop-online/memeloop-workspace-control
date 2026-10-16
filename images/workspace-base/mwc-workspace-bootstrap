@@ -208,7 +208,7 @@ sync_injected_files() (
         : > "$runtime_dir/injection-failed"
         exit 0
     }
-    trap 'result=$?; if [ "$result" -ne 0 ]; then : > "$runtime_dir/injection-failed"; fi; rm -rf "$attempt_dir"; exit 0' EXIT
+    trap 'if [ "$?" -ne 0 ]; then : > "$runtime_dir/injection-failed"; fi; rm -rf "$attempt_dir"; exit 0' EXIT
     injection_attempt_failed="$attempt_dir/failed"
     temporary_authorized="$attempt_dir/authorized_keys"
     if ! cat "$runtime_dir/ttyd_client_key.pub" > "$temporary_authorized"; then
