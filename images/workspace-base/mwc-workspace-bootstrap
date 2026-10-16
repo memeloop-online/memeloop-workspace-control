@@ -187,25 +187,43 @@ sync_injected_file() {
     group=$5
     target_dir=$(dirname "$target")
     if ! install -d -m 0750 -o "$owner" -g "$group" "$target_dir"; then
-        : > "$runtime_dir/injection-failed"
+        : > "$injection_attempt_failed"
         return 0
     fi
     temporary=$(mktemp "$target_dir/.mwc-injection.XXXXXX") || {
-        : > "$runtime_dir/injection-failed"
+        : > "$injection_attempt_failed"
         return 0
     }
     if ! install -m "$numeric_mode" -o "$owner" -g "$group" "$source" "$temporary" \
         || ! mv -f "$temporary" "$target"; then
         rm -f "$temporary"
-        : > "$runtime_dir/injection-failed"
+        : > "$injection_attempt_failed"
     fi
 }
 
-sync_injected_files() {
-    temporary_authorized=$(mktemp "$runtime_dir/.authorized_keys.XXXXXX") || return 0
-    cat "$runtime_dir/ttyd_client_key.pub" > "$temporary_authorized"
+sync_injected_files() (
+    # Keep the previous warning and authorized keys until this complete attempt succeeds.
+    # A subshell isolates the temporary paths from the serve process and its other monitors.
+    attempt_dir=$(mktemp -d "$runtime_dir/.injection-sync.XXXXXX") || {
+        : > "$runtime_dir/injection-failed"
+        exit 0
+    }
+    trap 'result=$?; if [ "$result" -ne 0 ]; then : > "$runtime_dir/injection-failed"; fi; rm -rf "$attempt_dir"; exit 0' EXIT
+    injection_attempt_failed="$attempt_dir/failed"
+    temporary_authorized="$attempt_dir/authorized_keys"
+    if ! cat "$runtime_dir/ttyd_client_key.pub" > "$temporary_authorized"; then
+        : > "$runtime_dir/injection-failed"
+        exit 0
+    fi
     if [ -r "$manifest" ]; then
-        jq -c '.files[]' "$manifest" | while IFS= read -r entry; do
+        # Materialize the entries first: POSIX pipelines otherwise hide a jq parse failure
+        # behind a successful while loop, incorrectly clearing an existing warning.
+        if ! jq -c '.files | if type == "array" then .[] else error("invalid files manifest") end' \
+            "$manifest" > "$attempt_dir/files"; then
+            : > "$runtime_dir/injection-failed"
+            exit 0
+        fi
+        while IFS= read -r entry; do
             object=$(printf '%s' "$entry" | jq -r '.object')
             data_key=$(printf '%s' "$entry" | jq -r '.data_key')
             target=$(printf '%s' "$entry" | jq -r '.target')
@@ -218,24 +236,36 @@ sync_injected_files() {
             case "$object" in
                 secret) source=/var/run/workspace-injections/secret/$data_key ;;
                 config_map) source=/var/run/workspace-injections/config/$data_key ;;
-                *) : > "$runtime_dir/injection-failed"; continue ;;
+                *) : > "$injection_attempt_failed"; continue ;;
             esac
             if [ -z "$mode" ]; then
                 case "$object" in secret) mode=384 ;; config_map) mode=420 ;; esac
             fi
-            numeric_mode=$(printf '%o' "$mode")
+            if ! numeric_mode=$(printf '%o' "$mode"); then
+                : > "$injection_attempt_failed"
+                continue
+            fi
             if [ "$kind" = ssh_public_key ]; then
-                cat "$source" >> "$temporary_authorized"
-                printf '\n' >> "$temporary_authorized"
+                if ! cat "$source" >> "$temporary_authorized" \
+                    || ! printf '\n' >> "$temporary_authorized"; then
+                    : > "$injection_attempt_failed"
+                fi
             else
                 sync_injected_file "$source" "$target" "$numeric_mode" "$owner" "$group"
             fi
-        done
+        done < "$attempt_dir/files"
+    elif [ -e "$manifest" ]; then
+        : > "$injection_attempt_failed"
     fi
-    chown "$workspace_user:$workspace_group" "$temporary_authorized"
-    chmod 0600 "$temporary_authorized"
-    mv -f "$temporary_authorized" "$authorized_keys"
-}
+    if [ -e "$injection_attempt_failed" ] \
+        || ! chown "$workspace_user:$workspace_group" "$temporary_authorized" \
+        || ! chmod 0600 "$temporary_authorized" \
+        || ! mv -f "$temporary_authorized" "$authorized_keys"; then
+        : > "$runtime_dir/injection-failed"
+    else
+        rm -f "$runtime_dir/injection-failed"
+    fi
+)
 
 prepare() {
     prepare_layout
@@ -293,7 +323,7 @@ update_storage_banner() {
         used_percent=$(df -P "$workspace_root" | awk 'NR == 2 {gsub(/%/, "", $5); print $5}')
     fi
     if [ -e "$runtime_dir/injection-failed" ]; then
-        printf '文件注入未能完全更新，请检查 Home 存储空间后重启工作区。\n' \
+        printf '文件注入未能完全更新，系统会自动重试；请检查 Home 存储空间和目标目录权限。\n' \
             > "$runtime_dir/storage-banner"
     elif [ -e "$runtime_dir/home-degraded" ]; then
         printf 'Home 持久目录初始化已降级，请清理空间后重启工作区。\n' \

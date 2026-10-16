@@ -68,6 +68,75 @@ test -s /workspace/.codex/session_index.jsonl
 test -s /workspace/.codex/config.toml
 test -s /workspace/.codex/auth.json
 
+# A failed injection must keep SSH keys available and recover on the next complete sync,
+# without requiring a workspace restart. All data below belongs to this isolated fixture.
+rm -f /workspace/fill
+install -d /var/run/workspace-injections/config
+injection_config=/var/run/workspace-injections/config
+printf '%s\n' old > "$injection_config/recovery-file"
+cp /etc/ssh/platform/ssh_host_ed25519_key.pub "$injection_config/recovery-key"
+cat > "$injection_config/workspace-files.json" <<'EOF'
+{"files":[
+  {"object":"config_map","data_key":"recovery-file","target":"/workspace/recovery-file","kind":"file","mode":416},
+  {"object":"config_map","data_key":"recovery-key","target":"/workspace/.ssh/authorized_keys","kind":"ssh_public_key"}
+]}
+EOF
+prepare_recovery_fixture() {
+    MWC_WORKSPACE_USER=workspace MWC_WORKSPACE_HOME=/workspace MWC_HOME_RESERVE_MIB=1 \
+        /usr/local/bin/mwc-workspace-bootstrap prepare
+    /usr/sbin/sshd -t -f /run/mwc-ssh/sshd_config
+    test -s /run/mwc-ssh/authorized_keys
+    test -s /run/mwc-ssh/ttyd_client_key
+}
+prepare_recovery_fixture
+test ! -e /run/mwc-ssh/injection-failed
+test "$(cat /workspace/recovery-file)" = old
+test "$(stat -c %a /workspace/recovery-file)" = 640
+test "$(stat -c %U:%G /workspace/recovery-file)" = workspace:workspace
+cp /run/mwc-ssh/authorized_keys /tmp/expected-authorized-keys
+
+# A regular file in place of a parent directory forces a persistent injection failure.
+printf '%s\n' keep > /workspace/blocked-parent
+printf '%s\n' new > "$injection_config/recovery-file"
+jq '.files += [{"object":"config_map","data_key":"recovery-file","target":"/workspace/blocked-parent/config","kind":"file"}]' \
+    "$injection_config/workspace-files.json" > /tmp/recovery-manifest
+cp /tmp/recovery-manifest "$injection_config/workspace-files.json"
+prepare_recovery_fixture
+test -e /run/mwc-ssh/injection-failed
+grep -q '文件注入未能完全更新' /run/mwc-ssh/storage-banner
+test "$(cat /workspace/blocked-parent)" = keep
+cmp /tmp/expected-authorized-keys /run/mwc-ssh/authorized_keys
+
+rm /workspace/blocked-parent
+mkdir /workspace/blocked-parent
+prepare_recovery_fixture
+test ! -e /run/mwc-ssh/injection-failed
+test "$(cat /workspace/recovery-file)" = new
+test "$(cat /workspace/blocked-parent/config)" = new
+! grep -q '文件注入未能完全更新' /run/mwc-ssh/storage-banner
+cmp /tmp/expected-authorized-keys /run/mwc-ssh/authorized_keys
+
+# Parse failures, invalid modes and missing SSH sources must never clear the warning or
+# replace working authorized keys with a partial key set. Every case must recover in place.
+cp "$injection_config/workspace-files.json" /tmp/good-injection-manifest
+for failure in malformed non_array invalid_mode missing_key; do
+    case "$failure" in
+        malformed) printf '{' > "$injection_config/workspace-files.json" ;;
+        non_array) printf '{"files":null}' > "$injection_config/workspace-files.json" ;;
+        invalid_mode) jq '.files[0].mode = "invalid"' /tmp/good-injection-manifest > "$injection_config/workspace-files.json" ;;
+        missing_key) jq '.files[1].data_key = "missing-key"' /tmp/good-injection-manifest > "$injection_config/workspace-files.json" ;;
+    esac
+    prepare_recovery_fixture
+    test -e /run/mwc-ssh/injection-failed
+    cmp /tmp/expected-authorized-keys /run/mwc-ssh/authorized_keys
+    test "$(cat /workspace/recovery-file)" = new
+    cp /tmp/good-injection-manifest "$injection_config/workspace-files.json"
+    prepare_recovery_fixture
+    test ! -e /run/mwc-ssh/injection-failed
+    cmp /tmp/expected-authorized-keys /run/mwc-ssh/authorized_keys
+done
+test -z "$(find /run/mwc-ssh -maxdepth 1 -name '.injection-sync.*' -print -quit)"
+
 # A stale symlink or regular file must be removed without following it, while the durable
 # session directory remains untouched.
 rm -f /workspace/.codex/.tmp
