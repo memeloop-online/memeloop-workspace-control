@@ -321,44 +321,12 @@ pub(super) async fn preview(
         );
         (organization, user, select_injections(&workspace, selection))
     } else {
-        let (organization, user, workspace) = if let Some(template) = creation_template.as_ref() {
-            let selection = InjectionSelection {
-                workspace_id: None,
-                organization_id: request.organization_id.ok_or(ApiError::BadRequest(
-                    "organization_id is required for a template creation preview",
-                ))?,
-                owner_id: user_id,
-                template_id: Some(template.id),
-                image: &template.template.image,
-                access_mode: template.template.access_mode,
-            };
-            (
-                select_injections(&organization, selection),
-                select_injections(&user, selection),
-                select_injections(&workspace, selection),
-            )
-        } else {
-            // Without a template, image/access/template selectors cannot be evaluated.
-            // Do not combine mutually exclusive configurations into a false conflict.
-            if organization
-                .iter()
-                .chain(&user)
-                .chain(&workspace)
-                .any(|item| {
-                    item.template_selector
-                        .as_deref()
-                        .is_some_and(|selector| selector != "*")
-                        || item.labels.keys().any(|key| {
-                            matches!(key.as_str(), "template_id" | "image" | "access_mode")
-                        })
-                })
-            {
-                return Err(ApiError::BadRequest(
-                    "template_id is required to preview template, image, or access mode injection selectors",
-                ));
-            }
-            (organization, user, workspace)
-        };
+        let [organization, user, workspace] = select_creation_preview_sources(
+            [organization, user, workspace],
+            creation_template.as_ref(),
+            request.organization_id,
+            user_id,
+        )?;
         super::workspace_creation::validate_refs(
             request.organization_injection_refs.as_deref(),
             &organization,
@@ -378,6 +346,43 @@ pub(super) async fn preview(
     Ok(Json(
         resolved.into_iter().map(|item| item.summary()).collect(),
     ))
+}
+
+fn select_creation_preview_sources(
+    sources: [Vec<InjectionItem>; 3],
+    template: Option<&crate::storage::WorkspaceTemplate>,
+    organization_id: Option<Uuid>,
+    owner_id: Uuid,
+) -> Result<[Vec<InjectionItem>; 3], ApiError> {
+    if let Some(template) = template {
+        let selection = InjectionSelection {
+            workspace_id: None,
+            organization_id: organization_id.ok_or(ApiError::BadRequest(
+                "organization_id is required for a template creation preview",
+            ))?,
+            owner_id,
+            template_id: Some(template.id),
+            image: &template.template.image,
+            access_mode: template.template.access_mode,
+        };
+        return Ok(sources.map(|items| select_injections(&items, selection)));
+    }
+    // Without a template, these selectors cannot be evaluated. Never combine mutually
+    // exclusive configurations into a false target conflict.
+    if sources.iter().flatten().any(|item| {
+        item.template_selector
+            .as_deref()
+            .is_some_and(|selector| selector != "*")
+            || item
+                .labels
+                .keys()
+                .any(|key| matches!(key.as_str(), "template_id" | "image" | "access_mode"))
+    }) {
+        return Err(ApiError::BadRequest(
+            "template_id is required to preview template, image, or access mode injection selectors",
+        ));
+    }
+    Ok(sources)
 }
 
 async fn preview_creation_template(

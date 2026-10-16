@@ -48,12 +48,23 @@ async fn fixture() -> (Router, Database, Uuid, Uuid, [WorkspaceTemplate; 2]) {
             .unwrap();
         templates.push(template);
     }
+    let templates: [WorkspaceTemplate; 2] = templates.try_into().unwrap();
+    seed_profiles(&database, user, organization.id, &templates).await;
+    (app, database, user, organization.id, templates)
+}
+
+async fn seed_profiles(
+    database: &Database,
+    user: Uuid,
+    organization: Uuid,
+    templates: &[WorkspaceTemplate; 2],
+) {
     let cipher = EnvelopeCipher::from_base64(&STANDARD.encode([9_u8; 32])).unwrap();
     let mut items = Vec::new();
     for (index, template) in templates.iter().enumerate() {
         items.push((
             InjectionScope::Organization,
-            organization.id,
+            organization,
             json!({
                 "key": format!("docker-{index}"), "kind": "environment_variable", "target": "DOCKER_CONFIG",
                 "value": {"encoding": "utf8", "value": "private-docker-path"},
@@ -95,13 +106,6 @@ async fn fixture() -> (Router, Database, Uuid, Uuid, [WorkspaceTemplate; 2]) {
             .await
             .unwrap();
     }
-    (
-        app,
-        database,
-        user,
-        organization.id,
-        templates.try_into().unwrap(),
-    )
 }
 
 #[tokio::test]
