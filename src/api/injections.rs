@@ -34,6 +34,8 @@ pub(super) struct PreviewRequest {
     pub organization_id: Option<Uuid>,
     pub user_id: Uuid,
     pub workspace_id: Option<Uuid>,
+    /// Template context for a workspace that has not been created yet.
+    pub template_id: Option<Uuid>,
     #[serde(default)]
     pub organization_injection_refs: Option<Vec<String>>,
     #[serde(default)]
@@ -244,6 +246,11 @@ pub(super) async fn preview(
         .ok_or(ApiError::EncryptionUnavailable)?;
 
     let target = preview_target(&state, &actor, &request).await?;
+    let creation_template = if target.is_none() {
+        preview_creation_template(&state, &actor, &request).await?
+    } else {
+        None
+    };
 
     let organization_id = target
         .as_ref()
@@ -314,6 +321,44 @@ pub(super) async fn preview(
         );
         (organization, user, select_injections(&workspace, selection))
     } else {
+        let (organization, user, workspace) = if let Some(template) = creation_template.as_ref() {
+            let selection = InjectionSelection {
+                workspace_id: None,
+                organization_id: request.organization_id.ok_or(ApiError::BadRequest(
+                    "organization_id is required for a template creation preview",
+                ))?,
+                owner_id: user_id,
+                template_id: Some(template.id),
+                image: &template.template.image,
+                access_mode: template.template.access_mode,
+            };
+            (
+                select_injections(&organization, selection),
+                select_injections(&user, selection),
+                select_injections(&workspace, selection),
+            )
+        } else {
+            // Without a template, image/access/template selectors cannot be evaluated.
+            // Do not combine mutually exclusive configurations into a false conflict.
+            if organization
+                .iter()
+                .chain(&user)
+                .chain(&workspace)
+                .any(|item| {
+                    item.template_selector
+                        .as_deref()
+                        .is_some_and(|selector| selector != "*")
+                        || item.labels.keys().any(|key| {
+                            matches!(key.as_str(), "template_id" | "image" | "access_mode")
+                        })
+                })
+            {
+                return Err(ApiError::BadRequest(
+                    "template_id is required to preview template, image, or access mode injection selectors",
+                ));
+            }
+            (organization, user, workspace)
+        };
         super::workspace_creation::validate_refs(
             request.organization_injection_refs.as_deref(),
             &organization,
@@ -335,6 +380,33 @@ pub(super) async fn preview(
     ))
 }
 
+async fn preview_creation_template(
+    state: &AppState,
+    actor: &Principal,
+    request: &PreviewRequest,
+) -> Result<Option<crate::storage::WorkspaceTemplate>, ApiError> {
+    let Some(template_id) = request.template_id else {
+        return Ok(None);
+    };
+    let organization_id = request.organization_id.ok_or(ApiError::BadRequest(
+        "organization_id is required for a template creation preview",
+    ))?;
+    if !actor.allows(Permission::ReadWorkspace, organization_id)
+        || !actor.may_access_workspace_template(Some(template_id))
+    {
+        return Err(ApiError::Forbidden);
+    }
+    let template = state.database.get_workspace_template(template_id).await?;
+    if !template.enabled
+        || template
+            .organization_id
+            .is_some_and(|id| id != organization_id)
+    {
+        return Err(crate::storage::StorageError::TemplateNotFound.into());
+    }
+    Ok(Some(template))
+}
+
 async fn preview_target(
     state: &AppState,
     actor: &Principal,
@@ -346,9 +418,12 @@ async fn preview_target(
         }
         return Ok(None);
     };
-    if request.organization_injection_refs.is_some() || request.user_injection_refs.is_some() {
+    if request.organization_injection_refs.is_some()
+        || request.user_injection_refs.is_some()
+        || request.template_id.is_some()
+    {
         return Err(ApiError::BadRequest(
-            "an existing workspace preview uses its persisted injection references",
+            "an existing workspace preview uses its persisted template and injection references",
         ));
     }
     let workspace = state.database.get_workspace(workspace_id).await?;
