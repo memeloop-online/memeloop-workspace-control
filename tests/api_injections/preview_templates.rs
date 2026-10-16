@@ -216,7 +216,7 @@ async fn creation_preview_rejects_disabled_foreign_and_token_restricted_template
         .unwrap();
     assert_eq!(foreign.status(), StatusCode::NOT_FOUND);
     database
-        .set_workspace_template_enabled(templates[1].id, false, 6)
+        .set_workspace_template_enabled(templates[1].id, false, true, 6)
         .await
         .unwrap();
     let disabled = app
