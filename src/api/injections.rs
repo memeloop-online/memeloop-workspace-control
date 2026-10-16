@@ -299,27 +299,8 @@ pub(super) async fn preview(
     });
     workspace.extend(request.inline_workspace_injections);
 
-    let (organization, user, workspace) = if let Some(target) = target.as_ref() {
-        let selection = InjectionSelection {
-            workspace_id: Some(target.id),
-            organization_id: target.organization_id,
-            owner_id: target.owner_id,
-            template_id: target.template_id,
-            image: &target.template.image,
-            access_mode: target.template.access_mode,
-        };
-        let refs = state.database.workspace_injection_refs(target.id).await?;
-        let organization = filter_injection_refs(
-            &select_injections(&organization, selection),
-            refs.organization.as_deref(),
-            true,
-        );
-        let user = filter_injection_refs(
-            &select_injections(&user, selection),
-            refs.user.as_deref(),
-            false,
-        );
-        (organization, user, select_injections(&workspace, selection))
+    let [organization, user, workspace] = if let Some(target) = target.as_ref() {
+        select_existing_preview_sources(&state, target, [organization, user, workspace]).await?
     } else {
         let [organization, user, workspace] = select_creation_preview_sources(
             [organization, user, workspace],
@@ -332,7 +313,7 @@ pub(super) async fn preview(
             &organization,
         )?;
         super::workspace_creation::validate_refs(request.user_injection_refs.as_deref(), &user)?;
-        (
+        [
             filter_injection_refs(
                 &organization,
                 request.organization_injection_refs.as_deref(),
@@ -340,12 +321,42 @@ pub(super) async fn preview(
             ),
             filter_injection_refs(&user, request.user_injection_refs.as_deref(), false),
             workspace,
-        )
+        ]
     };
     let resolved = resolve_injections(&organization, &user, &workspace)?;
     Ok(Json(
         resolved.into_iter().map(|item| item.summary()).collect(),
     ))
+}
+
+async fn select_existing_preview_sources(
+    state: &AppState,
+    target: &crate::workspaces::Workspace,
+    sources: [Vec<InjectionItem>; 3],
+) -> Result<[Vec<InjectionItem>; 3], ApiError> {
+    let selection = InjectionSelection {
+        workspace_id: Some(target.id),
+        organization_id: target.organization_id,
+        owner_id: target.owner_id,
+        template_id: target.template_id,
+        image: &target.template.image,
+        access_mode: target.template.access_mode,
+    };
+    let refs = state.database.workspace_injection_refs(target.id).await?;
+    let [organization, user, workspace] = sources;
+    Ok([
+        filter_injection_refs(
+            &select_injections(&organization, selection),
+            refs.organization.as_deref(),
+            true,
+        ),
+        filter_injection_refs(
+            &select_injections(&user, selection),
+            refs.user.as_deref(),
+            false,
+        ),
+        select_injections(&workspace, selection),
+    ])
 }
 
 fn select_creation_preview_sources(
