@@ -34,6 +34,8 @@ pub(super) struct PreviewRequest {
     pub organization_id: Option<Uuid>,
     pub user_id: Uuid,
     pub workspace_id: Option<Uuid>,
+    /// Template context for a workspace that has not been created yet.
+    pub template_id: Option<Uuid>,
     #[serde(default)]
     pub organization_injection_refs: Option<Vec<String>>,
     #[serde(default)]
@@ -226,7 +228,8 @@ pub(super) async fn replace(
         (status = 400, body = super::ErrorEnvelope),
         (status = 401, body = super::ErrorEnvelope),
         (status = 403, body = super::ErrorEnvelope),
-        (status = 409, body = super::ErrorEnvelope)
+        (status = 409, body = super::ErrorEnvelope),
+        (status = 422, description = "Template missing, disabled, or outside the organization", body = super::ErrorEnvelope)
     )
 )]
 pub(super) async fn preview(
@@ -244,6 +247,11 @@ pub(super) async fn preview(
         .ok_or(ApiError::EncryptionUnavailable)?;
 
     let target = preview_target(&state, &actor, &request).await?;
+    let creation_template = if target.is_none() {
+        preview_creation_template(&state, &actor, &request).await?
+    } else {
+        None
+    };
 
     let organization_id = target
         .as_ref()
@@ -292,34 +300,21 @@ pub(super) async fn preview(
     });
     workspace.extend(request.inline_workspace_injections);
 
-    let (organization, user, workspace) = if let Some(target) = target.as_ref() {
-        let selection = InjectionSelection {
-            workspace_id: Some(target.id),
-            organization_id: target.organization_id,
-            owner_id: target.owner_id,
-            template_id: target.template_id,
-            image: &target.template.image,
-            access_mode: target.template.access_mode,
-        };
-        let refs = state.database.workspace_injection_refs(target.id).await?;
-        let organization = filter_injection_refs(
-            &select_injections(&organization, selection),
-            refs.organization.as_deref(),
-            true,
-        );
-        let user = filter_injection_refs(
-            &select_injections(&user, selection),
-            refs.user.as_deref(),
-            false,
-        );
-        (organization, user, select_injections(&workspace, selection))
+    let [organization, user, workspace] = if let Some(target) = target.as_ref() {
+        select_existing_preview_sources(&state, target, [organization, user, workspace]).await?
     } else {
+        let [organization, user, workspace] = select_creation_preview_sources(
+            [organization, user, workspace],
+            creation_template.as_ref(),
+            request.organization_id,
+            user_id,
+        )?;
         super::workspace_creation::validate_refs(
             request.organization_injection_refs.as_deref(),
             &organization,
         )?;
         super::workspace_creation::validate_refs(request.user_injection_refs.as_deref(), &user)?;
-        (
+        [
             filter_injection_refs(
                 &organization,
                 request.organization_injection_refs.as_deref(),
@@ -327,12 +322,106 @@ pub(super) async fn preview(
             ),
             filter_injection_refs(&user, request.user_injection_refs.as_deref(), false),
             workspace,
-        )
+        ]
     };
     let resolved = resolve_injections(&organization, &user, &workspace)?;
     Ok(Json(
         resolved.into_iter().map(|item| item.summary()).collect(),
     ))
+}
+
+async fn select_existing_preview_sources(
+    state: &AppState,
+    target: &crate::workspaces::Workspace,
+    sources: [Vec<InjectionItem>; 3],
+) -> Result<[Vec<InjectionItem>; 3], ApiError> {
+    let selection = InjectionSelection {
+        workspace_id: Some(target.id),
+        organization_id: target.organization_id,
+        owner_id: target.owner_id,
+        template_id: target.template_id,
+        image: &target.template.image,
+        access_mode: target.template.access_mode,
+    };
+    let refs = state.database.workspace_injection_refs(target.id).await?;
+    let [organization, user, workspace] = sources;
+    Ok([
+        filter_injection_refs(
+            &select_injections(&organization, selection),
+            refs.organization.as_deref(),
+            true,
+        ),
+        filter_injection_refs(
+            &select_injections(&user, selection),
+            refs.user.as_deref(),
+            false,
+        ),
+        select_injections(&workspace, selection),
+    ])
+}
+
+fn select_creation_preview_sources(
+    sources: [Vec<InjectionItem>; 3],
+    template: Option<&crate::storage::WorkspaceTemplate>,
+    organization_id: Option<Uuid>,
+    owner_id: Uuid,
+) -> Result<[Vec<InjectionItem>; 3], ApiError> {
+    if let Some(template) = template {
+        let selection = InjectionSelection {
+            workspace_id: None,
+            organization_id: organization_id.ok_or(ApiError::BadRequest(
+                "organization_id is required for a template creation preview",
+            ))?,
+            owner_id,
+            template_id: Some(template.id),
+            image: &template.template.image,
+            access_mode: template.template.access_mode,
+        };
+        return Ok(sources.map(|items| select_injections(&items, selection)));
+    }
+    // Without a template, these selectors cannot be evaluated. Never combine mutually
+    // exclusive configurations into a false target conflict.
+    if sources.iter().flatten().any(|item| {
+        item.template_selector
+            .as_deref()
+            .is_some_and(|selector| selector != "*")
+            || item
+                .labels
+                .keys()
+                .any(|key| matches!(key.as_str(), "template_id" | "image" | "access_mode"))
+    }) {
+        return Err(ApiError::BadRequest(
+            "template_id is required to preview template, image, or access mode injection selectors",
+        ));
+    }
+    Ok(sources)
+}
+
+async fn preview_creation_template(
+    state: &AppState,
+    actor: &Principal,
+    request: &PreviewRequest,
+) -> Result<Option<crate::storage::WorkspaceTemplate>, ApiError> {
+    let Some(template_id) = request.template_id else {
+        return Ok(None);
+    };
+    let organization_id = request.organization_id.ok_or(ApiError::BadRequest(
+        "organization_id is required for a template creation preview",
+    ))?;
+    if !actor.allows(Permission::ReadWorkspace, organization_id)
+        || !actor.may_access_workspace_template(Some(template_id))
+    {
+        return Err(ApiError::Forbidden);
+    }
+    let template = state.database.get_workspace_template(template_id).await?;
+    if !template.enabled
+        || template
+            .organization_id
+            .is_some_and(|id| id != organization_id)
+    {
+        return Err(crate::storage::StorageError::TemplateNotFound.into());
+    }
+    Ok(Some(template))
 }
 
 async fn preview_target(
@@ -346,9 +435,12 @@ async fn preview_target(
         }
         return Ok(None);
     };
-    if request.organization_injection_refs.is_some() || request.user_injection_refs.is_some() {
+    if request.organization_injection_refs.is_some()
+        || request.user_injection_refs.is_some()
+        || request.template_id.is_some()
+    {
         return Err(ApiError::BadRequest(
-            "an existing workspace preview uses its persisted injection references",
+            "an existing workspace preview uses its persisted template and injection references",
         ));
     }
     let workspace = state.database.get_workspace(workspace_id).await?;
