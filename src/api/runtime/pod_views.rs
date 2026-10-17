@@ -13,7 +13,6 @@ use crate::{
     workspaces::WorkspaceState,
 };
 
-#[cfg(test)]
 use super::RuntimeEventCategory;
 use super::{PodEvent, PodMetric, PodRuntime};
 
