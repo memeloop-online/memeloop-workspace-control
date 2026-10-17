@@ -25,6 +25,8 @@ mod envoy_filter;
 mod http_proxy;
 #[path = "client_apply/port_mappings.rs"]
 mod port_mappings;
+#[path = "client_apply/startup_gate.rs"]
+mod startup_gate;
 
 // Record only phase names, identity and timing; injection values and API bodies stay out of logs.
 async fn observe_apply_stage<T, E>(
@@ -72,49 +74,46 @@ impl KubernetesCoordinator {
             self.apply_namespace(workspace, desired),
         )
         .await?;
-        tokio::try_join!(
-            observe_apply_stage(
-                workspace,
-                "access_identity",
-                self.apply_access_identity(namespace_name, workspace, desired)
-            ),
-            observe_apply_stage(
-                workspace,
-                "injections",
-                self.apply_injections(workspace, &desired.injections)
-            ),
-            observe_apply_stage(
-                workspace,
-                "workspace_identity",
-                self.apply_workspace_identity(namespace_name, workspace, desired)
-            ),
-            observe_apply_stage(
-                workspace,
-                "network_policy",
-                self.apply_network_policy(namespace_name, workspace, desired)
-            ),
-            observe_apply_stage(
-                workspace,
-                "services",
-                self.apply_workspace_services(namespace_name, workspace, desired)
-            ),
-        )?;
-        // Inputs, access identity, isolation intent and Services must all be accepted before
-        // publishing routes or creating containers. They do not depend on each other's API
-        // responses. Policy acceptance is not an enforcement acknowledgement; node-level
-        // acceptance must still verify convergence.
+        let startup = observe_apply_stage(
+            workspace,
+            "startup_plan",
+            self.prepare_startup_plan(workspace, desired),
+        )
+        .await?;
+        self.apply_startup_prerequisites(namespace_name, workspace, desired, &startup)
+            .await?;
+        // A new Pod may prepare its volumes while injection writes are pending, but its
+        // required startup ConfigMap keeps every container blocked until all inputs and routes
+        // succeed. Existing workspaces keep the original update ordering.
         observe_apply_stage(
             workspace,
             "network",
             self.apply_network(namespace_name, workspace, desired),
         )
         .await?;
-        observe_apply_stage(
-            workspace,
-            "workload",
-            self.apply_workload(namespace_name, workspace, desired),
-        )
-        .await
+        if let Some(gate) = &startup.gate {
+            let config_maps = Api::<ConfigMap>::namespaced(self.client.clone(), namespace_name);
+            let name = gate
+                .metadata
+                .name
+                .as_deref()
+                .ok_or(ReconcileError::MissingObjectName)?;
+            observe_apply_stage(
+                workspace,
+                "startup_approval",
+                self.apply_owned(&config_maps, name, gate, workspace.id),
+            )
+            .await?;
+        }
+        if !startup.overlap {
+            observe_apply_stage(
+                workspace,
+                "workload",
+                self.apply_workload(namespace_name, workspace, &startup.workload),
+            )
+            .await?;
+        }
+        Ok(())
     }
 
     async fn apply_namespace(
@@ -275,14 +274,14 @@ impl KubernetesCoordinator {
         &self,
         namespace_name: &str,
         workspace: &Workspace,
-        desired: &DesiredResources,
+        desired: &StatefulSet,
     ) -> Result<(), ReconcileError> {
         let workspace_id = workspace.id;
         let runtime_names = self.builder.runtime_names(workspace)?;
         let names = &runtime_names.resources;
         let apply = PatchParams::apply(FIELD_MANAGER);
         let stateful_sets = Api::<StatefulSet>::namespaced(self.client.clone(), namespace_name);
-        let mut stateful_set = desired.stateful_set.clone();
+        let mut stateful_set = desired.clone();
         if let Some(existing) = stateful_sets.get_opt(&names.stateful_set).await? {
             self.builder
                 .verify_delete_ownership(&existing.metadata, workspace_id)?;
@@ -323,7 +322,6 @@ impl KubernetesCoordinator {
             self.builder
                 .verify_delete_ownership(&existing.metadata, workspace_id)?;
             let claim_labels = desired
-                .stateful_set
                 .spec
                 .as_ref()
                 .and_then(|spec| spec.volume_claim_templates.as_ref())
@@ -450,8 +448,8 @@ impl KubernetesCoordinator {
         }
         let secrets = Api::<Secret>::namespaced(self.client.clone(), namespace);
         let config_maps = Api::<ConfigMap>::namespaced(self.client.clone(), namespace);
-        // These projected inputs are independent. Join all writes before policies/workloads,
-        // retaining the ownership check for each object even when other writes succeed first.
+        // These projected inputs are independent. Join all writes before startup approval
+        // or updates to existing workloads, retaining the ownership check for every object.
         tokio::try_join!(
             self.apply_owned(
                 &secrets,

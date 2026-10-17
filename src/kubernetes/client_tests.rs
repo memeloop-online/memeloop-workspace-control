@@ -31,6 +31,8 @@ mod node_port_tests {
 }
 
 mod coordinator_tests {
+    mod gated_startup;
+
     use std::{
         collections::BTreeMap,
         convert::Infallible,

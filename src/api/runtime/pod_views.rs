@@ -95,6 +95,7 @@ pub(super) fn pod_runtime(pod: &Pod) -> PodRuntime {
 }
 
 pub(super) fn pod_event(event: Event) -> PodEvent {
+    let startup_pending = crate::runtime_incidents::startup_gate_pending(&event);
     let observed_at = crate::runtime_incidents::event_start(&event)
         .and_then(|seconds| k8s_openapi::jiff::Timestamp::new(seconds, 0).ok())
         .map(|time| time.to_string());
@@ -133,10 +134,18 @@ pub(super) fn pod_event(event: Event) -> PodEvent {
         })
         .map(str::to_owned);
     PodEvent {
-        reason: super::startup::safe_reason(event.reason.as_deref()).map(str::to_owned),
+        reason: if startup_pending {
+            Some("ContainerCreating".to_owned())
+        } else {
+            super::startup::safe_reason(event.reason.as_deref()).map(str::to_owned)
+        },
         component,
         last_observed_at,
-        category: runtime_event_category(event.reason.as_deref(), event.message.as_deref()),
+        category: if startup_pending {
+            RuntimeEventCategory::Other
+        } else {
+            runtime_event_category(event.reason.as_deref(), event.message.as_deref())
+        },
         count,
         observed_at,
     }

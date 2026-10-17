@@ -232,11 +232,13 @@ impl KubernetesCoordinator {
             return Ok(DeleteProgress::DeletionRequested);
         }
         let config_maps = Api::<ConfigMap>::namespaced(self.client.clone(), namespace);
+        let startup_gate = names.startup_gate_config_map();
         for name in [
             &names.workspace_config,
             &names.http_proxy_config,
             &names.environment_config_map,
             &names.files_config_map,
+            &startup_gate,
         ] {
             if delete_owned_if_present(&config_maps, name, &self.builder, workspace_id).await? {
                 return Ok(DeleteProgress::DeletionRequested);

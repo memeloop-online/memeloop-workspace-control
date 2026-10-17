@@ -151,6 +151,10 @@ impl WorkspaceResourceNames {
         format!("{}-{}-0", self.data_claim_template, self.stateful_set)
     }
 
+    pub fn startup_gate_config_map(&self) -> String {
+        format!("{}-startup-gate", self.stateful_set)
+    }
+
     fn validate(&self) -> Result<(), WorkspaceRuntimeIdentityError> {
         for name in [
             &self.stateful_set,
@@ -170,6 +174,7 @@ impl WorkspaceResourceNames {
             &self.data_claim_template,
             &self.pod_ordinal_zero(),
             &self.data_pvc_ordinal_zero(),
+            &self.startup_gate_config_map(),
         ] {
             valid_dns_label(name, 63)?;
         }
