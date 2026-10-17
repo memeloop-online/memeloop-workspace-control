@@ -115,7 +115,7 @@ fn workspace_short_id(event: &Event) -> Option<&str> {
 }
 
 fn normalized_incident(event: &Event) -> Option<NewWorkspaceRuntimeIncident> {
-    if event.type_.as_deref() != Some("Warning") {
+    if event.type_.as_deref() != Some("Warning") || startup_gate_pending(event) {
         return None;
     }
     let category = runtime_event_category(event.reason.as_deref(), event.message.as_deref());
@@ -144,6 +144,22 @@ fn normalized_incident(event: &Event) -> Option<NewWorkspaceRuntimeIncident> {
         last_observed_at,
         count,
     })
+}
+
+/// The missing approval marker is intentional during a new workspace's input writes.
+/// Match only this Pod's exact marker; other missing ConfigMaps remain real mount failures.
+pub(crate) fn startup_gate_pending(event: &Event) -> bool {
+    let Some(short_id) = workspace_short_id(event) else {
+        return false;
+    };
+    event.reason.as_deref() == Some("FailedMount")
+        && event.message.as_deref()
+            == Some(
+                format!(
+                    "MountVolume.SetUp failed for volume \"workspace-startup-gate\" : configmap \"w-{short_id}-startup-gate\" not found"
+                )
+                .as_str(),
+            )
 }
 
 /// A series' latest timestamp changes on every recurrence and must not be

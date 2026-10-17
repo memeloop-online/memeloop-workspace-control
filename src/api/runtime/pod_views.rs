@@ -13,7 +13,6 @@ use crate::{
     workspaces::WorkspaceState,
 };
 
-#[cfg(test)]
 use super::RuntimeEventCategory;
 use super::{PodEvent, PodMetric, PodRuntime};
 
@@ -95,6 +94,7 @@ pub(super) fn pod_runtime(pod: &Pod) -> PodRuntime {
 }
 
 pub(super) fn pod_event(event: Event) -> PodEvent {
+    let startup_pending = crate::runtime_incidents::startup_gate_pending(&event);
     let observed_at = crate::runtime_incidents::event_start(&event)
         .and_then(|seconds| k8s_openapi::jiff::Timestamp::new(seconds, 0).ok())
         .map(|time| time.to_string());
@@ -133,10 +133,18 @@ pub(super) fn pod_event(event: Event) -> PodEvent {
         })
         .map(str::to_owned);
     PodEvent {
-        reason: super::startup::safe_reason(event.reason.as_deref()).map(str::to_owned),
+        reason: if startup_pending {
+            Some("ContainerCreating".to_owned())
+        } else {
+            super::startup::safe_reason(event.reason.as_deref()).map(str::to_owned)
+        },
         component,
         last_observed_at,
-        category: runtime_event_category(event.reason.as_deref(), event.message.as_deref()),
+        category: if startup_pending {
+            RuntimeEventCategory::Other
+        } else {
+            runtime_event_category(event.reason.as_deref(), event.message.as_deref())
+        },
         count,
         observed_at,
     }
@@ -254,6 +262,30 @@ mod tests {
         let event = pod_event(event);
         assert_eq!(event.count, Some(7));
         assert_eq!(event.observed_at.as_deref(), Some("2026-08-28T09:00:00Z"));
+    }
+
+    #[test]
+    fn deliberate_gate_wait_is_preparation_and_preserves_event_history() {
+        let source: Event = serde_json::from_value(serde_json::json!({
+            "involvedObject": {
+                "kind":"Pod", "namespace":"memeloop-workspace-control",
+                "name":"w-8000000000000001-0"
+            },
+            "reason":"FailedMount",
+            "message":"MountVolume.SetUp failed for volume \"workspace-startup-gate\" : configmap \"w-8000000000000001-startup-gate\" not found",
+            "eventTime":"2026-08-28T09:00:00Z", "count":6
+        })).unwrap();
+        let event = pod_event(source.clone());
+        assert_eq!(event.reason.as_deref(), Some("ContainerCreating"));
+        assert_eq!(event.category, RuntimeEventCategory::Other);
+        assert_eq!(event.count, Some(6));
+        assert_eq!(event.observed_at.as_deref(), Some("2026-08-28T09:00:00Z"));
+        let mut failure = source;
+        failure.message =
+            Some("MountVolume.SetUp failed: configmap workspace-config not found".to_owned());
+        let event = pod_event(failure);
+        assert_eq!(event.reason.as_deref(), Some("FailedMount"));
+        assert_eq!(event.category, RuntimeEventCategory::VolumeUnavailable);
     }
 
     #[test]
