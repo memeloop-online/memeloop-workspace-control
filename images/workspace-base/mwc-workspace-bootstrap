@@ -201,6 +201,29 @@ sync_injected_file() {
     fi
 }
 
+decode_injected_dictionary() {
+    dictionary_entry=$1
+    dictionary_source=$2
+    if ! expected_bytes=$(printf '%s' "$dictionary_entry" | jq -er \
+        '.decoded_bytes | select(type == "number" and . >= 0 and . == floor)'); then
+        return 1
+    fi
+    # Emit validated string chunks directly, without adding a newline or reformatting JSON.
+    # jq is already part of Image Contract v1; no additional runtime is required.
+    if ! jq -jr '
+        if .version != 1 or (.chunks | type) != "array" or (.order | type) != "array"
+        then error("invalid file dictionary")
+        else . as $dictionary | .order[] |
+            if type == "number" and . >= 0 and . == floor and . < ($dictionary.chunks | length)
+            then $dictionary.chunks[.] |
+                if type == "string" then . else error("invalid dictionary chunk") end
+            else error("invalid dictionary index") end
+        end' "$dictionary_source" > "$attempt_dir/decoded"; then
+        return 1
+    fi
+    [ "$(wc -c < "$attempt_dir/decoded")" -eq "$expected_bytes" ]
+}
+
 sync_injected_files() (
     # Keep the previous warning and authorized keys until this complete attempt succeeds.
     # A subshell isolates the temporary paths from the serve process and its other monitors.
@@ -231,11 +254,24 @@ sync_injected_files() (
             owner=$(printf '%s' "$entry" | jq -r '.owner // empty')
             group=$(printf '%s' "$entry" | jq -r '.group // empty')
             kind=$(printf '%s' "$entry" | jq -r '.kind')
+            encoding=$(printf '%s' "$entry" | jq -r '.encoding // empty')
             [ -n "$owner" ] || owner=$workspace_user
             [ -n "$group" ] || group=$workspace_group
             case "$object" in
                 secret) source=/var/run/workspace-injections/secret/$data_key ;;
                 config_map) source=/var/run/workspace-injections/config/$data_key ;;
+                *) : > "$injection_attempt_failed"; continue ;;
+            esac
+            case "$encoding" in
+                '') ;;
+                dictionary_v1)
+                    if [ "$object" != config_map ] || [ "$kind" != config_file ] \
+                        || ! decode_injected_dictionary "$entry" "$source"; then
+                        : > "$injection_attempt_failed"
+                        continue
+                    fi
+                    source="$attempt_dir/decoded"
+                    ;;
                 *) : > "$injection_attempt_failed"; continue ;;
             esac
             if [ -z "$mode" ]; then

@@ -137,6 +137,53 @@ for failure in malformed non_array invalid_mode missing_key; do
 done
 test -z "$(find /run/mwc-ssh -maxdepth 1 -name '.injection-sync.*' -print -quit)"
 
+# Dictionary transport must restore exact bytes, including Unicode, CRLF, escaped newlines
+# and the absence of a final newline. A failed decode must preserve the last good file.
+printf '中文🦀 "quotes"\r\n literal\\nnext\n' > /tmp/dictionary-chunk
+printf 'no trailing newline' > /tmp/dictionary-tail
+cat /tmp/dictionary-chunk /tmp/dictionary-chunk /tmp/dictionary-tail > /tmp/dictionary-expected
+jq -nc --rawfile chunk /tmp/dictionary-chunk --rawfile tail /tmp/dictionary-tail \
+    '{version:1,chunks:[$chunk,$tail],order:[0,0,1]}' > /tmp/good-dictionary
+jq --argjson bytes "$(wc -c < /tmp/dictionary-expected)" '.files += [{
+    object:"config_map",data_key:"dictionary-file",target:"/workspace/dictionary-file",
+    kind:"config_file",encoding:"dictionary_v1",decoded_bytes:$bytes,mode:416,
+    owner:"workspace",group:"workspace"
+}]' /tmp/good-injection-manifest > /tmp/dictionary-manifest
+cp /tmp/dictionary-manifest "$injection_config/workspace-files.json"
+cp /tmp/good-dictionary "$injection_config/dictionary-file"
+prepare_recovery_fixture
+test ! -e /run/mwc-ssh/injection-failed
+cmp /tmp/dictionary-expected /workspace/dictionary-file
+test "$(stat -c %a /workspace/dictionary-file)" = 640
+test "$(stat -c %U:%G /workspace/dictionary-file)" = workspace:workspace
+cmp /tmp/expected-authorized-keys /run/mwc-ssh/authorized_keys
+for failure in bad_index fractional_index non_string wrong_version truncated size unknown_encoding encoded_ssh encoded_secret; do
+    case "$failure" in
+        bad_index) jq '.order = [0,99]' /tmp/good-dictionary > "$injection_config/dictionary-file" ;;
+        fractional_index) jq '.order = [0,0.5]' /tmp/good-dictionary > "$injection_config/dictionary-file" ;;
+        non_string) jq '.chunks[0] = null' /tmp/good-dictionary > "$injection_config/dictionary-file" ;;
+        wrong_version) jq '.version = 2' /tmp/good-dictionary > "$injection_config/dictionary-file" ;;
+        truncated) printf '{' > "$injection_config/dictionary-file" ;;
+        size) jq '.files[-1].decoded_bytes += 1' /tmp/dictionary-manifest > "$injection_config/workspace-files.json" ;;
+        unknown_encoding) jq '.files[-1].encoding = "unknown"' /tmp/dictionary-manifest > "$injection_config/workspace-files.json" ;;
+        encoded_ssh) jq '.files[-1].kind = "ssh_public_key"' /tmp/dictionary-manifest > "$injection_config/workspace-files.json" ;;
+        encoded_secret) jq '.files[-1].object = "secret"' /tmp/dictionary-manifest > "$injection_config/workspace-files.json" ;;
+    esac
+    prepare_recovery_fixture
+    test -e /run/mwc-ssh/injection-failed
+    cmp /tmp/dictionary-expected /workspace/dictionary-file
+    cmp /tmp/expected-authorized-keys /run/mwc-ssh/authorized_keys
+    cp /tmp/good-dictionary "$injection_config/dictionary-file"
+    cp /tmp/dictionary-manifest "$injection_config/workspace-files.json"
+    prepare_recovery_fixture
+    test ! -e /run/mwc-ssh/injection-failed
+    cmp /tmp/dictionary-expected /workspace/dictionary-file
+    cmp /tmp/expected-authorized-keys /run/mwc-ssh/authorized_keys
+done
+test -z "$(find /run/mwc-ssh -maxdepth 1 -name '.injection-sync.*' -print -quit)"
+test -z "$(find /workspace -name '.mwc-injection.*' -print -quit)"
+cp /tmp/good-injection-manifest "$injection_config/workspace-files.json"
+
 # A stale symlink or regular file must be removed without following it, while the durable
 # session directory remains untouched.
 rm -f /workspace/.codex/.tmp

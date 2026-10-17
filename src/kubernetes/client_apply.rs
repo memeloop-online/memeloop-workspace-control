@@ -433,6 +433,7 @@ impl KubernetesCoordinator {
         &self,
         workspace: &Workspace,
         materialization: &InjectionMaterialization,
+        compress_files: bool,
     ) -> Result<(), ReconcileError> {
         let workspace_id = workspace.id;
         let runtime_names = self.builder.runtime_names(workspace)?;
@@ -448,6 +449,13 @@ impl KubernetesCoordinator {
         }
         let secrets = Api::<Secret>::namespaced(self.client.clone(), namespace);
         let config_maps = Api::<ConfigMap>::namespaced(self.client.clone(), namespace);
+        let compressed;
+        let file_config_map = if compress_files {
+            compressed = materialization.compressed_config_files()?;
+            &compressed
+        } else {
+            &materialization.file_config_map
+        };
         // These projected inputs are independent. Join all writes before startup approval
         // or updates to existing workloads, retaining the ownership check for every object.
         tokio::try_join!(
@@ -472,7 +480,7 @@ impl KubernetesCoordinator {
             self.apply_owned(
                 &config_maps,
                 &names.files_config_map,
-                &materialization.file_config_map,
+                file_config_map,
                 workspace_id,
             ),
         )?;
