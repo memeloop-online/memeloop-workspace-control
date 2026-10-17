@@ -77,10 +77,10 @@ impl KubernetesCoordinator {
         let startup = observe_apply_stage(
             workspace,
             "startup_plan",
-            self.prepare_startup_plan(workspace, desired),
+            Box::pin(self.prepare_startup_plan(workspace, desired)),
         )
         .await?;
-        self.apply_startup_prerequisites(namespace_name, workspace, desired, &startup)
+        Box::pin(self.apply_startup_prerequisites(namespace_name, workspace, desired, &startup))
             .await?;
         // A new Pod may prepare its volumes while injection writes are pending, but its
         // required startup ConfigMap keeps every container blocked until all inputs and routes
@@ -109,7 +109,7 @@ impl KubernetesCoordinator {
             observe_apply_stage(
                 workspace,
                 "workload",
-                self.apply_workload(namespace_name, workspace, &startup.workload),
+                Box::pin(self.apply_workload(namespace_name, workspace, &startup.workload)),
             )
             .await?;
         }

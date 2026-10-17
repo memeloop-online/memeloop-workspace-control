@@ -163,7 +163,7 @@ async fn new_workload_prepares_volumes_before_files_but_approval_waits_for_every
         async move { coordinator.reconcile(&workspace).await }
     });
     wait_for_workload(&mock).await;
-    let before = mock.object("/w-8000000000000001").unwrap();
+    let before = mock.object("/statefulsets/w-8000000000000001").unwrap();
     assert_gated(&before);
     assert!(mock.object("-startup-gate").is_none());
     assert!(mock.object("-files-config").is_none());
@@ -200,7 +200,7 @@ async fn new_workload_prepares_volumes_before_files_but_approval_waits_for_every
     mock.hold_files.store(false, Ordering::SeqCst);
     workspace.state = WorkspaceState::Ready;
     coordinator.reconcile(&workspace).await.unwrap();
-    let after = mock.object("/w-8000000000000001").unwrap();
+    let after = mock.object("/statefulsets/w-8000000000000001").unwrap();
     assert_eq!(
         before["spec"]["template"], after["spec"]["template"],
         "ready reconciliation must not restart the newly gated Pod"
@@ -221,7 +221,7 @@ async fn failed_files_keep_early_workload_blocked_and_retry_approves_the_same_te
         async move { coordinator.reconcile(&workspace).await }
     });
     wait_for_workload(&mock).await;
-    let before = mock.object("/w-8000000000000001").unwrap();
+    let before = mock.object("/statefulsets/w-8000000000000001").unwrap();
     assert_gated(&before);
     mock.release_files.add_permits(1);
     assert!(matches!(
@@ -236,7 +236,7 @@ async fn failed_files_keep_early_workload_blocked_and_retry_approves_the_same_te
     assert!(mock.object("-startup-gate").is_some());
     assert_eq!(
         before["spec"]["template"],
-        mock.object("/w-8000000000000001").unwrap()["spec"]["template"]
+        mock.object("/statefulsets/w-8000000000000001").unwrap()["spec"]["template"]
     );
 }
 
@@ -249,7 +249,7 @@ async fn failed_route_or_approval_never_releases_the_startup_gate() {
         *mock.fail_suffix.lock().unwrap() = Some(suffix.to_owned());
         let coordinator = coordinator(mock.clone());
         assert!(coordinator.reconcile(&workspace).await.is_err());
-        assert_gated(&mock.object("/w-8000000000000001").unwrap());
+        assert_gated(&mock.object("/statefulsets/w-8000000000000001").unwrap());
         assert!(mock.object("-startup-gate").is_none());
         *mock.fail_suffix.lock().unwrap() = None;
         coordinator.reconcile(&workspace).await.unwrap();
@@ -277,7 +277,7 @@ async fn failed_small_prerequisites_prevent_early_workload_creation() {
             .await
             .expect("a failed small prerequisite must cancel the pending file upload")
             .unwrap_err();
-        assert!(mock.object("/w-8000000000000001").is_none());
+        assert!(mock.object("/statefulsets/w-8000000000000001").is_none());
         assert!(mock.object("-startup-gate").is_none());
         assert!(mock.object("-web-shell").is_none());
     }
@@ -313,7 +313,7 @@ async fn foreign_or_malformed_approval_is_never_reused_or_overwritten() {
             .unwrap()
             .insert(path.clone(), gate.clone());
         assert!(coordinator.reconcile(&workspace).await.is_err());
-        assert!(mock.object("/w-8000000000000001").is_none());
+        assert!(mock.object("/statefulsets/w-8000000000000001").is_none());
         assert_eq!(mock.objects.lock().unwrap().get(&path), Some(&gate));
     }
 }
@@ -336,7 +336,7 @@ async fn preexisting_workspaces_keep_their_ungated_template() {
     assert!(mock.object("-startup-gate").is_none());
     assert_eq!(
         old["spec"]["template"],
-        mock.object("/w-8000000000000001").unwrap()["spec"]["template"]
+        mock.object("/statefulsets/w-8000000000000001").unwrap()["spec"]["template"]
     );
 }
 

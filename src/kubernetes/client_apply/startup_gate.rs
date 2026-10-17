@@ -128,7 +128,7 @@ impl KubernetesCoordinator {
                     observe_apply_stage(
                         workspace,
                         "gated_workload",
-                        self.apply_workload(namespace, workspace, &startup.workload),
+                        Box::pin(self.apply_workload(namespace, workspace, &startup.workload)),
                     )
                     .await?;
                 }
