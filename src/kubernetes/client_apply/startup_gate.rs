@@ -12,11 +12,14 @@ use super::{DesiredResources, KubernetesCoordinator, ReconcileError, observe_app
 
 const GATE_ANNOTATION: &str = "workspace.memeloop.dev/startup-gate";
 const GATE_VOLUME: &str = "workspace-startup-gate";
+const FILE_ENCODING_ANNOTATION: &str = "workspace.memeloop.dev/file-encoding";
+const FILE_ENCODING: &str = "dictionary-v1";
 
 pub(super) struct StartupPlan {
     pub workload: StatefulSet,
     pub gate: Option<ConfigMap>,
     pub overlap: bool,
+    pub compress_files: bool,
 }
 
 impl KubernetesCoordinator {
@@ -33,21 +36,36 @@ impl KubernetesCoordinator {
             self.builder
                 .verify_delete_ownership(&existing.metadata, workspace.id)?;
         }
-        let previous_gate = existing.as_ref().and_then(|object| {
-            object
-                .metadata
-                .annotations
-                .as_ref()
-                .and_then(|a| a.get(GATE_ANNOTATION))
-        });
+        let annotations = existing
+            .as_ref()
+            .and_then(|object| object.metadata.annotations.as_ref());
+        let previous_gate = annotations.and_then(|a| a.get(GATE_ANNOTATION));
         let mut plan = StartupPlan {
             workload: desired.stateful_set.clone(),
             gate: None,
             overlap: false,
+            compress_files: false,
         };
         let is_new = existing.is_none() && workspace.state == WorkspaceState::Provisioning;
         if !is_new && previous_gate.is_none() {
             return Ok(plan);
+        }
+        let previous_encoding = annotations.and_then(|a| a.get(FILE_ENCODING_ANNOTATION));
+        if previous_encoding.is_some_and(|value| value != FILE_ENCODING) {
+            return Err(ReconcileError::RuntimeIdentityMismatch);
+        }
+        // Existing bootstrap monitor shells do not reload their functions when their script
+        // projection changes. Only newly created Pods may opt in to the new transport.
+        plan.compress_files = is_new || previous_encoding.is_some();
+        if plan.compress_files {
+            plan.workload
+                .metadata
+                .annotations
+                .get_or_insert_default()
+                .insert(
+                    FILE_ENCODING_ANNOTATION.to_owned(),
+                    FILE_ENCODING.to_owned(),
+                );
         }
         let name = names.startup_gate_config_map();
         if previous_gate.is_some_and(|value| value != &name) {
@@ -99,7 +117,7 @@ impl KubernetesCoordinator {
             observe_apply_stage(
                 workspace,
                 "injections",
-                self.apply_injections(workspace, &desired.injections)
+                self.apply_injections(workspace, &desired.injections, startup.compress_files)
             ),
             async {
                 tokio::try_join!(

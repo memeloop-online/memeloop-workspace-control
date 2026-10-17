@@ -165,6 +165,10 @@ async fn new_workload_prepares_volumes_before_files_but_approval_waits_for_every
     wait_for_workload(&mock).await;
     let before = mock.object("/statefulsets/w-8000000000000001").unwrap();
     assert_gated(&before);
+    assert_eq!(
+        before["metadata"]["annotations"]["workspace.memeloop.dev/file-encoding"],
+        "dictionary-v1"
+    );
     assert!(mock.object("-startup-gate").is_none());
     assert!(mock.object("-files-config").is_none());
     assert!(mock.object("-web-shell").is_none());
@@ -338,6 +342,136 @@ async fn preexisting_workspaces_keep_their_ungated_template() {
         old["spec"]["template"],
         mock.object("/statefulsets/w-8000000000000001").unwrap()["spec"]["template"]
     );
+    let text = "repeated instruction\\n".repeat(8192);
+    reconcile_large_file(&coordinator, &workspace, &text)
+        .await
+        .unwrap();
+    assert_eq!(
+        mock.object("-files-config").unwrap()["data"]["large-file"],
+        text
+    );
+}
+
+async fn reconcile_large_file(
+    coordinator: &KubernetesCoordinator,
+    workspace: &Workspace,
+    text: &str,
+) -> Result<(), ReconcileError> {
+    let mut desired = coordinator.builder.build(workspace).unwrap();
+    let data = desired.injections.file_config_map.data.as_mut().unwrap();
+    data.insert("large-file".to_owned(), text.to_owned());
+    data.insert(
+        "workspace-files.json".to_owned(),
+        json!({"version":1,"files":[{
+            "object":"config_map","kind":"config_file","data_key":"large-file",
+            "target":"/workspace/catalog.json","mode":416
+        }]})
+        .to_string(),
+    );
+    coordinator
+        .reconcile_with_injections(
+            workspace,
+            &crate::workspaces::ResolvedPlacement::default(),
+            desired.injections,
+            desired.ssh_identity,
+        )
+        .await
+}
+
+#[tokio::test]
+async fn new_workspaces_keep_dictionary_transport_after_becoming_ready() {
+    let mut workspace = workspace(workspace_id());
+    workspace.state = WorkspaceState::Provisioning;
+    let mock = Arc::new(GateMock::default());
+    let coordinator = coordinator(mock.clone());
+    let text = "repeated instruction\\n".repeat(8192);
+    reconcile_large_file(&coordinator, &workspace, &text)
+        .await
+        .unwrap();
+    let before = mock.object("/statefulsets/w-8000000000000001").unwrap();
+    let files = mock.object("-files-config").unwrap();
+    let manifest: Value =
+        serde_json::from_str(files["data"]["workspace-files.json"].as_str().unwrap()).unwrap();
+    assert_eq!(manifest["files"][0]["encoding"], "dictionary_v1");
+    assert_eq!(manifest["files"][0]["decoded_bytes"], text.len());
+    assert!(files["data"]["large-file"].as_str().unwrap().len() < text.len() / 2);
+    workspace.state = WorkspaceState::Ready;
+    reconcile_large_file(&coordinator, &workspace, &text)
+        .await
+        .unwrap();
+    assert_eq!(files, mock.object("-files-config").unwrap());
+    let after = mock.object("/statefulsets/w-8000000000000001").unwrap();
+    assert_eq!(before["spec"]["template"], after["spec"]["template"]);
+    assert_eq!(
+        after["metadata"]["annotations"]["workspace.memeloop.dev/file-encoding"],
+        "dictionary-v1"
+    );
+    assert!(
+        after["spec"]["template"]["metadata"]["annotations"]
+            .get("workspace.memeloop.dev/file-encoding")
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn previously_gated_workspaces_keep_unencoded_files_and_the_same_pod_template() {
+    let mut workspace = workspace(workspace_id());
+    workspace.state = WorkspaceState::Provisioning;
+    let mock = Arc::new(GateMock::default());
+    let coordinator = coordinator(mock.clone());
+    coordinator.reconcile(&workspace).await.unwrap();
+    let before = {
+        let mut objects = mock.objects.lock().unwrap();
+        let (_, old) = objects
+            .iter_mut()
+            .find(|(path, _)| path.contains("/statefulsets/"))
+            .unwrap();
+        old["metadata"]["annotations"]
+            .as_object_mut()
+            .unwrap()
+            .remove("workspace.memeloop.dev/file-encoding");
+        old.clone()
+    };
+    workspace.state = WorkspaceState::Ready;
+    let text = "repeated instruction\\n".repeat(8192);
+    reconcile_large_file(&coordinator, &workspace, &text)
+        .await
+        .unwrap();
+    assert_eq!(
+        mock.object("-files-config").unwrap()["data"]["large-file"],
+        text
+    );
+    let after = mock.object("/statefulsets/w-8000000000000001").unwrap();
+    assert_eq!(before["spec"]["template"], after["spec"]["template"]);
+    assert!(
+        after["metadata"]["annotations"]
+            .get("workspace.memeloop.dev/file-encoding")
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn unknown_workload_encoding_does_not_overwrite_existing_files() {
+    let mut workspace = workspace(workspace_id());
+    workspace.state = WorkspaceState::Provisioning;
+    let mock = Arc::new(GateMock::default());
+    let coordinator = coordinator(mock.clone());
+    coordinator.reconcile(&workspace).await.unwrap();
+    let files = mock.object("-files-config").unwrap();
+    {
+        let mut objects = mock.objects.lock().unwrap();
+        let (_, old) = objects
+            .iter_mut()
+            .find(|(path, _)| path.contains("/statefulsets/"))
+            .unwrap();
+        old["metadata"]["annotations"]["workspace.memeloop.dev/file-encoding"] = json!("unknown");
+    }
+    workspace.state = WorkspaceState::Ready;
+    assert!(matches!(
+        reconcile_large_file(&coordinator, &workspace, &"line\n".repeat(16384)).await,
+        Err(ReconcileError::RuntimeIdentityMismatch)
+    ));
+    assert_eq!(files, mock.object("-files-config").unwrap());
 }
 
 #[tokio::test]
