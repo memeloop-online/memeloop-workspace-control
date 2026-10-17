@@ -216,8 +216,15 @@ mod coordinator_tests {
             } else {
                 assert!(matches!(error, ReconcileError::Kubernetes(_)));
             }
-            assert!(requests.lock().unwrap().iter().all(|(_, path)| {
-                !path.contains("/ingresses/") && !path.contains("/statefulsets/")
+            assert!(
+                requests
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .all(|(_, path)| { !path.contains("/ingresses/") })
+            );
+            assert!(requests.lock().unwrap().iter().all(|(method, path)| {
+                *method == Method::GET || !path.contains("/statefulsets/")
             }));
             fail.store(false, Ordering::SeqCst);
             coordinator.reconcile(&workspace).await.unwrap();

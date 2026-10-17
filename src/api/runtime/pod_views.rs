@@ -265,6 +265,30 @@ mod tests {
     }
 
     #[test]
+    fn deliberate_gate_wait_is_preparation_and_preserves_event_history() {
+        let source: Event = serde_json::from_value(serde_json::json!({
+            "involvedObject": {
+                "kind":"Pod", "namespace":"memeloop-workspace-control",
+                "name":"w-8000000000000001-0"
+            },
+            "reason":"FailedMount",
+            "message":"MountVolume.SetUp failed for volume \"workspace-startup-gate\" : configmap \"w-8000000000000001-startup-gate\" not found",
+            "eventTime":"2026-08-28T09:00:00Z", "count":6
+        })).unwrap();
+        let event = pod_event(source.clone());
+        assert_eq!(event.reason.as_deref(), Some("ContainerCreating"));
+        assert_eq!(event.category, RuntimeEventCategory::Other);
+        assert_eq!(event.count, Some(6));
+        assert_eq!(event.observed_at.as_deref(), Some("2026-08-28T09:00:00Z"));
+        let mut failure = source;
+        failure.message =
+            Some("MountVolume.SetUp failed: configmap workspace-config not found".to_owned());
+        let event = pod_event(failure);
+        assert_eq!(event.reason.as_deref(), Some("FailedMount"));
+        assert_eq!(event.category, RuntimeEventCategory::VolumeUnavailable);
+    }
+
+    #[test]
     fn known_events_keep_the_reason_without_exposing_raw_messages() {
         for reason in [
             "Started",
