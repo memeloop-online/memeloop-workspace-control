@@ -85,6 +85,24 @@ impl KubernetesCoordinator {
         workspace: &Workspace,
         expected: i32,
     ) -> Result<bool, ReconcileError> {
+        let phase = if expected == 0 {
+            "observe_stopped_replicas"
+        } else {
+            "observe_ready_replicas"
+        };
+        apply::observe_runtime_stage(
+            workspace,
+            phase,
+            self.has_observed_replicas_inner(workspace, expected),
+        )
+        .await
+    }
+
+    async fn has_observed_replicas_inner(
+        &self,
+        workspace: &Workspace,
+        expected: i32,
+    ) -> Result<bool, ReconcileError> {
         let namespace_name = workspace.runtime.namespace();
         let names = self.builder.runtime_names(workspace)?;
         let Some(stateful_set) =

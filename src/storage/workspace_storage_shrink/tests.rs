@@ -596,3 +596,453 @@ async fn deletion_persists_missing_pv_identity_without_mutating_operation_state(
         Err(StorageError::WorkspaceStorageShrinkConflict)
     ));
 }
+
+async fn retry_fixture(
+    home: bool,
+    temporary: bool,
+    mutate: impl FnOnce(&mut StorageShrinkOperation),
+) -> (Database, Workspace, StorageShrinkOperation, Uuid) {
+    let (database, stopped, actor) = stopped_workspace().await;
+    let mut selected = request(&stopped);
+    if !home {
+        selected.home_gib = None;
+    }
+    if !temporary {
+        selected.temporary_storage_gib = None;
+    }
+    let mut operation = database
+        .enqueue_storage_shrink(stopped.id, selected, actor, 7)
+        .await
+        .unwrap();
+    verified(&mut operation);
+    for volume in [&mut operation.home, &mut operation.temporary] {
+        if volume.target_gib.is_none() {
+            volume.destination = None;
+            volume.destination_volume = None;
+            volume.verified = false;
+        }
+    }
+    operation.resume = true;
+    operation.switched = true;
+    operation.phase = StorageShrinkPhase::Resuming;
+    database
+        .save_storage_shrink(&operation, ShrinkWorkspaceUpdate::Switch)
+        .await
+        .unwrap();
+    database
+        .save_storage_shrink(&operation, ShrinkWorkspaceUpdate::Resume)
+        .await
+        .unwrap();
+    let ready = database
+        .record_workspace_observation(stopped.id, WorkspaceObservation::Ready, actor, 8)
+        .await
+        .unwrap();
+    operation.phase = StorageShrinkPhase::Failed;
+    operation.error = Some("Kubernetes SendRequest during resume".to_owned());
+    mutate(&mut operation);
+    database
+        .save_storage_shrink(&operation, ShrinkWorkspaceUpdate::None)
+        .await
+        .unwrap();
+    while let Some(job) = database
+        .claim_job("retry-fixture", 10, std::time::Duration::from_secs(60))
+        .await
+        .unwrap()
+    {
+        database
+            .complete_job(job.id, "retry-fixture", 10)
+            .await
+            .unwrap();
+    }
+    (database, ready, operation, actor)
+}
+
+async fn assert_retry_conflict_unchanged(
+    database: &Database,
+    workspace_id: Uuid,
+    operation_id: Uuid,
+    actor: Uuid,
+) {
+    let before = database.export_snapshot(20).await.unwrap();
+    assert!(matches!(
+        database
+            .retry_storage_shrink_resume(workspace_id, operation_id, actor, 21)
+            .await,
+        Err(StorageError::WorkspaceStorageShrinkConflict)
+    ));
+    let after = database.export_snapshot(22).await.unwrap();
+    assert_eq!(before.tables, after.tables);
+}
+
+#[tokio::test]
+async fn retry_resumes_same_operation_without_rebinding_or_reclaiming() {
+    for (home, temporary) in [(true, true), (true, false), (false, true)] {
+        let (database, ready, operation, actor) = retry_fixture(home, temporary, |_| {}).await;
+        let retried = database
+            .retry_storage_shrink_resume(ready.id, operation.id, actor, 20)
+            .await
+            .unwrap();
+        let mut expected = operation.clone();
+        expected.phase = StorageShrinkPhase::Resuming;
+        expected.error = None;
+        expected.updated_at = 20;
+        assert_eq!(
+            serde_json::to_value(&retried).unwrap(),
+            serde_json::to_value(&expected).unwrap()
+        );
+        let mut expected_workspace = ready.clone();
+        expected_workspace.generation += 1;
+        expected_workspace.updated_at = 20;
+        assert_eq!(
+            database.get_workspace(ready.id).await.unwrap(),
+            expected_workspace
+        );
+        assert!(database.storage_shrink_active(ready.id).await.unwrap());
+        let snapshot = database.export_snapshot(20).await.unwrap();
+        let pending: Vec<_> = snapshot.tables["jobs"]
+            .iter()
+            .filter(|job| job["status"] == "pending")
+            .collect();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0]["kind"], "workspace_storage_shrink");
+        let payload: serde_json::Value =
+            serde_json::from_str(pending[0]["payload_json"].as_str().unwrap()).unwrap();
+        assert_eq!(payload, serde_json::json!({"operation_id": operation.id}));
+        let audit = snapshot.tables["audit_log"]
+            .iter()
+            .find(|entry| entry["action"] == "workspace.storage_shrink_resume_retried")
+            .unwrap();
+        assert_eq!(audit["actor_user_id"], actor.to_string());
+        let metadata: serde_json::Value =
+            serde_json::from_str(audit["metadata_json"].as_str().unwrap()).unwrap();
+        assert_eq!(metadata["operation_id"], operation.id.to_string());
+        assert_eq!(metadata["prior_error"], operation.error.unwrap());
+        assert_retry_conflict_unchanged(&database, ready.id, operation.id, actor).await;
+    }
+}
+
+#[tokio::test]
+async fn retry_rejects_every_other_phase_and_wrong_operation_id() {
+    for phase in [
+        StorageShrinkPhase::Queued,
+        StorageShrinkPhase::Stopping,
+        StorageShrinkPhase::Measuring,
+        StorageShrinkPhase::Copying,
+        StorageShrinkPhase::Verifying,
+        StorageShrinkPhase::Switching,
+        StorageShrinkPhase::Resuming,
+        StorageShrinkPhase::RollingBack,
+        StorageShrinkPhase::Completed,
+        StorageShrinkPhase::Reclaiming,
+        StorageShrinkPhase::Reclaimed,
+    ] {
+        let (database, ready, operation, actor) =
+            retry_fixture(true, true, |operation| operation.phase = phase).await;
+        assert_retry_conflict_unchanged(&database, ready.id, operation.id, actor).await;
+    }
+    let (database, ready, _, actor) = retry_fixture(true, true, |_| {}).await;
+    assert_retry_conflict_unchanged(&database, ready.id, Uuid::now_v7(), actor).await;
+}
+
+#[tokio::test]
+async fn retry_rejects_unsafe_flags_bindings_verification_and_volume_identities() {
+    let mutations: &[fn(&mut StorageShrinkOperation)] = &[
+        |operation| operation.switched = false,
+        |operation| operation.sources_retained = false,
+        |operation| operation.reclaimable = true,
+        |operation| operation.resume = false,
+        |operation| operation.request.reclaim_source = true,
+        |operation| operation.home.verified = false,
+        |operation| operation.temporary.verified = false,
+        |operation| operation.home.source = None,
+        |operation| operation.temporary.destination = None,
+        |operation| operation.home.source.as_mut().unwrap().claim_uid.clear(),
+        |operation| {
+            operation.temporary.source.as_mut().unwrap().claim_uid = operation
+                .temporary
+                .destination
+                .as_ref()
+                .unwrap()
+                .claim_uid
+                .clone();
+        },
+        |operation| {
+            operation.home.destination.as_mut().unwrap().claim_uid = "foreign-uid".to_owned();
+        },
+        |operation| {
+            operation.home.destination.as_mut().unwrap().claim_name = "foreign-claim".to_owned();
+        },
+        |operation| {
+            operation
+                .temporary
+                .destination
+                .as_mut()
+                .unwrap()
+                .capacity_gib += 1
+        },
+        |operation| operation.home.source.as_mut().unwrap().namespace = "foreign".to_owned(),
+        |operation| operation.home.destination.as_mut().unwrap().namespace = "foreign".to_owned(),
+        |operation| operation.home.target_gib = Some(19),
+        |operation| operation.request.temporary_storage_gib = None,
+        |operation| operation.original_home_gib += 1,
+        |operation| operation.home.source_volume = None,
+        |operation| operation.temporary.destination_volume = None,
+        |operation| {
+            operation
+                .home
+                .source_volume
+                .as_mut()
+                .unwrap()
+                .pv_uid
+                .clear()
+        },
+        |operation| {
+            operation
+                .home
+                .destination_volume
+                .as_mut()
+                .unwrap()
+                .pv_name
+                .clear()
+        },
+        |operation| {
+            operation
+                .home
+                .source_volume
+                .as_mut()
+                .unwrap()
+                .csi_driver
+                .clear()
+        },
+        |operation| {
+            operation
+                .home
+                .destination_volume
+                .as_mut()
+                .unwrap()
+                .csi_volume_handle
+                .clear()
+        },
+        |operation| {
+            operation
+                .home
+                .source_volume
+                .as_mut()
+                .unwrap()
+                .storage_class_name
+                .clear()
+        },
+        |operation| {
+            operation.home.source_volume.as_mut().unwrap().pv_uid = operation
+                .home
+                .destination_volume
+                .as_ref()
+                .unwrap()
+                .pv_uid
+                .clone();
+        },
+        |operation| {
+            operation.home.source_volume.as_mut().unwrap().pv_name = operation
+                .home
+                .destination_volume
+                .as_ref()
+                .unwrap()
+                .pv_name
+                .clone();
+        },
+        |operation| {
+            operation
+                .home
+                .source_volume
+                .as_mut()
+                .unwrap()
+                .csi_volume_handle = operation
+                .home
+                .destination_volume
+                .as_ref()
+                .unwrap()
+                .csi_volume_handle
+                .clone();
+        },
+    ];
+    for mutate in mutations {
+        let (database, ready, operation, actor) = retry_fixture(true, true, mutate).await;
+        assert_retry_conflict_unchanged(&database, ready.id, operation.id, actor).await;
+    }
+}
+
+#[tokio::test]
+async fn retry_rejects_changes_to_unselected_volumes() {
+    for home in [false, true] {
+        for change_binding in [false, true] {
+            let (database, ready, operation, actor) = retry_fixture(home, !home, |operation| {
+                let unselected = if home {
+                    &mut operation.temporary
+                } else {
+                    &mut operation.home
+                };
+                if change_binding {
+                    unselected.source.as_mut().unwrap().claim_uid = "foreign-uid".to_owned();
+                } else {
+                    unselected.destination = Some(binding("unexpected-destination", 5));
+                }
+            })
+            .await;
+            assert_retry_conflict_unchanged(&database, ready.id, operation.id, actor).await;
+        }
+    }
+}
+
+#[tokio::test]
+async fn retry_rejects_not_ready_and_latest_or_active_competition() {
+    let (database, ready, operation, actor) = retry_fixture(true, true, |_| {}).await;
+    database
+        .request_workspace_action(ready.id, WorkspaceAction::Stop, actor, 11)
+        .await
+        .unwrap();
+    assert_retry_conflict_unchanged(&database, ready.id, operation.id, actor).await;
+    database
+        .record_workspace_observation(ready.id, WorkspaceObservation::Stopped, actor, 12)
+        .await
+        .unwrap();
+    assert_retry_conflict_unchanged(&database, ready.id, operation.id, actor).await;
+
+    for created_at in [1, 11] {
+        let (database, ready, operation, actor) = retry_fixture(true, true, |_| {}).await;
+        database
+            .enqueue_storage_shrink(
+                ready.id,
+                StorageShrinkRequest {
+                    home_gib: Some(15),
+                    temporary_storage_gib: None,
+                    expected_generation: ready.generation,
+                    reclaim_source: false,
+                },
+                actor,
+                created_at,
+            )
+            .await
+            .unwrap();
+        assert_retry_conflict_unchanged(&database, ready.id, operation.id, actor).await;
+    }
+}
+
+#[tokio::test]
+async fn retry_rejects_pending_and_running_workspace_jobs() {
+    for kind in ["workspace_storage_shrink", "reconcile_workspace"] {
+        for running in [false, true] {
+            let (database, ready, operation, actor) = retry_fixture(true, true, |_| {}).await;
+            let job_id = database
+                .enqueue_job(
+                    crate::storage::NewJob {
+                        kind: kind.to_owned(),
+                        workspace_id: Some(ready.id),
+                        payload: serde_json::json!({"operation_id": operation.id}),
+                        available_at: 11,
+                    },
+                    11,
+                )
+                .await
+                .unwrap();
+            if running {
+                let claimed = database
+                    .claim_job("competitor", 11, std::time::Duration::from_secs(60))
+                    .await
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(claimed.id, job_id);
+            }
+            assert_retry_conflict_unchanged(&database, ready.id, operation.id, actor).await;
+        }
+    }
+}
+
+#[tokio::test]
+async fn retry_rolls_back_operation_activation_when_job_insert_fails() {
+    let (database, ready, operation, actor) = retry_fixture(false, true, |_| {}).await;
+    let Database::Sqlite { pool, .. } = &database else {
+        unreachable!()
+    };
+    sqlx::query("CREATE TRIGGER reject_retry_job BEFORE INSERT ON jobs WHEN NEW.kind = 'workspace_storage_shrink' BEGIN SELECT RAISE(ABORT, 'injected enqueue failure'); END")
+        .execute(pool)
+        .await
+        .unwrap();
+    let before = database.export_snapshot(20).await.unwrap();
+    assert!(
+        database
+            .retry_storage_shrink_resume(ready.id, operation.id, actor, 21)
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        before.tables,
+        database.export_snapshot(22).await.unwrap().tables
+    );
+}
+
+#[tokio::test]
+async fn failed_operation_still_cannot_confirm_and_retry_replays_by_idempotency() {
+    let (database, ready, operation, actor) = retry_fixture(false, true, |_| {}).await;
+    let before = database.export_snapshot(20).await.unwrap();
+    assert!(matches!(
+        database
+            .confirm_storage_shrink(ready.id, operation.id, actor, 20)
+            .await,
+        Err(StorageError::WorkspaceStorageShrinkConflict)
+    ));
+    assert_eq!(
+        before.tables,
+        database.export_snapshot(20).await.unwrap().tables
+    );
+    let scope = format!("{actor}:workspace-storage-shrink-retry");
+    assert_eq!(
+        database
+            .begin_idempotency(&scope, "retry-key", "retry-hash", 20, 100)
+            .await
+            .unwrap(),
+        crate::storage::IdempotencyDecision::Reserved
+    );
+    let retried = database
+        .retry_storage_shrink_resume(ready.id, operation.id, actor, 20)
+        .await
+        .unwrap();
+    let json = serde_json::to_string(&retried).unwrap();
+    database
+        .finish_idempotency(&scope, "retry-key", "retry-hash", 202, &json)
+        .await
+        .unwrap();
+    let before_replay = database.export_snapshot(21).await.unwrap();
+    let replay = database
+        .begin_idempotency(&scope, "retry-key", "retry-hash", 21, 100)
+        .await
+        .unwrap();
+    assert_eq!(
+        replay,
+        crate::storage::IdempotencyDecision::Replay(crate::storage::IdempotencyReplay {
+            status_code: 202,
+            response_json: json,
+        })
+    );
+    assert_eq!(
+        before_replay.tables,
+        database.export_snapshot(22).await.unwrap().tables
+    );
+    for other in [
+        "workspace-storage-shrink",
+        "workspace-storage-shrink-confirm",
+    ] {
+        assert_eq!(
+            database
+                .begin_idempotency(
+                    &format!("{actor}:{other}"),
+                    "retry-key",
+                    "retry-hash",
+                    22,
+                    100
+                )
+                .await
+                .unwrap(),
+            crate::storage::IdempotencyDecision::Reserved
+        );
+    }
+}

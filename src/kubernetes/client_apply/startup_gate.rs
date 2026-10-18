@@ -129,7 +129,19 @@ impl KubernetesCoordinator {
                 "injections",
                 self.apply_injections(workspace, &desired.injections, startup.compress_files)
             ),
+            observe_apply_stage(
+                workspace,
+                "workspace_identity",
+                self.apply_workspace_identity(namespace, workspace, desired)
+            ),
+            observe_apply_stage(
+                workspace,
+                "services",
+                self.apply_workspace_services(namespace, workspace, desired)
+            ),
             async {
+                // A named ServiceAccount must exist before Pod admission. Establish the
+                // isolation policy too, before a Pod can acquire a network namespace.
                 tokio::try_join!(
                     observe_apply_stage(
                         workspace,
@@ -138,21 +150,14 @@ impl KubernetesCoordinator {
                     ),
                     observe_apply_stage(
                         workspace,
-                        "workspace_identity",
-                        self.apply_workspace_identity(namespace, workspace, desired)
-                    ),
-                    observe_apply_stage(
-                        workspace,
                         "network_policy",
                         self.apply_network_policy(namespace, workspace, desired)
                     ),
-                    observe_apply_stage(
-                        workspace,
-                        "services",
-                        self.apply_workspace_services(namespace, workspace, desired)
-                    ),
                 )?;
                 if startup.overlap {
+                    // Other projected inputs and Services may still be pending. Every
+                    // container is blocked by the required, unapproved gate ConfigMap,
+                    // while scheduling and volume preparation can already progress.
                     observe_apply_stage(
                         workspace,
                         "gated_workload",

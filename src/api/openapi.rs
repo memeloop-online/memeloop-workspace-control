@@ -79,6 +79,7 @@ use super::{
         workspace_storage_shrink::create,
         workspace_storage_shrink::get,
         workspace_storage_shrink::confirm,
+        workspace_storage_shrink::retry,
         workspace_placement::update,
         port_mappings::list,
         port_mappings::create,

@@ -292,6 +292,73 @@ impl Database {
             } => confirm!(pool, installation_id, decode_postgres, " FOR UPDATE"),
         }
     }
+
+    pub async fn retry_storage_shrink_resume(
+        &self,
+        workspace_id: Uuid,
+        operation_id: Uuid,
+        actor_user_id: Uuid,
+        now: i64,
+    ) -> Result<StorageShrinkOperation, StorageError> {
+        macro_rules! retry {
+            ($pool:expr, $installation:expr, $decode:ident, $suffix:expr) => {{
+                let mut transaction = $pool.begin().await?;
+                if $suffix.is_empty() {
+                    sqlx::query("UPDATE workspaces SET generation = generation WHERE installation_id = $1 AND id = $2")
+                        .bind($installation.as_str()).bind(workspace_id.to_string()).execute(&mut *transaction).await?;
+                }
+                let select = format!("{}{}", select_workspace_sql("$1", "$2"), $suffix);
+                let row = sqlx::query(&select)
+                    .bind($installation.as_str()).bind(workspace_id.to_string())
+                    .fetch_optional(&mut *transaction).await?.ok_or(StorageError::WorkspaceNotFound)?;
+                let workspace = $decode(row, $installation)?;
+                let row = sqlx::query("SELECT id, operation_json FROM workspace_storage_shrinks WHERE installation_id = $1 AND workspace_id = $2 ORDER BY created_at DESC, id DESC LIMIT 1")
+                    .bind($installation.as_str()).bind(workspace_id.to_string())
+                    .fetch_optional(&mut *transaction).await?.ok_or(StorageError::WorkspaceStorageShrinkConflict)?;
+                let stored_id: String = row.try_get("id")?;
+                let json: String = row.try_get("operation_json")?;
+                let mut operation: StorageShrinkOperation = serde_json::from_str(&json)?;
+                if stored_id != operation_id.to_string() || operation.id != operation_id
+                    || operation.workspace_id != workspace_id || operation.phase != StorageShrinkPhase::Failed
+                    || !operation.switched || !operation.sources_retained || operation.reclaimable
+                    || operation.request.reclaim_source || !operation.resume || workspace.state != WorkspaceState::Ready
+                    || operation.request.home_gib.is_none() && operation.request.temporary_storage_gib.is_none()
+                { return Err(StorageError::WorkspaceStorageShrinkConflict); }
+                validate_retry_volume(&operation.home, operation.request.home_gib, workspace.home_volume_binding.as_ref(), workspace.template.resources.disk_gib, operation.original_home_gib, workspace.runtime.namespace())?;
+                validate_retry_volume(&operation.temporary, operation.request.temporary_storage_gib, workspace.scratch_volume_binding.as_ref(), workspace.template.storage_policy.temporary_storage_gib, operation.original_temporary_storage_gib, workspace.runtime.namespace())?;
+                let active: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM workspace_storage_shrinks WHERE installation_id = $1 AND workspace_id = $2 AND active = 1")
+                    .bind($installation.as_str()).bind(workspace_id.to_string()).fetch_one(&mut *transaction).await?;
+                let jobs: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM jobs WHERE installation_id = $1 AND workspace_id = $2 AND status IN ('pending', 'running')")
+                    .bind($installation.as_str()).bind(workspace_id.to_string()).fetch_one(&mut *transaction).await?;
+                if active != 0 || jobs != 0 { return Err(StorageError::WorkspaceStorageShrinkConflict); }
+                let prior_error = operation.error.take();
+                operation.phase = StorageShrinkPhase::Resuming;
+                operation.updated_at = now;
+                let updated = sqlx::query("UPDATE workspace_storage_shrinks SET active = 1, operation_json = $1, updated_at = $2 WHERE installation_id = $3 AND workspace_id = $4 AND id = $5 AND active = 0")
+                    .bind(serde_json::to_string(&operation)?).bind(now).bind($installation.as_str()).bind(workspace_id.to_string()).bind(operation.id.to_string()).execute(&mut *transaction).await?;
+                if updated.rows_affected() != 1 { return Err(StorageError::WorkspaceStorageShrinkConflict); }
+                sqlx::query("INSERT INTO jobs (id, installation_id, kind, workspace_id, payload_json, status, available_at, lease_owner, lease_expires_at, attempts, created_at, updated_at) VALUES ($1,$2,'workspace_storage_shrink',$3,$4,'pending',$5,NULL,NULL,0,$5,$5)")
+                    .bind(Uuid::now_v7().to_string()).bind($installation.as_str()).bind(workspace_id.to_string()).bind(serde_json::json!({"operation_id": operation.id}).to_string()).bind(now).execute(&mut *transaction).await?;
+                sqlx::query("UPDATE workspaces SET generation = generation + 1, updated_at = $1 WHERE installation_id = $2 AND id = $3")
+                    .bind(now).bind($installation.as_str()).bind(workspace_id.to_string()).execute(&mut *transaction).await?;
+                sqlx::query("INSERT INTO audit_log (id, installation_id, actor_user_id, organization_id, workspace_id, action, metadata_json, created_at) VALUES ($1,$2,$3,$4,$5,'workspace.storage_shrink_resume_retried',$6,$7)")
+                    .bind(Uuid::now_v7().to_string()).bind($installation.as_str()).bind(actor_user_id.to_string()).bind(workspace.organization_id.to_string()).bind(workspace_id.to_string()).bind(serde_json::json!({"operation_id": operation.id, "prior_error": prior_error}).to_string()).bind(now).execute(&mut *transaction).await?;
+                transaction.commit().await?;
+                Ok(operation)
+            }};
+        }
+        match self {
+            Self::Sqlite {
+                pool,
+                installation_id,
+            } => retry!(pool, installation_id, decode_sqlite, ""),
+            Self::Postgres {
+                pool,
+                installation_id,
+            } => retry!(pool, installation_id, decode_postgres, " FOR UPDATE"),
+        }
+    }
+
     pub async fn latest_storage_shrink(
         &self,
         workspace_id: Uuid,
@@ -562,6 +629,64 @@ fn apply_shrink_workspace_update(
         }
         ShrinkWorkspaceUpdate::Resume => workspace.state = WorkspaceState::Starting,
         ShrinkWorkspaceUpdate::None => unreachable!(),
+    }
+    Ok(())
+}
+
+fn validate_retry_volume(
+    volume: &StorageShrinkVolume,
+    requested_target: Option<u64>,
+    current: Option<&WorkspaceHomeVolumeBinding>,
+    current_gib: u64,
+    original_gib: u64,
+    namespace: &str,
+) -> Result<(), StorageError> {
+    if volume.target_gib != requested_target {
+        return Err(StorageError::WorkspaceStorageShrinkConflict);
+    }
+    let Some(target) = requested_target else {
+        if volume.source.as_ref() != current
+            || volume.destination.is_some()
+            || current_gib != original_gib
+        {
+            return Err(StorageError::WorkspaceStorageShrinkConflict);
+        }
+        return Ok(());
+    };
+    validate_verified_destination(volume)
+        .map_err(|_| StorageError::WorkspaceStorageShrinkConflict)?;
+    let identity_recorded = |identity: &StorageVolumeIdentity| {
+        [
+            &identity.pv_name,
+            &identity.pv_uid,
+            &identity.csi_driver,
+            &identity.csi_volume_handle,
+            &identity.storage_class_name,
+        ]
+        .iter()
+        .all(|value| !value.trim().is_empty())
+    };
+    let valid = volume.destination.as_ref() == current
+        && current_gib == target
+        && volume.source.as_ref().is_some_and(|source| {
+            source.namespace == namespace
+                && source.capacity_gib == original_gib
+                && volume.destination.as_ref().is_some_and(|destination| {
+                    destination.namespace == namespace
+                        && source.claim_name != destination.claim_name
+                })
+        })
+        && volume.source_volume.as_ref().is_some_and(|source| {
+            identity_recorded(source)
+                && volume
+                    .destination_volume
+                    .as_ref()
+                    .is_some_and(|destination| {
+                        identity_recorded(destination) && source.pv_name != destination.pv_name
+                    })
+        });
+    if !valid {
+        return Err(StorageError::WorkspaceStorageShrinkConflict);
     }
     Ok(())
 }

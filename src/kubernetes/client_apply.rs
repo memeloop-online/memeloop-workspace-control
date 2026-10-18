@@ -10,7 +10,7 @@ use kube::{
     api::{DeleteParams, Patch, PatchParams},
 };
 use serde::{Serialize, de::DeserializeOwned};
-use std::{fmt::Debug, future::Future, time::Instant};
+use std::{error::Error, fmt::Debug, future::Future, time::Instant};
 use uuid::Uuid;
 
 use super::super::{DesiredResources, InjectionMaterialization};
@@ -25,22 +25,64 @@ mod envoy_filter;
 mod http_proxy;
 #[path = "client_apply/port_mappings.rs"]
 mod port_mappings;
+#[path = "client_apply/request_observation.rs"]
+mod request_observation;
+use request_observation::{ErrorSummary, observe_request};
+
 #[path = "client_apply/startup_gate.rs"]
 mod startup_gate;
 
 // Record only phase names, identity and timing; injection values and API bodies stay out of logs.
-async fn observe_apply_stage<T, E>(
+async fn observe_apply_stage<T, E: Error + 'static>(
     workspace: &Workspace,
     phase: &'static str,
     operation: impl Future<Output = Result<T, E>>,
 ) -> Result<T, E> {
+    observe_stage(workspace, phase, operation, true).await
+}
+
+// Runtime readiness checks are frequent: keep fast successes below the info level,
+// but retain the same safe typed causes before callers convert errors to job text.
+pub(super) async fn observe_runtime_stage<T, E: Error + 'static>(
+    workspace: &Workspace,
+    phase: &'static str,
+    operation: impl Future<Output = Result<T, E>>,
+) -> Result<T, E> {
+    observe_stage(workspace, phase, operation, false).await
+}
+
+async fn observe_stage<T, E: Error + 'static>(
+    workspace: &Workspace,
+    phase: &'static str,
+    operation: impl Future<Output = Result<T, E>>,
+    report_fast: bool,
+) -> Result<T, E> {
     let started = Instant::now();
     let result = operation.await;
+    let elapsed = started.elapsed();
+    if !report_fast && result.is_ok() && elapsed.as_secs() < 1 {
+        tracing::debug!(
+            workspace_id = %workspace.id,
+            generation = workspace.generation,
+            phase,
+            elapsed_ms = elapsed.as_secs_f64() * 1000.0,
+            success = true,
+            "workspace resource apply stage completed"
+        );
+        return result;
+    }
+    let error = result.as_ref().err().map(ErrorSummary::new);
     tracing::info!(
+        error_kind = error.as_ref().map(|e| e.kind),
+        error_io_kind = error.as_ref().map(|e| e.io_kind),
+        error_api_code = error.as_ref().and_then(|e| e.api_code),
+        error_chain = ?error.as_ref().map(|e| &e.source_kinds),
+        error_chain_depth = error.as_ref().map(|e| e.source_kinds.len()),
+        error_chain_truncated = error.as_ref().map(|e| e.truncated),
         workspace_id = %workspace.id,
         generation = workspace.generation,
         phase,
-        elapsed_ms = started.elapsed().as_secs_f64() * 1000.0,
+        elapsed_ms = elapsed.as_secs_f64() * 1000.0,
         success = result.is_ok(),
         "workspace resource apply stage completed"
     );
@@ -123,7 +165,15 @@ impl KubernetesCoordinator {
     ) -> Result<(), ReconcileError> {
         let namespace_name = workspace.runtime.namespace();
         let namespaces = Api::<Namespace>::all(self.client.clone());
-        if let Some(existing) = namespaces.get_metadata_opt(namespace_name).await? {
+        if let Some(existing) = observe_request(
+            workspace.id,
+            "Namespace",
+            namespace_name,
+            "get_metadata",
+            namespaces.get_metadata_opt(namespace_name),
+        )
+        .await?
+        {
             self.builder
                 .verify_installation_ownership(&existing.metadata)?;
             if let Some(actual) = existing
@@ -140,13 +190,18 @@ impl KubernetesCoordinator {
                 .into());
             }
         }
-        namespaces
-            .patch(
+        observe_request(
+            workspace.id,
+            "Namespace",
+            namespace_name,
+            "apply",
+            namespaces.patch(
                 namespace_name,
                 &PatchParams::apply(FIELD_MANAGER),
                 &Patch::Apply(&desired.namespace),
-            )
-            .await?;
+            ),
+        )
+        .await?;
         Ok(())
     }
 
@@ -282,7 +337,15 @@ impl KubernetesCoordinator {
         let apply = PatchParams::apply(FIELD_MANAGER);
         let stateful_sets = Api::<StatefulSet>::namespaced(self.client.clone(), namespace_name);
         let mut stateful_set = desired.clone();
-        if let Some(existing) = stateful_sets.get_opt(&names.stateful_set).await? {
+        if let Some(existing) = observe_request(
+            workspace_id,
+            "StatefulSet",
+            &names.stateful_set,
+            "get",
+            stateful_sets.get_opt(&names.stateful_set),
+        )
+        .await?
+        {
             self.builder
                 .verify_delete_ownership(&existing.metadata, workspace_id)?;
             verify_unpersisted_home(
@@ -495,13 +558,30 @@ impl KubernetesCoordinator {
         workspace_id: Uuid,
     ) -> Result<(), ReconcileError>
     where
-        K: Clone + Debug + DeserializeOwned + Serialize,
+        K: Clone + Debug + DeserializeOwned + Serialize + k8s_openapi::Resource,
     {
-        verify_existing(api, name, &self.builder, workspace_id).await?;
-        api.patch(
+        if let Some(existing) = observe_request(
+            workspace_id,
+            K::KIND,
             name,
-            &PatchParams::apply(FIELD_MANAGER),
-            &Patch::Apply(desired),
+            "get_metadata",
+            api.get_metadata_opt(name),
+        )
+        .await?
+        {
+            self.builder
+                .verify_delete_ownership(&existing.metadata, workspace_id)?;
+        }
+        observe_request(
+            workspace_id,
+            K::KIND,
+            name,
+            "apply",
+            api.patch(
+                name,
+                &PatchParams::apply(FIELD_MANAGER),
+                &Patch::Apply(desired),
+            ),
         )
         .await?;
         Ok(())
