@@ -700,7 +700,7 @@ async fn sqlite_v25_upgrade_preserves_workspace_and_does_not_bind_or_change_a_te
     downgrade_binding_schema(&fixture.database).await;
     fixture.database.migrate().await.unwrap();
     fixture.database.migrate().await.unwrap();
-    assert_eq!(fixture.database.schema_version().await.unwrap(), 29);
+    assert_eq!(fixture.database.schema_version().await.unwrap(), 30);
     let stored = fixture
         .database
         .get_workspace(fixture.workspace.id)

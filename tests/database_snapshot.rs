@@ -91,9 +91,17 @@ async fn sqlite_snapshot_contains_ciphertext_and_resets_only_pending_work() {
         .unwrap();
     install_snapshot_plugin(&database, user.user_id).await;
 
+    database
+        .patch_runtime_settings(Some(96), Some(25), 199)
+        .await
+        .unwrap();
     let snapshot = database.export_snapshot(200).await.unwrap();
+    assert_eq!(
+        snapshot.tables["installation_runtime_settings"][0]["cpu_overcommit_ratio"],
+        25
+    );
     assert_eq!(snapshot.format_version, 2);
-    assert_eq!(snapshot.schema_version, 29);
+    assert_eq!(snapshot.schema_version, 30);
     assert_eq!(snapshot.installation_id, "snapshot-test");
     assert_eq!(snapshot.tables["injection_items"].len(), 1);
     assert!(snapshot.tables.contains_key("workspace_injection_refs"));
@@ -216,6 +224,10 @@ async fn postgres_import_restores_dynamic_plugin_package_and_assets_when_configu
         .unwrap();
     let workspace = create_snapshot_workspace(&source, organization.id, user.user_id).await;
     install_snapshot_plugin(&source, user.user_id).await;
+    source
+        .patch_runtime_settings(Some(96), Some(25), 199)
+        .await
+        .unwrap();
     let snapshot = source.export_snapshot(200).await.unwrap();
 
     let target = Database::connect(scoped_url.as_str(), installation)
@@ -361,6 +373,8 @@ async fn postgres_import_restores_dynamic_plugin_package_and_assets_when_configu
         .unwrap();
     assert_eq!(template_count, 0);
     target.import_snapshot(&snapshot).await.unwrap();
+    assert_eq!(target.cpu_overcommit_ratio().await.unwrap(), 25);
+    assert_eq!(target.job_worker_concurrency().await.unwrap(), 96);
     let packages = target.list_plugin_packages().await.unwrap();
     assert_eq!(packages.len(), 1);
     assert_eq!(packages[0].plugin_id, "snapshot-plugin");

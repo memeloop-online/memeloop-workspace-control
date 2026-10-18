@@ -70,7 +70,10 @@ pub use port_mappings::{IssuedPortMappingTicket, PortMapping, hash_secret, valid
 pub use runtime_incidents::{
     NewWorkspaceRuntimeIncident, RuntimeEventCategory, WorkspaceRuntimeIncident,
 };
-pub use runtime_settings::{DEFAULT_JOB_WORKER_CONCURRENCY, MAX_JOB_WORKER_CONCURRENCY};
+pub use runtime_settings::{
+    DEFAULT_CPU_OVERCOMMIT_RATIO, DEFAULT_JOB_WORKER_CONCURRENCY, MAX_CPU_OVERCOMMIT_RATIO,
+    MAX_JOB_WORKER_CONCURRENCY, RuntimeSettings,
+};
 pub use ssh_access::SshAccessCandidate;
 pub use ssh_identity::{WorkspaceSshIdentity, WorkspaceSshPublicIdentity};
 pub use template_store::{CreateWorkspaceTemplate, WorkspaceTemplate};

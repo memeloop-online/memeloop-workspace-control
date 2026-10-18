@@ -12,14 +12,22 @@ pub(super) const ENDPOINT: &str = "tcp://127.0.0.1:1234";
 pub(super) const SCRATCH_VOLUME: &str = "workspace-scratch";
 pub(super) const CACHE_SUB_PATH: &str = "build-cache";
 
-pub(super) fn bootstrap_container(enabled: bool, image: &str) -> Option<Container> {
+pub(super) fn bootstrap_container(
+    enabled: bool,
+    image: &str,
+    cpu_request_millis: u64,
+) -> Option<Container> {
     enabled.then(|| Container {
         name: "buildkit-bootstrap".to_owned(),
         image: Some(image.to_owned()),
         command: Some(vec!["sh".to_owned(), "-c".to_owned()]),
         args: Some(vec![setup_script().to_owned()]),
         resources: Some(ResourceRequirements {
-            requests: Some(quantities("10m", "16Mi", "32Mi")),
+            requests: Some(quantities(
+                &format!("{cpu_request_millis}m"),
+                "16Mi",
+                "32Mi",
+            )),
             limits: Some(quantities("100m", "128Mi", "128Mi")),
             ..ResourceRequirements::default()
         }),
@@ -33,7 +41,7 @@ fn buildkit_tmp_mount() -> VolumeMount {
     cache_mount("/tmp", "build-cache/tmp")
 }
 
-pub(super) fn container(enabled: bool, image: &str) -> Option<Container> {
+pub(super) fn container(enabled: bool, image: &str, cpu_request_millis: u64) -> Option<Container> {
     if !enabled {
         return None;
     }
@@ -70,7 +78,11 @@ pub(super) fn container(enabled: bool, image: &str) -> Option<Container> {
             ..probe
         }),
         resources: Some(ResourceRequirements {
-            requests: Some(quantities("250m", "512Mi", "256Mi")),
+            requests: Some(quantities(
+                &format!("{cpu_request_millis}m"),
+                "512Mi",
+                "256Mi",
+            )),
             limits: Some(quantities("4", "4Gi", "1Gi")),
             ..ResourceRequirements::default()
         }),

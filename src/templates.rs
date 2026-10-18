@@ -33,6 +33,10 @@ pub struct WorkspaceTemplateSpec {
     pub access_mode: AccessMode,
     pub resources: Resources,
     pub pod_requests: PodResourceRequest,
+    /// CPU request divisor resolved once when a workspace is created. Omitted values in
+    /// existing workspace snapshots preserve their original requests without oversubscription.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cpu_overcommit_ratio: Option<u16>,
     pub workspace_user: String,
     pub workspace_home: String,
     #[serde(default)]
@@ -241,6 +245,12 @@ impl WorkspaceTemplateSpec {
         {
             return Err(TemplateError::PodResources);
         }
+        if self
+            .cpu_overcommit_ratio
+            .is_some_and(|ratio| !(1..=1_000).contains(&ratio))
+        {
+            return Err(TemplateError::CpuOvercommitRatio);
+        }
         if !valid_workspace_user(&self.workspace_user)
             || !valid_workspace_home(&self.workspace_home)
         {
@@ -261,6 +271,12 @@ impl WorkspaceTemplateSpec {
         Ok(())
     }
 
+    pub fn cpu_request_millis(&self, base_millis: u64) -> u64 {
+        base_millis
+            .div_ceil(u64::from(self.cpu_overcommit_ratio.unwrap_or(1).max(1)))
+            .max(1)
+    }
+
     pub fn standard(
         image: impl Into<String>,
         access_mode: AccessMode,
@@ -274,6 +290,7 @@ impl WorkspaceTemplateSpec {
                 cpu_millis: resources.cpu_millis,
                 memory_mib: resources.memory_mib,
             },
+            cpu_overcommit_ratio: None,
             workspace_user: "workspace".to_owned(),
             workspace_home: "/workspace".to_owned(),
             buildkit: false,
@@ -353,6 +370,8 @@ pub enum TemplateError {
     Resources,
     #[error("Pod requests exceed workspace resource limits")]
     PodResources,
+    #[error("CPU overcommit ratio must be between 1 and 1000")]
+    CpuOvercommitRatio,
     #[error("workspace user or home path is invalid")]
     WorkspaceIdentity,
     #[error("Kubernetes RuntimeClass name is invalid")]

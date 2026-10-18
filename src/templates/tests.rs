@@ -189,3 +189,41 @@ fn storage_policy_requires_a_bounded_total_and_valid_placement() {
     spec.placement.allowed_node_pools.push("gpu".to_owned());
     assert_eq!(spec.validate(), Err(TemplateError::Placement));
 }
+
+#[test]
+fn cpu_overcommit_is_optional_bounded_and_rounds_up_to_one_millicore() {
+    let mut spec = WorkspaceTemplateSpec::standard(
+        "registry.example/dev:latest",
+        AccessMode::Internal,
+        Resources {
+            cpu_millis: 1_000,
+            memory_mib: 1_024,
+            gpu_count: 0,
+            disk_gib: 20,
+        },
+    );
+    let old_yaml = WorkspaceTemplateDocument::new("legacy", spec.clone())
+        .to_yaml()
+        .unwrap();
+    assert!(!old_yaml.contains("cpu_overcommit_ratio"));
+    let old = WorkspaceTemplateDocument::parse(&old_yaml).unwrap();
+    assert_eq!(old.spec.cpu_overcommit_ratio, None);
+    assert_eq!(old.spec.cpu_request_millis(1_000), 1_000);
+    for ratio in [1, 10, 1_000] {
+        spec.cpu_overcommit_ratio = Some(ratio);
+        let document = WorkspaceTemplateDocument::new("overcommit", spec.clone());
+        assert_eq!(
+            WorkspaceTemplateDocument::parse(&document.to_yaml().unwrap()).unwrap(),
+            document
+        );
+    }
+    spec.cpu_overcommit_ratio = Some(10);
+    assert_eq!(spec.cpu_request_millis(1_001), 101);
+    assert_eq!(spec.cpu_request_millis(1), 1);
+    assert_eq!(spec.cpu_request_millis(0), 1);
+    assert_eq!(spec.cpu_request_millis(u64::MAX), u64::MAX.div_ceil(10));
+    for ratio in [0, 1_001] {
+        spec.cpu_overcommit_ratio = Some(ratio);
+        assert_eq!(spec.validate(), Err(TemplateError::CpuOvercommitRatio));
+    }
+}

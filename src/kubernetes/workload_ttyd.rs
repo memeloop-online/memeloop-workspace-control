@@ -65,7 +65,10 @@ pub(super) fn container(
         volume_mounts: Some(volume_mounts),
         resources: Some(ResourceRequirements {
             requests: Some(BTreeMap::from([
-                ("cpu".to_owned(), Quantity("10m".to_owned())),
+                (
+                    "cpu".to_owned(),
+                    Quantity(format!("{}m", pod.cpu_request_millis(10))),
+                ),
                 ("memory".to_owned(), Quantity("16Mi".to_owned())),
             ])),
             limits: Some(BTreeMap::from([
