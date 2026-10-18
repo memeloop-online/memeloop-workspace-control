@@ -8,6 +8,9 @@ use k8s_openapi::api::core::v1::Event;
 use kube::{Api, api::ListParams};
 use tokio::sync::watch;
 
+mod scheduling;
+pub(crate) use scheduling::{SchedulingBlocker, scheduling_blockers};
+
 use crate::{
     storage::{Database, NewWorkspaceRuntimeIncident, RuntimeEventCategory, StorageError},
     workspace_runtime::WORKSPACE_NAMESPACE,
@@ -192,6 +195,9 @@ pub(crate) fn runtime_event_category(
     let reason = reason.unwrap_or_default().to_ascii_lowercase();
     let message = message.unwrap_or_default().to_ascii_lowercase();
     let contains = |needle: &str| reason.contains(needle) || message.contains(needle);
+    if reason == "failedscheduling" && !scheduling_blockers(Some(&message)).is_empty() {
+        return RuntimeEventCategory::Scheduling;
+    }
     if contains("ephemeral-storage") || contains("ephemeral storage") {
         RuntimeEventCategory::EphemeralStorage
     } else if contains("memorypressure")

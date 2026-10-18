@@ -54,7 +54,18 @@ pub(super) async fn fetch_workspace_runtime_details(
         )))
         .await
         .map_err(ApiError::Kubernetes)?;
-    let events = warning_events(event_list.items);
+    let mut events = warning_events(event_list.items);
+    if show_runtime {
+        for event in pod_list.items.iter().filter_map(pod_scheduling_event) {
+            if !events.iter().any(|existing| {
+                existing.category == event.category
+                    && existing.scheduling_blockers == event.scheduling_blockers
+            }) {
+                events.push(event);
+            }
+        }
+        newest_events(&mut events, 50);
+    }
 
     let storage_pvcs = Api::<PersistentVolumeClaim>::namespaced(client.clone(), namespace)
         .list(&ListParams::default().labels(selector))

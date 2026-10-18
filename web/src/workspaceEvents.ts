@@ -1,5 +1,5 @@
 import type { MessageKey } from "./i18n";
-import type { WorkspaceRuntimeEvent } from "./types";
+import type { SchedulingBlocker, WorkspaceRuntimeEvent } from "./types";
 
 export interface EventPresentationKeys {
   label: MessageKey;
@@ -38,6 +38,54 @@ const otherReasonKeys: Record<string, EventPresentationKeys> = {
   DeadlineExceeded: { label: "eventReasonDeadlineExceeded", description: "eventReasonDeadlineExceededDescription" },
   ExceededGracePeriod: { label: "eventReasonExceededGracePeriod", description: "eventReasonExceededGracePeriodDescription" },
 };
+
+/**
+ * Recognized Kubernetes scheduler blocking causes carried on scheduling
+ * events. These are capacity/constraint failures, not live utilization, so
+ * the copy never promises that startup resumes on its own. Keys must stay
+ * aligned with the backend's SchedulingBlocker enum (snake_case).
+ */
+const schedulingBlockerKeys: Record<SchedulingBlocker, EventPresentationKeys> = {
+  cpu_capacity: { label: "eventSchedulingBlockerCpuCapacity", description: "eventSchedulingBlockerCpuCapacityDescription" },
+  memory_capacity: { label: "eventSchedulingBlockerMemoryCapacity", description: "eventSchedulingBlockerMemoryCapacityDescription" },
+  storage_capacity: { label: "eventSchedulingBlockerStorageCapacity", description: "eventSchedulingBlockerStorageCapacityDescription" },
+  node_affinity: { label: "eventSchedulingBlockerNodeAffinity", description: "eventSchedulingBlockerNodeAffinityDescription" },
+  volume_affinity: { label: "eventSchedulingBlockerVolumeAffinity", description: "eventSchedulingBlockerVolumeAffinityDescription" },
+  taint: { label: "eventSchedulingBlockerTaint", description: "eventSchedulingBlockerTaintDescription" },
+  node_unavailable: { label: "eventSchedulingBlockerNodeUnavailable", description: "eventSchedulingBlockerNodeUnavailableDescription" },
+};
+
+/** Maps a recognized scheduler blocker to title/description keys, or null. */
+export function schedulingBlockerPresentationKeys(blocker: string | null | undefined): EventPresentationKeys | null {
+  if (!blocker) return null;
+  // Own-property lookup only: runtime blocker strings are arbitrary, and a
+  // plain index would happily return inherited properties like "__proto__"
+  // or "toString" as if they were recognized blockers.
+  return Object.hasOwn(schedulingBlockerKeys, blocker) ? schedulingBlockerKeys[blocker as SchedulingBlocker] : null;
+}
+
+/**
+ * Returns one title/description entry per recognized scheduler blocker on a
+ * scheduling event, deduplicated while preserving backend order. Unknown,
+ * malformed, or missing blocker data yields an empty list, and non-scheduling
+ * categories never surface stale blockers; callers fall back to the generic
+ * eventPresentationKeys copy in all of those cases.
+ */
+export function eventSchedulingPresentationKeys(event: Pick<WorkspaceRuntimeEvent, "category" | "scheduling_blockers">): EventPresentationKeys[] {
+  if (event.category !== "scheduling") return [];
+  const raw = event.scheduling_blockers;
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set<string>();
+  const entries: EventPresentationKeys[] = [];
+  for (const value of raw) {
+    if (typeof value !== "string" || seen.has(value)) continue;
+    const keys = schedulingBlockerPresentationKeys(value);
+    if (!keys) continue;
+    seen.add(value);
+    entries.push(keys);
+  }
+  return entries;
+}
 
 /** Maps a recognized Kubernetes warning reason to title/description keys, or null. */
 export function eventReasonKeys(reason: string | null | undefined): EventPresentationKeys | null {

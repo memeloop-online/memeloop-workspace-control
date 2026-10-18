@@ -39,6 +39,7 @@ use details::{
 use pod_views::{
     active_pod_metrics, active_pod_names, active_pod_node_name, has_live_runtime, is_active_pod,
     newest_events, object_workspace_id, pod_event, pod_metrics, pod_metrics_all, pod_runtime,
+    pod_scheduling_event,
 };
 pub(super) use storage_metrics::{
     StorageBacking, StoragePressure, StorageTelemetry, StorageTelemetryCoverage,
@@ -100,6 +101,8 @@ pub(super) struct PodEvent {
     last_observed_at: Option<String>,
     reason: Option<String>,
     component: Option<String>,
+    /// Safe known scheduler causes; raw scheduler messages are never exposed.
+    scheduling_blockers: Vec<crate::runtime_incidents::SchedulingBlocker>,
 }
 
 type PodRuntimeMap = BTreeMap<Uuid, Vec<PodRuntime>>;
@@ -117,6 +120,7 @@ struct KubernetesRuntimeBatch {
     scratch_backings: ScratchBackingMap,
     metrics: PodMetricMap,
     metrics_available: bool,
+    scheduling_events: BTreeMap<Uuid, Vec<PodEvent>>,
 }
 
 #[utoipa::path(get, path = "/api/v1/workspace-runtimes", params(WorkspaceRuntimeListQuery), responses((status = 200, body = [WorkspaceRuntimeEntry]), (status = 403, body = super::ErrorEnvelope), (status = 503, body = super::ErrorEnvelope)))]
@@ -217,6 +221,15 @@ async fn fetch_kubernetes_runtime(
     });
     request.success();
     let (pods, active_pods, node_names, scratch_backings) = index_pods(&pod_list.items);
+    let mut scheduling_events = BTreeMap::<Uuid, Vec<PodEvent>>::new();
+    for pod in &pod_list.items {
+        if let (Some(id), Some(event)) = (
+            object_workspace_id(&pod.metadata.labels),
+            pod_scheduling_event(pod),
+        ) {
+            scheduling_events.entry(id).or_default().push(event);
+        }
+    }
     Ok(KubernetesRuntimeBatch {
         pods,
         active_pods,
@@ -225,6 +238,7 @@ async fn fetch_kubernetes_runtime(
         scratch_backings,
         metrics,
         metrics_available,
+        scheduling_events,
     })
 }
 
@@ -362,13 +376,17 @@ fn build_runtime_entries(
                     node_name,
                     pods,
                     metrics,
-                    events: incidents
-                        .remove(&workspace_id)
-                        .unwrap_or_default()
-                        .into_iter()
-                        .filter(|event| event.category != RuntimeEventCategory::Other)
-                        .map(pod_event_from_incident)
-                        .collect(),
+                    events: merge_current_events(
+                        incidents.remove(&workspace_id).unwrap_or_default(),
+                        &if show_runtime {
+                            kubernetes
+                                .scheduling_events
+                                .remove(&workspace_id)
+                                .unwrap_or_default()
+                        } else {
+                            Vec::new()
+                        },
+                    ),
                 },
             }
         })
@@ -499,6 +517,7 @@ fn pod_event_from_incident(incident: WorkspaceRuntimeIncident) -> PodEvent {
         count: Some(i32::try_from(incident.count).unwrap_or(i32::MAX)),
         reason: None,
         component: None,
+        scheduling_blockers: Vec::new(),
         last_observed_at: k8s_openapi::jiff::Timestamp::new(incident.last_observed_at, 0)
             .ok()
             .map(|timestamp| timestamp.to_string()),
@@ -524,8 +543,21 @@ fn merge_current_events(
         {
             event.reason = live.reason.clone();
             event.component = live.component.clone();
+            event.scheduling_blockers = live.scheduling_blockers.clone();
         }
     }
+    for live in current
+        .iter()
+        .filter(|event| event.category != RuntimeEventCategory::Other)
+    {
+        if !events
+            .iter()
+            .any(|event| event.category == live.category && event.observed_at == live.observed_at)
+        {
+            events.push(live.clone());
+        }
+    }
+    newest_events(&mut events, 50);
     events
 }
 

@@ -65,6 +65,7 @@ fn runtime_incident_round_trip_keeps_only_normalized_fields() {
     let event = PodEvent {
         reason: None,
         component: None,
+        scheduling_blockers: Vec::new(),
         last_observed_at: Some("2026-09-15T12:30:00Z".to_owned()),
         category: RuntimeEventCategory::TemporaryStorageProvisioning,
         count: Some(4),
@@ -82,4 +83,39 @@ fn runtime_incident_round_trip_keeps_only_normalized_fields() {
         count: incident.count,
     });
     assert_eq!(restored, event);
+}
+
+#[test]
+fn current_scheduler_causes_reach_list_runtime_without_a_persisted_event() {
+    let current = PodEvent {
+        category: RuntimeEventCategory::Scheduling,
+        count: None,
+        observed_at: Some("2026-10-18T12:14:00Z".into()),
+        last_observed_at: Some("2026-10-18T12:14:00Z".into()),
+        reason: Some("FailedScheduling".into()),
+        component: None,
+        scheduling_blockers: vec![crate::runtime_incidents::SchedulingBlocker::CpuCapacity],
+    };
+    assert_eq!(
+        merge_current_events(Vec::new(), std::slice::from_ref(&current)),
+        vec![current.clone()]
+    );
+    let at = "2026-10-18T12:14:00Z"
+        .parse::<k8s_openapi::jiff::Timestamp>()
+        .unwrap()
+        .as_second();
+    let historical = WorkspaceRuntimeIncident {
+        workspace_id: Uuid::now_v7(),
+        category: RuntimeEventCategory::Scheduling,
+        observed_at: at,
+        last_observed_at: at,
+        count: 7,
+    };
+    let merged = merge_current_events(vec![historical], &[current]);
+    assert_eq!(merged.len(), 1);
+    assert_eq!(merged[0].count, Some(7));
+    assert_eq!(
+        merged[0].scheduling_blockers,
+        vec![crate::runtime_incidents::SchedulingBlocker::CpuCapacity]
+    );
 }

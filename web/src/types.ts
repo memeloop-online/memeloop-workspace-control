@@ -377,7 +377,18 @@ export interface WorkspaceRuntimeEvent {
   reason?: string | null;
   /** Reporting component such as kubelet or default-scheduler. */
   component?: string | null;
+  /** Safe known scheduler causes; raw scheduler messages are never exposed. Only meaningful for scheduling events; omitted by older backends. */
+  scheduling_blockers?: SchedulingBlocker[] | null;
 }
+
+export type SchedulingBlocker =
+  | "cpu_capacity"
+  | "memory_capacity"
+  | "storage_capacity"
+  | "node_affinity"
+  | "volume_affinity"
+  | "taint"
+  | "node_unavailable";
 
 export interface WorkspaceStorageTelemetry {
   configured_bytes: number;
