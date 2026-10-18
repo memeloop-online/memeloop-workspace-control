@@ -13,9 +13,23 @@ use super::super::super::{
     OWNER_INSTALLATION_LABEL, WORKSPACE_ID_LABEL, port_mappings as resource_port_mappings,
 };
 use super::super::{FIELD_MANAGER, KubernetesCoordinator, ReconcileError, verify_existing};
+use super::observe_runtime_stage;
 
 impl KubernetesCoordinator {
     pub async fn reconcile_port_mappings(
+        &self,
+        workspace: &Workspace,
+        mappings: &[PortMapping],
+    ) -> Result<(), ReconcileError> {
+        observe_runtime_stage(
+            workspace,
+            "port_mappings",
+            self.reconcile_port_mappings_inner(workspace, mappings),
+        )
+        .await
+    }
+
+    async fn reconcile_port_mappings_inner(
         &self,
         workspace: &Workspace,
         mappings: &[PortMapping],
