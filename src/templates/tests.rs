@@ -202,7 +202,7 @@ fn cpu_overcommit_is_optional_bounded_and_rounds_up_to_one_millicore() {
             disk_gib: 20,
         },
     );
-    let old_yaml = WorkspaceTemplateDocument::new("legacy", spec.clone())
+    let old_yaml = WorkspaceTemplateDocument::new("existing", spec.clone())
         .to_yaml()
         .unwrap();
     assert!(!old_yaml.contains("cpu_overcommit_ratio"));

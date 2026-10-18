@@ -42,6 +42,8 @@ export interface TemplateDraft {
   disk: string;
   requestCpu: string;
   requestMemory: string;
+  /** Optional YAML policy retained when switching between the form and YAML. */
+  cpuOvercommitRatio?: number;
   user: string;
   home: string;
   buildkit: boolean;
@@ -75,6 +77,7 @@ const TEMPLATE_FIELD_SCHEMA: TemplateFieldSchema = {
       cpu_millis: null,
       memory_mib: null,
     },
+    cpu_overcommit_ratio: null,
     workspace_user: null,
     workspace_home: null,
     buildkit: null,
@@ -168,6 +171,7 @@ export function templateDraftToYaml(draft: TemplateDraft): string {
       default_node_pool: placement.default_node_pool,
     },
   };
+  if (draft.cpuOvercommitRatio !== undefined) spec.cpu_overcommit_ratio = parseCpuOvercommitRatio(draft.cpuOvercommitRatio);
   if (draft.runtimeClassName.trim()) spec.runtime_class_name = draft.runtimeClassName.trim();
   if (desktopPort !== null) {
     spec.desktop = {
@@ -222,6 +226,7 @@ export function templateDraftFromYaml(yaml: string): TemplateDraft {
     disk: numberText(resources.disk_gib),
     requestCpu: numberText(podRequests.cpu_millis),
     requestMemory: numberText(podRequests.memory_mib),
+    ...(spec.cpu_overcommit_ratio === undefined || spec.cpu_overcommit_ratio === null ? {} : { cpuOvercommitRatio: parseCpuOvercommitRatio(spec.cpu_overcommit_ratio) }),
     user: String(spec.workspace_user ?? ""),
     home: String(spec.workspace_home ?? ""),
     buildkit: Boolean(spec.buildkit),
@@ -264,6 +269,13 @@ function parseDesktop(value: unknown): { internal_port: number; display_name?: s
     internal_port: port,
     ...(typeof desktop.display_name === "string" && desktop.display_name ? { display_name: desktop.display_name } : {}),
   };
+}
+
+function parseCpuOvercommitRatio(value: unknown): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1 || value > 1000) {
+    throw new TemplateDraftError("invalid_template_number");
+  }
+  return value;
 }
 
 function parseDesktopPort(value: string): number {

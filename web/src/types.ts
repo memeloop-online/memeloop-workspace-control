@@ -179,6 +179,8 @@ export interface WorkspaceTemplate {
   access_mode: AccessMode;
   resources: Resources;
   pod_requests: PodResourceRequest;
+  /** Missing template values inherit at creation; missing workspace snapshots retain ratio 1. */
+  cpu_overcommit_ratio?: number | null;
   workspace_user: string;
   workspace_home: string;
   buildkit: boolean;
@@ -261,6 +263,8 @@ export interface Workspace {
   image: string;
   access_mode: AccessMode;
   pod_requests: PodResourceRequest;
+  /** Missing template values inherit at creation; missing workspace snapshots retain ratio 1. */
+  cpu_overcommit_ratio?: number | null;
   workspace_user: string;
   workspace_home: string;
   buildkit: boolean;
