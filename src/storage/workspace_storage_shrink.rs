@@ -318,12 +318,7 @@ impl Database {
                 let stored_id: String = row.try_get("id")?;
                 let json: String = row.try_get("operation_json")?;
                 let mut operation: StorageShrinkOperation = serde_json::from_str(&json)?;
-                if stored_id != operation_id.to_string() || operation.id != operation_id
-                    || operation.workspace_id != workspace_id || operation.phase != StorageShrinkPhase::Failed
-                    || !operation.switched || !operation.sources_retained || operation.reclaimable
-                    || operation.request.reclaim_source || !operation.resume || workspace.state != WorkspaceState::Ready
-                    || operation.request.home_gib.is_none() && operation.request.temporary_storage_gib.is_none()
-                { return Err(StorageError::WorkspaceStorageShrinkConflict); }
+                validate_retry_operation(&stored_id, operation_id, &operation, &workspace)?;
                 validate_retry_volume(&operation.home, operation.request.home_gib, workspace.home_volume_binding.as_ref(), workspace.template.resources.disk_gib, operation.original_home_gib, workspace.runtime.namespace())?;
                 validate_retry_volume(&operation.temporary, operation.request.temporary_storage_gib, workspace.scratch_volume_binding.as_ref(), workspace.template.storage_policy.temporary_storage_gib, operation.original_temporary_storage_gib, workspace.runtime.namespace())?;
                 let active: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM workspace_storage_shrinks WHERE installation_id = $1 AND workspace_id = $2 AND active = 1")
@@ -629,6 +624,30 @@ fn apply_shrink_workspace_update(
         }
         ShrinkWorkspaceUpdate::Resume => workspace.state = WorkspaceState::Starting,
         ShrinkWorkspaceUpdate::None => unreachable!(),
+    }
+    Ok(())
+}
+
+fn validate_retry_operation(
+    stored_id: &str,
+    operation_id: Uuid,
+    operation: &StorageShrinkOperation,
+    workspace: &Workspace,
+) -> Result<(), StorageError> {
+    if stored_id != operation_id.to_string()
+        || operation.id != operation_id
+        || operation.workspace_id != workspace.id
+        || operation.phase != StorageShrinkPhase::Failed
+        || !operation.switched
+        || !operation.sources_retained
+        || operation.reclaimable
+        || operation.request.reclaim_source
+        || !operation.resume
+        || workspace.state != WorkspaceState::Ready
+        || operation.request.home_gib.is_none()
+            && operation.request.temporary_storage_gib.is_none()
+    {
+        return Err(StorageError::WorkspaceStorageShrinkConflict);
     }
     Ok(())
 }
