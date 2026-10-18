@@ -38,8 +38,39 @@ async fn observe_apply_stage<T, E: Error + 'static>(
     phase: &'static str,
     operation: impl Future<Output = Result<T, E>>,
 ) -> Result<T, E> {
+    observe_stage(workspace, phase, operation, true).await
+}
+
+// Runtime readiness checks are frequent: keep fast successes below the info level,
+// but retain the same safe typed causes before callers convert errors to job text.
+pub(super) async fn observe_runtime_stage<T, E: Error + 'static>(
+    workspace: &Workspace,
+    phase: &'static str,
+    operation: impl Future<Output = Result<T, E>>,
+) -> Result<T, E> {
+    observe_stage(workspace, phase, operation, false).await
+}
+
+async fn observe_stage<T, E: Error + 'static>(
+    workspace: &Workspace,
+    phase: &'static str,
+    operation: impl Future<Output = Result<T, E>>,
+    report_fast: bool,
+) -> Result<T, E> {
     let started = Instant::now();
     let result = operation.await;
+    let elapsed = started.elapsed();
+    if !report_fast && result.is_ok() && elapsed.as_secs() < 1 {
+        tracing::debug!(
+            workspace_id = %workspace.id,
+            generation = workspace.generation,
+            phase,
+            elapsed_ms = elapsed.as_secs_f64() * 1000.0,
+            success = true,
+            "workspace resource apply stage completed"
+        );
+        return result;
+    }
     let error = result.as_ref().err().map(ErrorSummary::new);
     tracing::info!(
         error_kind = error.as_ref().map(|e| e.kind),
@@ -51,7 +82,7 @@ async fn observe_apply_stage<T, E: Error + 'static>(
         workspace_id = %workspace.id,
         generation = workspace.generation,
         phase,
-        elapsed_ms = started.elapsed().as_secs_f64() * 1000.0,
+        elapsed_ms = elapsed.as_secs_f64() * 1000.0,
         success = result.is_ok(),
         "workspace resource apply stage completed"
     );
