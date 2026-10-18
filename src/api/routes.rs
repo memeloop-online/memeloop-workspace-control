@@ -239,6 +239,10 @@ fn workspace_routes(router: ApiRouter) -> ApiRouter {
             post(workspace_storage_shrink::confirm),
         )
         .route(
+            "/api/v1/workspaces/{workspace_id}/storage-shrink/retry",
+            post(workspace_storage_shrink::retry),
+        )
+        .route(
             "/api/v1/workspaces/{workspace_id}/placement",
             axum::routing::put(workspace_placement::update),
         )

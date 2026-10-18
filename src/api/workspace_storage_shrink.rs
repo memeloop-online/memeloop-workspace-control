@@ -52,6 +52,74 @@ pub(super) struct ConfirmStorageShrinkRequest {
 
 #[utoipa::path(
     post,
+    path = "/api/v1/workspaces/{workspace_id}/storage-shrink/retry",
+    request_body = ConfirmStorageShrinkRequest,
+    params(("workspace_id" = Uuid, Path), ("Idempotency-Key" = String, Header)),
+    responses((status = 202, body = StorageShrinkOperation), (status = 401, body = super::ErrorEnvelope), (status = 403, body = super::ErrorEnvelope), (status = 404, body = super::ErrorEnvelope), (status = 409, body = super::ErrorEnvelope), (status = 503, body = super::ErrorEnvelope))
+)]
+pub(super) async fn retry(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(workspace_id): Path<Uuid>,
+    Json(request): Json<ConfirmStorageShrinkRequest>,
+) -> Result<Response, ApiError> {
+    let actor = principal(&state, &headers).await?;
+    let workspace = state.database.get_workspace(workspace_id).await?;
+    authorize(&actor, &workspace, true)?;
+    if state.kubernetes_client.is_none() {
+        return Err(ApiError::KubernetesUnavailable);
+    }
+    let key = idempotency_key(&headers)?;
+    let request_hash = hash(&(workspace_id, &request))?;
+    let scope = format!("{}:workspace-storage-shrink-retry", actor.user_id);
+    let now = unix_timestamp()?;
+    match state
+        .database
+        .begin_idempotency(
+            &scope,
+            key,
+            &request_hash,
+            now,
+            now + IDEMPOTENCY_TTL_SECONDS,
+        )
+        .await?
+    {
+        IdempotencyDecision::Replay(replay) => return replay_response(replay),
+        IdempotencyDecision::Conflict => return Err(ApiError::IdempotencyConflict),
+        IdempotencyDecision::InProgress => return Err(ApiError::IdempotencyInProgress),
+        IdempotencyDecision::Reserved => {}
+    }
+    let operation = match state
+        .database
+        .retry_storage_shrink_resume(workspace_id, request.operation_id, actor.user_id, now)
+        .await
+    {
+        Ok(operation) => operation,
+        Err(error) => {
+            state
+                .database
+                .abandon_idempotency(&scope, key, &request_hash)
+                .await?;
+            return Err(error.into());
+        }
+    };
+    let json = serde_json::to_string(&operation)
+        .map_err(|_| ApiError::BadRequest("response serialization failed"))?;
+    state
+        .database
+        .finish_idempotency(
+            &scope,
+            key,
+            &request_hash,
+            StatusCode::ACCEPTED.as_u16(),
+            &json,
+        )
+        .await?;
+    json_response(StatusCode::ACCEPTED, json)
+}
+
+#[utoipa::path(
+    post,
     path = "/api/v1/workspaces/{workspace_id}/storage-shrink/confirm",
     request_body = ConfirmStorageShrinkRequest,
     params(("workspace_id" = Uuid, Path), ("Idempotency-Key" = String, Header)),
@@ -212,6 +280,15 @@ mod tests {
 
     #[test]
     fn request_rejects_unknown_fields() {
+        let operation_id = Uuid::now_v7();
+        assert!(
+            serde_json::from_value::<ConfirmStorageShrinkRequest>(serde_json::json!({
+                "operation_id": operation_id,
+                "reclaim_source": true,
+            }))
+            .is_err()
+        );
+        assert!(serde_json::from_str::<ConfirmStorageShrinkRequest>("{}").is_err());
         assert!(
             serde_json::from_str::<StorageShrinkRequest>(
                 r#"{"home_gib":20,"expected_generation":1,"delete_source":true}"#
