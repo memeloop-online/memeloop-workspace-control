@@ -188,7 +188,8 @@ async fn kubernetes_runtime(
             "MWC_ENCRYPTION_KEY is required when Kubernetes coordination is enabled",
         )
     })?;
-    let client = kube::Client::try_default().await?;
+    let client =
+        memeloop_workspace_control::kubernetes::request_client(kube::Config::infer().await?)?;
     let builder = kubernetes_config::resource_builder(config)?;
     let coordinator = KubernetesCoordinator::new(client.clone(), builder.clone());
     let dynamic_egress = kubernetes_config::dynamic_egress_refresh(&builder)?;

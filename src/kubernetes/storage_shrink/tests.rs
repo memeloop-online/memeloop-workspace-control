@@ -526,3 +526,19 @@ fn copy_and_verification_cover_sparse_metadata_checksum_and_hardlinks() {
         assert!(verify.contains(required), "{required}");
     }
 }
+
+#[test]
+fn copy_and_verify_preserve_offline_sockets_and_exact_metadata() {
+    let result = std::process::Command::new("python3")
+        .args(["-I", "-c", include_str!("copy_verify_regression.py")])
+        .env("SHRINK_COPY_SCRIPT", ShrinkPodStage::Copy.script())
+        .env("SHRINK_VERIFY_SCRIPT", ShrinkPodStage::Verify.script())
+        .output()
+        .expect("storage shrink regression requires the CI Python toolchain");
+    assert!(
+        result.status.success(),
+        "storage shrink regression failed:\n{}\n{}",
+        String::from_utf8_lossy(&result.stdout),
+        String::from_utf8_lossy(&result.stderr)
+    );
+}

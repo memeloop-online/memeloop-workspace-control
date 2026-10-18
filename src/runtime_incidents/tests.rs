@@ -18,6 +18,25 @@ fn event(message: &str) -> Event {
 }
 
 #[test]
+fn only_this_pods_missing_startup_marker_is_expected_waiting() {
+    let expected = "MountVolume.SetUp failed for volume \"workspace-startup-gate\" : configmap \"w-8000000000000001-startup-gate\" not found";
+    let mut waiting = event(expected);
+    waiting.reason = Some("FailedMount".to_owned());
+    assert!(startup_gate_pending(&waiting));
+    assert!(normalized_incident(&waiting).is_none());
+    for unexpected in [
+        expected.replace("8000000000000001", "8000000000000002"),
+        expected.replace("not found", "permission denied"),
+        expected.replace("workspace-startup-gate", "workspace-config"),
+        expected.replace("configmap", "secret"),
+    ] {
+        waiting.message = Some(unexpected);
+        assert!(!startup_gate_pending(&waiting));
+        assert!(normalized_incident(&waiting).is_some());
+    }
+}
+
+#[test]
 fn eviction_resource_causes_take_precedence_over_generic_evicted() {
     for (message, expected) in [
         (

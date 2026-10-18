@@ -9,6 +9,9 @@ use kube::{
     Api,
     api::{DeleteParams, Patch, PatchParams},
 };
+use serde::{Serialize, de::DeserializeOwned};
+use std::{fmt::Debug, future::Future, time::Instant};
+use uuid::Uuid;
 
 use super::super::{DesiredResources, InjectionMaterialization};
 use super::{
@@ -22,6 +25,27 @@ mod envoy_filter;
 mod http_proxy;
 #[path = "client_apply/port_mappings.rs"]
 mod port_mappings;
+#[path = "client_apply/startup_gate.rs"]
+mod startup_gate;
+
+// Record only phase names, identity and timing; injection values and API bodies stay out of logs.
+async fn observe_apply_stage<T, E>(
+    workspace: &Workspace,
+    phase: &'static str,
+    operation: impl Future<Output = Result<T, E>>,
+) -> Result<T, E> {
+    let started = Instant::now();
+    let result = operation.await;
+    tracing::info!(
+        workspace_id = %workspace.id,
+        generation = workspace.generation,
+        phase,
+        elapsed_ms = started.elapsed().as_secs_f64() * 1000.0,
+        success = result.is_ok(),
+        "workspace resource apply stage completed"
+    );
+    result
+}
 
 impl KubernetesCoordinator {
     pub(super) async fn apply_desired(
@@ -38,19 +62,58 @@ impl KubernetesCoordinator {
         if namespace_name != workspace.runtime.namespace() {
             return Err(ReconcileError::RuntimeIdentityMismatch);
         }
-        self.verify_home_volume_binding(workspace).await?;
-        self.apply_namespace(workspace, desired).await?;
-        tokio::try_join!(
-            self.apply_access_identity(namespace_name, workspace, desired),
-            self.apply_injections(workspace, &desired.injections),
-            self.apply_workspace_identity(namespace_name, workspace, desired),
-        )?;
-        // Publish isolation intent before creating any workspace containers. Policy acceptance
-        // is not an enforcement acknowledgement; node-level acceptance must verify convergence.
-        self.apply_network(namespace_name, workspace, desired)
+        observe_apply_stage(
+            workspace,
+            "home_binding",
+            self.verify_home_volume_binding(workspace),
+        )
+        .await?;
+        observe_apply_stage(
+            workspace,
+            "namespace",
+            self.apply_namespace(workspace, desired),
+        )
+        .await?;
+        let startup = observe_apply_stage(
+            workspace,
+            "startup_plan",
+            Box::pin(self.prepare_startup_plan(workspace, desired)),
+        )
+        .await?;
+        Box::pin(self.apply_startup_prerequisites(namespace_name, workspace, desired, &startup))
             .await?;
-        self.apply_workload(namespace_name, workspace, desired)
-            .await
+        // A new Pod may prepare its volumes while injection writes are pending, but its
+        // required startup ConfigMap keeps every container blocked until all inputs and routes
+        // succeed. Existing workspaces keep the original update ordering.
+        observe_apply_stage(
+            workspace,
+            "network",
+            self.apply_network(namespace_name, workspace, desired),
+        )
+        .await?;
+        if let Some(gate) = &startup.gate {
+            let config_maps = Api::<ConfigMap>::namespaced(self.client.clone(), namespace_name);
+            let name = gate
+                .metadata
+                .name
+                .as_deref()
+                .ok_or(ReconcileError::MissingObjectName)?;
+            observe_apply_stage(
+                workspace,
+                "startup_approval",
+                self.apply_owned(&config_maps, name, gate, workspace.id),
+            )
+            .await?;
+        }
+        if !startup.overlap {
+            observe_apply_stage(
+                workspace,
+                "workload",
+                Box::pin(self.apply_workload(namespace_name, workspace, &startup.workload)),
+            )
+            .await?;
+        }
+        Ok(())
     }
 
     async fn apply_namespace(
@@ -154,44 +217,28 @@ impl KubernetesCoordinator {
         desired: &DesiredResources,
     ) -> Result<(), ReconcileError> {
         let workspace_id = workspace.id;
-        let apply = PatchParams::apply(FIELD_MANAGER);
         let runtime_names = self.builder.runtime_names(workspace)?;
         let names = &runtime_names.resources;
         let secrets = Api::<Secret>::namespaced(self.client.clone(), namespace_name);
-        verify_existing(
-            &secrets,
-            &names.ssh_identity_secret,
-            &self.builder,
-            workspace_id,
-        )
-        .await?;
-        secrets
-            .patch(
-                &names.ssh_identity_secret,
-                &apply,
-                &Patch::Apply(&desired.ssh_identity),
-            )
-            .await?;
-
         let config_maps = Api::<ConfigMap>::namespaced(self.client.clone(), namespace_name);
-        verify_existing(
-            &config_maps,
-            &names.workspace_config,
-            &self.builder,
-            workspace_id,
-        )
-        .await?;
-        config_maps
-            .patch(
+        tokio::try_join!(
+            self.apply_owned(
+                &secrets,
+                &names.ssh_identity_secret,
+                &desired.ssh_identity,
+                workspace_id,
+            ),
+            self.apply_owned(
+                &config_maps,
                 &names.workspace_config,
-                &apply,
-                &Patch::Apply(&desired.workspace_config),
-            )
-            .await?;
+                &desired.workspace_config,
+                workspace_id,
+            ),
+        )?;
         Ok(())
     }
 
-    async fn apply_workload(
+    async fn apply_workspace_services(
         &self,
         namespace_name: &str,
         workspace: &Workspace,
@@ -202,10 +249,12 @@ impl KubernetesCoordinator {
         let names = &runtime_names.resources;
         let apply = PatchParams::apply(FIELD_MANAGER);
         let services = Api::<Service>::namespaced(self.client.clone(), namespace_name);
-        verify_existing(&services, &names.service, &self.builder, workspace_id).await?;
-        services
-            .patch(&names.service, &apply, &Patch::Apply(&desired.service))
-            .await?;
+        observe_apply_stage(
+            workspace,
+            "service",
+            self.apply_owned(&services, &names.service, &desired.service, workspace_id),
+        )
+        .await?;
         if let Some(service) = &desired.internal_ssh_service {
             verify_existing(&services, &names.ssh_service, &self.builder, workspace_id).await?;
             services
@@ -218,8 +267,21 @@ impl KubernetesCoordinator {
                 .delete(&names.ssh_service, &DeleteParams::default())
                 .await?;
         }
+        Ok(())
+    }
+
+    async fn apply_workload(
+        &self,
+        namespace_name: &str,
+        workspace: &Workspace,
+        desired: &StatefulSet,
+    ) -> Result<(), ReconcileError> {
+        let workspace_id = workspace.id;
+        let runtime_names = self.builder.runtime_names(workspace)?;
+        let names = &runtime_names.resources;
+        let apply = PatchParams::apply(FIELD_MANAGER);
         let stateful_sets = Api::<StatefulSet>::namespaced(self.client.clone(), namespace_name);
-        let mut stateful_set = desired.stateful_set.clone();
+        let mut stateful_set = desired.clone();
         if let Some(existing) = stateful_sets.get_opt(&names.stateful_set).await? {
             self.builder
                 .verify_delete_ownership(&existing.metadata, workspace_id)?;
@@ -235,9 +297,12 @@ impl KubernetesCoordinator {
             preserve_claim_storage_classes(&mut stateful_set, &existing);
         }
         self.verify_home_volume_binding(workspace).await?;
-        let stateful_set_result = stateful_sets
-            .patch(&names.stateful_set, &apply, &Patch::Apply(&stateful_set))
-            .await;
+        let stateful_set_result = observe_apply_stage(
+            workspace,
+            "stateful_set",
+            stateful_sets.patch(&names.stateful_set, &apply, &Patch::Apply(&stateful_set)),
+        )
+        .await;
         if let Err(error) = stateful_set_result {
             if immutable_stateful_set_update(&error) {
                 self.verify_home_volume_binding(workspace).await?;
@@ -257,7 +322,6 @@ impl KubernetesCoordinator {
             self.builder
                 .verify_delete_ownership(&existing.metadata, workspace_id)?;
             let claim_labels = desired
-                .stateful_set
                 .spec
                 .as_ref()
                 .and_then(|spec| spec.volume_claim_templates.as_ref())
@@ -295,7 +359,7 @@ impl KubernetesCoordinator {
         Ok(())
     }
 
-    async fn apply_network(
+    async fn apply_network_policy(
         &self,
         namespace_name: &str,
         workspace: &Workspace,
@@ -321,6 +385,19 @@ impl KubernetesCoordinator {
                 &Patch::Apply(&desired.network_policy),
             )
             .await?;
+        Ok(())
+    }
+
+    async fn apply_network(
+        &self,
+        namespace_name: &str,
+        workspace: &Workspace,
+        desired: &DesiredResources,
+    ) -> Result<(), ReconcileError> {
+        let workspace_id = workspace.id;
+        let apply = PatchParams::apply(FIELD_MANAGER);
+        let runtime_names = self.builder.runtime_names(workspace)?;
+        let names = &runtime_names.resources;
         if self.builder.ttyd_mtls.is_some() && desired.web_shell_ingress.is_some() {
             self.apply_web_shell_envoy_filter(workspace, desired)
                 .await?;
@@ -356,6 +433,7 @@ impl KubernetesCoordinator {
         &self,
         workspace: &Workspace,
         materialization: &InjectionMaterialization,
+        compress_files: bool,
     ) -> Result<(), ReconcileError> {
         let workspace_id = workspace.id;
         let runtime_names = self.builder.runtime_names(workspace)?;
@@ -369,59 +447,63 @@ impl KubernetesCoordinator {
         if namespace != workspace.runtime.namespace() {
             return Err(ReconcileError::RuntimeIdentityMismatch);
         }
-        let apply = PatchParams::apply(FIELD_MANAGER);
         let secrets = Api::<Secret>::namespaced(self.client.clone(), namespace);
-        verify_existing(
-            &secrets,
-            &names.environment_secret,
-            &self.builder,
-            workspace_id,
-        )
-        .await?;
-        secrets
-            .patch(
-                &names.environment_secret,
-                &apply,
-                &Patch::Apply(&materialization.environment_secret),
-            )
-            .await?;
-        verify_existing(&secrets, &names.files_secret, &self.builder, workspace_id).await?;
-        secrets
-            .patch(
-                &names.files_secret,
-                &apply,
-                &Patch::Apply(&materialization.file_secret),
-            )
-            .await?;
         let config_maps = Api::<ConfigMap>::namespaced(self.client.clone(), namespace);
-        verify_existing(
-            &config_maps,
-            &names.environment_config_map,
-            &self.builder,
-            workspace_id,
-        )
-        .await?;
-        config_maps
-            .patch(
+        let compressed;
+        let file_config_map = if compress_files {
+            compressed = materialization.compressed_config_files()?;
+            &compressed
+        } else {
+            &materialization.file_config_map
+        };
+        // These projected inputs are independent. Join all writes before startup approval
+        // or updates to existing workloads, retaining the ownership check for every object.
+        tokio::try_join!(
+            self.apply_owned(
+                &secrets,
+                &names.environment_secret,
+                &materialization.environment_secret,
+                workspace_id,
+            ),
+            self.apply_owned(
+                &secrets,
+                &names.files_secret,
+                &materialization.file_secret,
+                workspace_id,
+            ),
+            self.apply_owned(
+                &config_maps,
                 &names.environment_config_map,
-                &apply,
-                &Patch::Apply(&materialization.environment_config_map),
-            )
-            .await?;
-        verify_existing(
-            &config_maps,
-            &names.files_config_map,
-            &self.builder,
-            workspace_id,
+                &materialization.environment_config_map,
+                workspace_id,
+            ),
+            self.apply_owned(
+                &config_maps,
+                &names.files_config_map,
+                file_config_map,
+                workspace_id,
+            ),
+        )?;
+        Ok(())
+    }
+
+    async fn apply_owned<K>(
+        &self,
+        api: &Api<K>,
+        name: &str,
+        desired: &K,
+        workspace_id: Uuid,
+    ) -> Result<(), ReconcileError>
+    where
+        K: Clone + Debug + DeserializeOwned + Serialize,
+    {
+        verify_existing(api, name, &self.builder, workspace_id).await?;
+        api.patch(
+            name,
+            &PatchParams::apply(FIELD_MANAGER),
+            &Patch::Apply(desired),
         )
         .await?;
-        config_maps
-            .patch(
-                &names.files_config_map,
-                &apply,
-                &Patch::Apply(&materialization.file_config_map),
-            )
-            .await?;
         Ok(())
     }
 }

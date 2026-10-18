@@ -31,6 +31,8 @@ mod node_port_tests {
 }
 
 mod coordinator_tests {
+    mod gated_startup;
+
     use std::{
         collections::BTreeMap,
         convert::Infallible,
@@ -58,6 +60,378 @@ mod coordinator_tests {
         workspace_runtime::WorkspaceRuntimeIdentity,
         workspaces::{AccessMode, Workspace, WorkspaceHomeVolumeBinding, WorkspaceState},
     };
+
+    fn startup_input_paths(builder: &ResourceBuilder, workspace: &Workspace) -> Vec<String> {
+        let names = builder.runtime_names(workspace).unwrap().resources;
+        let namespace = workspace.runtime.namespace();
+        [
+            ("secrets", names.environment_secret),
+            ("secrets", names.files_secret),
+            ("secrets", names.ssh_identity_secret),
+            ("configmaps", names.environment_config_map),
+            ("configmaps", names.files_config_map),
+            ("configmaps", names.workspace_config),
+        ]
+        .into_iter()
+        .map(|(kind, name)| format!("/api/v1/namespaces/{namespace}/{kind}/{name}"))
+        .collect()
+    }
+
+    fn startup_prerequisite_paths(builder: &ResourceBuilder, workspace: &Workspace) -> Vec<String> {
+        let mut paths = startup_input_paths(builder, workspace);
+        let names = builder.runtime_names(workspace).unwrap().resources;
+        let namespace = workspace.runtime.namespace();
+        paths.push(format!(
+            "/apis/networking.k8s.io/v1/namespaces/{namespace}/networkpolicies/{}",
+            names.network_policy
+        ));
+        paths.push(format!(
+            "/api/v1/namespaces/{namespace}/services/{}",
+            names.service
+        ));
+        paths
+    }
+
+    #[tokio::test]
+    async fn startup_prerequisites_progress_concurrently_before_routes_or_workload() {
+        use http_body_util::BodyExt;
+        use std::sync::atomic::AtomicUsize;
+        use std::time::Duration;
+        use tokio::sync::Barrier;
+
+        let mut workspace = workspace(workspace_id());
+        workspace.state = WorkspaceState::Starting;
+        let mut builder =
+            workspace_coordinator(Arc::new(WorkspaceDeleteMock::new("public-a", workspace.id)))
+                .builder;
+        builder.web_shell_domain = Some("shell.example.invalid".to_owned());
+        let inputs = Arc::new(startup_prerequisite_paths(&builder, &workspace));
+        let barrier = Arc::new(Barrier::new(inputs.len()));
+        let completed = Arc::new(AtomicUsize::new(0));
+        let service = service_fn(move |request: Request<kube::client::Body>| {
+            let inputs = inputs.clone();
+            let barrier = barrier.clone();
+            let completed = completed.clone();
+            async move {
+                if request.method() == Method::GET {
+                    return Ok::<_, Infallible>(not_found());
+                }
+                assert_eq!(request.method(), Method::PATCH);
+                let path = request.uri().path().to_owned();
+                let body: serde_json::Value = serde_json::from_slice(
+                    &request.into_body().collect().await.unwrap().to_bytes(),
+                )
+                .unwrap();
+                if inputs.contains(&path) {
+                    // Policy and Services must progress while projected inputs are pending.
+                    // Routes and workload publication must wait for every prerequisite.
+                    barrier.wait().await;
+                    completed.fetch_add(1, Ordering::SeqCst);
+                } else if path.contains("/ingresses/") || path.contains("/statefulsets/") {
+                    assert_eq!(completed.load(Ordering::SeqCst), inputs.len());
+                }
+                Ok(json_response(StatusCode::OK, body))
+            }
+        });
+        let coordinator =
+            KubernetesCoordinator::new(kube::Client::new(service, "default"), builder);
+        tokio::time::timeout(Duration::from_secs(3), coordinator.reconcile(&workspace))
+            .await
+            .expect("independent startup prerequisites must not wait for another API response")
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn failed_or_foreign_prerequisite_blocks_routes_and_workload_and_can_be_retried() {
+        use http_body_util::BodyExt;
+
+        for (blocked_index, foreign) in
+            (0..8).flat_map(|index| [false, true].map(|foreign| (index, foreign)))
+        {
+            let mut workspace = workspace(workspace_id());
+            workspace.state = WorkspaceState::Starting;
+            let mut builder =
+                workspace_coordinator(Arc::new(WorkspaceDeleteMock::new("public-a", workspace.id)))
+                    .builder;
+            builder.web_shell_domain = Some("shell.example.invalid".to_owned());
+            let blocked = startup_prerequisite_paths(&builder, &workspace)[blocked_index].clone();
+            let fail = Arc::new(AtomicBool::new(true));
+            let requests = Arc::new(Mutex::new(Vec::new()));
+            let service = service_fn({
+                let fail = fail.clone();
+                let requests = requests.clone();
+                move |request: Request<kube::client::Body>| {
+                    let fail = fail.clone();
+                    let requests = requests.clone();
+                    let blocked = blocked.clone();
+                    async move {
+                        let method = request.method().clone();
+                        let path = request.uri().path().to_owned();
+                        requests
+                            .lock()
+                            .unwrap()
+                            .push((method.clone(), path.clone()));
+                        if method == Method::GET {
+                            if foreign && path == blocked && fail.load(Ordering::SeqCst) {
+                                return Ok::<_, Infallible>(json_response(
+                                    StatusCode::OK,
+                                    serde_json::json!({
+                                        "apiVersion": "meta.k8s.io/v1",
+                                        "kind": "PartialObjectMetadata",
+                                        "metadata": {"labels": ownership_labels("another-installation", workspace.id)},
+                                    }),
+                                ));
+                            }
+                            return Ok(not_found());
+                        }
+                        assert_eq!(method, Method::PATCH);
+                        if foreign && path == blocked {
+                            assert!(
+                                !fail.load(Ordering::SeqCst),
+                                "foreign input must never be overwritten"
+                            );
+                        }
+                        if !foreign && path == blocked && fail.load(Ordering::SeqCst) {
+                            return Ok(json_response(
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                serde_json::json!({
+                                    "apiVersion": "v1", "kind": "Status", "status": "Failure",
+                                    "code": 500, "reason": "InternalError", "message": "transient failure",
+                                }),
+                            ));
+                        }
+                        let body: serde_json::Value = serde_json::from_slice(
+                            &request.into_body().collect().await.unwrap().to_bytes(),
+                        )
+                        .unwrap();
+                        Ok(json_response(StatusCode::OK, body))
+                    }
+                }
+            });
+            let coordinator =
+                KubernetesCoordinator::new(kube::Client::new(service, "default"), builder);
+            let error = coordinator.reconcile(&workspace).await.unwrap_err();
+            if foreign {
+                assert!(matches!(error, ReconcileError::Ownership(_)));
+            } else {
+                assert!(matches!(error, ReconcileError::Kubernetes(_)));
+            }
+            assert!(
+                requests
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .all(|(_, path)| { !path.contains("/ingresses/") })
+            );
+            assert!(requests.lock().unwrap().iter().all(|(method, path)| {
+                *method == Method::GET || !path.contains("/statefulsets/")
+            }));
+            fail.store(false, Ordering::SeqCst);
+            coordinator.reconcile(&workspace).await.unwrap();
+            assert!(requests.lock().unwrap().iter().any(|(method, path)| {
+                *method == Method::PATCH && path.contains("/statefulsets/")
+            }));
+        }
+    }
+
+    fn ready_pod_fixture() -> (Workspace, serde_json::Value, serde_json::Value) {
+        let mut workspace = workspace(workspace_id());
+        workspace.state = WorkspaceState::Starting;
+        let builder =
+            workspace_coordinator(Arc::new(WorkspaceDeleteMock::new("public-a", workspace.id)))
+                .builder;
+        let names = builder.runtime_names(&workspace).unwrap().resources;
+        let desired = builder.build(&workspace).unwrap();
+        let mut stateful_set = serde_json::to_value(desired.stateful_set).unwrap();
+        stateful_set["metadata"]["uid"] = serde_json::json!("current-sts-uid");
+        stateful_set["metadata"]["generation"] = serde_json::json!(10);
+        stateful_set["status"] = serde_json::json!({
+            "observedGeneration": 10, "replicas": 1, "readyReplicas": 0,
+            "updatedReplicas": 1, "currentRevision": "previous-revision",
+            "updateRevision": "current-revision",
+        });
+        let mut metadata = stateful_set["spec"]["template"]["metadata"].clone();
+        metadata["name"] = serde_json::json!(names.pod_ordinal_zero());
+        metadata["namespace"] = serde_json::json!(workspace.runtime.namespace());
+        metadata["labels"]["controller-revision-hash"] = serde_json::json!("current-revision");
+        metadata["ownerReferences"] = serde_json::json!([{
+            "apiVersion": "apps/v1", "kind": "StatefulSet", "name": names.stateful_set,
+            "uid": "current-sts-uid", "controller": true,
+        }]);
+        let pod = serde_json::json!({
+            "apiVersion": "v1", "kind": "Pod", "metadata": metadata,
+            "status": {"phase": "Running", "conditions": [{"type": "Ready", "status": "True"}]},
+        });
+        (workspace, stateful_set, pod)
+    }
+
+    async fn observe_ready_fixture(
+        workspace: &Workspace,
+        stateful_set: serde_json::Value,
+        pod: Option<serde_json::Value>,
+        expected: i32,
+    ) -> (Result<bool, ReconcileError>, Vec<String>) {
+        let builder =
+            workspace_coordinator(Arc::new(WorkspaceDeleteMock::new("public-a", workspace.id)))
+                .builder;
+        let paths = Arc::new(Mutex::new(Vec::new()));
+        let service = service_fn({
+            let paths = paths.clone();
+            move |request: Request<kube::client::Body>| {
+                assert_eq!(request.method(), Method::GET);
+                let path = request.uri().path().to_owned();
+                paths.lock().unwrap().push(path.clone());
+                let response = if path.contains("/statefulsets/") {
+                    json_response(StatusCode::OK, stateful_set.clone())
+                } else {
+                    assert!(path.contains("/pods/"));
+                    pod.clone()
+                        .map_or_else(not_found, |pod| json_response(StatusCode::OK, pod))
+                };
+                async move { Ok::<_, Infallible>(response) }
+            }
+        });
+        let coordinator =
+            KubernetesCoordinator::new(kube::Client::new(service, "default"), builder);
+        let result = coordinator.has_observed_replicas(workspace, expected).await;
+        let requests = paths.lock().unwrap().clone();
+        (result, requests)
+    }
+
+    #[tokio::test]
+    async fn current_ready_pod_does_not_wait_for_stateful_set_aggregate_status() {
+        let (workspace, stateful_set, pod) = ready_pod_fixture();
+        let (result, requests) =
+            observe_ready_fixture(&workspace, stateful_set, Some(pod), 1).await;
+        assert!(result.unwrap());
+        assert_eq!(requests.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn direct_readiness_rejects_stale_terminating_or_unready_workloads() {
+        let (workspace, stateful_set, pod) = ready_pod_fixture();
+        let (missing, _) = observe_ready_fixture(&workspace, stateful_set.clone(), None, 1).await;
+        assert!(!missing.unwrap());
+        for (pointer, value) in [
+            ("/status/observedGeneration", serde_json::json!(9)),
+            ("/status/updateRevision", serde_json::Value::Null),
+            ("/metadata/uid", serde_json::Value::Null),
+            ("/spec/replicas", serde_json::json!(0)),
+            (
+                "/metadata/deletionTimestamp",
+                serde_json::json!("2026-10-15T00:00:00Z"),
+            ),
+            (
+                "/spec/template/metadata/annotations/workspace.memeloop.dev~1generation",
+                serde_json::json!("2"),
+            ),
+        ] {
+            let mut stale = stateful_set.clone();
+            if pointer == "/metadata/deletionTimestamp" {
+                stale["metadata"]["deletionTimestamp"] = value;
+            } else {
+                *stale.pointer_mut(pointer).unwrap() = value;
+            }
+            let (result, _) = observe_ready_fixture(&workspace, stale, Some(pod.clone()), 1).await;
+            assert!(
+                !result.unwrap(),
+                "accepted stale StatefulSet field {pointer}"
+            );
+        }
+        for (pointer, value) in [
+            (
+                "/metadata/ownerReferences/0/uid",
+                serde_json::json!("replaced-sts-uid"),
+            ),
+            (
+                "/metadata/ownerReferences/0/name",
+                serde_json::json!("another-stateful-set"),
+            ),
+            (
+                "/metadata/ownerReferences/0/controller",
+                serde_json::json!(false),
+            ),
+            (
+                "/metadata/ownerReferences/0/kind",
+                serde_json::json!("ReplicaSet"),
+            ),
+            (
+                "/metadata/ownerReferences/0/apiVersion",
+                serde_json::json!("apps/v1beta1"),
+            ),
+            (
+                "/metadata/labels/controller-revision-hash",
+                serde_json::json!("previous-revision"),
+            ),
+            (
+                "/metadata/labels/controller-revision-hash",
+                serde_json::Value::Null,
+            ),
+            (
+                "/metadata/annotations/workspace.memeloop.dev~1generation",
+                serde_json::json!("2"),
+            ),
+            (
+                "/metadata/annotations/workspace.memeloop.dev~1generation",
+                serde_json::Value::Null,
+            ),
+            (
+                "/metadata/deletionTimestamp",
+                serde_json::json!("2026-10-15T00:00:00Z"),
+            ),
+            ("/status/phase", serde_json::json!("Pending")),
+            ("/status/conditions/0/status", serde_json::json!("False")),
+            ("/status/conditions", serde_json::json!([])),
+        ] {
+            let mut stale = pod.clone();
+            if pointer == "/metadata/deletionTimestamp" {
+                stale["metadata"]["deletionTimestamp"] = value;
+            } else if value.is_null() {
+                let (parent, key) = pointer.rsplit_once('/').unwrap();
+                stale
+                    .pointer_mut(parent)
+                    .unwrap()
+                    .as_object_mut()
+                    .unwrap()
+                    .remove(&key.replace("~1", "/").replace("~0", "~"));
+            } else {
+                *stale.pointer_mut(pointer).unwrap() = value;
+            }
+            let (result, _) =
+                observe_ready_fixture(&workspace, stateful_set.clone(), Some(stale), 1).await;
+            assert!(!result.unwrap(), "accepted stale Pod field {pointer}");
+        }
+    }
+
+    #[tokio::test]
+    async fn direct_readiness_rejects_foreign_objects_and_preserves_scale_to_zero() {
+        let (workspace, stateful_set, pod) = ready_pod_fixture();
+        for foreign_pod in [false, true] {
+            let mut stateful_set = stateful_set.clone();
+            let mut pod = pod.clone();
+            let foreign = if foreign_pod {
+                &mut pod
+            } else {
+                &mut stateful_set
+            };
+            foreign["metadata"]["labels"]["workspace.memeloop.dev/owner-installation"] =
+                serde_json::json!("other-installation");
+            let (result, _) = observe_ready_fixture(&workspace, stateful_set, Some(pod), 1).await;
+            assert!(matches!(result, Err(ReconcileError::Ownership(_))));
+        }
+        for replicas in [1, 0] {
+            let mut stateful_set = stateful_set.clone();
+            stateful_set["status"]["replicas"] = serde_json::json!(replicas);
+            let (result, requests) =
+                observe_ready_fixture(&workspace, stateful_set, Some(pod.clone()), 0).await;
+            assert_eq!(result.unwrap(), replicas == 0);
+            assert_eq!(
+                requests.len(),
+                1,
+                "scale-to-zero must use StatefulSet observation"
+            );
+        }
+    }
 
     #[test]
     fn restart_deletes_only_a_pod_from_an_older_generation() {

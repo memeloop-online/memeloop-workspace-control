@@ -402,6 +402,7 @@ export class ApiClient {
     organization_id: string | null;
     user_id: string;
     workspace_id: string | null;
+    template_id?: string | null;
     organization_injection_refs?: string[] | null;
     user_injection_refs?: string[] | null;
     inline_workspace_injections: InjectionDraft[];

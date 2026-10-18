@@ -16,6 +16,8 @@ use crate::workspace_runtime::WorkspaceRuntimeNames;
 
 use super::namespaced_metadata;
 
+mod dictionary;
+
 #[derive(Debug)]
 pub struct InjectionMaterialization {
     pub environment_secret: Secret,
@@ -24,6 +26,12 @@ pub struct InjectionMaterialization {
     pub file_config_map: ConfigMap,
     pub environment_targets: BTreeSet<String>,
     pub provenance: Vec<ResolvedInjectionSummary>,
+}
+
+impl InjectionMaterialization {
+    pub(crate) fn compressed_config_files(&self) -> Result<ConfigMap, MaterializationError> {
+        dictionary::compress(&self.file_config_map)
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -285,6 +293,8 @@ pub enum MaterializationError {
     InvalidTargetPath(String),
     #[error("multiple resolved injections target {0}")]
     DuplicateTarget(String),
+    #[error("file injection manifest is invalid")]
+    InvalidFileManifest,
 }
 
 #[cfg(test)]

@@ -672,3 +672,6 @@ async fn body_json_array_length(response: axum::response::Response) -> usize {
         .unwrap()
         .len()
 }
+
+#[path = "api_injections/preview_templates.rs"]
+mod preview_templates;
