@@ -4,6 +4,8 @@ use serde_json::{Value, json};
 use std::time::Duration;
 use tokio::sync::{Notify, Semaphore};
 
+mod prerequisite_overlap;
+
 struct GateMock {
     objects: Mutex<BTreeMap<String, Value>>,
     patches: Mutex<Vec<(String, Value)>>,
@@ -11,6 +13,9 @@ struct GateMock {
     release_files: Semaphore,
     workload_applied: Notify,
     fail_suffix: Mutex<Option<String>>,
+    hold_request: Mutex<Option<(Method, String)>>,
+    request_started: Notify,
+    release_request: Semaphore,
 }
 
 impl Default for GateMock {
@@ -22,6 +27,9 @@ impl Default for GateMock {
             release_files: Semaphore::new(0),
             workload_applied: Notify::new(),
             fail_suffix: Mutex::default(),
+            hold_request: Mutex::default(),
+            request_started: Notify::new(),
+            release_request: Semaphore::new(0),
         }
     }
 }
@@ -38,6 +46,14 @@ impl GateMock {
     async fn respond(&self, request: Request<kube::client::Body>) -> Response<Body> {
         let method = request.method().clone();
         let path = request.uri().path().to_owned();
+        let held = self.hold_request.lock().unwrap().clone();
+        if held
+            .as_ref()
+            .is_some_and(|(held_method, held_path)| method == *held_method && path == *held_path)
+        {
+            self.request_started.notify_one();
+            self.release_request.acquire().await.unwrap().forget();
+        }
         if method == Method::GET {
             if path.ends_with("/pods")
                 || path.ends_with("/services")
@@ -262,14 +278,8 @@ async fn failed_route_or_approval_never_releases_the_startup_gate() {
 }
 
 #[tokio::test]
-async fn failed_small_prerequisites_prevent_early_workload_creation() {
-    for suffix in [
-        "-admin",
-        "-ssh-identity",
-        "-config",
-        "-ingress",
-        "/w-8000000000000001",
-    ] {
+async fn failed_access_or_isolation_prevents_early_workload_creation() {
+    for suffix in ["-admin", "-ingress"] {
         let mut workspace = workspace(workspace_id());
         workspace.state = WorkspaceState::Provisioning;
         workspace.template.cluster_access = true;
