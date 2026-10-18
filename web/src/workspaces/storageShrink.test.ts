@@ -276,12 +276,12 @@ test("resume guard requires the current binding to fully match the expected clai
   assert.equal(storageShrinkResumable(switchedFailure(), wrongUid), false);
   const wrongCapacity = { ...readyWorkspace, home_volume_binding: { ...homeDestination, capacity_gib: 81 } };
   assert.equal(storageShrinkResumable(switchedFailure(), wrongCapacity), false);
-  const legacyWorkspace = {
+  const workspaceWithoutBindings = {
     state: "ready",
     resources: { disk_gib: 80 },
     storage_policy: { temporary_storage_gib: 60 },
   } satisfies StorageShrinkResumeContext;
-  assert.equal(storageShrinkResumable(switchedFailure(), legacyWorkspace), false);
+  assert.equal(storageShrinkResumable(switchedFailure(), workspaceWithoutBindings), false);
   const nullScratch = { ...readyWorkspace, scratch_volume_binding: null };
   assert.equal(storageShrinkResumable(switchedFailure(), nullScratch), false);
 });
