@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import { Badge, Button, Caption1, Divider, Spinner, Text, Title3, Tooltip } from "@fluentui/react-components";
 import { ArrowClockwiseRegular, ChevronDownRegular, ChevronUpRegular, DeleteRegular, DesktopRegular, LocationRegular, PlayRegular, SaveRegular, StopRegular, WindowConsoleRegular } from "@fluentui/react-icons";
 import { useI18n } from "./i18n";
@@ -15,7 +15,7 @@ import { aggregateRuntimeUsage, formatCpuMillis, formatMemoryMiB, parseCpuMillis
 import { StorageMeter } from "./workspaces/StorageMeter";
 import { useWorkspaceStyles } from "./workspaces/workspaceStyles";
 import { containerNameLabelKey, containerStateLabelKey, formatDurationSeconds, startupStageLabelKey } from "./workspaceStartup";
-import { eventPresentationKeys } from "./workspaceEvents";
+import { eventPresentationKeys, eventSchedulingPresentationKeys } from "./workspaceEvents";
 
 type WorkspaceAction = "start" | "stop" | "restart" | "delete";
 type DetailView = "status" | "events";
@@ -161,11 +161,14 @@ function EventLog({ id, runtime, locale }: { id: string; runtime: WorkspaceRunti
 function EventEntry({ event, locale }: { event: WorkspaceRuntimeEvent; locale: Locale }) {
   const { t } = useI18n();
   const styles = useWorkspaceStyles();
-  const keys = eventPresentationKeys(event);
+  const blockerKeys = eventSchedulingPresentationKeys(event);
+  const entries = blockerKeys.length > 0 ? blockerKeys : [eventPresentationKeys(event)];
   const showLast = event.last_observed_at && event.last_observed_at !== event.observed_at;
   return <article className={styles.event}>
-    <Text weight="semibold">{t(keys.label)}</Text>
-    <Text>{t(keys.description)}</Text>
+    {entries.map((keys) => <Fragment key={keys.label}>
+      <Text weight="semibold">{t(keys.label)}</Text>
+      <Text>{t(keys.description)}</Text>
+    </Fragment>)}
     <Caption1 className={styles.eventMeta}>
       {t("observedAt")} {formatTimestamp(event.observed_at, locale)}
       {showLast && <> · {t("eventLastObserved")} {formatTimestamp(event.last_observed_at ?? null, locale)}</>}

@@ -147,7 +147,52 @@ pub(super) fn pod_event(event: Event) -> PodEvent {
         },
         count,
         observed_at,
+        scheduling_blockers: if event.reason.as_deref() == Some("FailedScheduling") {
+            crate::runtime_incidents::scheduling_blockers(event.message.as_deref())
+        } else {
+            Vec::new()
+        },
     }
+}
+
+/// Pod conditions keep the current scheduling cause visible after Event TTL expiry,
+/// without adding per-workspace event requests to the batched runtime endpoint.
+pub(super) fn pod_scheduling_event(pod: &Pod) -> Option<PodEvent> {
+    if !is_active_pod(pod)
+        || pod
+            .spec
+            .as_ref()
+            .is_some_and(|spec| spec.node_name.is_some())
+    {
+        return None;
+    }
+    let condition = pod
+        .status
+        .as_ref()?
+        .conditions
+        .as_ref()?
+        .iter()
+        .find(|condition| {
+            condition.type_ == "PodScheduled"
+                && condition.status == "False"
+                && condition.reason.as_deref() == Some("Unschedulable")
+        })?;
+    let observed_at = condition
+        .last_transition_time
+        .as_ref()
+        .or(pod.metadata.creation_timestamp.as_ref())
+        .map(|time| time.0.to_string());
+    Some(PodEvent {
+        category: RuntimeEventCategory::Scheduling,
+        count: None,
+        observed_at: observed_at.clone(),
+        last_observed_at: observed_at,
+        reason: Some("FailedScheduling".to_owned()),
+        component: None,
+        scheduling_blockers: crate::runtime_incidents::scheduling_blockers(
+            condition.message.as_deref(),
+        ),
+    })
 }
 
 pub(super) fn newest_events(events: &mut Vec<PodEvent>, limit: usize) {
@@ -239,12 +284,71 @@ mod tests {
 
     use super::{
         PodEvent, RuntimeEventCategory, active_pod_metrics, active_pod_names, active_pod_node_name,
-        has_live_runtime, newest_events, pod_event, runtime_event_category,
+        has_live_runtime, newest_events, pod_event, pod_scheduling_event, runtime_event_category,
     };
     use crate::api::runtime::PodMetric;
 
     fn timestamp(value: &str) -> Timestamp {
         value.parse().expect("valid test timestamp")
+    }
+
+    #[test]
+    fn unschedulable_condition_survives_event_expiry_but_not_scheduling_or_termination() {
+        let mut pod: Pod = serde_json::from_value(serde_json::json!({
+            "metadata": {"creationTimestamp":"2026-10-18T12:13:58Z"},
+            "spec": {"containers": []},
+            "status": {"phase":"Pending", "conditions":[{
+                "type":"PodScheduled", "status":"False", "reason":"Unschedulable",
+                "lastTransitionTime":"2026-10-18T12:14:00Z",
+                "message":"0/9 nodes are available: 1 Insufficient cpu, 1 node(s) had untolerated taint(s), 7 node(s) didn't match Pod's node affinity/selector. private-host private-pvc"
+            }]}
+        })).unwrap();
+        let event = pod_scheduling_event(&pod).expect("current Pending cause");
+        assert_eq!(event.category, RuntimeEventCategory::Scheduling);
+        assert_eq!(event.observed_at.as_deref(), Some("2026-10-18T12:14:00Z"));
+        assert_eq!(
+            event.scheduling_blockers,
+            vec![
+                crate::runtime_incidents::SchedulingBlocker::CpuCapacity,
+                crate::runtime_incidents::SchedulingBlocker::NodeAffinity,
+                crate::runtime_incidents::SchedulingBlocker::Taint,
+            ]
+        );
+        assert!(!serde_json::to_string(&event).unwrap().contains("private"));
+        pod.spec.as_mut().unwrap().node_name = Some("private-host".into());
+        assert!(pod_scheduling_event(&pod).is_none());
+        pod.spec.as_mut().unwrap().node_name = None;
+        pod.metadata.deletion_timestamp = Some(Time(timestamp("2026-10-18T12:15:00Z")));
+        assert!(pod_scheduling_event(&pod).is_none());
+    }
+
+    #[test]
+    fn storage_scheduler_events_keep_capacity_separate_from_other_volume_failures() {
+        let event = pod_event(Event {
+            reason: Some("FailedScheduling".into()),
+            message: Some(
+                "1 node(s) did not have enough free storage for volume private-pvc".into(),
+            ),
+            ..Event::default()
+        });
+        assert_eq!(event.category, RuntimeEventCategory::Scheduling);
+        assert_eq!(
+            event.scheduling_blockers,
+            vec![crate::runtime_incidents::SchedulingBlocker::StorageCapacity]
+        );
+        let mount = pod_event(Event {
+            reason: Some("FailedMount".into()),
+            message: Some("private diagnostic mentions Insufficient cpu".into()),
+            ..Event::default()
+        });
+        assert!(mount.scheduling_blockers.is_empty());
+        let unknown = pod_event(Event {
+            reason: Some("FailedScheduling".into()),
+            message: Some("unknown private scheduler diagnostic".into()),
+            ..Event::default()
+        });
+        assert_eq!(unknown.category, RuntimeEventCategory::Scheduling);
+        assert!(unknown.scheduling_blockers.is_empty());
     }
 
     #[test]

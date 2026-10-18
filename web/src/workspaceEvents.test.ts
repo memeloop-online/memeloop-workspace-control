@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { eventPresentationKeys, eventReasonKeys } from "./workspaceEvents.ts";
+import { eventPresentationKeys, eventReasonKeys, eventSchedulingPresentationKeys, schedulingBlockerPresentationKeys } from "./workspaceEvents.ts";
 
 test("recognized warning reasons under the other category get specific keys", () => {
   assert.deepEqual(eventReasonKeys("FailedSync"), { label: "eventReasonFailedSync", description: "eventReasonFailedSyncDescription" });
@@ -70,4 +70,41 @@ test("recognized categories keep their category-specific copy even with a known 
     eventPresentationKeys({ category: "container_backoff", reason: null }),
     { label: "eventCategoryContainerBackoff", description: "eventCategoryContainerBackoffDescription" },
   );
+});
+
+test("scheduler capacity causes distinguish CPU, memory and CSI storage", () => {
+  assert.deepEqual(eventSchedulingPresentationKeys({ category: "scheduling", scheduling_blockers: ["cpu_capacity"] }), [
+    { label: "eventSchedulingBlockerCpuCapacity", description: "eventSchedulingBlockerCpuCapacityDescription" },
+  ]);
+  assert.deepEqual(eventSchedulingPresentationKeys({ category: "scheduling", scheduling_blockers: ["memory_capacity", "storage_capacity"] }), [
+    { label: "eventSchedulingBlockerMemoryCapacity", description: "eventSchedulingBlockerMemoryCapacityDescription" },
+    { label: "eventSchedulingBlockerStorageCapacity", description: "eventSchedulingBlockerStorageCapacityDescription" },
+  ]);
+});
+
+test("mixed scheduler constraints retain order, dedupe causes and ignore unknown entries", () => {
+  const event = { category: "scheduling", scheduling_blockers: ["taint", "new_cause", "cpu_capacity", "taint", "volume_affinity", "node_affinity", "node_unavailable"] } as unknown as Parameters<typeof eventSchedulingPresentationKeys>[0];
+  assert.deepEqual(eventSchedulingPresentationKeys(event).map((entry) => entry.label), [
+    "eventSchedulingBlockerTaint", "eventSchedulingBlockerCpuCapacity", "eventSchedulingBlockerVolumeAffinity", "eventSchedulingBlockerNodeAffinity", "eventSchedulingBlockerNodeUnavailable",
+  ]);
+});
+
+test("old and malformed blocker fields preserve the generic scheduling fallback", () => {
+  const fallback = { label: "eventCategoryScheduling", description: "eventCategorySchedulingDescription" };
+  for (const scheduling_blockers of [undefined, null, [], "cpu_capacity", {}, [null, 42, {}, "__proto__", "constructor", "toString", "unknown"]]) {
+    const event = { category: "scheduling", reason: "FailedScheduling", scheduling_blockers } as unknown as Parameters<typeof eventSchedulingPresentationKeys>[0];
+    assert.deepEqual(eventSchedulingPresentationKeys(event), []);
+    assert.deepEqual(eventPresentationKeys(event), fallback);
+  }
+  for (const blocker of [null, undefined, "", "__proto__", "constructor", "toString", "new_cause"]) {
+    assert.equal(schedulingBlockerPresentationKeys(blocker), null);
+  }
+});
+
+test("non-scheduling events never surface stale scheduling causes", () => {
+  const event = { category: "volume_unavailable", scheduling_blockers: ["cpu_capacity"] } as const;
+  assert.deepEqual(eventSchedulingPresentationKeys({ ...event, scheduling_blockers: [...event.scheduling_blockers] }), []);
+  assert.deepEqual(eventPresentationKeys(event), {
+    label: "eventCategoryVolumeUnavailable", description: "eventCategoryVolumeUnavailableDescription",
+  });
 });

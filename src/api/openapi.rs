@@ -168,6 +168,7 @@ use super::{
         runtime::StorageBacking,
         runtime::StoragePressure,
         runtime::RuntimeEventCategory,
+        crate::runtime_incidents::SchedulingBlocker,
         runtime::PodRuntime,
         runtime::PodMetric,
         runtime::PodEvent,
