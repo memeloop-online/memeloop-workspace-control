@@ -301,19 +301,27 @@ impl Database {
         now: i64,
     ) -> Result<StorageShrinkOperation, StorageError> {
         macro_rules! retry {
-            ($pool:expr, $installation:expr, $decode:ident, $suffix:expr) => {{
-                let mut transaction = $pool.begin().await?;
+            ($pool:expr, $installation:expr, $backend:ty, $decode:ident, $suffix:expr) => {{
+                async fn retry_backend(
+                    pool: &sqlx::Pool<$backend>,
+                    installation: &crate::config::InstallationId,
+                    workspace_id: Uuid,
+                    operation_id: Uuid,
+                    actor_user_id: Uuid,
+                    now: i64,
+                ) -> Result<StorageShrinkOperation, StorageError> {
+                let mut transaction = pool.begin().await?;
                 if $suffix.is_empty() {
                     sqlx::query("UPDATE workspaces SET generation = generation WHERE installation_id = $1 AND id = $2")
-                        .bind($installation.as_str()).bind(workspace_id.to_string()).execute(&mut *transaction).await?;
+                        .bind(installation.as_str()).bind(workspace_id.to_string()).execute(&mut *transaction).await?;
                 }
                 let select = format!("{}{}", select_workspace_sql("$1", "$2"), $suffix);
                 let row = sqlx::query(&select)
-                    .bind($installation.as_str()).bind(workspace_id.to_string())
+                    .bind(installation.as_str()).bind(workspace_id.to_string())
                     .fetch_optional(&mut *transaction).await?.ok_or(StorageError::WorkspaceNotFound)?;
-                let workspace = $decode(row, $installation)?;
+                let workspace = $decode(row, installation)?;
                 let row = sqlx::query("SELECT id, operation_json FROM workspace_storage_shrinks WHERE installation_id = $1 AND workspace_id = $2 ORDER BY created_at DESC, id DESC LIMIT 1")
-                    .bind($installation.as_str()).bind(workspace_id.to_string())
+                    .bind(installation.as_str()).bind(workspace_id.to_string())
                     .fetch_optional(&mut *transaction).await?.ok_or(StorageError::WorkspaceStorageShrinkConflict)?;
                 let stored_id: String = row.try_get("id")?;
                 let json: String = row.try_get("operation_json")?;
@@ -322,35 +330,43 @@ impl Database {
                 validate_retry_volume(&operation.home, operation.request.home_gib, workspace.home_volume_binding.as_ref(), workspace.template.resources.disk_gib, operation.original_home_gib, workspace.runtime.namespace())?;
                 validate_retry_volume(&operation.temporary, operation.request.temporary_storage_gib, workspace.scratch_volume_binding.as_ref(), workspace.template.storage_policy.temporary_storage_gib, operation.original_temporary_storage_gib, workspace.runtime.namespace())?;
                 let active: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM workspace_storage_shrinks WHERE installation_id = $1 AND workspace_id = $2 AND active = 1")
-                    .bind($installation.as_str()).bind(workspace_id.to_string()).fetch_one(&mut *transaction).await?;
+                    .bind(installation.as_str()).bind(workspace_id.to_string()).fetch_one(&mut *transaction).await?;
                 let jobs: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM jobs WHERE installation_id = $1 AND workspace_id = $2 AND status IN ('pending', 'running')")
-                    .bind($installation.as_str()).bind(workspace_id.to_string()).fetch_one(&mut *transaction).await?;
+                    .bind(installation.as_str()).bind(workspace_id.to_string()).fetch_one(&mut *transaction).await?;
                 validate_retry_idle(active, jobs)?;
                 let prior_error = operation.error.take();
                 operation.phase = StorageShrinkPhase::Resuming;
                 operation.updated_at = now;
                 let updated = sqlx::query("UPDATE workspace_storage_shrinks SET active = 1, operation_json = $1, updated_at = $2 WHERE installation_id = $3 AND workspace_id = $4 AND id = $5 AND active = 0")
-                    .bind(serde_json::to_string(&operation)?).bind(now).bind($installation.as_str()).bind(workspace_id.to_string()).bind(operation.id.to_string()).execute(&mut *transaction).await?;
+                    .bind(serde_json::to_string(&operation)?).bind(now).bind(installation.as_str()).bind(workspace_id.to_string()).bind(operation.id.to_string()).execute(&mut *transaction).await?;
                 if updated.rows_affected() != 1 { return Err(StorageError::WorkspaceStorageShrinkConflict); }
                 sqlx::query("INSERT INTO jobs (id, installation_id, kind, workspace_id, payload_json, status, available_at, lease_owner, lease_expires_at, attempts, created_at, updated_at) VALUES ($1,$2,'workspace_storage_shrink',$3,$4,'pending',$5,NULL,NULL,0,$5,$5)")
-                    .bind(Uuid::now_v7().to_string()).bind($installation.as_str()).bind(workspace_id.to_string()).bind(serde_json::json!({"operation_id": operation.id}).to_string()).bind(now).execute(&mut *transaction).await?;
+                    .bind(Uuid::now_v7().to_string()).bind(installation.as_str()).bind(workspace_id.to_string()).bind(serde_json::json!({"operation_id": operation.id}).to_string()).bind(now).execute(&mut *transaction).await?;
                 sqlx::query("UPDATE workspaces SET generation = generation + 1, updated_at = $1 WHERE installation_id = $2 AND id = $3")
-                    .bind(now).bind($installation.as_str()).bind(workspace_id.to_string()).execute(&mut *transaction).await?;
+                    .bind(now).bind(installation.as_str()).bind(workspace_id.to_string()).execute(&mut *transaction).await?;
                 sqlx::query("INSERT INTO audit_log (id, installation_id, actor_user_id, organization_id, workspace_id, action, metadata_json, created_at) VALUES ($1,$2,$3,$4,$5,'workspace.storage_shrink_resume_retried',$6,$7)")
-                    .bind(Uuid::now_v7().to_string()).bind($installation.as_str()).bind(actor_user_id.to_string()).bind(workspace.organization_id.to_string()).bind(workspace_id.to_string()).bind(serde_json::json!({"operation_id": operation.id, "prior_error": prior_error}).to_string()).bind(now).execute(&mut *transaction).await?;
+                    .bind(Uuid::now_v7().to_string()).bind(installation.as_str()).bind(actor_user_id.to_string()).bind(workspace.organization_id.to_string()).bind(workspace_id.to_string()).bind(serde_json::json!({"operation_id": operation.id, "prior_error": prior_error}).to_string()).bind(now).execute(&mut *transaction).await?;
                 transaction.commit().await?;
                 Ok(operation)
+                }
+                retry_backend($pool, $installation, workspace_id, operation_id, actor_user_id, now).await
             }};
         }
         match self {
             Self::Sqlite {
                 pool,
                 installation_id,
-            } => retry!(pool, installation_id, decode_sqlite, ""),
+            } => retry!(pool, installation_id, sqlx::Sqlite, decode_sqlite, ""),
             Self::Postgres {
                 pool,
                 installation_id,
-            } => retry!(pool, installation_id, decode_postgres, " FOR UPDATE"),
+            } => retry!(
+                pool,
+                installation_id,
+                sqlx::Postgres,
+                decode_postgres,
+                " FOR UPDATE"
+            ),
         }
     }
 
