@@ -325,7 +325,7 @@ impl Database {
                     .bind($installation.as_str()).bind(workspace_id.to_string()).fetch_one(&mut *transaction).await?;
                 let jobs: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM jobs WHERE installation_id = $1 AND workspace_id = $2 AND status IN ('pending', 'running')")
                     .bind($installation.as_str()).bind(workspace_id.to_string()).fetch_one(&mut *transaction).await?;
-                if active != 0 || jobs != 0 { return Err(StorageError::WorkspaceStorageShrinkConflict); }
+                validate_retry_idle(active, jobs)?;
                 let prior_error = operation.error.take();
                 operation.phase = StorageShrinkPhase::Resuming;
                 operation.updated_at = now;
@@ -624,6 +624,13 @@ fn apply_shrink_workspace_update(
         }
         ShrinkWorkspaceUpdate::Resume => workspace.state = WorkspaceState::Starting,
         ShrinkWorkspaceUpdate::None => unreachable!(),
+    }
+    Ok(())
+}
+
+fn validate_retry_idle(active_operations: i64, active_jobs: i64) -> Result<(), StorageError> {
+    if active_operations != 0 || active_jobs != 0 {
+        return Err(StorageError::WorkspaceStorageShrinkConflict);
     }
     Ok(())
 }
