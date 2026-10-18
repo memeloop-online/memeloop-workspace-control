@@ -15,6 +15,7 @@ mod network_refresh;
 pub use network_refresh::NetworkRefreshError;
 mod ownership;
 mod port_mappings;
+mod request_client;
 mod resource_helpers;
 mod ttyd_mtls;
 mod workload;
@@ -33,6 +34,7 @@ pub use egress_refresh::{
 pub use internet_egress::{InternetEgressConfig, InternetEgressConfigError};
 pub use materialization::{InjectionMaterialization, MaterializationError};
 pub use ownership::OwnershipError;
+pub use request_client::request_client;
 pub use ttyd_mtls::{TtydMtlsConfig, TtydMtlsConfigError};
 
 pub(crate) use resource_helpers::namespaced_metadata;
