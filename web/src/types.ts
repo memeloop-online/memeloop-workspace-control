@@ -271,6 +271,8 @@ export interface Workspace {
   placement: WorkspacePlacement;
   state: WorkspaceState;
   resources: Resources;
+  home_volume_binding?: WorkspaceHomeVolumeBinding | null;
+  scratch_volume_binding?: WorkspaceHomeVolumeBinding | null;
   generation: number;
   created_at: number;
   updated_at: number;
@@ -403,8 +405,8 @@ export interface WorkspaceStorageTelemetry {
 }
 
 export interface StorageShrinkRequest {
-  home_gib?: number;
-  temporary_storage_gib?: number;
+  home_gib?: number | null;
+  temporary_storage_gib?: number | null;
   expected_generation: number;
   reclaim_source?: boolean;
 }

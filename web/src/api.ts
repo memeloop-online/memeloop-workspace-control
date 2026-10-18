@@ -239,6 +239,12 @@ export class ApiClient {
     });
   }
 
+  retryStorageShrinkResume(workspaceId: string, operationId: string): Promise<StorageShrinkOperation> {
+    return this.request(`/api/v1/workspaces/${workspaceId}/storage-shrink/retry`, {
+      method: "POST", body: JSON.stringify({ operation_id: operationId }), idempotent: true,
+    });
+  }
+
   audit(organizationId: string | undefined, options: { limit?: number; offset?: number; action?: string; actor?: string; workspace?: string; q?: string } = {}): Promise<AuditPage> {
     const query = new URLSearchParams();
     if (organizationId) query.set("organization_id", organizationId);
