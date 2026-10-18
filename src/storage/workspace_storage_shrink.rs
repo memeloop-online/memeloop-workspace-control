@@ -644,8 +644,7 @@ fn validate_retry_operation(
         || operation.request.reclaim_source
         || !operation.resume
         || workspace.state != WorkspaceState::Ready
-        || operation.request.home_gib.is_none()
-            && operation.request.temporary_storage_gib.is_none()
+        || operation.request.home_gib.is_none() && operation.request.temporary_storage_gib.is_none()
     {
         return Err(StorageError::WorkspaceStorageShrinkConflict);
     }
