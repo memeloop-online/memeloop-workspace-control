@@ -43,7 +43,8 @@ fn status_response(status: StatusCode) -> axum::response::Response {
         [("retry-after", "120")],
         Json(serde_json::json!({
             "apiVersion": "v1", "kind": "Status", "status": "Failure",
-            "message": "injected API failure", "reason": "ServiceUnavailable",
+            "message": "injected API failure",
+            "reason": status.canonical_reason().unwrap().replace(' ', ""),
             "code": status.as_u16(),
         })),
     )
