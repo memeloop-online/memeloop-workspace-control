@@ -31,7 +31,12 @@ impl KubernetesCoordinator {
         let names = self.builder.runtime_names(workspace)?.resources;
         let namespace = workspace.runtime.namespace();
         let stateful_sets = Api::<StatefulSet>::namespaced(self.client.clone(), namespace);
-        let existing = stateful_sets.get_metadata_opt(&names.stateful_set).await?;
+        let existing = observe_apply_stage(
+            workspace,
+            "startup_workload_metadata",
+            stateful_sets.get_metadata_opt(&names.stateful_set),
+        )
+        .await?;
         if let Some(existing) = &existing {
             self.builder
                 .verify_delete_ownership(&existing.metadata, workspace.id)?;
@@ -72,7 +77,12 @@ impl KubernetesCoordinator {
             return Err(ReconcileError::RuntimeIdentityMismatch);
         }
         let config_maps = Api::<ConfigMap>::namespaced(self.client.clone(), namespace);
-        let approved = config_maps.get_opt(&name).await?;
+        let approved = observe_apply_stage(
+            workspace,
+            "startup_approval_read",
+            config_maps.get_opt(&name),
+        )
+        .await?;
         if let Some(approved) = &approved {
             self.builder
                 .verify_delete_ownership(&approved.metadata, workspace.id)?;
