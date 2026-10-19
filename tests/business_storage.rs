@@ -284,6 +284,7 @@ async fn admitted_template_must_match_the_transactional_workspace_snapshot() {
             node_pool: None,
             inline_injections: None,
             admitted_template_yaml: &admitted_yaml,
+            cpu_overcommit_ratio: 10,
             allow_cluster_access: true,
             actor_user_id: admin.user_id,
             now: 104,
@@ -357,6 +358,7 @@ async fn workspace_runtime_identity_uses_the_product_namespace() {
             node_pool: None,
             inline_injections: None,
             admitted_template_yaml: &admitted_yaml,
+            cpu_overcommit_ratio: 10,
             allow_cluster_access: true,
             actor_user_id: admin.user_id,
             now: 103,
@@ -665,6 +667,7 @@ async fn image_allowlist_and_template_contract_are_admitted_atomically() {
         .create_workspace(command.clone(), true, admin.user_id, 104)
         .await
         .unwrap();
+    template_spec.cpu_overcommit_ratio = Some(10);
     assert_eq!(created.template, template_spec);
     assert_eq!(
         database.get_workspace(created.id).await.unwrap().template,
@@ -1210,4 +1213,171 @@ async fn user_injection_change_reconciles_every_workspace_the_user_can_access() 
         .unwrap();
     assert_eq!(affected, 1);
     assert_eq!(database.job_counts().await.unwrap().pending, 2);
+}
+
+#[tokio::test]
+async fn cpu_overcommit_is_frozen_for_all_creation_paths_and_existing_snapshots_stay_unscaled() {
+    let database = database().await;
+    let admin = database
+        .create_user_with_initial_key(
+            "Admin",
+            ADMIN_TOKEN,
+            true,
+            memeloop_workspace_control::auth::ApiKeyScope::initial_key_defaults(true),
+            31_536_000,
+            100,
+        )
+        .await
+        .unwrap();
+    let organization = database
+        .create_organization(
+            CreateOrganization {
+                name: "CPU snapshots".to_owned(),
+                owner_user_id: admin.user_id,
+            },
+            101,
+        )
+        .await
+        .unwrap();
+    let resources = Resources {
+        cpu_millis: 1_000,
+        memory_mib: 2_048,
+        gpu_count: 0,
+        disk_gib: 20,
+    };
+    let template_id = create_template(
+        &database,
+        organization.id,
+        "CPU",
+        "registry.example/workspace:1",
+        AccessMode::Internal,
+        resources,
+        102,
+    )
+    .await;
+    let template = database.get_workspace_template(template_id).await.unwrap();
+    let command = |name: &str, resources| CreateWorkspace {
+        organization_id: organization.id,
+        owner_id: admin.user_id,
+        name: name.to_owned(),
+        template_id,
+        resources,
+        organization_injection_refs: None,
+        user_injection_refs: None,
+    };
+    let fresh = database
+        .create_workspace(command("fresh", None), true, admin.user_id, 103)
+        .await
+        .unwrap();
+    assert_eq!(fresh.template.cpu_overcommit_ratio, Some(10));
+    let cipher =
+        EnvelopeCipher::from_base64(&EnvelopeCipher::generate_base64_key().unwrap()).unwrap();
+    let inline = database
+        .create_workspace_with_inline_injections(
+            command("inline", None),
+            &cipher,
+            &[],
+            true,
+            admin.user_id,
+            103,
+        )
+        .await
+        .unwrap();
+    assert_eq!(inline.template.cpu_overcommit_ratio, Some(10));
+    let overridden = database
+        .create_workspace(
+            command(
+                "override",
+                Some(Resources {
+                    cpu_millis: 2_000,
+                    ..resources
+                }),
+            ),
+            true,
+            admin.user_id,
+            104,
+        )
+        .await
+        .unwrap();
+    assert_eq!(overridden.template.cpu_overcommit_ratio, Some(10));
+    assert_eq!(overridden.template.resources.cpu_millis, 2_000);
+    let jobs_before_settings = database.job_counts().await.unwrap();
+    database
+        .patch_runtime_settings(None, Some(20), 105)
+        .await
+        .unwrap();
+    assert_eq!(
+        database.job_counts().await.unwrap().pending,
+        jobs_before_settings.pending
+    );
+    assert_eq!(database.get_workspace(fresh.id).await.unwrap(), fresh);
+    let admitted = database
+        .create_workspace_with_admitted_template(AdmittedWorkspaceCreation {
+            command: command("admitted-before-settings-change", None),
+            node_pool: None,
+            inline_injections: None,
+            admitted_template_yaml: &template.yaml,
+            cpu_overcommit_ratio: 10,
+            allow_cluster_access: true,
+            actor_user_id: admin.user_id,
+            now: 106,
+        })
+        .await
+        .unwrap();
+    assert_eq!(admitted.template.cpu_overcommit_ratio, Some(10));
+    assert_eq!(
+        database.get_workspace(fresh.id).await.unwrap().template,
+        fresh.template
+    );
+    assert_eq!(
+        database
+            .get_workspace(overridden.id)
+            .await
+            .unwrap()
+            .template,
+        overridden.template
+    );
+    assert_eq!(
+        database.get_workspace(admitted.id).await.unwrap().template,
+        admitted.template
+    );
+    let future = database
+        .create_workspace(command("future", None), true, admin.user_id, 107)
+        .await
+        .unwrap();
+    assert_eq!(future.template.cpu_overcommit_ratio, Some(20));
+    let mut explicit = template.template.clone();
+    explicit.cpu_overcommit_ratio = Some(1);
+    database
+        .replace_workspace_template(
+            template_id,
+            &WorkspaceTemplateDocument::new("Explicit no overcommit", explicit)
+                .to_yaml()
+                .unwrap(),
+            true,
+            108,
+        )
+        .await
+        .unwrap();
+    let no_overcommit = database
+        .create_workspace(command("explicit-one", None), true, admin.user_id, 109)
+        .await
+        .unwrap();
+    assert_eq!(no_overcommit.template.cpu_overcommit_ratio, Some(1));
+    let Database::Sqlite { pool, .. } = &database else {
+        unreachable!()
+    };
+    sqlx::query("UPDATE workspaces SET template_snapshot_yaml = ?1 WHERE id = ?2")
+        .bind(&template.yaml)
+        .bind(fresh.id.to_string())
+        .execute(pool)
+        .await
+        .unwrap();
+    database
+        .patch_runtime_settings(None, Some(50), 110)
+        .await
+        .unwrap();
+    let existing = database.get_workspace(fresh.id).await.unwrap();
+    assert_eq!(existing.template.cpu_overcommit_ratio, None);
+    assert_eq!(existing.template.cpu_request_millis(1_000), 1_000);
 }

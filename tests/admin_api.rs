@@ -467,8 +467,10 @@ async fn management_api_enforces_system_and_organization_boundaries() {
     let scaling: Value = body_json(scaling).await;
     assert_eq!(scaling["database_mode"], "sqlite");
     assert_eq!(scaling["configured_replicas"], 1);
-    assert_eq!(scaling["schema_version"], 29);
+    assert_eq!(scaling["schema_version"], 30);
     assert_eq!(scaling["job_worker_concurrency"], 32);
+    assert_eq!(scaling["cpu_overcommit_ratio"], 10);
+    let jobs_before = scaling["jobs"].clone();
     for (token, concurrency, expected) in [
         (MEMBER_TOKEN, 64, StatusCode::FORBIDDEN),
         (ADMIN_TOKEN, 0, StatusCode::BAD_REQUEST),
@@ -491,6 +493,83 @@ async fn management_api_enforces_system_and_organization_boundaries() {
         if expected == StatusCode::OK {
             assert_eq!(body_json(response).await["job_worker_concurrency"], 64);
         }
+    }
+    for (token, patch, expected, concurrency, ratio) in [
+        (
+            MEMBER_TOKEN,
+            json!({"cpu_overcommit_ratio": 2}),
+            StatusCode::FORBIDDEN,
+            64,
+            10,
+        ),
+        (
+            ADMIN_TOKEN,
+            json!({"cpu_overcommit_ratio": 0}),
+            StatusCode::BAD_REQUEST,
+            64,
+            10,
+        ),
+        (
+            ADMIN_TOKEN,
+            json!({"cpu_overcommit_ratio": 1001}),
+            StatusCode::BAD_REQUEST,
+            64,
+            10,
+        ),
+        (
+            ADMIN_TOKEN,
+            json!({"job_worker_concurrency": 70, "cpu_overcommit_ratio": 0}),
+            StatusCode::BAD_REQUEST,
+            64,
+            10,
+        ),
+        (
+            ADMIN_TOKEN,
+            json!({"cpu_overcommit_ratio": 1}),
+            StatusCode::OK,
+            64,
+            1,
+        ),
+        (
+            ADMIN_TOKEN,
+            json!({"cpu_overcommit_ratio": 1000}),
+            StatusCode::OK,
+            64,
+            1000,
+        ),
+        (
+            ADMIN_TOKEN,
+            json!({"job_worker_concurrency": 48}),
+            StatusCode::OK,
+            48,
+            1000,
+        ),
+        (ADMIN_TOKEN, json!({}), StatusCode::BAD_REQUEST, 48, 1000),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                authenticated(Request::put("/api/v1/admin/scaling"), token)
+                    .header("content-type", "application/json")
+                    .body(Body::from(patch.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected);
+        let stored = app
+            .clone()
+            .oneshot(
+                authenticated(Request::get("/api/v1/admin/scaling"), ADMIN_TOKEN)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let stored = body_json(stored).await;
+        assert_eq!(stored["job_worker_concurrency"], concurrency);
+        assert_eq!(stored["cpu_overcommit_ratio"], ratio);
+        assert_eq!(stored["jobs"], jobs_before);
     }
 }
 

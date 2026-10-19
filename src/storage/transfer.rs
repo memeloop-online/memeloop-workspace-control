@@ -285,7 +285,7 @@ const IMPORT_DESTINATION_DATA_TABLES: &[&str] = &[
 const EXPORT_QUERIES: &[(&str, &str)] = &[
     (
         "installation_runtime_settings",
-        "SELECT json_object('installation_id', installation_id, 'job_worker_concurrency', job_worker_concurrency, 'updated_at', updated_at) item FROM installation_runtime_settings WHERE installation_id = ?1",
+        "SELECT json_object('installation_id', installation_id, 'job_worker_concurrency', job_worker_concurrency, 'cpu_overcommit_ratio', cpu_overcommit_ratio, 'updated_at', updated_at) item FROM installation_runtime_settings WHERE installation_id = ?1",
     ),
     (
         "users",

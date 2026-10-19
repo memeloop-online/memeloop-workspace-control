@@ -155,3 +155,29 @@ test("template form rejects unknown fields at every schema object level", () => 
     assert.throws(() => templateDraftFromYaml(candidate), /unknown field .*arbitrary_typo/u);
   }
 });
+
+test("explicit CPU reservation overrides survive form edits and YAML round-trips", () => {
+  const base = templateDraftToYaml({ ...emptyTemplateDraft(), name: "cpu-policy" });
+  for (const ratio of [1, 10, 1000]) {
+    const yaml = base.replace("spec:\n", `spec:\n  cpu_overcommit_ratio: ${ratio}\n`);
+    const draft = templateDraftFromYaml(yaml);
+    assert.equal(draft.cpuOvercommitRatio, ratio);
+    const saved = templateDraftToYaml({ ...draft, name: "renamed-template" });
+    assert.match(saved, new RegExp(`cpu_overcommit_ratio: ${ratio}\\n`, "u"));
+    assert.equal(templateDraftFromYaml(saved).cpuOvercommitRatio, ratio);
+  }
+  assert.doesNotMatch(templateDraftToYaml(templateDraftFromYaml(base)), /cpu_overcommit_ratio/u);
+  const inherited = templateDraftFromYaml(base.replace("spec:\n", "spec:\n  cpu_overcommit_ratio: null\n"));
+  assert.equal(inherited.cpuOvercommitRatio, undefined);
+  assert.doesNotMatch(templateDraftToYaml(inherited), /cpu_overcommit_ratio/u);
+});
+
+test("CPU reservation overrides reject malformed YAML values without dropping the policy", () => {
+  const base = templateDraftToYaml({ ...emptyTemplateDraft(), name: "cpu-policy" });
+  for (const value of ["0", "1001", "-1", "1.5", '"10"', "true", "[]", "{}", "NaN"]) {
+    assert.throws(() => templateDraftFromYaml(base.replace("spec:\n", `spec:\n  cpu_overcommit_ratio: ${value}\n`)), TemplateDraftError);
+  }
+  for (const cpuOvercommitRatio of [0, 1001, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+    assert.throws(() => templateDraftToYaml({ ...emptyTemplateDraft(), cpuOvercommitRatio }), TemplateDraftError);
+  }
+});

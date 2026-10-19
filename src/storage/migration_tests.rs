@@ -282,3 +282,6 @@ async fn sqlite_v28_adds_runtime_settings_without_reapplying_storage_shrink_colu
         100
     );
 }
+
+#[path = "migration_tests/cpu_settings.rs"]
+mod cpu_settings;

@@ -54,10 +54,17 @@ impl<'a> WorkspacePod<'a> {
 
     pub fn resource_requests(&self) -> BTreeMap<String, Quantity> {
         quantities(
-            format!("{}m", self.template.pod_requests.cpu_millis),
+            format!(
+                "{}m",
+                self.cpu_request_millis(self.template.pod_requests.cpu_millis)
+            ),
             format!("{}Mi", self.template.pod_requests.memory_mib),
             Some("512Mi".to_owned()),
         )
+    }
+
+    pub fn cpu_request_millis(&self, base_millis: u64) -> u64 {
+        self.template.cpu_request_millis(base_millis)
     }
 
     pub fn ssh_strict_modes(self) -> &'static str {
@@ -108,7 +115,11 @@ impl<'a> WorkspacePod<'a> {
             ]),
             volume_mounts: Some(vec![mount(buildkit::SCRATCH_VOLUME, SCRATCH_ROOT, false)]),
             resources: Some(ResourceRequirements {
-                requests: Some(quantities("10m", "16Mi", None)),
+                requests: Some(quantities(
+                    format!("{}m", self.cpu_request_millis(10)),
+                    "16Mi",
+                    None,
+                )),
                 limits: Some(quantities("100m", "64Mi", None)),
                 ..ResourceRequirements::default()
             }),
@@ -190,11 +201,11 @@ impl<'a> WorkspacePod<'a> {
     }
 
     pub fn buildkit_container(&self, image: &str) -> Option<Container> {
-        buildkit::container(self.has_buildkit(), image)
+        buildkit::container(self.has_buildkit(), image, self.cpu_request_millis(250))
     }
 
     pub fn buildkit_bootstrap_container(&self, image: &str) -> Option<Container> {
-        buildkit::bootstrap_container(self.has_buildkit(), image)
+        buildkit::bootstrap_container(self.has_buildkit(), image, self.cpu_request_millis(10))
     }
 
     pub fn pod_security_context(&self) -> Option<k8s_openapi::api::core::v1::PodSecurityContext> {

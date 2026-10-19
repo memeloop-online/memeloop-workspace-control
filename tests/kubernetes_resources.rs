@@ -1999,3 +1999,108 @@ fn materializes_values_without_putting_secrets_in_metadata_or_manifest() {
     let serialized = serde_json::to_string(&materialized.environment_secret.metadata).unwrap();
     assert!(!serialized.contains(secret_value));
 }
+
+#[test]
+fn snapshot_cpu_overcommit_scales_every_container_request_without_changing_other_resources() {
+    let mut workspace = workspace(WorkspaceState::Ready);
+    workspace.template.pod_requests.cpu_millis = 1_000;
+    workspace.template.buildkit = true;
+    let original = builder()
+        .build(&workspace)
+        .unwrap()
+        .stateful_set
+        .spec
+        .unwrap()
+        .template
+        .spec
+        .unwrap();
+    workspace.template.cpu_overcommit_ratio = Some(1);
+    let explicit_one = builder()
+        .build(&workspace)
+        .unwrap()
+        .stateful_set
+        .spec
+        .unwrap()
+        .template
+        .spec
+        .unwrap();
+    assert_eq!(
+        original, explicit_one,
+        "existing snapshots and ratio 1 preserve the same Pod"
+    );
+    workspace.template.cpu_overcommit_ratio = Some(10);
+    let scaled = builder()
+        .build(&workspace)
+        .unwrap()
+        .stateful_set
+        .spec
+        .unwrap()
+        .template
+        .spec
+        .unwrap();
+    let cpu_millis = |container: &k8s_openapi::api::core::v1::Container| {
+        container
+            .resources
+            .as_ref()
+            .unwrap()
+            .requests
+            .as_ref()
+            .unwrap()["cpu"]
+            .0
+            .strip_suffix('m')
+            .unwrap()
+            .parse::<u64>()
+            .unwrap()
+    };
+    let containers = original
+        .containers
+        .iter()
+        .chain(original.init_containers.as_ref().unwrap());
+    let scaled_containers = scaled
+        .containers
+        .iter()
+        .chain(scaled.init_containers.as_ref().unwrap());
+    for (before, after) in containers.zip(scaled_containers) {
+        assert_eq!(before.name, after.name);
+        assert_eq!(
+            cpu_millis(after),
+            cpu_millis(before).div_ceil(10).max(1),
+            "{}",
+            after.name
+        );
+        let mut resources = after.resources.clone().unwrap();
+        resources.requests.as_mut().unwrap().insert(
+            "cpu".to_owned(),
+            before
+                .resources
+                .as_ref()
+                .unwrap()
+                .requests
+                .as_ref()
+                .unwrap()["cpu"]
+                .clone(),
+        );
+        assert_eq!(
+            resources,
+            before.resources.clone().unwrap(),
+            "{} changed non-CPU resources or limits",
+            after.name
+        );
+    }
+    let effective_request = |pod: &k8s_openapi::api::core::v1::PodSpec| {
+        let steady = pod.containers.iter().map(cpu_millis).sum::<u64>();
+        let initialization = pod
+            .init_containers
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(cpu_millis)
+            .max()
+            .unwrap();
+        steady.max(initialization)
+    };
+    assert_eq!(effective_request(&original), 1_260);
+    assert_eq!(effective_request(&scaled), 126);
+    assert!(effective_request(&scaled) <= 460);
+    assert!(effective_request(&original) > 460);
+}

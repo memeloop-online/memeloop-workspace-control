@@ -18,6 +18,7 @@ pub(super) struct WorkspaceCreation<'a> {
     pub(super) injection_refs: &'a WorkspaceInjectionRefs,
     pub(super) inline: Option<(&'a EnvelopeCipher, &'a [InjectionItem])>,
     pub(super) admitted_template_yaml: Option<&'a str>,
+    pub(super) cpu_overcommit_ratio: u16,
     pub(super) allow_cluster_access: bool,
     pub(super) actor_user_id: Uuid,
     pub(super) now: i64,
@@ -45,7 +46,7 @@ pub(super) async fn create_sqlite(
         creation.requested_node_pool,
     )
     .await?;
-    let yaml = apply_resource_override(command, &mut snapshot)?;
+    let yaml = apply_resource_override(command, &mut snapshot, creation.cpu_overcommit_ratio)?;
     let workspace = build_workspace(command, snapshot, node_pool, creation.now)?;
     crate::storage::workspace_admission::admit_sqlite(connection, installation_id, &workspace)
         .await?;
@@ -77,7 +78,7 @@ pub(super) async fn create_postgres(
         creation.requested_node_pool,
     )
     .await?;
-    let yaml = apply_resource_override(command, &mut snapshot)?;
+    let yaml = apply_resource_override(command, &mut snapshot, creation.cpu_overcommit_ratio)?;
     let workspace = build_workspace(command, snapshot, node_pool, creation.now)?;
     crate::storage::workspace_admission::admit_postgres(connection, installation_id, &workspace)
         .await?;
@@ -90,11 +91,17 @@ pub(super) async fn create_postgres(
 fn apply_resource_override(
     command: &CreateWorkspace,
     snapshot: &mut crate::storage::template_store::ResolvedTemplateSnapshot,
+    cpu_overcommit_ratio: u16,
 ) -> Result<String, StorageError> {
-    let Some(resources) = command.resources else {
-        return Ok(snapshot.yaml.clone());
-    };
-    snapshot.spec.resources = resources;
+    if let Some(resources) = command.resources {
+        snapshot.spec.resources = resources;
+    }
+    snapshot.spec.cpu_overcommit_ratio = Some(
+        snapshot
+            .spec
+            .cpu_overcommit_ratio
+            .unwrap_or(cpu_overcommit_ratio),
+    );
     snapshot
         .spec
         .validate()
@@ -148,6 +155,14 @@ fn verify_admitted_template(
         .is_some_and(|expected| expected != snapshot.yaml)
     {
         return Err(StorageError::TemplateNotFound);
+    }
+    if creation.admitted_template_yaml.is_some()
+        && snapshot
+            .spec
+            .cpu_overcommit_ratio
+            .is_some_and(|ratio| ratio != creation.cpu_overcommit_ratio)
+    {
+        return Err(StorageError::InvalidWorkspace);
     }
     Ok(())
 }

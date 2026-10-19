@@ -47,6 +47,8 @@ pub struct AdmittedWorkspaceCreation<'a> {
     pub node_pool: Option<&'a str>,
     pub inline_injections: Option<(&'a EnvelopeCipher, &'a [InjectionItem])>,
     pub admitted_template_yaml: &'a str,
+    /// Final ratio approved before plugin admission; storage must not re-read global settings.
+    pub cpu_overcommit_ratio: u16,
     pub allow_cluster_access: bool,
     pub actor_user_id: Uuid,
     pub now: i64,
@@ -56,6 +58,7 @@ struct WorkspaceCreationOptions<'a> {
     node_pool: Option<&'a str>,
     inline: Option<(&'a EnvelopeCipher, &'a [InjectionItem])>,
     admitted_template_yaml: Option<&'a str>,
+    cpu_overcommit_ratio: Option<u16>,
     allow_cluster_access: bool,
     actor_user_id: Uuid,
     now: i64,
@@ -159,6 +162,7 @@ impl Database {
                 node_pool: None,
                 inline: None,
                 admitted_template_yaml: None,
+                cpu_overcommit_ratio: None,
                 allow_cluster_access,
                 actor_user_id,
                 now,
@@ -182,6 +186,7 @@ impl Database {
                 node_pool: None,
                 inline: Some((cipher, inline)),
                 admitted_template_yaml: None,
+                cpu_overcommit_ratio: None,
                 allow_cluster_access,
                 actor_user_id,
                 now,
@@ -199,6 +204,7 @@ impl Database {
             node_pool,
             inline_injections,
             admitted_template_yaml,
+            cpu_overcommit_ratio,
             allow_cluster_access,
             actor_user_id,
             now,
@@ -209,6 +215,7 @@ impl Database {
                 node_pool,
                 inline: inline_injections,
                 admitted_template_yaml: Some(admitted_template_yaml),
+                cpu_overcommit_ratio: Some(cpu_overcommit_ratio),
                 allow_cluster_access,
                 actor_user_id,
                 now,
@@ -230,12 +237,20 @@ impl Database {
             user: command.user_injection_refs.clone(),
         };
         injection_refs.validate()?;
+        let cpu_overcommit_ratio = match options.cpu_overcommit_ratio {
+            Some(ratio) => ratio,
+            None => self.cpu_overcommit_ratio().await?,
+        };
+        if !(1..=1_000).contains(&cpu_overcommit_ratio) {
+            return Err(StorageError::InvalidWorkspace);
+        }
         let creation = creation::WorkspaceCreation {
             command: &command,
             requested_node_pool: options.node_pool,
             injection_refs: &injection_refs,
             inline: options.inline,
             admitted_template_yaml: options.admitted_template_yaml,
+            cpu_overcommit_ratio,
             allow_cluster_access: options.allow_cluster_access,
             actor_user_id: options.actor_user_id,
             now: options.now,

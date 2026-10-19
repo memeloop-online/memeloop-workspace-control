@@ -18,6 +18,11 @@ pub(super) async fn create_admitted_workspace(
 ) -> Result<Workspace, ApiError> {
     let command = &request.workspace;
     let mut final_template = template.template.clone();
+    let cpu_overcommit_ratio = match final_template.cpu_overcommit_ratio {
+        Some(ratio) => ratio,
+        None => state.database.cpu_overcommit_ratio().await?,
+    };
+    final_template.cpu_overcommit_ratio = Some(cpu_overcommit_ratio);
     if let Some(resources) = command.resources {
         final_template.resources = resources;
         final_template
@@ -63,6 +68,7 @@ pub(super) async fn create_admitted_workspace(
             node_pool: request.node_pool.as_deref(),
             inline_injections: inline,
             admitted_template_yaml: &template.yaml,
+            cpu_overcommit_ratio,
             allow_cluster_access: actor.may_manage_system(),
             actor_user_id: actor.user_id,
             now,
@@ -191,6 +197,39 @@ mod tests {
                 "fixture {fixture:?} persisted an unexpected workspace count"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn creation_freezes_cpu_ratio_before_preflight_and_plugin_admission() {
+        let (mut state, actor, request, template, _) = setup(NamespaceFixture::Owned).await;
+        let database = state.database.clone();
+        state.set_kubernetes_client(kube::Client::new(
+            service_fn(move |_request: Request<kube::client::Body>| {
+                let database = database.clone();
+                async move {
+                    database
+                        .patch_runtime_settings(None, Some(20), 9)
+                        .await
+                        .unwrap();
+                    Ok::<_, Infallible>(namespace_response(NamespaceFixture::Owned))
+                }
+            }),
+            "default",
+        ));
+        let workspace = create_admitted_workspace(&state, &actor, &request, &template, 10)
+            .await
+            .unwrap();
+        assert_eq!(state.database.cpu_overcommit_ratio().await.unwrap(), 20);
+        assert_eq!(workspace.template.cpu_overcommit_ratio, Some(10));
+        assert_eq!(
+            state
+                .database
+                .get_workspace(workspace.id)
+                .await
+                .unwrap()
+                .template,
+            workspace.template
+        );
     }
 
     async fn setup(

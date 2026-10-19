@@ -28,7 +28,7 @@ async fn migrate_sqlite(pool: &SqlitePool, applied_at: i64) -> Result<(), Storag
         .await?;
     let version = current_sqlite_version(&mut transaction).await?;
     match version {
-        schema::SCHEMA_VERSION | 28 | 27 => {}
+        schema::SCHEMA_VERSION | 29 | 28 | 27 => {}
         24 => {
             upgrade_sqlite_v24_to_v25(&mut transaction, applied_at).await?;
             upgrade_sqlite_home_pvc(&mut transaction, applied_at).await?;
@@ -45,6 +45,7 @@ async fn migrate_sqlite(pool: &SqlitePool, applied_at: i64) -> Result<(), Storag
                 .chain(schema::HOME_PVC_MIGRATION)
                 .chain(schema::STORAGE_SHRINK_MIGRATION)
                 .chain(schema::RUNTIME_SETTINGS_MIGRATION)
+                .chain(schema::CPU_OVERCOMMIT_MIGRATION)
             {
                 sqlx::query(statement).execute(&mut *transaction).await?;
             }
@@ -56,21 +57,7 @@ async fn migrate_sqlite(pool: &SqlitePool, applied_at: i64) -> Result<(), Storag
         }
         _ => return Err(StorageError::UnsupportedDatabaseVersion),
     }
-    if version != 0 && version < schema::SCHEMA_VERSION {
-        if version < 28 {
-            for statement in schema::STORAGE_SHRINK_MIGRATION {
-                sqlx::query(statement).execute(&mut *transaction).await?;
-            }
-        }
-        for statement in schema::RUNTIME_SETTINGS_MIGRATION {
-            sqlx::query(statement).execute(&mut *transaction).await?;
-        }
-        sqlx::query("INSERT INTO schema_migrations (version, applied_at) VALUES (?1, ?2)")
-            .bind(schema::SCHEMA_VERSION)
-            .bind(applied_at)
-            .execute(&mut *transaction)
-            .await?;
-    }
+    upgrade_sqlite_incremental(&mut transaction, version, applied_at).await?;
     transaction.commit().await?;
     Ok(())
 }
@@ -100,7 +87,7 @@ async fn migrate_postgres(
             .fetch_one(&mut *transaction)
             .await?;
     match version {
-        schema::SCHEMA_VERSION | 28 | 27 => {}
+        schema::SCHEMA_VERSION | 29 | 28 | 27 => {}
         24 => {
             upgrade_postgres_v24_to_v25(&mut transaction, applied_at).await?;
             upgrade_postgres_home_pvc(&mut transaction, applied_at).await?;
@@ -117,6 +104,7 @@ async fn migrate_postgres(
                 .chain(schema::HOME_PVC_MIGRATION)
                 .chain(schema::STORAGE_SHRINK_MIGRATION)
                 .chain(schema::RUNTIME_SETTINGS_MIGRATION)
+                .chain(schema::CPU_OVERCOMMIT_MIGRATION)
             {
                 sqlx::query(statement).execute(&mut *transaction).await?;
             }
@@ -128,22 +116,64 @@ async fn migrate_postgres(
         }
         _ => return Err(StorageError::UnsupportedDatabaseVersion),
     }
+    upgrade_postgres_incremental(&mut transaction, version, applied_at).await?;
+    transaction.commit().await?;
+    Ok(())
+}
+
+async fn upgrade_sqlite_incremental(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    version: i64,
+    applied_at: i64,
+) -> Result<(), StorageError> {
     if version != 0 && version < schema::SCHEMA_VERSION {
         if version < 28 {
             for statement in schema::STORAGE_SHRINK_MIGRATION {
-                sqlx::query(statement).execute(&mut *transaction).await?;
+                sqlx::query(statement).execute(&mut **transaction).await?;
             }
         }
-        for statement in schema::RUNTIME_SETTINGS_MIGRATION {
-            sqlx::query(statement).execute(&mut *transaction).await?;
+        if version < 29 {
+            for statement in schema::RUNTIME_SETTINGS_MIGRATION {
+                sqlx::query(statement).execute(&mut **transaction).await?;
+            }
+        }
+        for statement in schema::CPU_OVERCOMMIT_MIGRATION {
+            sqlx::query(statement).execute(&mut **transaction).await?;
+        }
+        sqlx::query("INSERT INTO schema_migrations (version, applied_at) VALUES (?1, ?2)")
+            .bind(schema::SCHEMA_VERSION)
+            .bind(applied_at)
+            .execute(&mut **transaction)
+            .await?;
+    }
+    Ok(())
+}
+
+async fn upgrade_postgres_incremental(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    version: i64,
+    applied_at: i64,
+) -> Result<(), StorageError> {
+    if version != 0 && version < schema::SCHEMA_VERSION {
+        if version < 28 {
+            for statement in schema::STORAGE_SHRINK_MIGRATION {
+                sqlx::query(statement).execute(&mut **transaction).await?;
+            }
+        }
+        if version < 29 {
+            for statement in schema::RUNTIME_SETTINGS_MIGRATION {
+                sqlx::query(statement).execute(&mut **transaction).await?;
+            }
+        }
+        for statement in schema::CPU_OVERCOMMIT_MIGRATION {
+            sqlx::query(statement).execute(&mut **transaction).await?;
         }
         sqlx::query("INSERT INTO schema_migrations (version, applied_at) VALUES ($1, $2)")
             .bind(schema::SCHEMA_VERSION)
             .bind(applied_at)
-            .execute(&mut *transaction)
+            .execute(&mut **transaction)
             .await?;
     }
-    transaction.commit().await?;
     Ok(())
 }
 

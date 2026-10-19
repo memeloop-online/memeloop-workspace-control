@@ -2,7 +2,11 @@ pub(super) const RUNTIME_SETTINGS_MIGRATION: &[&str] = &[
     "CREATE TABLE installation_runtime_settings (installation_id TEXT PRIMARY KEY, job_worker_concurrency BIGINT NOT NULL CHECK (job_worker_concurrency BETWEEN 1 AND 256), updated_at BIGINT NOT NULL)",
 ];
 
-pub(super) const SCHEMA_VERSION: i64 = 29;
+pub(super) const CPU_OVERCOMMIT_MIGRATION: &[&str] = &[
+    "ALTER TABLE installation_runtime_settings ADD COLUMN cpu_overcommit_ratio BIGINT NOT NULL DEFAULT 10 CHECK (cpu_overcommit_ratio BETWEEN 1 AND 1000)",
+];
+
+pub(super) const SCHEMA_VERSION: i64 = 30;
 
 pub(super) const STORAGE_SHRINK_MIGRATION: &[&str] = &[
     "ALTER TABLE workspaces ADD COLUMN scratch_volume_binding_json TEXT",

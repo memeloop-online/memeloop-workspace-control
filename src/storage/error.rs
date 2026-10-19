@@ -15,6 +15,8 @@ pub enum StorageError {
     Uuid(#[from] uuid::Error),
     #[error("job worker concurrency must be between 1 and 256")]
     InvalidJobWorkerConcurrency,
+    #[error("CPU overcommit ratio must be between 1 and 1000")]
+    InvalidCpuOvercommitRatio,
     #[error("lease owner must not be empty")]
     EmptyLeaseOwner,
     #[error("lease duration overflowed")]
