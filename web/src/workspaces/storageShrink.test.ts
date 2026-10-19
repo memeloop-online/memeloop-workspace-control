@@ -286,6 +286,17 @@ test("resume guard requires the current binding to fully match the expected clai
   assert.equal(storageShrinkResumable(switchedFailure(), nullScratch), false);
 });
 
+test("resume accepts an unselected volume with an explicitly absent current binding", () => {
+  const operation = switchedFailure();
+  operation.request.temporary_storage_gib = null;
+  operation.temporary.source = null;
+  const workspace = { ...readyWorkspace, scratch_volume_binding: null };
+  assert.equal(storageShrinkResumable(operation, workspace), true);
+  assert.equal(storageShrinkResumable(operation, { ...workspace, scratch_volume_binding: undefined }), false);
+  assert.equal(storageShrinkResumable(operation, { ...workspace, storage_policy: { temporary_storage_gib: 59 } }), false);
+  assert.equal(storageShrinkResumable(operation, readyWorkspace), false);
+});
+
 test("resume guard rejects an operation with no selected volume", () => {
   const idleWorkspace = {
     ...readyWorkspace,

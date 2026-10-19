@@ -138,12 +138,10 @@ function volumeResumeReady(
   originalGiB: number,
 ): boolean {
   if (volume.target_gib === null) {
-    return requestTarget === undefined
-      && volume.destination === null
-      && volume.source !== null
-      && volume.source.capacity_gib === currentGiB
-      && volume.source.capacity_gib === originalGiB
-      && bindingMatches(currentBinding, volume.source);
+    if (requestTarget !== undefined || volume.destination !== null || currentGiB !== originalGiB) return false;
+    return volume.source === null
+      ? currentBinding === null
+      : volume.source.capacity_gib === originalGiB && bindingMatches(currentBinding, volume.source);
   }
   const { source, destination, source_volume, destination_volume } = volume;
   return requestTarget === volume.target_gib
