@@ -30,6 +30,7 @@ import {
   storageShrinkInFlight,
   storageShrinkPhaseLabelKey,
   storageShrinkReclaimable,
+  storageShrinkResumable,
   validateStorageShrink,
 } from "./storageShrink";
 
@@ -58,6 +59,8 @@ export function StorageShrinkDialog({ api, item, runtime, onClose, onSettled }: 
   const [reclaimConfirming, setReclaimConfirming] = useState(false);
   const [reclaimSubmitting, setReclaimSubmitting] = useState(false);
   const [reclaimError, setReclaimError] = useState<string | null>(null);
+  const [resumeSubmitting, setResumeSubmitting] = useState(false);
+  const [resumeError, setResumeError] = useState<string | null>(null);
   const watchedRef = useRef<string | null>(null);
   const notifiedRef = useRef<string | null>(null);
 
@@ -69,6 +72,7 @@ export function StorageShrinkDialog({ api, item, runtime, onClose, onSettled }: 
     setReclaimSource(false);
     setReclaimConfirming(false);
     setReclaimError(null);
+    setResumeError(null);
     watchedRef.current = null;
     notifiedRef.current = null;
     if (!workspaceId) return;
@@ -97,6 +101,7 @@ export function StorageShrinkDialog({ api, item, runtime, onClose, onSettled }: 
   useEffect(() => {
     setReclaimConfirming(false);
     setReclaimError(null);
+    setResumeError(null);
   }, [operation?.id, operation?.phase]);
 
   useEffect(() => {
@@ -120,8 +125,9 @@ export function StorageShrinkDialog({ api, item, runtime, onClose, onSettled }: 
     { currentGiB: workspace.storage_policy.temporary_storage_gib, usedBytes: temporaryUsedBytes },
   );
 
-  const busy = submitting || loading;
+  const busy = submitting || loading || resumeSubmitting;
   const canSubmit = !busy && !inFlight && validation.targets !== null;
+  const resumable = storageShrinkResumable(operation, workspace);
 
   async function submit() {
     if (!workspace || !validation.targets || submitting) return;
@@ -151,6 +157,21 @@ export function StorageShrinkDialog({ api, item, runtime, onClose, onSettled }: 
       setReclaimError(error instanceof Error ? error.message : t("operationFailed"));
     } finally {
       setReclaimSubmitting(false);
+    }
+  }
+
+  async function resumeOperation() {
+    if (!workspace || !operation || resumeSubmitting) return;
+    setResumeSubmitting(true);
+    setResumeError(null);
+    try {
+      const resumed = await api.retryStorageShrinkResume(workspace.id, operation.id);
+      notifiedRef.current = null;
+      setOperation(resumed);
+    } catch (error) {
+      setResumeError(error instanceof Error ? error.message : t("operationFailed"));
+    } finally {
+      setResumeSubmitting(false);
     }
   }
 
@@ -283,6 +304,7 @@ export function StorageShrinkDialog({ api, item, runtime, onClose, onSettled }: 
               </MessageBar>
             )}
             {submitError && <MessageBar intent="error"><MessageBarBody>{submitError}</MessageBarBody></MessageBar>}
+            {resumeError && <MessageBar intent="error"><MessageBarBody>{resumeError}</MessageBarBody></MessageBar>}
             <dl className={styles.dialogFacts}>
               <div className={styles.dialogFact}>
                 <Text weight="semibold">{t("homeStorage")}</Text>
@@ -338,6 +360,11 @@ export function StorageShrinkDialog({ api, item, runtime, onClose, onSettled }: 
             )}
           </DialogContent>
           <DialogActions className={styles.dialogActions}>
+            {resumable && (
+              <Button appearance="primary" disabled={busy} onClick={() => void resumeOperation()}>
+                {t("retry")}
+              </Button>
+            )}
             <Button appearance="secondary" disabled={submitting} onClick={onClose}>{t("cancel")}</Button>
             <Button appearance="primary" disabled={!canSubmit} onClick={() => void submit()}>
               {submitting ? t("shrinkStorageStarting") : t("shrinkStorageSubmit")}
