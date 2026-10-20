@@ -45,6 +45,7 @@ test("administrator saves CPU overcommit and concurrency independently with loca
     const openScaling = async (locale = "en") => {
       const copy = translations[locale];
       await page.goto(`${baseUrl}/#administration`, { waitUntil: "domcontentloaded" });
+      await page.reload({ waitUntil: "domcontentloaded" });
       await page.getByRole("button", { name: copy.settingsTitle, exact: true }).click();
       await page.getByTestId("settings-search").fill(copy.cpuOvercommitRatio);
       const section = page.getByTestId("settings-section-scaling");
