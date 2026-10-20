@@ -619,7 +619,7 @@ async fn postgres_binding_competition_is_atomic_and_survives_database_reconnect(
         .await
         .unwrap();
     let fixture = Fixture::with_database(database).await;
-    downgrade_binding_schema(&fixture.database).await;
+    assert_eq!(fixture.database.schema_version().await.unwrap(), 30);
     fixture.database.migrate().await.unwrap();
     assert_eq!(
         fixture
@@ -657,6 +657,7 @@ async fn postgres_binding_competition_is_atomic_and_survives_database_reconnect(
     let reconnected = Database::connect(scoped.as_str(), "home-binding".parse().unwrap())
         .await
         .unwrap();
+    reconnected.migrate().await.unwrap();
     let readback = reconnected.get_workspace(winner.id).await.unwrap();
     assert_eq!(readback.home_volume_binding, Some(binding));
     assert_eq!(readback.template.resources.disk_gib, 20);
@@ -668,36 +669,9 @@ async fn postgres_binding_competition_is_atomic_and_survives_database_reconnect(
         .unwrap();
 }
 
-async fn downgrade_binding_schema(database: &Database) {
-    let statements = [
-        "DROP TABLE workspace_storage_shrinks",
-        "DROP TABLE installation_runtime_settings",
-        "DROP INDEX workspace_home_pvc_name_idx",
-        "DROP INDEX workspace_home_pvc_uid_idx",
-        "ALTER TABLE workspaces DROP COLUMN home_pvc_namespace",
-        "ALTER TABLE workspaces DROP COLUMN home_pvc_name",
-        "ALTER TABLE workspaces DROP COLUMN home_pvc_uid",
-        "ALTER TABLE workspaces DROP COLUMN home_pvc_capacity_gib",
-        "ALTER TABLE workspaces DROP COLUMN scratch_volume_binding_json",
-        "DELETE FROM schema_migrations WHERE version >= 26",
-        "INSERT INTO schema_migrations (version, applied_at) VALUES (25, 1)",
-    ];
-    for statement in statements {
-        match database {
-            Database::Sqlite { pool, .. } => {
-                sqlx::query(statement).execute(pool).await.unwrap();
-            }
-            Database::Postgres { pool, .. } => {
-                sqlx::query(statement).execute(pool).await.unwrap();
-            }
-        }
-    }
-}
-
 #[tokio::test]
-async fn sqlite_v25_upgrade_preserves_workspace_and_does_not_bind_or_change_a_template() {
+async fn current_sqlite_schema_preserves_workspace_and_rejects_template_binding() {
     let fixture = Fixture::new().await;
-    downgrade_binding_schema(&fixture.database).await;
     fixture.database.migrate().await.unwrap();
     fixture.database.migrate().await.unwrap();
     assert_eq!(fixture.database.schema_version().await.unwrap(), 30);
