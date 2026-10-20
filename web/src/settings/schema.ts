@@ -1,5 +1,5 @@
 import type { MessageKey } from "../i18n";
-import type { Principal } from "../types";
+import type { Principal, ScalingSettingsPatch } from "../types";
 import { canManageOrganization, canManageOtherUserApiKeys, canManageSystem, hasApiKeyScope } from "../permissions.ts";
 import { settingsFields } from "./fields.ts";
 
@@ -32,7 +32,7 @@ export const settingsSections: readonly SettingsSection[] = [
   { id: "templates", category: "organization", title: "templates", keywords: ["template", "workspace", "cluster"], available: manageOrganization },
   { id: "webhooks", category: "organization", title: "webhook", keywords: ["webhook", "url", "secret", "event_prefix"], available: manageOrganization },
   { id: "images", category: "system", title: "imageAllowlist", keywords: ["oci", "image", "allowlist", "enabled"], available: systemAdmin },
-  { id: "scaling", category: "system", title: "scaling", keywords: ["database", "replicas", "jobs", "schema_version", "job_worker_concurrency", "concurrency", "worker"], available: systemAdmin },
+  { id: "scaling", category: "system", title: "scaling", keywords: ["database", "replicas", "jobs", "schema_version", "job_worker_concurrency", "concurrency", "worker", "cpu_overcommit_ratio", "overcommit"], available: systemAdmin },
 ];
 
 export const JOB_WORKER_CONCURRENCY_MIN = 1;
@@ -48,9 +48,36 @@ export function parseJobWorkerConcurrency(value: string): number {
   return parsed;
 }
 
+export const CPU_OVERCOMMIT_RATIO_MIN = 1;
+export const CPU_OVERCOMMIT_RATIO_MAX = 1000;
+export const CPU_OVERCOMMIT_RATIO_DEFAULT = 10;
+
+export class InvalidCpuOvercommitRatio extends Error {}
+
+export function parseCpuOvercommitRatio(value: string): number {
+  const trimmed = value.trim();
+  const parsed = Number(trimmed);
+  if (!/^\d+$/.test(trimmed) || !Number.isSafeInteger(parsed) || parsed < CPU_OVERCOMMIT_RATIO_MIN || parsed > CPU_OVERCOMMIT_RATIO_MAX) throw new InvalidCpuOvercommitRatio();
+  return parsed;
+}
+
+export interface ScalingDraft {
+  job_worker_concurrency: string;
+  cpu_overcommit_ratio: string;
+}
+
+export function changedScalingSettings(draft: ScalingDraft, baseline: ScalingDraft): ScalingSettingsPatch {
+  const concurrency = parseJobWorkerConcurrency(draft.job_worker_concurrency);
+  const ratio = parseCpuOvercommitRatio(draft.cpu_overcommit_ratio);
+  return {
+    ...(concurrency !== Number(baseline.job_worker_concurrency) ? { job_worker_concurrency: concurrency } : {}),
+    ...(ratio !== Number(baseline.cpu_overcommit_ratio) ? { cpu_overcommit_ratio: ratio } : {}),
+  };
+}
+
 export function visibleSettingsSections(principal: Principal, organizationId: string, category: SettingsCategory | "all", query: string, t: (key: MessageKey) => string): SettingsSection[] {
   const terms = query.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
   return settingsSections.filter((section) => section.available(principal, organizationId) && (category === "all" || section.category === category) && terms.every((term) => [section.id, t(section.title), section.description ? t(section.description) : "", ...section.keywords, ...section.keywords.filter((word) => word in keywordLabels).map((word) => t(keywordLabels[word as keyof typeof keywordLabels])), ...settingsFields.filter((field) => field.section === section.id).flatMap((field) => [field.key, t(field.label), field.description ? t(field.description) : "", ...(field.options ?? []).flatMap((option) => [option.value, t(option.label)])])].join(" ").toLocaleLowerCase().includes(term)));
 }
 
-const keywordLabels = { organizationName: "organizationSettings", createOrganization: "createOrganization", deleteOrganization: "deleteOrganization", editQuota: "editQuota", stateCount: "stateCount", createUser: "createUser", userApiCredentials: "userApiCredentials", revokeApiKey: "revokeApiKey", avatar: "avatarUrl", displayName: "displayName", theme: "appearanceSettings", language: "language", copy: "copy", cpu: "cpu", memory: "memory", gpu: "gpu", disk: "disk", job_worker_concurrency: "jobWorkerConcurrency", concurrency: "jobWorkerConcurrency", worker: "jobWorkerConcurrency" } as const;
+const keywordLabels = { organizationName: "organizationSettings", createOrganization: "createOrganization", deleteOrganization: "deleteOrganization", editQuota: "editQuota", stateCount: "stateCount", createUser: "createUser", userApiCredentials: "userApiCredentials", revokeApiKey: "revokeApiKey", avatar: "avatarUrl", displayName: "displayName", theme: "appearanceSettings", language: "language", copy: "copy", cpu: "cpu", memory: "memory", gpu: "gpu", disk: "disk", job_worker_concurrency: "jobWorkerConcurrency", concurrency: "jobWorkerConcurrency", worker: "jobWorkerConcurrency", cpu_overcommit_ratio: "cpuOvercommitRatio", overcommit: "cpuOvercommitRatio" } as const;

@@ -1,33 +1,40 @@
 import assert from "node:assert/strict";
+import { readFileSync, mkdirSync } from "node:fs";
+import { join } from "node:path";
 import { test } from "node:test";
 
 const baseUrl = process.env.E2E_BASE_URL;
 const adminToken = process.env.E2E_ADMIN_TOKEN;
 const playwrightModule = process.env.E2E_PLAYWRIGHT_MODULE ?? "playwright-core";
+const translations = Object.fromEntries(["en", "zh-CN", "ru"].map((locale) => [locale, JSON.parse(readFileSync(new URL(`../src/locales/${locale}.json`, import.meta.url), "utf8"))]));
 
-test("system administrator edits job worker concurrency and the setting persists", { timeout: 150_000 }, async () => {
+test("administrator saves CPU overcommit and concurrency independently with localized validation", { timeout: 150_000 }, async () => {
   const url = new URL(baseUrl);
   const localHttp = process.env.E2E_LOCAL_BACKEND === "1" && url.protocol === "http:" && ["127.0.0.1", "::1", "localhost"].includes(url.hostname);
   assert.ok(url.protocol === "https:" || localHttp, "E2E_BASE_URL must be HTTPS or an explicitly enabled loopback backend");
   assert.ok(adminToken, "Set E2E_ADMIN_TOKEN to an unrestricted system administrator token");
-
+  const headers = { Authorization: `Bearer ${adminToken}`, "Content-Type": "application/json" };
   const readScaling = async () => {
-    const response = await fetch(new URL("/api/v1/admin/scaling", baseUrl), { headers: { Authorization: `Bearer ${adminToken}` } });
-    assert.equal(response.status, 200, "scaling status must be readable");
+    const response = await fetch(new URL("/api/v1/admin/scaling", baseUrl), { headers });
+    assert.equal(response.status, 200);
     return response.json();
   };
-
-  const original = (await readScaling()).job_worker_concurrency;
-  assert.ok(Number.isSafeInteger(original) && original >= 1 && original <= 256, "scaling status must report job_worker_concurrency in the supported range");
-  const next = original >= 256 ? 255 : original + 1;
-
+  const writeScaling = async (patch) => {
+    const response = await fetch(new URL("/api/v1/admin/scaling", baseUrl), { method: "PUT", headers: { ...headers, "Idempotency-Key": crypto.randomUUID() }, body: JSON.stringify(patch) });
+    assert.equal(response.status, 200);
+  };
+  const original = await readScaling();
+  assert.ok(Number.isSafeInteger(original.job_worker_concurrency) && original.job_worker_concurrency >= 1 && original.job_worker_concurrency <= 256);
+  assert.ok(Number.isSafeInteger(original.cpu_overcommit_ratio) && original.cpu_overcommit_ratio >= 1 && original.cpu_overcommit_ratio <= 1000);
+  const nextConcurrency = original.job_worker_concurrency === 256 ? 255 : original.job_worker_concurrency + 1;
+  const nextRatio = original.cpu_overcommit_ratio === 1000 ? 999 : original.cpu_overcommit_ratio + 1;
   const { chromium } = await import(playwrightModule);
   const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_BIN || chromium.executablePath(), headless: true, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
   try {
     const context = await browser.newContext();
     await context.addInitScript((credential) => {
       sessionStorage.setItem("mwc.api-token", credential);
-      localStorage.setItem("mwc.locale", "en");
+      if (!localStorage.getItem("mwc.locale")) localStorage.setItem("mwc.locale", "en");
       localStorage.setItem("mwc.view", "workspaces");
     }, adminToken);
     const page = await context.newPage();
@@ -35,49 +42,117 @@ test("system administrator edits job worker concurrency and the setting persists
     page.on("request", (request) => {
       if (request.method() === "PUT" && new URL(request.url()).pathname === "/api/v1/admin/scaling") scalingPuts.push(request.postDataJSON());
     });
-
-    const openScalingSection = async () => {
+    const openScaling = async (locale = "en") => {
+      const copy = translations[locale];
       await page.goto(`${baseUrl}/#administration`, { waitUntil: "domcontentloaded" });
-      await page.getByRole("button", { name: "Settings", exact: true }).click();
-      await page.getByTestId("settings-search").fill("concurrency");
+      await page.getByRole("button", { name: copy.settingsTitle, exact: true }).click();
+      await page.getByTestId("settings-search").fill(copy.cpuOvercommitRatio);
       const section = page.getByTestId("settings-section-scaling");
       await section.waitFor();
       return section;
     };
+    const edit = async (section, locale = "en") => {
+      await section.getByRole("button", { name: translations[locale].editScaling }).click();
+      return {
+        cpu: section.getByRole("spinbutton", { name: translations[locale].cpuOvercommitRatio }),
+        concurrency: section.getByRole("spinbutton", { name: translations[locale].jobWorkerConcurrency }),
+      };
+    };
+    const save = async (section, locale = "en") => {
+      const saved = page.waitForResponse((response) => response.request().method() === "PUT" && new URL(response.url()).pathname === "/api/v1/admin/scaling" && response.status() === 200);
+      await section.getByRole("button", { name: translations[locale].saveScaling }).click();
+      await saved;
+      await section.getByRole("button", { name: translations[locale].editScaling }).waitFor();
+    };
+    let section = await openScaling();
+    let editor = await edit(section);
+    await editor.concurrency.fill("0");
+    await section.getByRole("button", { name: translations.en.saveScaling }).click();
+    await page.locator(".fui-ToastTitle").filter({ hasText: translations.en.invalidJobWorkerConcurrency }).waitFor();
+    assert.deepEqual(scalingPuts, []);
+    await section.getByRole("button", { name: translations.en.cancel }).click();
 
-    // Invalid input is rejected locally: no PUT reaches the server and a localized error is shown.
-    let section = await openScalingSection();
-    await section.getByRole("button", { name: "Edit scaling" }).click();
-    const editor = section.getByRole("spinbutton", { name: "Job worker concurrency" });
-    await editor.fill("0");
-    await section.getByRole("button", { name: "Save scaling" }).click();
-    await page.locator(".fui-ToastTitle").filter({ hasText: "Job worker concurrency must be a whole number between 1 and 256." }).waitFor();
-    assert.deepEqual(scalingPuts, [], "invalid input must not send a scaling PUT");
-    await section.getByRole("button", { name: "Cancel" }).click();
+    // Validate and review the existing-style CPU field in all supported languages.
+    for (const locale of ["en", "zh-CN", "ru"]) {
+      if (locale !== "en") {
+        await page.evaluate((value) => localStorage.setItem("mwc.locale", value), locale);
+        section = await openScaling(locale);
+      }
+      editor = await edit(section, locale);
+      assert.equal(await editor.cpu.inputValue(), String(original.cpu_overcommit_ratio));
+      assert.equal(await editor.cpu.getAttribute("min"), "1");
+      assert.equal(await editor.cpu.getAttribute("max"), "1000");
+      await section.getByText(translations[locale].cpuOvercommitRatioHelp, { exact: true }).waitFor();
+      await editor.cpu.fill("1001");
+      await section.getByRole("button", { name: translations[locale].saveScaling }).click();
+      await page.locator(".fui-ToastTitle").filter({ hasText: translations[locale].invalidCpuOvercommitRatio }).waitFor();
+      assert.deepEqual(scalingPuts, []);
+      if (process.env.E2E_LOG_DIR) {
+        mkdirSync(process.env.E2E_LOG_DIR, { recursive: true });
+        await page.screenshot({ path: join(process.env.E2E_LOG_DIR, `cpu-overcommit-${locale}.png`), fullPage: true });
+      }
+      await section.getByRole("button", { name: translations[locale].cancel }).click();
+    }
+    await page.evaluate(() => localStorage.setItem("mwc.locale", "en"));
+    section = await openScaling();
+    editor = await edit(section);
+    await editor.cpu.fill(String(nextRatio));
+    await section.getByRole("button", { name: translations.en.cancel }).click();
+    editor = await edit(section);
+    assert.equal(await editor.cpu.inputValue(), String(original.cpu_overcommit_ratio), "cancel must discard draft");
+    await section.getByRole("button", { name: translations.en.saveScaling }).click();
+    await section.getByRole("button", { name: translations.en.editScaling }).waitFor();
+    assert.deepEqual(scalingPuts, [], "unchanged save sends no empty patch");
 
-    // A valid save sends exactly one PUT and the API read-back matches.
-    await section.getByRole("button", { name: "Edit scaling" }).click();
-    await editor.fill(String(next));
-    const saved = page.waitForResponse((response) => response.request().method() === "PUT" && new URL(response.url()).pathname === "/api/v1/admin/scaling" && response.status() === 200);
-    await section.getByRole("button", { name: "Save scaling" }).click();
-    await saved;
-    assert.deepEqual(scalingPuts, [{ job_worker_concurrency: next }], "the editor must send exactly one scaling PUT with the new value");
-    assert.equal((await readScaling()).job_worker_concurrency, next, "API read-back must match the saved value");
+    // Another administrator changes concurrency after the editor opened.
+    editor = await edit(section);
+    await writeScaling({ job_worker_concurrency: nextConcurrency });
+    await editor.cpu.fill(String(nextRatio));
+    await save(section);
+    assert.deepEqual(scalingPuts, [{ cpu_overcommit_ratio: nextRatio }]);
+    let actual = await readScaling();
+    assert.equal(actual.cpu_overcommit_ratio, nextRatio);
+    assert.equal(actual.job_worker_concurrency, nextConcurrency, "CPU-only save preserves concurrent administrator changes");
 
-    // Reloading the page keeps the persisted value.
-    section = await openScalingSection();
-    await section.getByRole("button", { name: "Edit scaling" }).click();
-    const reloadedEditor = section.getByRole("spinbutton", { name: "Job worker concurrency" });
-    await reloadedEditor.waitFor();
-    assert.equal(await reloadedEditor.inputValue(), String(next), "reload must show the persisted value");
+    section = await openScaling();
+    editor = await edit(section);
+    assert.equal(await editor.cpu.inputValue(), String(nextRatio), "reload must show persisted CPU ratio");
+    await editor.concurrency.fill(String(original.job_worker_concurrency));
+    await save(section);
+    assert.deepEqual(scalingPuts.at(-1), { job_worker_concurrency: original.job_worker_concurrency });
+    assert.equal((await readScaling()).cpu_overcommit_ratio, nextRatio);
+
+    // A server failure retains both drafts and re-enables retry/cancel.
+    editor = await edit(section);
+    await editor.cpu.fill(String(original.cpu_overcommit_ratio));
+    await editor.concurrency.fill(String(nextConcurrency));
+    let releaseFailure;
+    const failureGate = new Promise((resolve) => { releaseFailure = resolve; });
+    await page.route("**/api/v1/admin/scaling", async (route) => {
+      if (route.request().method() !== "PUT") return route.continue();
+      await failureGate;
+      await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: { code: "unavailable", message: "Scaling save unavailable" } }) });
+    });
+    await section.getByRole("button", { name: translations.en.saveScaling }).click();
+    await section.getByRole("button", { name: translations.en.saving, exact: true }).waitFor();
+    assert.equal(await editor.cpu.isDisabled(), true);
+    assert.equal(await editor.concurrency.isDisabled(), true);
+    assert.equal(await section.getByRole("button", { name: translations.en.cancel }).isDisabled(), true);
+    releaseFailure();
+    await page.locator(".fui-ToastTitle").filter({ hasText: "Scaling save unavailable" }).waitFor();
+    assert.equal(await editor.cpu.inputValue(), String(original.cpu_overcommit_ratio));
+    assert.equal(await editor.concurrency.inputValue(), String(nextConcurrency));
+    assert.equal(await editor.cpu.isEnabled(), true);
+    assert.equal(await section.getByRole("button", { name: translations.en.cancel }).isEnabled(), true);
+    await page.unroute("**/api/v1/admin/scaling");
+    await save(section);
+    assert.deepEqual(scalingPuts.at(-1), { job_worker_concurrency: nextConcurrency, cpu_overcommit_ratio: original.cpu_overcommit_ratio });
+    actual = await readScaling();
+    assert.equal(actual.job_worker_concurrency, nextConcurrency);
+    assert.equal(actual.cpu_overcommit_ratio, original.cpu_overcommit_ratio);
     await context.close();
   } finally {
     await browser.close();
-    const response = await fetch(new URL("/api/v1/admin/scaling", baseUrl), {
-      method: "PUT",
-      headers: { Authorization: `Bearer ${adminToken}`, "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
-      body: JSON.stringify({ job_worker_concurrency: original }),
-    });
-    assert.equal(response.status, 200, "cleanup must restore the original job worker concurrency");
+    await writeScaling({ job_worker_concurrency: original.job_worker_concurrency, cpu_overcommit_ratio: original.cpu_overcommit_ratio });
   }
 });

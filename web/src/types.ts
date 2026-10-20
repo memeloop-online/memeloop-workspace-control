@@ -227,11 +227,17 @@ export interface AuditPage {
   next_offset: number | null;
 }
 
+export interface ScalingSettingsPatch {
+  job_worker_concurrency?: number;
+  cpu_overcommit_ratio?: number;
+}
+
 export interface ScalingStatus {
   database_mode: "sqlite" | "postgres";
   configured_replicas: number;
   schema_version: number;
   job_worker_concurrency: number;
+  cpu_overcommit_ratio?: number;
   jobs: { pending: number; running: number; completed: number; failed: number };
 }
 

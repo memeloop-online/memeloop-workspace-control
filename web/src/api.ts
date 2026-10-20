@@ -20,6 +20,7 @@ import type {
   ResolvedInjection,
   Role,
   ScalingStatus,
+  ScalingSettingsPatch,
   StorageShrinkOperation,
   StorageShrinkRequest,
   StoredInjection,
@@ -258,9 +259,9 @@ export class ApiClient {
     return this.request("/api/v1/admin/scaling");
   }
 
-  updateScaling(jobWorkerConcurrency: number): Promise<ScalingStatus> {
+  updateScaling(settings: number | ScalingSettingsPatch): Promise<ScalingStatus> {
     return this.request("/api/v1/admin/scaling", {
-      method: "PUT", body: JSON.stringify({ job_worker_concurrency: jobWorkerConcurrency }), idempotent: true,
+      method: "PUT", body: JSON.stringify(typeof settings === "number" ? { job_worker_concurrency: settings } : settings), idempotent: true,
     });
   }
 
