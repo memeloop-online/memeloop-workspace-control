@@ -186,8 +186,8 @@ pub(super) fn scratch_backing_from_pods(pods: &[Pod]) -> StorageBacking {
     };
     if volume.ephemeral.is_some() {
         StorageBacking::EphemeralVolume
-    } else if volume.empty_dir.is_some() {
-        StorageBacking::NodeLocal
+    } else if volume.persistent_volume_claim.is_some() {
+        StorageBacking::PersistentVolume
     } else {
         StorageBacking::Unknown
     }

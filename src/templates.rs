@@ -110,8 +110,7 @@ pub enum EgressPolicy {
 
 /// Bounded, Pod-lifetime storage for data that can be regenerated safely.
 ///
-/// The workspace Home PVC remains the durable boundary. Disk-backed sizes become PVC requests
-/// when a platform scratch StorageClass is configured, or `emptyDir` bounds otherwise.
+/// Home uses its own durable PVC. Temporary storage sizes become CSI PVC requests.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct WorkspaceStoragePolicy {

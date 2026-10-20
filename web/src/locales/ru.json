@@ -215,7 +215,6 @@
   "storageTelemetryDisabled": "Данные об использовании диска ещё не получены",
   "storageTelemetryStale": "Обновите данные об использовании диска",
   "storageTelemetryAvailable": "Текущее использование диска",
-  "nodeLocalStorageTelemetryUnavailable": "Для временного хранилища узла показан только объём",
   "storagePressureWarning": "Хранилище почти заполнено",
   "storagePressureCritical": "Хранилище почти исчерпано",
   "storageUsage": "использованная ёмкость",

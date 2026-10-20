@@ -34,10 +34,9 @@ controlPlane:
 
 workspace:
   storageClassName: ""
-  # Optional local temporary-storage CSI class. When set, each workspace uses one Pod-owned
-  # generic ephemeral PVC with a template-selected hard total quota. Leave empty to use one
-  # bounded node-local disk emptyDir as a compatibility fallback.
-  scratchStorageClassName: ""
+  # Required CSI class for temporary build/cache storage. Each workspace uses one
+  # Pod-owned generic ephemeral PVC with a template-selected capacity.
+  scratchStorageClassName: mwc-local-scratch
   storageShrink:
     helperImage: ""
     xattrPolicy: ""

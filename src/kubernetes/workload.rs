@@ -140,7 +140,7 @@ fn pod_spec(
             names,
             builder.ttyd_mtls.as_ref(),
             builder.http_proxy_enabled(),
-            builder.scratch_storage_class_name.as_deref(),
+            &builder.scratch_storage_class_name,
             stable_labels,
         )),
         ..PodSpec::default()
@@ -201,7 +201,7 @@ fn workspace_volumes(
     names: &WorkspaceResourceNames,
     ttyd_mtls: Option<&super::TtydMtlsConfig>,
     http_proxy_enabled: bool,
-    scratch_storage_class_name: Option<&str>,
+    scratch_storage_class_name: &str,
     stable_labels: &BTreeMap<String, String>,
 ) -> Vec<Volume> {
     let mut volumes = vec![
@@ -291,7 +291,7 @@ fn workspace_volumes(
 fn scratch_volume(
     binding: Option<&crate::workspaces::WorkspaceHomeVolumeBinding>,
     size_gib: u64,
-    storage_class_name: Option<&str>,
+    storage_class_name: &str,
     stable_labels: &BTreeMap<String, String>,
 ) -> Volume {
     if let Some(binding) = binding {
@@ -304,15 +304,6 @@ fn scratch_volume(
             ..Volume::default()
         };
     }
-    // An unset platform class deliberately preserves bounded node-local disk compatibility.
-    if storage_class_name.is_none() {
-        return Volume {
-            name: "workspace-scratch".to_owned(),
-            empty_dir: Some(bounded_empty_dir(&format!("{size_gib}Gi"), None)),
-            ..Volume::default()
-        };
-    }
-
     let mut labels = stable_labels.clone();
     labels.insert(super::STORAGE_ROLE_LABEL.to_owned(), "temporary".to_owned());
     Volume {
@@ -325,7 +316,7 @@ fn scratch_volume(
                 }),
                 spec: PersistentVolumeClaimSpec {
                     access_modes: Some(vec!["ReadWriteOnce".to_owned()]),
-                    storage_class_name: storage_class_name.map(str::to_owned),
+                    storage_class_name: Some(storage_class_name.to_owned()),
                     resources: Some(storage_resources(&format!("{size_gib}Gi"))),
                     ..PersistentVolumeClaimSpec::default()
                 },

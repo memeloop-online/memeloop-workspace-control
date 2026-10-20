@@ -1,29 +1,4 @@
-pub(super) const RUNTIME_SETTINGS_MIGRATION: &[&str] = &[
-    "CREATE TABLE installation_runtime_settings (installation_id TEXT PRIMARY KEY, job_worker_concurrency BIGINT NOT NULL CHECK (job_worker_concurrency BETWEEN 1 AND 256), updated_at BIGINT NOT NULL)",
-];
-
-pub(super) const CPU_OVERCOMMIT_MIGRATION: &[&str] = &[
-    "ALTER TABLE installation_runtime_settings ADD COLUMN cpu_overcommit_ratio BIGINT NOT NULL DEFAULT 10 CHECK (cpu_overcommit_ratio BETWEEN 1 AND 1000)",
-];
-
 pub(super) const SCHEMA_VERSION: i64 = 30;
-
-pub(super) const STORAGE_SHRINK_MIGRATION: &[&str] = &[
-    "ALTER TABLE workspaces ADD COLUMN scratch_volume_binding_json TEXT",
-    "CREATE TABLE workspace_storage_shrinks (id TEXT PRIMARY KEY, installation_id TEXT NOT NULL, workspace_id TEXT NOT NULL, operation_json TEXT NOT NULL, active BIGINT NOT NULL CHECK (active IN (0, 1)), created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE)",
-    "CREATE UNIQUE INDEX workspace_storage_shrinks_active_idx ON workspace_storage_shrinks (installation_id, workspace_id) WHERE active = 1",
-];
-
-pub(super) const HOME_PVC_MIGRATION: &[&str] = &[
-    "ALTER TABLE workspaces ADD COLUMN home_pvc_namespace TEXT",
-    "ALTER TABLE workspaces ADD COLUMN home_pvc_name TEXT",
-    "ALTER TABLE workspaces ADD COLUMN home_pvc_uid TEXT",
-    "ALTER TABLE workspaces ADD COLUMN home_pvc_capacity_gib BIGINT",
-    "CREATE UNIQUE INDEX workspace_home_pvc_name_idx ON workspaces (home_pvc_namespace, home_pvc_name) WHERE home_pvc_name IS NOT NULL AND state <> 'deleted'",
-    "CREATE UNIQUE INDEX workspace_home_pvc_uid_idx ON workspaces (home_pvc_uid) WHERE home_pvc_uid IS NOT NULL AND state <> 'deleted'",
-];
-
-pub(super) const RUNTIME_INCIDENTS_TABLE: &str = "CREATE TABLE workspace_runtime_incidents (id TEXT PRIMARY KEY, installation_id TEXT NOT NULL, workspace_id TEXT NOT NULL, category TEXT NOT NULL CHECK (category IN ('ephemeral_storage', 'memory_pressure', 'pid_pressure', 'disk_pressure', 'evicted', 'temporary_storage_provisioning', 'temporary_storage_attachment', 'volume_unavailable', 'container_backoff', 'image_pull', 'scheduling', 'health_check', 'other')), observed_at BIGINT NOT NULL, count BIGINT NOT NULL CHECK (count > 0), first_seen_at BIGINT NOT NULL, last_seen_at BIGINT NOT NULL CHECK (last_seen_at >= first_seen_at), UNIQUE (installation_id, workspace_id, category, observed_at), FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE)";
 
 pub(super) const MIGRATION_TABLE: &str = "CREATE TABLE IF NOT EXISTS schema_migrations (version BIGINT PRIMARY KEY, applied_at BIGINT NOT NULL)";
 
@@ -31,6 +6,7 @@ pub(super) const MIGRATION_TABLE: &str = "CREATE TABLE IF NOT EXISTS schema_migr
 /// only the current data model.
 pub(super) const BASELINE: &[&str] = &[
     "CREATE TABLE installation_metadata (singleton INTEGER PRIMARY KEY CHECK (singleton = 1), installation_id TEXT NOT NULL)",
+    "CREATE TABLE installation_runtime_settings (installation_id TEXT PRIMARY KEY, job_worker_concurrency BIGINT NOT NULL CHECK (job_worker_concurrency BETWEEN 1 AND 256), updated_at BIGINT NOT NULL, cpu_overcommit_ratio BIGINT NOT NULL DEFAULT 10 CHECK (cpu_overcommit_ratio BETWEEN 1 AND 1000))",
     "CREATE TABLE users (id TEXT PRIMARY KEY, installation_id TEXT NOT NULL, display_name TEXT NOT NULL, token_hash TEXT NOT NULL, system_admin BIGINT NOT NULL, disabled BIGINT NOT NULL, created_at BIGINT NOT NULL, avatar_url TEXT, UNIQUE (installation_id, token_hash))",
     "CREATE INDEX users_installation_idx ON users (installation_id, id)",
     "CREATE INDEX users_page_idx ON users (installation_id, created_at, id)",
@@ -43,11 +19,15 @@ pub(super) const BASELINE: &[&str] = &[
     "CREATE TABLE organization_quotas (installation_id TEXT NOT NULL, organization_id TEXT NOT NULL, cpu_millis BIGINT NOT NULL, memory_mib BIGINT NOT NULL, gpu_count BIGINT NOT NULL, disk_gib BIGINT NOT NULL, temporary_storage_gib BIGINT NOT NULL, updated_at BIGINT NOT NULL, PRIMARY KEY (installation_id, organization_id), FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE)",
     "CREATE TABLE user_quotas (installation_id TEXT NOT NULL, user_id TEXT NOT NULL, cpu_millis BIGINT NOT NULL, memory_mib BIGINT NOT NULL, gpu_count BIGINT NOT NULL, disk_gib BIGINT NOT NULL, temporary_storage_gib BIGINT NOT NULL, updated_at BIGINT NOT NULL, PRIMARY KEY (installation_id, user_id), FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE)",
     "CREATE TABLE node_pools (installation_id TEXT NOT NULL, name TEXT NOT NULL, display_name TEXT NOT NULL, placement_json TEXT NOT NULL, enabled BIGINT NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, PRIMARY KEY (installation_id, name))",
-    "CREATE TABLE workspaces (id TEXT PRIMARY KEY, installation_id TEXT NOT NULL, short_id TEXT NOT NULL, organization_id TEXT NOT NULL, owner_id TEXT NOT NULL, name TEXT NOT NULL, template_id TEXT, image TEXT NOT NULL, access_mode TEXT NOT NULL, state TEXT NOT NULL, cpu_millis BIGINT NOT NULL, memory_mib BIGINT NOT NULL, gpu_count BIGINT NOT NULL, disk_gib BIGINT NOT NULL, temporary_storage_gib BIGINT NOT NULL, node_pool TEXT NOT NULL, generation BIGINT NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, deleted_at BIGINT, template_snapshot_yaml TEXT NOT NULL, UNIQUE (installation_id, short_id), UNIQUE (installation_id, organization_id, name), FOREIGN KEY (organization_id) REFERENCES organizations(id), FOREIGN KEY (owner_id) REFERENCES users(id))",
+    "CREATE TABLE workspaces (id TEXT PRIMARY KEY, installation_id TEXT NOT NULL, short_id TEXT NOT NULL, organization_id TEXT NOT NULL, owner_id TEXT NOT NULL, name TEXT NOT NULL, template_id TEXT, image TEXT NOT NULL, access_mode TEXT NOT NULL, state TEXT NOT NULL, cpu_millis BIGINT NOT NULL, memory_mib BIGINT NOT NULL, gpu_count BIGINT NOT NULL, disk_gib BIGINT NOT NULL, temporary_storage_gib BIGINT NOT NULL, node_pool TEXT NOT NULL, generation BIGINT NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, deleted_at BIGINT, template_snapshot_yaml TEXT NOT NULL, home_pvc_namespace TEXT, home_pvc_name TEXT, home_pvc_uid TEXT, home_pvc_capacity_gib BIGINT, scratch_volume_binding_json TEXT, UNIQUE (installation_id, short_id), UNIQUE (installation_id, organization_id, name), FOREIGN KEY (organization_id) REFERENCES organizations(id), FOREIGN KEY (owner_id) REFERENCES users(id))",
+    "CREATE UNIQUE INDEX workspace_home_pvc_name_idx ON workspaces (home_pvc_namespace, home_pvc_name) WHERE home_pvc_name IS NOT NULL AND state <> 'deleted'",
+    "CREATE UNIQUE INDEX workspace_home_pvc_uid_idx ON workspaces (home_pvc_uid) WHERE home_pvc_uid IS NOT NULL AND state <> 'deleted'",
+    "CREATE TABLE workspace_storage_shrinks (id TEXT PRIMARY KEY, installation_id TEXT NOT NULL, workspace_id TEXT NOT NULL, operation_json TEXT NOT NULL, active BIGINT NOT NULL CHECK (active IN (0, 1)), created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE)",
+    "CREATE UNIQUE INDEX workspace_storage_shrinks_active_idx ON workspace_storage_shrinks (installation_id, workspace_id) WHERE active = 1",
     "CREATE INDEX workspaces_org_idx ON workspaces (installation_id, organization_id, state, created_at)",
     "CREATE INDEX workspaces_page_idx ON workspaces (installation_id, organization_id, state, created_at, id)",
     "CREATE INDEX workspaces_node_pool_idx ON workspaces (installation_id, node_pool, state, id)",
-    RUNTIME_INCIDENTS_TABLE,
+    "CREATE TABLE workspace_runtime_incidents (id TEXT PRIMARY KEY, installation_id TEXT NOT NULL, workspace_id TEXT NOT NULL, category TEXT NOT NULL CHECK (category IN ('ephemeral_storage', 'memory_pressure', 'pid_pressure', 'disk_pressure', 'evicted', 'temporary_storage_provisioning', 'temporary_storage_attachment', 'volume_unavailable', 'container_backoff', 'image_pull', 'scheduling', 'health_check', 'other')), observed_at BIGINT NOT NULL, count BIGINT NOT NULL CHECK (count > 0), first_seen_at BIGINT NOT NULL, last_seen_at BIGINT NOT NULL CHECK (last_seen_at >= first_seen_at), UNIQUE (installation_id, workspace_id, category, observed_at), FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE)",
     "CREATE INDEX workspace_runtime_incidents_recent_idx ON workspace_runtime_incidents (installation_id, workspace_id, last_seen_at, observed_at)",
     "CREATE TABLE workspace_injection_refs (installation_id TEXT NOT NULL, workspace_id TEXT NOT NULL, scope TEXT NOT NULL, injection_key TEXT NOT NULL, created_at BIGINT NOT NULL, PRIMARY KEY (installation_id, workspace_id, scope, injection_key), FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE)",
     "CREATE TABLE workspace_port_mappings (id TEXT PRIMARY KEY, installation_id TEXT NOT NULL, organization_id TEXT NOT NULL, workspace_id TEXT NOT NULL, internal_port BIGINT NOT NULL CHECK (internal_port BETWEEN 1 AND 65535), display_name TEXT, created_by TEXT NOT NULL, created_at BIGINT NOT NULL, UNIQUE (installation_id, workspace_id, internal_port), FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE, FOREIGN KEY (created_by) REFERENCES users(id))",

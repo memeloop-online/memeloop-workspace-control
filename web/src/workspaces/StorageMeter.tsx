@@ -30,7 +30,6 @@ export function StorageMeter({ label, telemetry, configuredGiB, locale, statusOv
         telemetryDisabled: t("storageTelemetryDisabled"),
         telemetryAvailable: t("storageTelemetryAvailable"),
         telemetryUnavailable: t("storageTelemetryUnavailable"),
-        nodeLocalTelemetryUnavailable: t("nodeLocalStorageTelemetryUnavailable"),
         pressureCritical: t("storagePressureCritical"),
         pressureWarning: t("storagePressureWarning"),
         observedAt: t("observedAt"),

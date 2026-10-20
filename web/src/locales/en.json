@@ -215,7 +215,6 @@
   "storageTelemetryDisabled": "Disk usage is still loading",
   "storageTelemetryStale": "Disk usage data needs a refresh",
   "storageTelemetryAvailable": "Live storage usage",
-  "nodeLocalStorageTelemetryUnavailable": "Node-local temporary storage shows capacity only",
   "storagePressureWarning": "Storage is filling up",
   "storagePressureCritical": "Storage is almost full",
   "storageUsage": "used capacity",

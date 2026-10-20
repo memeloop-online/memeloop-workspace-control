@@ -752,10 +752,8 @@ impl KubernetesCoordinator {
             .ok_or("workspace scratch volume is missing")?;
         let claim_name = if let Some(source) = scratch.persistent_volume_claim.as_ref() {
             source.claim_name.clone()
-        } else if scratch.ephemeral.is_some() {
-            format!("{pod_name}-workspace-scratch")
         } else {
-            return Err("safe offline shrink requires CSI scratch; node-local emptyDir cannot be preserved by stopping a Pod".to_owned());
+            format!("{pod_name}-workspace-scratch")
         };
         let claim = claims.get(&claim_name).await.map_err(safe_error)?;
         self.shrink_owned(&claim.metadata, workspace)?;

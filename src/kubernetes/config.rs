@@ -27,7 +27,13 @@ pub fn resource_builder(config: &AppConfig) -> Result<ResourceBuilder, io::Error
         .filter(|value| !value.trim().is_empty());
     let scratch_storage_class_name = std::env::var("MWC_SCRATCH_STORAGE_CLASS_NAME")
         .ok()
-        .filter(|value| !value.trim().is_empty());
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "MWC_SCRATCH_STORAGE_CLASS_NAME is required when Kubernetes coordination is enabled",
+            )
+        })?;
     let web_shell_domain = std::env::var("MWC_WEB_SHELL_DOMAIN")
         .ok()
         .filter(|value| !value.trim().is_empty());

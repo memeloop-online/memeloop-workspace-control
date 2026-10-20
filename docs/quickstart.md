@@ -69,6 +69,7 @@ working kubeconfig or service account and set:
 ```bash
 export MWC_KUBERNETES_ENABLED=true
 export MWC_TTYD_IMAGE='tsl0922/ttyd:1.7.7'
+export MWC_SCRATCH_STORAGE_CLASS_NAME='local-nvme-scratch'
 ```
 
 For Kubernetes deployments, inject the encryption and internal-auth values

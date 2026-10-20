@@ -50,7 +50,7 @@ const demoRuntimes = demoWorkspaces.map(({ workspace }) => ({
   runtime: {
     allocated: workspace.resources,
     persistent_storage: storage(workspace.resources.disk_gib, workspace.id === "demo-web" ? 3 : 2, "persistent_volume"),
-    temporary_storage: storage(8, workspace.id === "demo-web" ? 1 : 0, "node_local"),
+    temporary_storage: storage(8, workspace.id === "demo-web" ? 1 : 0, "ephemeral_volume"),
     metrics_available: workspace.state === "ready", node_name: workspace.state === "ready" ? "demo-node" : null,
     pods: [], metrics: [], events: [],
   },

@@ -50,8 +50,8 @@ pub struct ResourceBuilder {
     pub jump_host_pod_labels: BTreeMap<String, String>,
     /// StorageClass for the durable workspace Home PVC.
     pub storage_class_name: Option<String>,
-    /// Optional local CSI class for Pod-owned generic ephemeral scratch PVCs.
-    pub scratch_storage_class_name: Option<String>,
+    /// CSI class for Pod-owned generic ephemeral scratch PVCs.
+    pub scratch_storage_class_name: String,
     pub web_shell_domain: Option<String>,
     pub port_mapping_domain: Option<String>,
     pub higress_gateway_name: String,

@@ -36,16 +36,11 @@ pub(crate) enum StoragePressure {
 }
 
 /// The storage implementation behind one product-level storage allocation.
-///
-/// `NodeLocal` is the bounded `emptyDir` compatibility mode. Kubernetes does
-/// not expose reliable per-volume byte usage for that mode, so its telemetry
-/// coverage is always unavailable rather than a synthetic zero.
 #[derive(Debug, Clone, Copy, Serialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum StorageBacking {
     PersistentVolume,
     EphemeralVolume,
-    NodeLocal,
     Unknown,
 }
 
