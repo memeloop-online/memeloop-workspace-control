@@ -640,7 +640,7 @@ fn preserve_claim_storage_classes(desired: &mut StatefulSet, existing: &Stateful
             .ephemeral
             .as_mut()
             .and_then(|ephemeral| ephemeral.volume_claim_template.as_mut())
-            .and_then(|claim| claim.spec.as_mut())
+            .map(|claim| &mut claim.spec)
         else {
             continue;
         };
@@ -650,7 +650,7 @@ fn preserve_claim_storage_classes(desired: &mut StatefulSet, existing: &Stateful
             .find(|existing| existing.name == volume.name)
             .and_then(|existing| existing.ephemeral.as_ref())
             .and_then(|ephemeral| ephemeral.volume_claim_template.as_ref())
-            .and_then(|claim| claim.spec.as_ref())
+            .map(|claim| &claim.spec)
         {
             claim_spec.storage_class_name = existing_spec.storage_class_name.clone();
         }
