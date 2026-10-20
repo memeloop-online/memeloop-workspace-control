@@ -4,7 +4,7 @@ import test from "node:test";
 import type { MessageKey } from "../i18n.tsx";
 import type { Principal } from "../types.ts";
 import { matchingFields } from "./fields.ts";
-import { JOB_WORKER_CONCURRENCY_DEFAULT, JOB_WORKER_CONCURRENCY_MAX, JOB_WORKER_CONCURRENCY_MIN, parseJobWorkerConcurrency, visibleSettingsSections } from "./schema.ts";
+import { CPU_OVERCOMMIT_RATIO_DEFAULT, changedScalingSettings, parseCpuOvercommitRatio, JOB_WORKER_CONCURRENCY_DEFAULT, JOB_WORKER_CONCURRENCY_MAX, JOB_WORKER_CONCURRENCY_MIN, parseJobWorkerConcurrency, visibleSettingsSections } from "./schema.ts";
 
 const translation = (key: MessageKey) => ({ avatarUrl: "头像", displayName: "显示名称", userApiCredentials: "凭据配置", cpu: "处理器", memory: "内存", copy: "复制", jobWorkerConcurrency: "任务工作器并发数" } as Partial<Record<MessageKey, string>>)[key] ?? key;
 const russianTranslation = (key: MessageKey) => ({ jobWorkerConcurrency: "Параллелизм рабочих задач" } as Partial<Record<MessageKey, string>>)[key] ?? key;
@@ -57,4 +57,31 @@ test("scaling section is searchable by the job worker concurrency keywords", () 
   assert.deepEqual(visibleSettingsSections(administrator, "", "system", "并发", translation).map((section) => section.id), ["scaling"]);
   assert.deepEqual(visibleSettingsSections(administrator, "", "system", "Параллелизм", russianTranslation).map((section) => section.id), ["scaling"]);
   assert.deepEqual(visibleSettingsSections(member, "", "system", "concurrency", translation), []);
+});
+
+
+test("CPU ratio accepts only decimal integers within the backend range", () => {
+  assert.equal(CPU_OVERCOMMIT_RATIO_DEFAULT, 10);
+  for (const value of ["1", " 10 ", "1000"]) assert.equal(parseCpuOvercommitRatio(value), Number(value));
+  for (const value of ["", "0", "1001", "-1", "1.5", "1e2", "0x10", "+10", "NaN", "Infinity", "9007199254740993"]) assert.throws(() => parseCpuOvercommitRatio(value));
+});
+
+test("scaling patches include only fields changed from the captured edit baseline", () => {
+  const baseline = { job_worker_concurrency: "32", cpu_overcommit_ratio: "10" };
+  assert.deepEqual(changedScalingSettings(baseline, baseline), {});
+  assert.deepEqual(changedScalingSettings({ ...baseline, cpu_overcommit_ratio: "20" }, baseline), { cpu_overcommit_ratio: 20 });
+  assert.deepEqual(changedScalingSettings({ ...baseline, job_worker_concurrency: "64" }, baseline), { job_worker_concurrency: 64 });
+  assert.deepEqual(changedScalingSettings({ job_worker_concurrency: "64", cpu_overcommit_ratio: "20" }, baseline), { job_worker_concurrency: 64, cpu_overcommit_ratio: 20 });
+  assert.deepEqual(changedScalingSettings({ ...baseline, cpu_overcommit_ratio: "010" }, baseline), {});
+});
+
+test("CPU settings are searchable in all supported languages and hidden from members", () => {
+  const administrator: Principal = { ...member, system_admin: true, api_key_scopes: ["manage_system"] };
+  for (const label of ["CPU overcommit ratio", "CPU 超售比率", "Коэффициент переподписки CPU"]) {
+    const t = (key: MessageKey) => key === "cpuOvercommitRatio" ? label : key;
+    for (const query of [label, "cpu_overcommit_ratio", "overcommit"]) {
+      assert.deepEqual(visibleSettingsSections(administrator, "", "system", query, t).map((section) => section.id), ["scaling"]);
+      assert.deepEqual(visibleSettingsSections(member, "", "all", query, t), []);
+    }
+  }
 });

@@ -66,6 +66,9 @@ test("ordinary member Settings cannot reveal administrator sections or request a
     assert.equal(await page.getByText("Users and roles", { exact: true }).count(), 0);
     assert.equal(await page.getByText("System", { exact: true }).count(), 0);
     assert.equal(await page.getByRole("button", { name: "Credential configuration" }).count(), 0);
+    await search.fill("cpu_overcommit_ratio");
+    assert.equal(await page.getByTestId("settings-section-scaling").count(), 0);
+    assert.equal(await page.getByRole("spinbutton", { name: "CPU overcommit ratio" }).count(), 0);
     await search.fill("Display name");
     await page.getByRole("textbox", { name: "Display name" }).waitFor();
     assert.deepEqual(unexpected, []);

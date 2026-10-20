@@ -89,3 +89,20 @@ test("workspace runtime payload preserves the scheduled Kubernetes node name", a
     assert.equal(request, "/api/v1/workspace-runtimes?organization_id=organization-1&workspace_ids=workspace-1");
   } finally { globalThis.fetch = originalFetch; }
 });
+
+
+test("scaling partial updates preserve omitted settings in the request", async () => {
+  const originalFetch = globalThis.fetch;
+  const bodies: unknown[] = [];
+  globalThis.fetch = async (_input, init) => {
+    bodies.push(JSON.parse(String(init?.body)));
+    return Response.json({ cpu_overcommit_ratio: 20, job_worker_concurrency: 64 });
+  };
+  try {
+    const api = new ApiClient("operator-token");
+    assert.equal((await api.updateScaling({ cpu_overcommit_ratio: 20 })).cpu_overcommit_ratio, 20);
+    await api.updateScaling({ job_worker_concurrency: 64 });
+    await api.updateScaling({ cpu_overcommit_ratio: 20, job_worker_concurrency: 64 });
+    assert.deepEqual(bodies, [{ cpu_overcommit_ratio: 20 }, { job_worker_concurrency: 64 }, { cpu_overcommit_ratio: 20, job_worker_concurrency: 64 }]);
+  } finally { globalThis.fetch = originalFetch; }
+});
