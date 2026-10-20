@@ -139,10 +139,8 @@ spec:
             - name: MWC_STORAGE_CLASS_NAME
               value: {{ .Values.workspace.storageClassName | quote }}
             {{- end }}
-            {{- if .Values.workspace.scratchStorageClassName }}
             - name: MWC_SCRATCH_STORAGE_CLASS_NAME
               value: {{ .Values.workspace.scratchStorageClassName | quote }}
-            {{- end }}
             {{- if .Values.workspace.storageShrink.helperImage }}
             - name: MWC_STORAGE_SHRINK_IMAGE
               value: {{ .Values.workspace.storageShrink.helperImage | quote }}

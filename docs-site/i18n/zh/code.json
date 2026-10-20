@@ -92,7 +92,6 @@
   "preview.meters.telemetryStale": { "message": "最近一次用量", "description": "Storage telemetry state" },
   "preview.meters.telemetryDisabled": { "message": "停止后释放", "description": "Storage telemetry state" },
   "preview.meters.telemetryUnavailable": { "message": "暂无用量", "description": "Storage telemetry state" },
-  "preview.meters.nodeLocalTelemetryUnavailable": { "message": "暂无节点本地用量", "description": "Storage telemetry state" },
   "preview.meters.pressureCritical": { "message": "存储压力严重", "description": "Storage pressure state" },
   "preview.meters.pressureWarning": { "message": "存储压力较高", "description": "Storage pressure state" },
   "preview.meters.observedAt": { "message": "观测时间", "description": "Storage telemetry timestamp label" },

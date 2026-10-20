@@ -58,7 +58,10 @@ app.kubernetes.io/instance: {{ include "mwc.name" . }}
 {{- if and .Values.sqlite.existingClaim (or (gt (len .Values.sqlite.existingClaim) 253) (not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$" .Values.sqlite.existingClaim))) -}}
 {{- fail "sqlite.existingClaim must be a lower-case DNS subdomain of at most 253 characters" -}}
 {{- end -}}
-{{- if and .Values.workspace.scratchStorageClassName (or (gt (len .Values.workspace.scratchStorageClassName) 253) (not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$" .Values.workspace.scratchStorageClassName))) -}}
+{{- if not .Values.workspace.scratchStorageClassName -}}
+{{- fail "workspace.scratchStorageClassName is required" -}}
+{{- end -}}
+{{- if or (gt (len .Values.workspace.scratchStorageClassName) 253) (not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$" .Values.workspace.scratchStorageClassName)) -}}
 {{- fail "workspace.scratchStorageClassName must be a lower-case DNS subdomain of at most 253 characters" -}}
 {{- end -}}
 {{- if and .Values.workspace.storageShrink.helperImage (not (regexMatch "^[^@[:space:]]+@sha256:[0-9a-f]{64}$" .Values.workspace.storageShrink.helperImage)) -}}

@@ -215,7 +215,6 @@
   "storageTelemetryDisabled": "磁盘用量暂未返回",
   "storageTelemetryStale": "磁盘用量数据需要刷新",
   "storageTelemetryAvailable": "实时磁盘用量",
-  "nodeLocalStorageTelemetryUnavailable": "节点临时存储仅显示容量",
   "storagePressureWarning": "存储空间接近上限",
   "storagePressureCritical": "存储空间即将用完",
   "storageUsage": "已用容量",

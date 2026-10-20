@@ -65,6 +65,7 @@ Web 控制台由同一监听器提供。健康端点：
 ```bash
 export MWC_KUBERNETES_ENABLED=true
 export MWC_TTYD_IMAGE='tsl0922/ttyd:1.7.7'
+export MWC_SCRATCH_STORAGE_CLASS_NAME='local-nvme-scratch'
 ```
 
 Kubernetes 部署应从 Secret 注入加密密钥与内部鉴权令牌；Helm Chart 会将

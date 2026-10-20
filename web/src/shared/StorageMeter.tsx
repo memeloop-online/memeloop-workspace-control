@@ -9,7 +9,6 @@ export interface StorageMeterLabels {
   telemetryDisabled: string;
   telemetryAvailable: string;
   telemetryUnavailable: string;
-  nodeLocalTelemetryUnavailable: string;
   pressureCritical: string;
   pressureWarning: string;
   observedAt: string;
@@ -52,9 +51,7 @@ export function StorageMeter({ label, telemetry, configuredGiB, locale, labels, 
       ? labels.telemetryDisabled
       : coverage === "exact"
         ? labels.telemetryAvailable
-        : telemetry?.backing === "node_local"
-          ? labels.nodeLocalTelemetryUnavailable
-          : labels.telemetryUnavailable;
+        : labels.telemetryUnavailable;
   const statusText = statusOverride ?? telemetryStatus;
   const pressureText = telemetry?.pressure === "critical"
     ? labels.pressureCritical

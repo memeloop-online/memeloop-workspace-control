@@ -74,7 +74,7 @@ fn telemetry_reports_exact_stale_and_unavailable_coverage() {
     ));
     assert!(matches!(
         values
-            .telemetry(None, 200, StorageBacking::NodeLocal, 1_100)
+            .telemetry(None, 200, StorageBacking::EphemeralVolume, 1_100)
             .coverage,
         StorageTelemetryCoverage::Unavailable
     ));

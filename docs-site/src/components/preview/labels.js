@@ -24,7 +24,6 @@ export const PREVIEW_LABELS = {
     telemetryStale: translate({ id: 'preview.meters.telemetryStale', message: 'Last observed usage' }),
     telemetryDisabled: translate({ id: 'preview.meters.telemetryDisabled', message: 'Released when stopped' }),
     telemetryUnavailable: translate({ id: 'preview.meters.telemetryUnavailable', message: 'Usage unavailable' }),
-    nodeLocalTelemetryUnavailable: translate({ id: 'preview.meters.nodeLocalTelemetryUnavailable', message: 'Node-local usage unavailable' }),
     pressureCritical: translate({ id: 'preview.meters.pressureCritical', message: 'Storage pressure is critical' }),
     pressureWarning: translate({ id: 'preview.meters.pressureWarning', message: 'Storage pressure is high' }),
     observedAt: translate({ id: 'preview.meters.observedAt', message: 'Observed' }),

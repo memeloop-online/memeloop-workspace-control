@@ -156,7 +156,7 @@ pub(super) fn builder(mtls_enabled: bool, web_shell_domain: Option<&str>) -> Res
         jump_host_namespace: "access".to_owned(),
         jump_host_pod_labels: BTreeMap::new(),
         storage_class_name: None,
-        scratch_storage_class_name: None,
+        scratch_storage_class_name: "local-nvme-scratch".to_owned(),
         web_shell_domain: web_shell_domain.map(str::to_owned),
         port_mapping_domain: None,
         higress_gateway_name: "higress".to_owned(),

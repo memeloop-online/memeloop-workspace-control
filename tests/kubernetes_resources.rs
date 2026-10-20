@@ -39,7 +39,7 @@ fn builder() -> ResourceBuilder {
             "mwc-ssh-jump".to_owned(),
         )]),
         storage_class_name: Some("managed-delete".to_owned()),
-        scratch_storage_class_name: Some("local-nvme-scratch".to_owned()),
+        scratch_storage_class_name: "local-nvme-scratch".to_owned(),
         web_shell_domain: Some("shell.example.com".to_owned()),
         port_mapping_domain: Some("ports.example.com".to_owned()),
         higress_gateway_name: "higress-gateway".to_owned(),
@@ -1737,35 +1737,6 @@ fn temporary_storage_uses_one_generic_ephemeral_claim_and_isolated_subpaths() {
     let sshd = &resources.workspace_config.data.as_ref().unwrap()["sshd_config"];
     assert!(sshd.contains("AuthorizedKeysFile /run/mwc-ssh/authorized_keys"));
     assert!(sshd.contains("Banner /run/mwc-ssh/storage-banner"));
-}
-
-#[test]
-fn temporary_storage_without_a_platform_class_uses_one_bounded_disk_empty_dir() {
-    let mut workspace = workspace(WorkspaceState::Ready);
-    workspace.template.storage_policy.temporary_storage_gib = 24;
-    let mut resource_builder = builder();
-    resource_builder.scratch_storage_class_name = None;
-
-    let pod = resource_builder
-        .build(&workspace)
-        .unwrap()
-        .stateful_set
-        .spec
-        .unwrap()
-        .template
-        .spec
-        .unwrap();
-    let scratch = pod
-        .volumes
-        .as_ref()
-        .unwrap()
-        .iter()
-        .find(|volume| volume.name == "workspace-scratch")
-        .unwrap();
-    assert!(scratch.ephemeral.is_none());
-    let empty_dir = scratch.empty_dir.as_ref().unwrap();
-    assert_eq!(empty_dir.medium, None);
-    assert_eq!(empty_dir.size_limit.as_ref().unwrap().0, "24Gi");
 }
 
 #[test]

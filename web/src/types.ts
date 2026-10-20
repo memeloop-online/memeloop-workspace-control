@@ -411,7 +411,7 @@ export interface WorkspaceStorageTelemetry {
   used_percent: number | null;
   pressure: "normal" | "warning" | "critical" | null;
   coverage: "exact" | "stale" | "unavailable" | "disabled";
-  backing: "persistent_volume" | "ephemeral_volume" | "node_local" | "unknown";
+  backing: "persistent_volume" | "ephemeral_volume" | "unknown";
 }
 
 export interface StorageShrinkRequest {

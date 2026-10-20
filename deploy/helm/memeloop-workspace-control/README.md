@@ -60,9 +60,8 @@ tag.
 ## Storage
 
 `workspace.storageClassName` stores durable workspace home volumes.
-`workspace.scratchStorageClassName` can select a local, capacity-enforced CSI
-class for regenerable build and cache data. When it is empty, workspace
-temporary storage uses a bounded node-local `emptyDir`.
+`workspace.scratchStorageClassName` defaults to `mwc-local-scratch` and selects a CSI class for
+regenerable build and cache data, separate from Home.
 
 SQLite uses the `sqlite.size` and `sqlite.storageClassName` settings. Set
 `sqlite.existingClaim` on a fresh installation to mount a pre-created claim;

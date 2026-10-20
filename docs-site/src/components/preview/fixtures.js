@@ -8,7 +8,7 @@ export const WORKSPACES = [
       { key: 'cpu', actual: '4.7 m', requested: '6000 m', percent: 1 },
       { key: 'memory', actual: '234 MiB', requested: '4 GiB', percent: 6 },
       { key: 'disk', kind: 'storage', configuredGiB: 30, telemetry: storageTelemetry(3, 30, 'persistent_volume') },
-      { key: 'ephemeral', kind: 'storage', configuredGiB: 22, telemetry: storageTelemetry(0.223, 22, 'node_local') },
+      { key: 'ephemeral', kind: 'storage', configuredGiB: 22, telemetry: storageTelemetry(0.223, 22, 'ephemeral_volume') },
     ],
   },
   {
@@ -20,7 +20,7 @@ export const WORKSPACES = [
       { key: 'cpu', actual: '3.2 m', requested: '1000 m', percent: 1 },
       { key: 'memory', actual: '49 MiB', requested: '1 GiB', percent: 5 },
       { key: 'disk', kind: 'storage', configuredGiB: 1.9, telemetry: storageTelemetry(0.543, 1.9, 'persistent_volume') },
-      { key: 'ephemeral', kind: 'storage', configuredGiB: 5, telemetry: storageTelemetry(0.068, 5, 'node_local') },
+      { key: 'ephemeral', kind: 'storage', configuredGiB: 5, telemetry: storageTelemetry(0.068, 5, 'ephemeral_volume') },
     ],
   },
   {
@@ -32,7 +32,7 @@ export const WORKSPACES = [
       { key: 'cpu', actual: '120 m', requested: '8000 m', percent: 2 },
       { key: 'memory', actual: '512 MiB', requested: '32 GiB', percent: 2 },
       { key: 'disk', kind: 'storage', configuredGiB: 100, telemetry: storageTelemetry(6.4, 100, 'persistent_volume') },
-      { key: 'ephemeral', kind: 'storage', configuredGiB: 40, telemetry: storageTelemetry(1.1, 40, 'node_local') },
+      { key: 'ephemeral', kind: 'storage', configuredGiB: 40, telemetry: storageTelemetry(1.1, 40, 'ephemeral_volume') },
     ],
   },
   {
@@ -44,7 +44,7 @@ export const WORKSPACES = [
       { key: 'cpu', actual: '0 m', requested: '1000 m', percent: 0 },
       { key: 'memory', actual: '0 MiB', requested: '1 GiB', percent: 0 },
       { key: 'disk', kind: 'storage', configuredGiB: 1.9, telemetry: storageTelemetry(1.2, 1.9, 'persistent_volume') },
-      { key: 'ephemeral', kind: 'storage', configuredGiB: 5, telemetry: { configured_bytes: 5 * 1024 ** 3, used_bytes: null, capacity_bytes: null, available_bytes: null, observed_at: null, used_percent: null, pressure: null, coverage: 'disabled', backing: 'node_local' } },
+      { key: 'ephemeral', kind: 'storage', configuredGiB: 5, telemetry: { configured_bytes: 5 * 1024 ** 3, used_bytes: null, capacity_bytes: null, available_bytes: null, observed_at: null, used_percent: null, pressure: null, coverage: 'disabled', backing: 'ephemeral_volume' } },
     ],
   },
 ];

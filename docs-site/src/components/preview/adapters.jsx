@@ -31,7 +31,6 @@ function meterLabels() {
     telemetryDisabled: PREVIEW_LABELS.meter.telemetryDisabled,
     telemetryAvailable: PREVIEW_LABELS.meter.telemetryAvailable,
     telemetryUnavailable: PREVIEW_LABELS.meter.telemetryUnavailable,
-    nodeLocalTelemetryUnavailable: PREVIEW_LABELS.meter.nodeLocalTelemetryUnavailable,
     pressureCritical: PREVIEW_LABELS.meter.pressureCritical,
     pressureWarning: PREVIEW_LABELS.meter.pressureWarning,
     observedAt: PREVIEW_LABELS.meter.observedAt,
