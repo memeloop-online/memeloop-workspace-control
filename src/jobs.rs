@@ -111,9 +111,11 @@ impl<H: JobHandler> JobWorker<H> {
             }
             Err(JobHandlerError::PendingWithCheckpoint { message, payload }) => {
                 tracing::debug!(job_id = %job.id, error = %message, "job is waiting after applying resources");
-                self.database
-                    .save_job_checkpoint(job.id, &self.lease_owner, &payload, now)
-                    .await?;
+                if payload != job.payload {
+                    self.database
+                        .save_job_checkpoint(job.id, &self.lease_owner, &payload, now)
+                        .await?;
+                }
                 self.database
                     .defer_job_without_attempt(
                         job.id,

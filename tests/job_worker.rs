@@ -431,9 +431,86 @@ impl JobHandler for CheckpointHandler {
     }
 }
 
+struct UnchangedCheckpointHandler;
+
+impl JobHandler for UnchangedCheckpointHandler {
+    async fn handle(&self, job: &ClaimedJob) -> Result<(), JobHandlerError> {
+        Err(JobHandlerError::PendingWithCheckpoint {
+            message: "waiting for readiness".to_owned(),
+            payload: job.payload.clone(),
+        })
+    }
+}
+
+#[tokio::test]
+async fn unchanged_checkpoint_waits_without_rewriting_payload_or_retaining_workspace_lease() {
+    let (database, _, workspace_id, _) = workspace_database().await;
+    let Database::Sqlite { pool, .. } = &database else {
+        unreachable!()
+    };
+    // This database guard rejects actual redundant writes, rather than checking
+    // a mock or the payload comparison implementation.
+    sqlx::query("CREATE TRIGGER reject_checkpoint_rewrite BEFORE UPDATE OF payload_json ON jobs BEGIN SELECT RAISE(ABORT, 'unexpected checkpoint rewrite'); END")
+        .execute(pool).await.unwrap();
+    let worker = JobWorker::new(
+        database.clone(),
+        Arc::new(UnchangedCheckpointHandler),
+        "owner-a".to_owned(),
+    );
+    assert!(worker.run_once(100).await.unwrap());
+    assert!(!worker.run_once(100).await.unwrap());
+    let (status, available_at, attempts, lease_owner): (String, i64, i64, Option<String>) =
+        sqlx::query_as(
+            "SELECT status, available_at, attempts, lease_owner FROM jobs WHERE workspace_id = ?1",
+        )
+        .bind(workspace_id.to_string())
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    assert_eq!(status, "pending");
+    assert_eq!(available_at, 101);
+    assert_eq!(attempts, 0);
+    assert!(lease_owner.is_none());
+    assert!(
+        database
+            .try_acquire_workspace_lease(workspace_id, "other-owner", 100, Duration::from_secs(60))
+            .await
+            .unwrap()
+    );
+    database
+        .release_workspace_lease(workspace_id, "other-owner")
+        .await
+        .unwrap();
+    let restarted = JobWorker::new(
+        database.clone(),
+        Arc::new(UnchangedCheckpointHandler),
+        "owner-b".to_owned(),
+    );
+    for now in 101..113 {
+        assert!(restarted.run_once(now).await.unwrap());
+    }
+    assert_eq!(database.job_counts().await.unwrap().failed, 0);
+    let (attempts, available_at): (i64, i64) =
+        sqlx::query_as("SELECT attempts, available_at FROM jobs WHERE workspace_id = ?1")
+            .bind(workspace_id.to_string())
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    assert_eq!(attempts, 0);
+    assert_eq!(available_at, 113);
+}
+
 #[tokio::test]
 async fn readiness_checkpoint_survives_worker_restart_and_retries_after_one_second() {
     let database = database().await;
+    let Database::Sqlite { pool, .. } = &database else {
+        unreachable!()
+    };
+    sqlx::query("CREATE TABLE checkpoint_writes (writes INTEGER NOT NULL)")
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query("CREATE TRIGGER observe_checkpoint_write AFTER UPDATE OF payload_json ON jobs BEGIN INSERT INTO checkpoint_writes VALUES (1); END").execute(pool).await.unwrap();
     database
         .enqueue_job(
             NewJob {
@@ -453,9 +530,21 @@ async fn readiness_checkpoint_survives_worker_restart_and_retries_after_one_seco
     );
     assert!(worker.run_once(100).await.unwrap());
     assert!(!worker.run_once(100).await.unwrap());
-    let restarted = JobWorker::new(database, Arc::new(CheckpointHandler), "owner-b".to_owned());
+    let restarted = JobWorker::new(
+        database.clone(),
+        Arc::new(CheckpointHandler),
+        "owner-b".to_owned(),
+    );
     assert!(restarted.run_once(101).await.unwrap());
     assert!(!restarted.run_once(102).await.unwrap());
+    let writes: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM checkpoint_writes")
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        writes, 1,
+        "the changed checkpoint must be persisted exactly once"
+    );
 }
 
 #[tokio::test]
