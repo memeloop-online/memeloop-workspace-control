@@ -112,8 +112,15 @@ async fn webhook_secret_is_encrypted_and_workspace_events_enqueue_durable_delive
         .await
         .unwrap();
     database
-        .record_workspace_observation(workspace.id, WorkspaceObservation::Ready, admin.user_id, 5)
+        .record_workspace_observation(
+            workspace.id,
+            workspace.generation,
+            WorkspaceObservation::Ready,
+            admin.user_id,
+            5,
+        )
         .await
+        .unwrap()
         .unwrap();
     assert!(database.job_counts().await.unwrap().pending >= 2);
 

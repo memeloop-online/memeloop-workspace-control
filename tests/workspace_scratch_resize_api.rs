@@ -116,11 +116,13 @@ async fn app() -> (Router, Database, Workspace) {
     let workspace = database
         .record_workspace_observation(
             stopping.id,
+            stopping.generation,
             WorkspaceObservation::Stopped,
             admin.user_id,
             now + 5,
         )
         .await
+        .unwrap()
         .unwrap();
     let config = AppConfig {
         installation_id: "scratch-resize-api".parse().unwrap(),

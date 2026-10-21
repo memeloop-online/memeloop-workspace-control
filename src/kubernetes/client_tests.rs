@@ -421,6 +421,7 @@ mod coordinator_tests {
         }
         for replicas in [1, 0] {
             let mut stateful_set = stateful_set.clone();
+            stateful_set["spec"]["replicas"] = serde_json::json!(0);
             stateful_set["status"]["replicas"] = serde_json::json!(replicas);
             let (result, requests) =
                 observe_ready_fixture(&workspace, stateful_set, Some(pod.clone()), 0).await;
@@ -430,6 +431,70 @@ mod coordinator_tests {
                 1,
                 "scale-to-zero must use StatefulSet observation"
             );
+        }
+    }
+
+    #[tokio::test]
+    async fn aggregate_observation_requires_current_owned_workload_for_ready_and_stopped() {
+        for expected in [0, 1] {
+            let (workspace, mut stateful_set, _) = ready_pod_fixture();
+            stateful_set["spec"]["replicas"] = serde_json::json!(expected);
+            stateful_set["status"] = serde_json::json!({
+                "observedGeneration": 10, "replicas": expected,
+                "readyReplicas": expected, "updatedReplicas": expected,
+                "currentRevision": "current-revision", "updateRevision": "current-revision",
+            });
+            let (result, requests) =
+                observe_ready_fixture(&workspace, stateful_set.clone(), None, expected).await;
+            assert!(result.unwrap());
+            assert_eq!(requests.len(), 1);
+
+            // A previous startup may still be fully Ready (or scaled to zero) when
+            // a later action has advanced the desired workspace generation.
+            let mut next = workspace.clone();
+            next.generation += 1;
+            let (result, requests) =
+                observe_ready_fixture(&next, stateful_set.clone(), None, expected).await;
+            assert!(!result.unwrap());
+            assert_eq!(requests.len(), 1);
+
+            for (pointer, value) in [
+                ("/spec/replicas", serde_json::json!(1 - expected)),
+                ("/metadata/generation", serde_json::Value::Null),
+                ("/status/observedGeneration", serde_json::Value::Null),
+                ("/status/observedGeneration", serde_json::json!(9)),
+                (
+                    "/spec/template/metadata/annotations/workspace.memeloop.dev~1generation",
+                    serde_json::Value::Null,
+                ),
+                (
+                    "/metadata/deletionTimestamp",
+                    serde_json::json!("2026-10-21T12:00:00Z"),
+                ),
+            ] {
+                let mut stale = stateful_set.clone();
+                if pointer == "/metadata/deletionTimestamp" {
+                    stale["metadata"]["deletionTimestamp"] = value;
+                } else if value.is_null() {
+                    let (parent, key) = pointer.rsplit_once('/').unwrap();
+                    stale
+                        .pointer_mut(parent)
+                        .unwrap()
+                        .as_object_mut()
+                        .unwrap()
+                        .remove(&key.replace("~1", "/"));
+                } else {
+                    *stale.pointer_mut(pointer).unwrap() = value;
+                }
+                let (result, _) = observe_ready_fixture(&workspace, stale, None, expected).await;
+                assert!(!result.unwrap(), "accepted stale aggregate field {pointer}");
+            }
+
+            let mut foreign = stateful_set;
+            foreign["metadata"]["labels"]["workspace.memeloop.dev/owner-installation"] =
+                serde_json::json!("other-installation");
+            let (result, _) = observe_ready_fixture(&workspace, foreign, None, expected).await;
+            assert!(matches!(result, Err(ReconcileError::Ownership(_))));
         }
     }
 

@@ -106,8 +106,15 @@ async fn browser_access_tickets_are_scoped_and_consumed_once() {
         .await
         .unwrap();
     database
-        .record_workspace_observation(workspace.id, WorkspaceObservation::Ready, user.user_id, 103)
+        .record_workspace_observation(
+            workspace.id,
+            workspace.generation,
+            WorkspaceObservation::Ready,
+            user.user_id,
+            103,
+        )
         .await
+        .unwrap()
         .unwrap();
     let mapping = database
         .create_port_mapping(

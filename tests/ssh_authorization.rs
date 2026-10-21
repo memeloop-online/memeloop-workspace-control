@@ -99,8 +99,15 @@ async fn authorized_keys_command_returns_only_restricted_workspace_target() {
         .await
         .unwrap();
     database
-        .record_workspace_observation(workspace.id, WorkspaceObservation::Ready, user.user_id, 103)
+        .record_workspace_observation(
+            workspace.id,
+            workspace.generation,
+            WorkspaceObservation::Ready,
+            user.user_id,
+            103,
+        )
         .await
+        .unwrap()
         .unwrap();
     let cipher = EnvelopeCipher::from_base64(&STANDARD.encode([9_u8; 32])).unwrap();
     database

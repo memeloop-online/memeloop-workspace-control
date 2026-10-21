@@ -324,6 +324,7 @@ impl WorkspaceReconcileHandler {
         self.database
             .record_workspace_observation(
                 workspace.id,
+                workspace.generation,
                 observation,
                 workspace.owner_id,
                 unix_timestamp()?,

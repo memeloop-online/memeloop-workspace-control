@@ -463,7 +463,7 @@ async fn second_workspace(fixture: &Fixture) -> memeloop_workspace_control::work
         )
         .await
         .unwrap();
-    fixture
+    let workspace = fixture
         .database
         .request_workspace_action(
             workspace.id,
@@ -477,11 +477,13 @@ async fn second_workspace(fixture: &Fixture) -> memeloop_workspace_control::work
         .database
         .record_workspace_observation(
             workspace.id,
+            workspace.generation,
             WorkspaceObservation::Stopped,
             workspace.owner_id,
             fixture.now,
         )
         .await
+        .unwrap()
         .unwrap()
 }
 

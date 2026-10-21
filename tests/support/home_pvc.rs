@@ -129,18 +129,20 @@ impl Fixture {
             )
             .await
             .unwrap();
-        database
+        let workspace = database
             .request_workspace_action(workspace.id, WorkspaceAction::Stop, admin.user_id, now)
             .await
             .unwrap();
         let workspace = database
             .record_workspace_observation(
                 workspace.id,
+                workspace.generation,
                 WorkspaceObservation::Stopped,
                 admin.user_id,
                 now,
             )
             .await
+            .unwrap()
             .unwrap();
         Self {
             database,
@@ -252,7 +254,8 @@ impl Fixture {
     }
 
     pub async fn ready(&mut self) {
-        self.database
+        self.workspace = self
+            .database
             .request_workspace_action(
                 self.workspace.id,
                 WorkspaceAction::Start,
@@ -265,11 +268,13 @@ impl Fixture {
             .database
             .record_workspace_observation(
                 self.workspace.id,
+                self.workspace.generation,
                 WorkspaceObservation::Ready,
                 self.workspace.owner_id,
                 self.now,
             )
             .await
+            .unwrap()
             .unwrap();
         match &self.database {
             Database::Sqlite { pool, .. } => {

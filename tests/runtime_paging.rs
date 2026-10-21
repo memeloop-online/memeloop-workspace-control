@@ -468,11 +468,17 @@ async fn workspace_page_summary_covers_every_matching_workspace_not_only_the_cur
     database
         .record_workspace_observation(
             deleted_workspace,
+            database
+                .get_workspace(deleted_workspace)
+                .await
+                .unwrap()
+                .generation,
             WorkspaceObservation::Deleted,
             admin_id,
             42,
         )
         .await
+        .unwrap()
         .unwrap();
 
     let first_page = app
@@ -628,8 +634,15 @@ async fn workspace_usage_summary_aggregates_in_sql_and_honors_template_scope() {
         .await
         .unwrap();
     database
-        .record_workspace_observation(stopped, WorkspaceObservation::Stopped, admin_id, 14)
+        .record_workspace_observation(
+            stopped,
+            database.get_workspace(stopped).await.unwrap().generation,
+            WorkspaceObservation::Stopped,
+            admin_id,
+            14,
+        )
         .await
+        .unwrap()
         .unwrap();
     seeded_workspace(
         &database,
@@ -654,8 +667,15 @@ async fn workspace_usage_summary_aggregates_in_sql_and_honors_template_scope() {
         .await
         .unwrap();
     database
-        .record_workspace_observation(deleted, WorkspaceObservation::Deleted, admin_id, 18)
+        .record_workspace_observation(
+            deleted,
+            database.get_workspace(deleted).await.unwrap().generation,
+            WorkspaceObservation::Deleted,
+            admin_id,
+            18,
+        )
         .await
+        .unwrap()
         .unwrap();
     let deleting = seeded_workspace(
         &database,

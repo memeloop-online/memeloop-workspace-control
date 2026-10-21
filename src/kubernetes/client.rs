@@ -112,11 +112,25 @@ impl KubernetesCoordinator {
         else {
             return Ok(false);
         };
+        self.builder
+            .verify_delete_ownership(&stateful_set.metadata, workspace.id)?;
+        let Some(spec) = stateful_set.spec.as_ref() else {
+            return Ok(false);
+        };
         let Some(status) = stateful_set.status.as_ref() else {
             return Ok(false);
         };
-        if status.observed_generation.unwrap_or_default()
-            < stateful_set.metadata.generation.unwrap_or_default()
+        if spec.replicas != Some(expected)
+            || stateful_set.metadata.deletion_timestamp.is_some()
+            || stateful_set.metadata.generation.is_none()
+            || status.observed_generation.is_none()
+            || status.observed_generation < stateful_set.metadata.generation
+            || spec.template.metadata.as_ref().is_none_or(|metadata| {
+                metadata.annotations.as_ref().is_none_or(|annotations| {
+                    annotations.get("workspace.memeloop.dev/generation")
+                        != Some(&workspace.generation.to_string())
+                })
+            })
         {
             return Ok(false);
         }
@@ -134,31 +148,15 @@ impl KubernetesCoordinator {
         // StatefulSet aggregate status can lag behind an already Ready Pod. Use direct
         // observation only for the current single-replica workload revision; generation,
         // ownership and deletion guards prevent a previous Pod from satisfying a restart.
-        let Some(spec) = stateful_set.spec.as_ref() else {
-            return Ok(false);
-        };
         let Some(revision) = status.update_revision.as_deref() else {
             return Ok(false);
         };
         let Some(uid) = stateful_set.metadata.uid.as_deref() else {
             return Ok(false);
         };
-        if expected != 1
-            || stateful_set.metadata.generation.is_none()
-            || status.observed_generation.is_none()
-            || spec.replicas != Some(1)
-            || stateful_set.metadata.deletion_timestamp.is_some()
-            || spec.template.metadata.as_ref().is_none_or(|metadata| {
-                metadata.annotations.as_ref().is_none_or(|annotations| {
-                    annotations.get("workspace.memeloop.dev/generation")
-                        != Some(&workspace.generation.to_string())
-                })
-            })
-        {
+        if expected != 1 {
             return Ok(false);
         }
-        self.builder
-            .verify_delete_ownership(&stateful_set.metadata, workspace.id)?;
         let Some(pod) = Api::<Pod>::namespaced(self.client.clone(), namespace_name)
             .get_opt(&names.resources.pod_ordinal_zero())
             .await?
