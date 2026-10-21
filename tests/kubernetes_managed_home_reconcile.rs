@@ -65,12 +65,7 @@ async fn stopped_managed_home_recreates_only_sts_and_preserves_existing_pvc() {
         assert!(state.sts.is_none());
         assert_eq!(
             state.events,
-            [
-                "get-old-sts",
-                "get-old-sts",
-                "reject-vct-update",
-                "delete-sts"
-            ]
+            ["get-old-sts", "reject-vct-update", "delete-sts"]
         );
         assert_eq!(state.pvc, original_pvc);
     }
@@ -81,10 +76,8 @@ async fn stopped_managed_home_recreates_only_sts_and_preserves_existing_pvc() {
         state.events,
         [
             "get-old-sts",
-            "get-old-sts",
             "reject-vct-update",
             "delete-sts",
-            "get-absent-sts",
             "get-absent-sts",
             "create-sts",
             "get-pvc"
