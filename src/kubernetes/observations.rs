@@ -516,10 +516,10 @@ impl State {
         history.until = job.until;
         history.workspace_id = job.workspace_id;
         history.desired_replicas = job.desired_replicas;
-        if let Some(previous) = self.waiters.insert(job.id, job.clone()) {
-            if let Some(jobs) = self.by_workspace.get_mut(&previous.workspace_id) {
-                jobs.remove(&previous.id);
-            }
+        if let Some(previous) = self.waiters.insert(job.id, job.clone())
+            && let Some(jobs) = self.by_workspace.get_mut(&previous.workspace_id)
+        {
+            jobs.remove(&previous.id);
         }
         self.by_workspace
             .entry(job.workspace_id)
@@ -694,13 +694,13 @@ impl State {
     }
 
     fn release_cancelled(&mut self, reservation: &Reservation, now: i64) {
-        if let Some(history) = self.cycles.get_mut(&reservation.cycle) {
-            if history.in_flight.get(&reservation.edge) == Some(&reservation.job.payload_json) {
-                history.in_flight.remove(&reservation.edge);
-                history
-                    .retry_after
-                    .insert(reservation.edge, now.saturating_add(REPAIR_SECONDS as i64));
-            }
+        if let Some(history) = self.cycles.get_mut(&reservation.cycle)
+            && history.in_flight.get(&reservation.edge) == Some(&reservation.job.payload_json)
+        {
+            history.in_flight.remove(&reservation.edge);
+            history
+                .retry_after
+                .insert(reservation.edge, now.saturating_add(REPAIR_SECONDS as i64));
         }
     }
 

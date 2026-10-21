@@ -333,7 +333,9 @@ impl WorkspaceReconcileHandler {
         workspace: &Workspace,
         observation: WorkspaceObservation,
     ) -> Result<(), JobHandlerError> {
-        self.database
+        let started = std::time::Instant::now();
+        let recorded = self
+            .database
             .record_workspace_observation(
                 workspace.id,
                 workspace.generation,
@@ -343,6 +345,18 @@ impl WorkspaceReconcileHandler {
             )
             .await
             .map_err(job_error)?;
+        if let Some(recorded) = recorded {
+            // Audit timestamps are supplied before acquiring the transaction.
+            // This log is emitted after commit, so diagnostics can separate them.
+            tracing::info!(
+                workspace_id = %recorded.id,
+                workspace = %recorded.name,
+                generation = recorded.generation,
+                state = ?recorded.state,
+                elapsed_ms = started.elapsed().as_secs_f64() * 1_000.0,
+                "workspace observation committed"
+            );
+        }
         Ok(())
     }
 }
