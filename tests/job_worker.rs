@@ -424,6 +424,7 @@ impl JobHandler for CheckpointHandler {
         }
         let mut payload = job.payload.clone();
         payload["reconciled_generation"] = 17.into();
+        payload["reconciled_at"] = 100.into();
         Err(JobHandlerError::PendingWithCheckpoint {
             message: "waiting for readiness".to_owned(),
             payload,
@@ -443,14 +444,27 @@ impl JobHandler for UnchangedCheckpointHandler {
 }
 
 #[tokio::test]
-async fn unchanged_checkpoint_waits_without_rewriting_payload_or_retaining_workspace_lease() {
-    let (database, _, workspace_id, _) = workspace_database().await;
+async fn checkpoint_parks_atomically_without_sliding_its_apply_deadline() {
+    let (database, _, workspace_id, generation) = workspace_database().await;
     let Database::Sqlite { pool, .. } = &database else {
         unreachable!()
     };
-    // This database guard rejects actual redundant writes, rather than checking
-    // a mock or the payload comparison implementation.
-    sqlx::query("CREATE TRIGGER reject_checkpoint_rewrite BEFORE UPDATE OF payload_json ON jobs BEGIN SELECT RAISE(ABORT, 'unexpected checkpoint rewrite'); END")
+    let checkpoint =
+        json!({"generation": generation, "reconciled_generation": generation, "reconciled_at": 80});
+    sqlx::query("UPDATE jobs SET payload_json = ?1 WHERE workspace_id = ?2")
+        .bind(checkpoint.to_string())
+        .bind(workspace_id.to_string())
+        .execute(pool)
+        .await
+        .unwrap();
+    // A separate checkpoint save would still be running and violate this guard.
+    sqlx::query("CREATE TRIGGER require_atomic_park BEFORE UPDATE OF payload_json ON jobs WHEN NEW.payload_json != OLD.payload_json AND (OLD.status != 'running' OR NEW.status != 'pending' OR NEW.lease_owner IS NOT NULL OR NEW.attempts != OLD.attempts - 1 OR json_extract(NEW.payload_json, '$.runtime_wait.until') != 140) BEGIN SELECT RAISE(ABORT, 'checkpoint was not parked atomically'); END")
+        .execute(pool).await.unwrap();
+    sqlx::query("CREATE TABLE checkpoint_writes (payload TEXT NOT NULL)")
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query("CREATE TRIGGER observe_park AFTER UPDATE OF payload_json ON jobs BEGIN INSERT INTO checkpoint_writes VALUES (NEW.payload_json); END")
         .execute(pool).await.unwrap();
     let worker = JobWorker::new(
         database.clone(),
@@ -458,7 +472,7 @@ async fn unchanged_checkpoint_waits_without_rewriting_payload_or_retaining_works
         "owner-a".to_owned(),
     );
     assert!(worker.run_once(100).await.unwrap());
-    assert!(!worker.run_once(100).await.unwrap());
+    assert!(!worker.run_once(101).await.unwrap());
     let (status, available_at, attempts, lease_owner): (String, i64, i64, Option<String>) =
         sqlx::query_as(
             "SELECT status, available_at, attempts, lease_owner FROM jobs WHERE workspace_id = ?1",
@@ -467,9 +481,10 @@ async fn unchanged_checkpoint_waits_without_rewriting_payload_or_retaining_works
         .fetch_one(pool)
         .await
         .unwrap();
-    assert_eq!(status, "pending");
-    assert_eq!(available_at, 101);
-    assert_eq!(attempts, 0);
+    assert_eq!(
+        (status.as_str(), available_at, attempts),
+        ("pending", 140, 0)
+    );
     assert!(lease_owner.is_none());
     assert!(
         database
@@ -481,27 +496,67 @@ async fn unchanged_checkpoint_waits_without_rewriting_payload_or_retaining_works
         .release_workspace_lease(workspace_id, "other-owner")
         .await
         .unwrap();
+    let writes: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM checkpoint_writes")
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        writes, 1,
+        "one UPDATE must save checkpoint and defer together"
+    );
+
+    // Simulate a watch wake; another unresolved observation cannot extend the cycle.
+    sqlx::query("UPDATE jobs SET available_at = 101 WHERE workspace_id = ?1")
+        .bind(workspace_id.to_string())
+        .execute(pool)
+        .await
+        .unwrap();
     let restarted = JobWorker::new(
         database.clone(),
         Arc::new(UnchangedCheckpointHandler),
         "owner-b".to_owned(),
     );
-    for now in 101..113 {
-        assert!(restarted.run_once(now).await.unwrap());
-    }
-    assert_eq!(database.job_counts().await.unwrap().failed, 0);
+    assert!(restarted.run_once(101).await.unwrap());
+    assert!(!restarted.run_once(139).await.unwrap());
+    assert!(restarted.run_once(140).await.unwrap());
     let (attempts, available_at): (i64, i64) =
         sqlx::query_as("SELECT attempts, available_at FROM jobs WHERE workspace_id = ?1")
             .bind(workspace_id.to_string())
             .fetch_one(pool)
             .await
             .unwrap();
-    assert_eq!(attempts, 0);
-    assert_eq!(available_at, 113);
+    assert_eq!(
+        (attempts, available_at),
+        (0, 140),
+        "expired apply deadline stays immediately claimable"
+    );
+    let payloads: Vec<String> = sqlx::query_scalar("SELECT payload FROM checkpoint_writes")
+        .fetch_all(pool)
+        .await
+        .unwrap();
+    assert_eq!(payloads.len(), 3);
+    let mut previous_nonce = None;
+    for raw in payloads {
+        let mut payload: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        let marker = payload
+            .as_object_mut()
+            .unwrap()
+            .remove("runtime_wait")
+            .unwrap();
+        assert_eq!(
+            payload, checkpoint,
+            "semantic checkpoint fields must survive re-parking"
+        );
+        assert_eq!(marker["until"], 140);
+        let nonce = marker["nonce"].as_str().unwrap().to_owned();
+        uuid::Uuid::parse_str(&nonce).unwrap();
+        assert_ne!(previous_nonce.as_ref(), Some(&nonce));
+        previous_nonce = Some(nonce);
+    }
 }
 
 #[tokio::test]
-async fn readiness_checkpoint_survives_worker_restart_and_retries_after_one_second() {
+async fn readiness_checkpoint_survives_worker_restart_until_repair_deadline() {
     let database = database().await;
     let Database::Sqlite { pool, .. } = &database else {
         unreachable!()
@@ -510,7 +565,7 @@ async fn readiness_checkpoint_survives_worker_restart_and_retries_after_one_seco
         .execute(pool)
         .await
         .unwrap();
-    sqlx::query("CREATE TRIGGER observe_checkpoint_write AFTER UPDATE OF payload_json ON jobs BEGIN INSERT INTO checkpoint_writes VALUES (1); END").execute(pool).await.unwrap();
+    sqlx::query("CREATE TRIGGER observe_checkpoint_write AFTER UPDATE OF payload_json ON jobs WHEN NEW.status = 'pending' BEGIN INSERT INTO checkpoint_writes VALUES (1); END").execute(pool).await.unwrap();
     database
         .enqueue_job(
             NewJob {
@@ -535,8 +590,9 @@ async fn readiness_checkpoint_survives_worker_restart_and_retries_after_one_seco
         Arc::new(CheckpointHandler),
         "owner-b".to_owned(),
     );
-    assert!(restarted.run_once(101).await.unwrap());
-    assert!(!restarted.run_once(102).await.unwrap());
+    assert!(!restarted.run_once(159).await.unwrap());
+    assert!(restarted.run_once(160).await.unwrap());
+    assert!(!restarted.run_once(161).await.unwrap());
     let writes: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM checkpoint_writes")
         .fetch_one(pool)
         .await
@@ -568,7 +624,7 @@ async fn checkpoint_rejects_a_wrong_lease_owner_without_changing_payload() {
         .unwrap()
         .unwrap();
     let result = database
-        .save_job_checkpoint(id, "owner-b", &json!({"generation":18}), 100)
+        .park_workspace_job(id, "owner-b", &json!({"generation":18}), 160, 100)
         .await;
     assert!(matches!(result, Err(StorageError::LeaseNotOwned(actual)) if actual == id));
     database
@@ -581,6 +637,327 @@ async fn checkpoint_rejects_a_wrong_lease_owner_without_changing_payload() {
         .unwrap()
         .unwrap();
     assert_eq!(job.payload, json!({"generation":17}));
+}
+
+struct PostParkHandler {
+    database: Database,
+    workspace_id: uuid::Uuid,
+    hooks: AtomicUsize,
+}
+
+impl JobHandler for PostParkHandler {
+    async fn handle(&self, job: &ClaimedJob) -> Result<(), JobHandlerError> {
+        if job.workspace_id.is_none() {
+            return Ok(());
+        }
+        let mut payload = job.payload.clone();
+        // Keep this synthetic job parked during the real-clock pool test.
+        payload["reconciled_at"] = 4_000_000_000_i64.into();
+        Err(JobHandlerError::PendingWithCheckpoint {
+            message: "waiting".to_owned(),
+            payload,
+        })
+    }
+
+    async fn on_checkpoint_deferred(
+        &self,
+        job_id: uuid::Uuid,
+        now: i64,
+    ) -> Result<(), StorageError> {
+        let Database::Sqlite { pool, .. } = &self.database else {
+            unreachable!()
+        };
+        let (status, attempts, owner, payload): (String, i64, Option<String>, String) =
+            sqlx::query_as(
+                "SELECT status, attempts, lease_owner, payload_json FROM jobs WHERE id = ?1",
+            )
+            .bind(job_id.to_string())
+            .fetch_one(pool)
+            .await?;
+        assert_eq!((status.as_str(), attempts), ("pending", 0));
+        assert!(owner.is_none());
+        let payload: serde_json::Value = serde_json::from_str(&payload)?;
+        assert_eq!(payload["runtime_wait"]["until"], 4_000_000_060_i64);
+        assert!(
+            self.database
+                .try_acquire_workspace_lease(
+                    self.workspace_id,
+                    "hook-probe",
+                    now,
+                    Duration::from_secs(60)
+                )
+                .await?
+        );
+        self.database
+            .release_workspace_lease(self.workspace_id, "hook-probe")
+            .await?;
+        self.hooks.fetch_add(1, Ordering::SeqCst);
+        Err(StorageError::LeaseNotOwned(job_id))
+    }
+}
+
+#[tokio::test]
+async fn checkpoint_hook_runs_after_lease_release_and_its_failure_does_not_stop_pool() {
+    let (database, _, workspace_id, _) = workspace_database().await;
+    database.set_job_worker_concurrency(1, 100).await.unwrap();
+    database
+        .enqueue_job(
+            NewJob {
+                kind: "test".to_owned(),
+                workspace_id: None,
+                payload: json!({}),
+                available_at: 100,
+            },
+            100,
+        )
+        .await
+        .unwrap();
+    let handler = Arc::new(PostParkHandler {
+        database: database.clone(),
+        workspace_id,
+        hooks: AtomicUsize::new(0),
+    });
+    let worker = JobWorker::new(database.clone(), handler.clone(), "hook-pool".to_owned());
+    let (shutdown, receiver) = tokio::sync::watch::channel(false);
+    let task = tokio::spawn(async move { worker.run_pool_until_shutdown(receiver).await });
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if handler.hooks.load(Ordering::SeqCst) == 1
+                && database.job_counts().await.unwrap().completed == 1
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    shutdown.send(true).unwrap();
+    tokio::time::timeout(Duration::from_secs(5), task)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let counts = database.job_counts().await.unwrap();
+    assert_eq!(
+        (
+            counts.pending,
+            counts.running,
+            counts.completed,
+            counts.failed
+        ),
+        (1, 0, 1, 0)
+    );
+    assert_eq!(handler.hooks.load(Ordering::SeqCst), 1);
+}
+
+struct HangingCheckpointHook(AtomicUsize);
+
+impl JobHandler for HangingCheckpointHook {
+    async fn handle(&self, job: &ClaimedJob) -> Result<(), JobHandlerError> {
+        if job.kind == "park" {
+            Err(JobHandlerError::PendingWithCheckpoint {
+                message: "waiting".to_owned(),
+                payload: json!({"reconciled_at": 100}),
+            })
+        } else {
+            Ok(())
+        }
+    }
+
+    async fn on_checkpoint_deferred(
+        &self,
+        _job_id: uuid::Uuid,
+        _now: i64,
+    ) -> Result<(), StorageError> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        std::future::pending().await
+    }
+}
+
+#[tokio::test]
+async fn stalled_checkpoint_hook_times_out_and_worker_can_process_next_job() {
+    let database = database().await;
+    for (kind, available_at) in [("park", 100), ("test", 101)] {
+        database
+            .enqueue_job(
+                NewJob {
+                    kind: kind.to_owned(),
+                    workspace_id: None,
+                    payload: json!({}),
+                    available_at,
+                },
+                100,
+            )
+            .await
+            .unwrap();
+    }
+    let handler = Arc::new(HangingCheckpointHook(AtomicUsize::new(0)));
+    let worker = JobWorker::new(database.clone(), handler.clone(), "owner-a".to_owned());
+    let started = std::time::Instant::now();
+    assert!(
+        tokio::time::timeout(Duration::from_secs(10), worker.run_once(100))
+            .await
+            .unwrap()
+            .unwrap()
+    );
+    assert!(started.elapsed() >= Duration::from_secs(5));
+    assert_eq!(handler.0.load(Ordering::SeqCst), 1);
+    assert!(worker.run_once(101).await.unwrap());
+    let counts = database.job_counts().await.unwrap();
+    assert_eq!((counts.pending, counts.completed, counts.failed), (1, 1, 0));
+}
+
+#[tokio::test]
+async fn checkpoint_hook_does_not_run_when_park_or_workspace_release_fails() {
+    for fail_release in [false, true] {
+        let (database, _, workspace_id, _) = workspace_database().await;
+        let Database::Sqlite { pool, .. } = &database else {
+            unreachable!()
+        };
+        let guard = if fail_release {
+            "CREATE TRIGGER reject_release BEFORE DELETE ON workspace_leases BEGIN SELECT RAISE(ABORT, 'release unavailable'); END"
+        } else {
+            "CREATE TRIGGER reject_park BEFORE UPDATE OF payload_json ON jobs WHEN NEW.status = 'pending' BEGIN SELECT RAISE(ABORT, 'park unavailable'); END"
+        };
+        sqlx::query(guard).execute(pool).await.unwrap();
+        let handler = Arc::new(PostParkHandler {
+            database: database.clone(),
+            workspace_id,
+            hooks: AtomicUsize::new(0),
+        });
+        let worker = JobWorker::new(database.clone(), handler.clone(), "owner-a".to_owned());
+        assert!(worker.run_once(100).await.is_err());
+        assert_eq!(handler.hooks.load(Ordering::SeqCst), 0);
+        let status: String = sqlx::query_scalar("SELECT status FROM jobs WHERE workspace_id = ?1")
+            .bind(workspace_id.to_string())
+            .fetch_one(pool)
+            .await
+            .unwrap();
+        assert_eq!(status, if fail_release { "pending" } else { "running" });
+    }
+}
+
+#[tokio::test]
+async fn workspace_lease_contention_after_wake_keeps_delay_and_clears_park_marker() {
+    let (database, _, workspace_id, _) = workspace_database().await;
+    let handler = Arc::new(PostParkHandler {
+        database: database.clone(),
+        workspace_id,
+        hooks: AtomicUsize::new(0),
+    });
+    let worker = JobWorker::new(database.clone(), handler.clone(), "owner-a".to_owned());
+    assert!(worker.run_once(100).await.unwrap());
+    let Database::Sqlite { pool, .. } = &database else {
+        unreachable!()
+    };
+    sqlx::query("UPDATE jobs SET available_at = 101 WHERE workspace_id = ?1")
+        .bind(workspace_id.to_string())
+        .execute(pool)
+        .await
+        .unwrap();
+    assert!(
+        database
+            .try_acquire_workspace_lease(workspace_id, "other-owner", 100, Duration::from_secs(60))
+            .await
+            .unwrap()
+    );
+    assert!(worker.run_once(101).await.unwrap());
+    assert!(!worker.run_once(105).await.unwrap());
+    let (attempts, available_at, payload): (i64, i64, String) = sqlx::query_as(
+        "SELECT attempts, available_at, payload_json FROM jobs WHERE workspace_id = ?1",
+    )
+    .bind(workspace_id.to_string())
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!((attempts, available_at), (0, 106));
+    let payload: serde_json::Value = serde_json::from_str(&payload).unwrap();
+    assert!(payload.get("runtime_wait").is_none());
+    assert_eq!(payload["reconciled_at"], 4_000_000_000_i64);
+    assert_eq!(
+        handler.hooks.load(Ordering::SeqCst),
+        1,
+        "contention must not register another observation"
+    );
+    database
+        .release_workspace_lease(workspace_id, "other-owner")
+        .await
+        .unwrap();
+    assert!(worker.run_once(106).await.unwrap());
+    assert_eq!(handler.hooks.load(Ordering::SeqCst), 2);
+}
+
+struct CheckpointRecoveryHandler(AtomicUsize);
+
+impl JobHandler for CheckpointRecoveryHandler {
+    async fn handle(&self, job: &ClaimedJob) -> Result<(), JobHandlerError> {
+        match self.0.fetch_add(1, Ordering::SeqCst) {
+            0 => Err(JobHandlerError::PendingWithCheckpoint {
+                message: "waiting".to_owned(),
+                payload: json!({"generation": 17, "reconciled_at": 100}),
+            }),
+            1 => {
+                assert!(job.payload["runtime_wait"].is_object());
+                Err(JobHandlerError::Failed("transient".to_owned()))
+            }
+            2 => {
+                assert!(job.payload.get("runtime_wait").is_none());
+                Err(JobHandlerError::Pending("waiting for deletion".to_owned()))
+            }
+            _ => Ok(()),
+        }
+    }
+}
+
+#[tokio::test]
+async fn checkpoint_wake_followed_by_failure_preserves_backoff_and_attempts() {
+    let database = database().await;
+    let id = database
+        .enqueue_job(
+            NewJob {
+                kind: "test".to_owned(),
+                workspace_id: None,
+                payload: json!({}),
+                available_at: 100,
+            },
+            100,
+        )
+        .await
+        .unwrap();
+    let worker = JobWorker::new(
+        database.clone(),
+        Arc::new(CheckpointRecoveryHandler(AtomicUsize::new(0))),
+        "owner-a".to_owned(),
+    );
+    assert!(worker.run_once(100).await.unwrap());
+    let Database::Sqlite { pool, .. } = &database else {
+        unreachable!()
+    };
+    sqlx::query("UPDATE jobs SET available_at = 101 WHERE id = ?1")
+        .bind(id.to_string())
+        .execute(pool)
+        .await
+        .unwrap();
+    assert!(worker.run_once(101).await.unwrap());
+    assert!(!worker.run_once(102).await.unwrap());
+    assert!(worker.run_once(103).await.unwrap());
+    assert!(!worker.run_once(107).await.unwrap());
+    let (attempts, available_at, payload): (i64, i64, String) =
+        sqlx::query_as("SELECT attempts, available_at, payload_json FROM jobs WHERE id = ?1")
+            .bind(id.to_string())
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    assert_eq!((attempts, available_at), (1, 108));
+    assert!(
+        serde_json::from_str::<serde_json::Value>(&payload)
+            .unwrap()
+            .get("runtime_wait")
+            .is_none()
+    );
+    assert!(worker.run_once(108).await.unwrap());
+    assert_eq!(database.job_counts().await.unwrap().completed, 1);
 }
 
 struct PoolBarrierHandler {
@@ -775,8 +1152,8 @@ struct SlowHandler(SlowOutcome);
 
 impl JobHandler for SlowHandler {
     async fn handle(&self, _job: &ClaimedJob) -> Result<(), JobHandlerError> {
-        // Longer than the initial retry and checkpoint delays: using the claim
-        // timestamp would make both deadlines expire before this call returns.
+        // Longer than the initial failure retry: using the claim timestamp
+        // would consume its backoff before this call returns.
         tokio::time::sleep(Duration::from_secs(3)).await;
         match self.0 {
             SlowOutcome::Retry => Err(JobHandlerError::Failed("transient".to_owned())),
@@ -840,7 +1217,9 @@ async fn assert_slow_job_deadline(outcome: SlowOutcome, delay: Option<i64>) {
             .unwrap()
             .unwrap();
         if matches!(outcome, SlowOutcome::Checkpoint) {
-            assert_eq!(retried.payload, json!({"stage":"applied"}));
+            assert_eq!(retried.payload["stage"], "applied");
+            assert_eq!(retried.payload["runtime_wait"]["until"], available_at);
+            assert!(retried.payload["runtime_wait"]["nonce"].is_string());
         }
         assert_eq!(attempts, i64::from(matches!(outcome, SlowOutcome::Retry)));
     } else {
@@ -860,7 +1239,7 @@ async fn slow_pending_receives_full_readiness_delay_after_execution() {
 
 #[tokio::test]
 async fn slow_checkpoint_survives_until_its_post_execution_deadline() {
-    assert_slow_job_deadline(SlowOutcome::Checkpoint, Some(1)).await;
+    assert_slow_job_deadline(SlowOutcome::Checkpoint, Some(60)).await;
 }
 
 #[tokio::test]

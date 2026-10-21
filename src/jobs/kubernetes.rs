@@ -1,3 +1,5 @@
+use uuid::Uuid;
+
 use crate::{
     crypto::EnvelopeCipher,
     injections::{
@@ -5,7 +7,10 @@ use crate::{
         select_injections,
     },
     jobs::{JobHandler, JobHandlerError},
-    kubernetes::{DeleteProgress, KubernetesCoordinator, ReconcileError, ResourceBuilder},
+    kubernetes::{
+        DeleteProgress, KubernetesCoordinator, ReconcileError, ResourceBuilder,
+        WorkspaceObservations,
+    },
     storage::{ClaimedJob, Database, InjectionScopeRef, StorageError},
     workspaces::{Workspace, WorkspaceObservation, WorkspaceState},
 };
@@ -18,6 +23,7 @@ pub struct WorkspaceReconcileHandler {
     cipher: EnvelopeCipher,
     builder: ResourceBuilder,
     coordinator: KubernetesCoordinator,
+    observations: Option<WorkspaceObservations>,
 }
 
 impl WorkspaceReconcileHandler {
@@ -32,7 +38,13 @@ impl WorkspaceReconcileHandler {
             cipher,
             builder,
             coordinator,
+            observations: None,
         }
+    }
+
+    pub fn with_observations(mut self, observations: WorkspaceObservations) -> Self {
+        self.observations = Some(observations);
+        self
     }
 
     async fn reconcile_workspace(
@@ -321,7 +333,9 @@ impl WorkspaceReconcileHandler {
         workspace: &Workspace,
         observation: WorkspaceObservation,
     ) -> Result<(), JobHandlerError> {
-        self.database
+        let started = std::time::Instant::now();
+        let recorded = self
+            .database
             .record_workspace_observation(
                 workspace.id,
                 workspace.generation,
@@ -331,6 +345,18 @@ impl WorkspaceReconcileHandler {
             )
             .await
             .map_err(job_error)?;
+        if let Some(recorded) = recorded {
+            // Audit timestamps are supplied before acquiring the transaction.
+            // This log is emitted after commit, so diagnostics can separate them.
+            tracing::info!(
+                workspace_id = %recorded.id,
+                workspace = %recorded.name,
+                generation = recorded.generation,
+                state = ?recorded.state,
+                elapsed_ms = started.elapsed().as_secs_f64() * 1_000.0,
+                "workspace observation committed"
+            );
+        }
         Ok(())
     }
 }
@@ -394,6 +420,9 @@ fn checkpoint_error(
         return error;
     };
     let mut payload = job.payload.clone();
+    if let Some(object) = payload.as_object_mut() {
+        object.remove("runtime_wait");
+    }
     if let Some(at) = reconciled_at {
         payload["reconciled_generation"] = workspace.generation.into();
         payload["reconciled_at"] = at.into();
@@ -432,6 +461,13 @@ impl JobHandler for WorkspaceReconcileHandler {
             return Ok(());
         }
         self.reconcile_workspace(&workspace, job).await
+    }
+
+    async fn on_checkpoint_deferred(&self, job_id: Uuid, now: i64) -> Result<(), StorageError> {
+        if let Some(observations) = &self.observations {
+            observations.register(job_id, now).await?;
+        }
+        Ok(())
     }
 
     async fn on_terminal_failure(&self, job: &ClaimedJob, now: i64) -> Result<(), StorageError> {

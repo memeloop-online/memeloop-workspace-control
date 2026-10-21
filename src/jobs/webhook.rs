@@ -114,6 +114,13 @@ impl JobHandler for ControlPlaneJobHandler {
         }
     }
 
+    async fn on_checkpoint_deferred(&self, job_id: Uuid, now: i64) -> Result<(), StorageError> {
+        if let Some(workspace) = &self.workspace {
+            workspace.on_checkpoint_deferred(job_id, now).await?;
+        }
+        Ok(())
+    }
+
     async fn on_terminal_failure(&self, job: &ClaimedJob, now: i64) -> Result<(), StorageError> {
         if matches!(
             job.kind.as_str(),
