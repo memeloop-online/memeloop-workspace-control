@@ -77,42 +77,39 @@ impl KubernetesCoordinator {
         // selected by both installation and workspace ownership labels so a
         // sibling in the same namespace can never be swept up.
         let ingresses = Api::<Ingress>::namespaced(self.client.clone(), namespace);
-        if delete_owned_if_present(
+        let mut present = delete_owned_if_present(
             &ingresses,
             &names.web_shell_ingress,
             &self.builder,
             workspace_id,
         )
-        .await?
-            || delete_first_owned(&ingresses, &mapping_resources, &self.builder, workspace_id)
-                .await?
-        {
+        .await?;
+        present |=
+            delete_all_owned(&ingresses, &mapping_resources, &self.builder, workspace_id).await?;
+        // Keep TLS validation filters until every route using them has disappeared.
+        if present {
             return Ok(DeleteProgress::DeletionRequested);
         }
-        if self
+        let mut present = self
             .delete_owned_web_shell_filter(workspace_id, names)
-            .await?
-        {
-            return Ok(DeleteProgress::DeletionRequested);
-        }
+            .await?;
         let mapping_policies = Api::<NetworkPolicy>::namespaced(self.client.clone(), namespace);
-        if delete_first_owned(
+        present |= delete_all_owned(
             &mapping_policies,
             &mapping_resources,
             &self.builder,
             workspace_id,
         )
-        .await?
-        {
-            return Ok(DeleteProgress::DeletionRequested);
-        }
+        .await?;
         let services = Api::<Service>::namespaced(self.client.clone(), namespace);
-        if delete_first_owned(&services, &mapping_resources, &self.builder, workspace_id).await?
-            || delete_owned_if_present(&services, &names.ssh_service, &self.builder, workspace_id)
-                .await?
-            || delete_owned_if_present(&services, &names.service, &self.builder, workspace_id)
-                .await?
-        {
+        present |=
+            delete_all_owned(&services, &mapping_resources, &self.builder, workspace_id).await?;
+        present |=
+            delete_owned_if_present(&services, &names.ssh_service, &self.builder, workspace_id)
+                .await?;
+        present |=
+            delete_owned_if_present(&services, &names.service, &self.builder, workspace_id).await?;
+        if present {
             return Ok(DeleteProgress::DeletionRequested);
         }
 
@@ -150,36 +147,39 @@ impl KubernetesCoordinator {
             &self.builder.higress_namespace,
             &super::super::envoy_filter::api_resource(),
         );
-        let Some(existing) = filters.get_opt(&names.web_shell_envoy_filter).await? else {
-            if self.builder.port_mapping_domain.is_some() {
-                let selector = ListParams::default().labels(&format!(
-                    "{}={},{}={},{}",
-                    super::super::OWNER_INSTALLATION_LABEL,
-                    self.builder.installation_id,
-                    super::super::WORKSPACE_ID_LABEL,
-                    workspace_id,
-                    super::super::port_mappings::PORT_MAPPING_ID_LABEL,
-                ));
-                return delete_first_owned(&filters, &selector, &self.builder, workspace_id).await;
+        let mut present = false;
+        if let Some(existing) = filters.get_opt(&names.web_shell_envoy_filter).await? {
+            present = true;
+            self.builder
+                .verify_delete_ownership(&existing.metadata, workspace_id)?;
+            if existing.metadata.deletion_timestamp.is_none() {
+                let uid = existing
+                    .metadata
+                    .uid
+                    .ok_or(ReconcileError::MissingEnvoyFilterUid)?;
+                filters
+                    .delete(
+                        &names.web_shell_envoy_filter,
+                        &DeleteParams::default().preconditions(Preconditions {
+                            uid: Some(uid),
+                            resource_version: None,
+                        }),
+                    )
+                    .await?;
             }
-            return Ok(false);
-        };
-        self.builder
-            .verify_delete_ownership(&existing.metadata, workspace_id)?;
-        let uid = existing
-            .metadata
-            .uid
-            .ok_or(ReconcileError::MissingEnvoyFilterUid)?;
-        filters
-            .delete(
-                &names.web_shell_envoy_filter,
-                &DeleteParams::default().preconditions(Preconditions {
-                    uid: Some(uid),
-                    resource_version: None,
-                }),
-            )
-            .await?;
-        Ok(true)
+        }
+        if self.builder.port_mapping_domain.is_some() {
+            let selector = ListParams::default().labels(&format!(
+                "{}={},{}={},{}",
+                super::super::OWNER_INSTALLATION_LABEL,
+                self.builder.installation_id,
+                super::super::WORKSPACE_ID_LABEL,
+                workspace_id,
+                super::super::port_mappings::PORT_MAPPING_ID_LABEL,
+            ));
+            present |= delete_all_owned(&filters, &selector, &self.builder, workspace_id).await?;
+        }
+        Ok(present)
     }
 
     async fn workspace_pod_or_pvc_reference_is_present(
@@ -221,16 +221,13 @@ impl KubernetesCoordinator {
     ) -> Result<DeleteProgress, ReconcileError> {
         let namespace = workspace.runtime.namespace();
         let workspace_id = workspace.id;
-        if delete_owned_if_present(
+        let mut present = delete_owned_if_present(
             mapping_policies,
             &names.network_policy,
             &self.builder,
             workspace_id,
         )
-        .await?
-        {
-            return Ok(DeleteProgress::DeletionRequested);
-        }
+        .await?;
         let config_maps = Api::<ConfigMap>::namespaced(self.client.clone(), namespace);
         let startup_gate = names.startup_gate_config_map();
         for name in [
@@ -240,9 +237,8 @@ impl KubernetesCoordinator {
             &names.files_config_map,
             &startup_gate,
         ] {
-            if delete_owned_if_present(&config_maps, name, &self.builder, workspace_id).await? {
-                return Ok(DeleteProgress::DeletionRequested);
-            }
+            present |=
+                delete_owned_if_present(&config_maps, name, &self.builder, workspace_id).await?;
         }
         let secrets = Api::<Secret>::namespaced(self.client.clone(), namespace);
         for name in [
@@ -250,19 +246,17 @@ impl KubernetesCoordinator {
             &names.environment_secret,
             &names.files_secret,
         ] {
-            if delete_owned_if_present(&secrets, name, &self.builder, workspace_id).await? {
-                return Ok(DeleteProgress::DeletionRequested);
-            }
+            present |= delete_owned_if_present(&secrets, name, &self.builder, workspace_id).await?;
         }
         let service_accounts = Api::<ServiceAccount>::namespaced(self.client.clone(), namespace);
-        if delete_owned_if_present(
+        present |= delete_owned_if_present(
             &service_accounts,
             &names.service_account,
             &self.builder,
             workspace_id,
         )
-        .await?
-        {
+        .await?;
+        if present {
             return Ok(DeleteProgress::DeletionRequested);
         }
         let pvcs = Api::<PersistentVolumeClaim>::namespaced(self.client.clone(), namespace);
@@ -307,12 +301,11 @@ where
     let Some(existing) = api.get_opt(name).await? else {
         return Ok(false);
     };
-    builder.verify_delete_ownership(existing.meta(), workspace_id)?;
-    api.delete(name, &DeleteParams::default()).await?;
+    delete_owned_object(api, &existing, builder, workspace_id).await?;
     Ok(true)
 }
 
-async fn delete_first_owned<K>(
+async fn delete_all_owned<K>(
     api: &Api<K>,
     list: &ListParams,
     builder: &ResourceBuilder,
@@ -321,11 +314,38 @@ async fn delete_first_owned<K>(
 where
     K: Clone + DeserializeOwned + Debug + Resource,
 {
-    let Some(existing) = api.list(list).await?.into_iter().next() else {
-        return Ok(false);
-    };
+    let objects = api.list(list).await?;
+    for existing in &objects.items {
+        delete_owned_object(api, existing, builder, workspace_id).await?;
+    }
+    Ok(!objects.items.is_empty())
+}
+
+async fn delete_owned_object<K>(
+    api: &Api<K>,
+    existing: &K,
+    builder: &ResourceBuilder,
+    workspace_id: Uuid,
+) -> Result<(), ReconcileError>
+where
+    K: Clone + DeserializeOwned + Debug + Resource,
+{
     builder.verify_delete_ownership(existing.meta(), workspace_id)?;
-    let name = existing.name_any();
-    api.delete(&name, &DeleteParams::default()).await?;
-    Ok(true)
+    if existing.meta().deletion_timestamp.is_some() {
+        return Ok(());
+    }
+    let uid = existing.meta().uid.clone().ok_or_else(|| {
+        kube::Error::Service(
+            "owned workspace resource has no UID; refusing an unguarded delete".into(),
+        )
+    })?;
+    api.delete(
+        &existing.name_any(),
+        &DeleteParams::default().preconditions(Preconditions {
+            uid: Some(uid),
+            resource_version: None,
+        }),
+    )
+    .await?;
+    Ok(())
 }
