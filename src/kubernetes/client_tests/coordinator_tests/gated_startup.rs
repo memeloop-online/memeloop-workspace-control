@@ -1,7 +1,7 @@
 use super::*;
 use http_body_util::BodyExt;
 use serde_json::{Value, json};
-use std::time::Duration;
+use std::{sync::atomic::AtomicUsize, time::Duration};
 use tokio::sync::{Notify, Semaphore};
 
 mod prerequisite_overlap;
@@ -12,6 +12,7 @@ struct GateMock {
     hold_files: AtomicBool,
     release_files: Semaphore,
     workload_applied: Notify,
+    workload_reads: AtomicUsize,
     fail_suffix: Mutex<Option<String>>,
     hold_request: Mutex<Option<(Method, String)>>,
     request_started: Notify,
@@ -26,6 +27,7 @@ impl Default for GateMock {
             hold_files: AtomicBool::default(),
             release_files: Semaphore::new(0),
             workload_applied: Notify::new(),
+            workload_reads: AtomicUsize::new(0),
             fail_suffix: Mutex::default(),
             hold_request: Mutex::default(),
             request_started: Notify::new(),
@@ -55,6 +57,9 @@ impl GateMock {
             self.release_request.acquire().await.unwrap().forget();
         }
         if method == Method::GET {
+            if path.contains("/statefulsets/") {
+                self.workload_reads.fetch_add(1, Ordering::SeqCst);
+            }
             if path.ends_with("/pods")
                 || path.ends_with("/services")
                 || path.ends_with("/ingresses")
@@ -179,6 +184,7 @@ async fn new_workload_prepares_volumes_before_files_but_approval_waits_for_every
         async move { coordinator.reconcile(&workspace).await }
     });
     wait_for_workload(&mock).await;
+    assert_eq!(mock.workload_reads.load(Ordering::SeqCst), 1);
     let before = mock.object("/statefulsets/w-8000000000000001").unwrap();
     assert_gated(&before);
     assert_eq!(
@@ -220,6 +226,7 @@ async fn new_workload_prepares_volumes_before_files_but_approval_waits_for_every
     mock.hold_files.store(false, Ordering::SeqCst);
     workspace.state = WorkspaceState::Ready;
     coordinator.reconcile(&workspace).await.unwrap();
+    assert_eq!(mock.workload_reads.load(Ordering::SeqCst), 2);
     let after = mock.object("/statefulsets/w-8000000000000001").unwrap();
     assert_eq!(
         before["spec"]["template"], after["spec"]["template"],
