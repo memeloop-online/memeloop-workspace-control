@@ -26,6 +26,16 @@ pub fn request_client(mut config: Config) -> Result<Client, kube::Error> {
     Ok(client)
 }
 
+/// Watches have a server-side 60-second lifetime. Keep their transport separate
+/// so finite reconciliation calls still release their executor after 15 seconds.
+pub fn watch_client(mut config: Config) -> Result<Client, kube::Error> {
+    config.connect_timeout = Some(CONNECT_TIMEOUT);
+    config.read_timeout = Some(Duration::from_secs(75));
+    config.write_timeout = Some(WRITE_TIMEOUT);
+    config.default_retry = false;
+    Client::try_from(config)
+}
+
 #[cfg(test)]
 #[path = "request_client_tests.rs"]
 mod tests;

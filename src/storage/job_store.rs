@@ -1,10 +1,15 @@
 use std::time::Duration;
 
+use serde_json::Value;
+use sqlx::Row;
 use uuid::Uuid;
 
 use super::{
-    ClaimedJob, Database, NewJob, StorageError,
-    job_types::{decode_postgres_job, decode_sqlite_job},
+    ClaimedJob, Database, NewJob, ParkedWorkspaceJob, ParkedWorkspaceJobsPage, StorageError,
+    job_types::{
+        decode_postgres_job, decode_postgres_parked_job, decode_sqlite_job,
+        decode_sqlite_parked_job,
+    },
 };
 
 impl Database {
@@ -254,7 +259,10 @@ impl Database {
                 installation_id,
             } => sqlx::query(
                 "UPDATE jobs SET status = 'pending', available_at = ?1, lease_owner = NULL, \
-                lease_expires_at = NULL, updated_at = ?2 WHERE id = ?3 AND installation_id = ?4 \
+                lease_expires_at = NULL, payload_json = CASE \
+                WHEN json_type(payload_json, '$.runtime_wait') IS NOT NULL \
+                THEN json_remove(payload_json, '$.runtime_wait') ELSE payload_json END, \
+                updated_at = ?2 WHERE id = ?3 AND installation_id = ?4 \
                 AND status = 'running' AND lease_owner = ?5",
             )
             .bind(available_at)
@@ -270,7 +278,10 @@ impl Database {
                 installation_id,
             } => sqlx::query(
                 "UPDATE jobs SET status = 'pending', available_at = $1, lease_owner = NULL, \
-                lease_expires_at = NULL, updated_at = $2 WHERE id = $3 AND installation_id = $4 \
+                lease_expires_at = NULL, payload_json = CASE \
+                WHEN payload_json::jsonb ? 'runtime_wait' \
+                THEN (payload_json::jsonb - 'runtime_wait')::text ELSE payload_json END, \
+                updated_at = $2 WHERE id = $3 AND installation_id = $4 \
                 AND status = 'running' AND lease_owner = $5",
             )
             .bind(available_at)
@@ -288,30 +299,259 @@ impl Database {
         Ok(())
     }
 
-    pub async fn save_job_checkpoint(
+    /// Persist a new park identity and release the running lease in the same statement.
+    pub async fn park_workspace_job(
         &self,
         job_id: Uuid,
         lease_owner: &str,
-        payload: &serde_json::Value,
+        payload: &Value,
+        until: i64,
         now: i64,
-    ) -> Result<(), StorageError> {
-        let payload_json = serde_json::to_string(payload)?;
-        let affected = match self {
-            Self::Sqlite { pool, installation_id } => sqlx::query(
-                "UPDATE jobs SET payload_json = ?1, updated_at = ?2 WHERE id = ?3 AND installation_id = ?4 AND status = 'running' AND lease_owner = ?5",
-            )
-            .bind(&payload_json).bind(now).bind(job_id.to_string()).bind(installation_id.as_str()).bind(lease_owner)
-            .execute(pool).await?.rows_affected(),
-            Self::Postgres { pool, installation_id } => sqlx::query(
-                "UPDATE jobs SET payload_json = $1, updated_at = $2 WHERE id = $3 AND installation_id = $4 AND status = 'running' AND lease_owner = $5",
-            )
-            .bind(&payload_json).bind(now).bind(job_id.to_string()).bind(installation_id.as_str()).bind(lease_owner)
-            .execute(pool).await?.rows_affected(),
+    ) -> Result<Value, StorageError> {
+        let mut stored: serde_json::Map<String, Value> = serde_json::from_value(payload.clone())?;
+        stored.insert(
+            "runtime_wait".to_owned(),
+            serde_json::json!({"nonce": Uuid::now_v7(), "until": until}),
+        );
+        let payload_json = serde_json::to_string(&stored)?;
+        let stored_json: Option<String> = match self {
+            Self::Sqlite {
+                pool,
+                installation_id,
+            } => {
+                sqlx::query_scalar(
+                    "UPDATE jobs SET payload_json = ?1, status = 'pending', available_at = ?2, \
+                attempts = CASE WHEN attempts > 0 THEN attempts - 1 ELSE 0 END, \
+                lease_owner = NULL, lease_expires_at = NULL, updated_at = ?3 \
+                WHERE id = ?4 AND installation_id = ?5 AND status = 'running' \
+                AND lease_owner = ?6 RETURNING payload_json",
+                )
+                .bind(&payload_json)
+                .bind(until)
+                .bind(now)
+                .bind(job_id.to_string())
+                .bind(installation_id.as_str())
+                .bind(lease_owner)
+                .fetch_optional(pool)
+                .await?
+            }
+            Self::Postgres {
+                pool,
+                installation_id,
+            } => {
+                sqlx::query_scalar(
+                    "UPDATE jobs SET payload_json = $1, status = 'pending', available_at = $2, \
+                attempts = CASE WHEN attempts > 0 THEN attempts - 1 ELSE 0 END, \
+                lease_owner = NULL, lease_expires_at = NULL, updated_at = $3 \
+                WHERE id = $4 AND installation_id = $5 AND status = 'running' \
+                AND lease_owner = $6 RETURNING payload_json",
+                )
+                .bind(&payload_json)
+                .bind(until)
+                .bind(now)
+                .bind(job_id.to_string())
+                .bind(installation_id.as_str())
+                .bind(lease_owner)
+                .fetch_optional(pool)
+                .await?
+            }
         };
-        if affected != 1 {
-            return Err(StorageError::LeaseNotOwned(job_id));
+        let stored_json = stored_json.ok_or(StorageError::LeaseNotOwned(job_id))?;
+        Ok(serde_json::from_str(&stored_json)?)
+    }
+
+    /// Scan one bounded raw page. Rejected markers still advance `next`.
+    pub async fn list_parked_workspace_jobs(
+        &self,
+        after: Option<Uuid>,
+        limit: u32,
+        now: i64,
+    ) -> Result<ParkedWorkspaceJobsPage, StorageError> {
+        let limit = i64::from(limit.clamp(1, 1_000));
+        let after = after.map(|id| id.to_string());
+        match self {
+            Self::Sqlite {
+                pool,
+                installation_id,
+            } => {
+                let rows = sqlx::query(
+                    "SELECT j.id, j.workspace_id, j.payload_json, j.available_at, \
+                    w.generation AS workspace_generation, w.state FROM jobs j \
+                    JOIN workspaces w ON w.id = j.workspace_id \
+                    AND w.installation_id = j.installation_id \
+                    WHERE j.installation_id = ?1 AND j.kind = 'reconcile_workspace' \
+                    AND j.status = 'pending' AND j.available_at > ?2 \
+                    AND (?3 IS NULL OR j.id > ?3) \
+                    AND w.state IN ('provisioning', 'starting', 'restarting', 'stopping') \
+                    AND json_type(j.payload_json, '$.runtime_wait') IS NOT NULL \
+                    AND json_extract(j.payload_json, '$.reconciled_generation') = w.generation \
+                    ORDER BY j.id LIMIT ?4",
+                )
+                .bind(installation_id.as_str())
+                .bind(now)
+                .bind(&after)
+                .bind(limit)
+                .fetch_all(pool)
+                .await?;
+                let next = if rows.len() == limit as usize {
+                    rows.last()
+                        .map(|row| row.try_get::<String, _>("id"))
+                        .transpose()?
+                        .map(|id| Uuid::parse_str(&id))
+                        .transpose()?
+                } else {
+                    None
+                };
+                let jobs = rows
+                    .into_iter()
+                    .filter_map(|row| decode_sqlite_parked_job(row).transpose())
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(ParkedWorkspaceJobsPage { jobs, next })
+            }
+            Self::Postgres {
+                pool,
+                installation_id,
+            } => {
+                let rows = sqlx::query(
+                    "SELECT j.id, j.workspace_id, j.payload_json, j.available_at, \
+                    w.generation AS workspace_generation, w.state FROM jobs j \
+                    JOIN workspaces w ON w.id = j.workspace_id \
+                    AND w.installation_id = j.installation_id \
+                    WHERE j.installation_id = $1 AND j.kind = 'reconcile_workspace' \
+                    AND j.status = 'pending' AND j.available_at > $2 \
+                    AND ($3::text IS NULL OR j.id > $3) \
+                    AND w.state IN ('provisioning', 'starting', 'restarting', 'stopping') \
+                    AND j.payload_json::jsonb ? 'runtime_wait' \
+                    AND j.payload_json::jsonb ->> 'reconciled_generation' = w.generation::text \
+                    ORDER BY j.id LIMIT $4",
+                )
+                .bind(installation_id.as_str())
+                .bind(now)
+                .bind(&after)
+                .bind(limit)
+                .fetch_all(pool)
+                .await?;
+                let next = if rows.len() == limit as usize {
+                    rows.last()
+                        .map(|row| row.try_get::<String, _>("id"))
+                        .transpose()?
+                        .map(|id| Uuid::parse_str(&id))
+                        .transpose()?
+                } else {
+                    None
+                };
+                let jobs = rows
+                    .into_iter()
+                    .filter_map(|row| decode_postgres_parked_job(row).transpose())
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(ParkedWorkspaceJobsPage { jobs, next })
+            }
         }
-        Ok(())
+    }
+
+    /// Rebuild the persisted descriptor for a post-park hook without scanning other jobs.
+    pub async fn get_parked_workspace_job(
+        &self,
+        job_id: Uuid,
+        now: i64,
+    ) -> Result<Option<ParkedWorkspaceJob>, StorageError> {
+        match self {
+            Self::Sqlite {
+                pool,
+                installation_id,
+            } => {
+                let row = sqlx::query(
+                    "SELECT j.id, j.workspace_id, j.payload_json, j.available_at, \
+                    w.generation AS workspace_generation, w.state FROM jobs j \
+                    JOIN workspaces w ON w.id = j.workspace_id \
+                    AND w.installation_id = j.installation_id \
+                    WHERE j.id = ?1 AND j.installation_id = ?2 \
+                    AND j.kind = 'reconcile_workspace' AND j.status = 'pending' \
+                    AND j.available_at > ?3 \
+                    AND w.state IN ('provisioning', 'starting', 'restarting', 'stopping') \
+                    AND json_type(j.payload_json, '$.runtime_wait') IS NOT NULL \
+                    AND json_extract(j.payload_json, '$.reconciled_generation') = w.generation",
+                )
+                .bind(job_id.to_string())
+                .bind(installation_id.as_str())
+                .bind(now)
+                .fetch_optional(pool)
+                .await?;
+                row.map(decode_sqlite_parked_job)
+                    .transpose()
+                    .map(Option::flatten)
+            }
+            Self::Postgres {
+                pool,
+                installation_id,
+            } => {
+                let row = sqlx::query(
+                    "SELECT j.id, j.workspace_id, j.payload_json, j.available_at, \
+                    w.generation AS workspace_generation, w.state FROM jobs j \
+                    JOIN workspaces w ON w.id = j.workspace_id \
+                    AND w.installation_id = j.installation_id \
+                    WHERE j.id = $1 AND j.installation_id = $2 \
+                    AND j.kind = 'reconcile_workspace' AND j.status = 'pending' \
+                    AND j.available_at > $3 \
+                    AND w.state IN ('provisioning', 'starting', 'restarting', 'stopping') \
+                    AND j.payload_json::jsonb ? 'runtime_wait' \
+                    AND j.payload_json::jsonb ->> 'reconciled_generation' = w.generation::text",
+                )
+                .bind(job_id.to_string())
+                .bind(installation_id.as_str())
+                .bind(now)
+                .fetch_optional(pool)
+                .await?;
+                row.map(decode_postgres_parked_job)
+                    .transpose()
+                    .map(Option::flatten)
+            }
+        }
+    }
+
+    /// Only the exact, still-pending park may be accelerated; a stale wake is harmless.
+    pub async fn wake_parked_workspace_job(
+        &self,
+        parked: &ParkedWorkspaceJob,
+        now: i64,
+    ) -> Result<bool, StorageError> {
+        let affected = match self {
+            Self::Sqlite {
+                pool,
+                installation_id,
+            } => sqlx::query(
+                "UPDATE jobs SET available_at = ?1, updated_at = ?1 \
+                WHERE id = ?2 AND installation_id = ?3 AND kind = 'reconcile_workspace' \
+                AND status = 'pending' AND payload_json = ?4 AND available_at = ?5 \
+                AND available_at > ?1",
+            )
+            .bind(now)
+            .bind(parked.id.to_string())
+            .bind(installation_id.as_str())
+            .bind(&parked.payload_json)
+            .bind(parked.until)
+            .execute(pool)
+            .await?
+            .rows_affected(),
+            Self::Postgres {
+                pool,
+                installation_id,
+            } => sqlx::query(
+                "UPDATE jobs SET available_at = $1, updated_at = $1 \
+                WHERE id = $2 AND installation_id = $3 AND kind = 'reconcile_workspace' \
+                AND status = 'pending' AND payload_json = $4 AND available_at = $5 \
+                AND available_at > $1",
+            )
+            .bind(now)
+            .bind(parked.id.to_string())
+            .bind(installation_id.as_str())
+            .bind(&parked.payload_json)
+            .bind(parked.until)
+            .execute(pool)
+            .await?
+            .rows_affected(),
+        };
+        Ok(affected == 1)
     }
 
     pub async fn defer_job_without_attempt(
@@ -328,7 +568,9 @@ impl Database {
             } => sqlx::query(
                 "UPDATE jobs SET status = 'pending', available_at = ?1, \
                 attempts = CASE WHEN attempts > 0 THEN attempts - 1 ELSE 0 END, \
-                lease_owner = NULL, lease_expires_at = NULL, updated_at = ?2 \
+                lease_owner = NULL, lease_expires_at = NULL, \
+                payload_json = CASE WHEN json_type(payload_json, '$.runtime_wait') IS NOT NULL \
+                THEN json_remove(payload_json, '$.runtime_wait') ELSE payload_json END, updated_at = ?2 \
                 WHERE id = ?3 AND installation_id = ?4 AND status = 'running' \
                 AND lease_owner = ?5",
             )
@@ -346,7 +588,9 @@ impl Database {
             } => sqlx::query(
                 "UPDATE jobs SET status = 'pending', available_at = $1, \
                 attempts = CASE WHEN attempts > 0 THEN attempts - 1 ELSE 0 END, \
-                lease_owner = NULL, lease_expires_at = NULL, updated_at = $2 \
+                lease_owner = NULL, lease_expires_at = NULL, \
+                payload_json = CASE WHEN payload_json::jsonb ? 'runtime_wait' \
+                THEN (payload_json::jsonb - 'runtime_wait')::text ELSE payload_json END, updated_at = $2 \
                 WHERE id = $3 AND installation_id = $4 AND status = 'running' \
                 AND lease_owner = $5",
             )

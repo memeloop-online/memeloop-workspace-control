@@ -2,6 +2,7 @@ use std::{sync::Arc, time::Duration};
 
 use thiserror::Error;
 use tokio::sync::watch;
+use uuid::Uuid;
 
 use crate::storage::{ClaimedJob, Database, StorageError};
 
@@ -10,6 +11,7 @@ mod webhook;
 
 const MAX_JOB_ATTEMPTS: i64 = 10;
 const PENDING_JOB_DELAY_SECONDS: i64 = 5;
+const CHECKPOINT_REPAIR_SECONDS: i64 = 60;
 
 pub use kubernetes::WorkspaceReconcileHandler;
 pub use webhook::{ControlPlaneJobHandler, WebhookDeliveryHandler};
@@ -19,6 +21,14 @@ pub trait JobHandler: Send + Sync + 'static {
         &self,
         job: &ClaimedJob,
     ) -> impl std::future::Future<Output = Result<(), JobHandlerError>> + Send;
+
+    fn on_checkpoint_deferred(
+        &self,
+        _job_id: Uuid,
+        _now: i64,
+    ) -> impl std::future::Future<Output = Result<(), StorageError>> + Send {
+        async { Ok(()) }
+    }
 
     fn on_terminal_failure(
         &self,
@@ -87,6 +97,8 @@ impl<H: JobHandler> JobWorker<H> {
         // Anchor elapsed monotonic time to the caller's clock, including synthetic
         // clocks used by deterministic queue callers.
         let finished_at = execution_finished_at(now, started.elapsed());
+        let checkpoint_deferred =
+            matches!(&result, Err(JobHandlerError::PendingWithCheckpoint { .. }));
         let persistence_result = self.persist_job_result(&job, result, finished_at).await;
         if let Some(workspace_id) = job.workspace_id {
             self.database
@@ -94,6 +106,23 @@ impl<H: JobHandler> JobWorker<H> {
                 .await?;
         }
         persistence_result?;
+        if checkpoint_deferred {
+            // The durable deadline remains the repair path if registration fails.
+            match tokio::time::timeout(
+                Duration::from_secs(5),
+                self.handler.on_checkpoint_deferred(job.id, finished_at),
+            )
+            .await
+            {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => {
+                    tracing::warn!(job_id = %job.id, %error, "could not register deferred workspace observation")
+                }
+                Err(_) => {
+                    tracing::warn!(job_id = %job.id, "deferred workspace observation registration timed out")
+                }
+            }
+        }
         Ok(true)
     }
 
@@ -111,19 +140,17 @@ impl<H: JobHandler> JobWorker<H> {
             }
             Err(JobHandlerError::PendingWithCheckpoint { message, payload }) => {
                 tracing::debug!(job_id = %job.id, error = %message, "job is waiting after applying resources");
-                if payload != job.payload {
-                    self.database
-                        .save_job_checkpoint(job.id, &self.lease_owner, &payload, now)
-                        .await?;
-                }
+                // Repeated readiness checks share the original apply deadline.
+                // An expired cycle must be claimable immediately for a fresh apply.
+                let until = payload
+                    .get("reconciled_at")
+                    .and_then(serde_json::Value::as_i64)
+                    .unwrap_or(now)
+                    .saturating_add(CHECKPOINT_REPAIR_SECONDS);
                 self.database
-                    .defer_job_without_attempt(
-                        job.id,
-                        &self.lease_owner,
-                        now.saturating_add(1),
-                        now,
-                    )
+                    .park_workspace_job(job.id, &self.lease_owner, &payload, until, now)
                     .await
+                    .map(|_| ())
             }
             Err(JobHandlerError::Pending(error)) => {
                 tracing::debug!(
