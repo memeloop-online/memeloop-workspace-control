@@ -53,7 +53,7 @@ pub(super) fn container(enabled: bool, image: &str, cpu_request_millis: u64) -> 
                 "workers".to_owned(),
             ]),
         }),
-        initial_delay_seconds: Some(5),
+        initial_delay_seconds: Some(1),
         period_seconds: Some(2),
         ..Probe::default()
     };
