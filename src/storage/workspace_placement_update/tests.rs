@@ -106,8 +106,15 @@ async fn stopped_workspace() -> (Database, Workspace, Uuid) {
         .await
         .unwrap();
     let stopped = database
-        .record_workspace_observation(stopping.id, WorkspaceObservation::Stopped, admin.user_id, 6)
+        .record_workspace_observation(
+            stopping.id,
+            stopping.generation,
+            WorkspaceObservation::Stopped,
+            admin.user_id,
+            6,
+        )
         .await
+        .unwrap()
         .unwrap();
     (database, stopped, admin.user_id)
 }

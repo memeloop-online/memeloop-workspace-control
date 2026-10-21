@@ -92,8 +92,15 @@ async fn stopped_workspace() -> (Database, Workspace, Uuid) {
         .await
         .unwrap();
     let stopped = database
-        .record_workspace_observation(stopping.id, WorkspaceObservation::Stopped, admin.user_id, 6)
+        .record_workspace_observation(
+            stopping.id,
+            stopping.generation,
+            WorkspaceObservation::Stopped,
+            admin.user_id,
+            6,
+        )
         .await
+        .unwrap()
         .unwrap();
     (database, stopped, admin.user_id)
 }
@@ -634,8 +641,15 @@ async fn retry_fixture(
         .await
         .unwrap();
     let ready = database
-        .record_workspace_observation(stopped.id, WorkspaceObservation::Ready, actor, 8)
+        .record_workspace_observation(
+            stopped.id,
+            database.get_workspace(stopped.id).await.unwrap().generation,
+            WorkspaceObservation::Ready,
+            actor,
+            8,
+        )
         .await
+        .unwrap()
         .unwrap();
     operation.phase = StorageShrinkPhase::Failed;
     operation.error = Some("Kubernetes SendRequest during resume".to_owned());
@@ -896,14 +910,21 @@ async fn retry_rejects_changes_to_unselected_volumes() {
 #[tokio::test]
 async fn retry_rejects_not_ready_and_latest_or_active_competition() {
     let (database, ready, operation, actor) = retry_fixture(true, true, |_| {}).await;
-    database
+    let stopping = database
         .request_workspace_action(ready.id, WorkspaceAction::Stop, actor, 11)
         .await
         .unwrap();
     assert_retry_conflict_unchanged(&database, ready.id, operation.id, actor).await;
     database
-        .record_workspace_observation(ready.id, WorkspaceObservation::Stopped, actor, 12)
+        .record_workspace_observation(
+            ready.id,
+            stopping.generation,
+            WorkspaceObservation::Stopped,
+            actor,
+            12,
+        )
         .await
+        .unwrap()
         .unwrap();
     assert_retry_conflict_unchanged(&database, ready.id, operation.id, actor).await;
 

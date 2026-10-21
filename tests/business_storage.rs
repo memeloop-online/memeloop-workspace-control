@@ -906,11 +906,13 @@ async fn workspace_creation_enforces_quota_and_enqueues_lifecycle_actions() {
     let ready = database
         .record_workspace_observation(
             workspace.id,
+            workspace.generation,
             WorkspaceObservation::Ready,
             admin.user_id,
             105,
         )
         .await
+        .unwrap()
         .unwrap();
     assert_eq!(ready.state, WorkspaceState::Ready);
     let stopping = database
@@ -1074,28 +1076,32 @@ async fn confirmed_deletion_scrubs_sensitive_workspace_state_and_keeps_a_tombsto
     database
         .record_workspace_observation(
             workspace.id,
+            workspace.generation,
             WorkspaceObservation::Ready,
             admin.user_id,
             105,
         )
         .await
+        .unwrap()
         .unwrap();
     let ticket = database
         .issue_web_shell_ticket(organization.id, workspace.id, admin.user_id, 106, 60)
         .await
         .unwrap();
-    database
+    let deleting = database
         .request_workspace_action(workspace.id, WorkspaceAction::Delete, admin.user_id, 107)
         .await
         .unwrap();
     database
         .record_workspace_observation(
             workspace.id,
+            deleting.generation,
             WorkspaceObservation::Deleted,
             admin.user_id,
             108,
         )
         .await
+        .unwrap()
         .unwrap();
     assert!(matches!(
         database.get_workspace(workspace.id).await,

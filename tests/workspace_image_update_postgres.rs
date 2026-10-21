@@ -113,8 +113,15 @@ async fn postgres_updates_a_locked_stopped_workspace_image() {
         .await
         .unwrap();
     let stopped = database
-        .record_workspace_observation(stopping.id, WorkspaceObservation::Stopped, admin.user_id, 6)
+        .record_workspace_observation(
+            stopping.id,
+            stopping.generation,
+            WorkspaceObservation::Stopped,
+            admin.user_id,
+            6,
+        )
         .await
+        .unwrap()
         .unwrap();
 
     let updated = database

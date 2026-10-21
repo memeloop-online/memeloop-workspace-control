@@ -127,8 +127,15 @@ async fn app() -> (
         .await
         .unwrap();
     let workspace = database
-        .record_workspace_observation(stopping.id, WorkspaceObservation::Stopped, admin.user_id, 6)
+        .record_workspace_observation(
+            stopping.id,
+            stopping.generation,
+            WorkspaceObservation::Stopped,
+            admin.user_id,
+            6,
+        )
         .await
+        .unwrap()
         .unwrap();
     let config = AppConfig {
         installation_id: "image-update-api".parse().unwrap(),

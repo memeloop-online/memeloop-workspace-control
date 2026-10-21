@@ -382,8 +382,19 @@ async fn authenticated_workspace_api_enforces_rbac_and_exact_idempotent_replay()
     assert!(page["next_cursor"].is_null());
 
     database
-        .record_workspace_observation(workspace_id, WorkspaceObservation::Ready, admin_id, 3)
+        .record_workspace_observation(
+            workspace_id,
+            database
+                .get_workspace(workspace_id)
+                .await
+                .unwrap()
+                .generation,
+            WorkspaceObservation::Ready,
+            admin_id,
+            3,
+        )
         .await
+        .unwrap()
         .unwrap();
     let ready = app
         .clone()

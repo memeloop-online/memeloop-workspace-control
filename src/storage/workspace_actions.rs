@@ -18,22 +18,27 @@ impl Database {
     ) -> Result<Workspace, StorageError> {
         self.transition_workspace(
             workspace_id,
+            None,
             StoredTransition::Action(action),
             actor_user_id,
             now,
         )
-        .await
+        .await?
+        .ok_or(StorageError::WorkspaceNotFound)
     }
 
+    /// Ignore an observation if a newer action superseded its Kubernetes snapshot.
     pub async fn record_workspace_observation(
         &self,
         workspace_id: Uuid,
+        expected_generation: u64,
         observation: WorkspaceObservation,
         actor_user_id: Uuid,
         now: i64,
-    ) -> Result<Workspace, StorageError> {
+    ) -> Result<Option<Workspace>, StorageError> {
         self.transition_workspace(
             workspace_id,
+            Some(expected_generation),
             StoredTransition::Observation(observation),
             actor_user_id,
             now,
@@ -125,10 +130,11 @@ impl Database {
     async fn transition_workspace(
         &self,
         workspace_id: Uuid,
+        expected_generation: Option<u64>,
         transition: StoredTransition,
         actor_user_id: Uuid,
         now: i64,
-    ) -> Result<Workspace, StorageError> {
+    ) -> Result<Option<Workspace>, StorageError> {
         match self {
             Self::Sqlite {
                 pool,
@@ -140,10 +146,17 @@ impl Database {
                     .bind(workspace_id.to_string())
                     .fetch_optional(&mut *transaction)
                     .await?;
-                let mut workspace = row
-                    .map(|row| decode_sqlite(row, installation_id))
-                    .transpose()?
-                    .ok_or(StorageError::WorkspaceNotFound)?;
+                let Some(row) = row else {
+                    return if expected_generation.is_some() {
+                        Ok(None)
+                    } else {
+                        Err(StorageError::WorkspaceNotFound)
+                    };
+                };
+                let mut workspace = decode_sqlite(row, installation_id)?;
+                if expected_generation.is_some_and(|expected| workspace.generation != expected) {
+                    return Ok(None);
+                }
                 apply_sqlite(
                     &mut transaction,
                     installation_id.as_str(),
@@ -154,7 +167,7 @@ impl Database {
                 )
                 .await?;
                 transaction.commit().await?;
-                Ok(workspace)
+                Ok(Some(workspace))
             }
             Self::Postgres {
                 pool,
@@ -166,10 +179,17 @@ impl Database {
                     .bind(workspace_id.to_string())
                     .fetch_optional(&mut *transaction)
                     .await?;
-                let mut workspace = row
-                    .map(|row| decode_postgres(row, installation_id))
-                    .transpose()?
-                    .ok_or(StorageError::WorkspaceNotFound)?;
+                let Some(row) = row else {
+                    return if expected_generation.is_some() {
+                        Ok(None)
+                    } else {
+                        Err(StorageError::WorkspaceNotFound)
+                    };
+                };
+                let mut workspace = decode_postgres(row, installation_id)?;
+                if expected_generation.is_some_and(|expected| workspace.generation != expected) {
+                    return Ok(None);
+                }
                 apply_postgres(
                     &mut transaction,
                     installation_id.as_str(),
@@ -180,7 +200,7 @@ impl Database {
                 )
                 .await?;
                 transaction.commit().await?;
-                Ok(workspace)
+                Ok(Some(workspace))
             }
         }
     }
@@ -229,6 +249,7 @@ async fn apply_sqlite(
             .await?;
     }
     let prior_state = workspace.state;
+    let prior_generation = workspace.generation;
     workspace.state = transition.next_state(prior_state)?;
     if transition.enqueues_reconcile() {
         workspace.generation = workspace
@@ -237,9 +258,10 @@ async fn apply_sqlite(
             .ok_or(StorageError::InvalidWorkspace)?;
     }
     workspace.updated_at = now;
-    let affected = sqlx::query("UPDATE workspaces SET state = ?1, generation = ?2, updated_at = ?3 WHERE installation_id = ?4 AND id = ?5 AND state = ?6")
+    let affected = sqlx::query("UPDATE workspaces SET state = ?1, generation = ?2, updated_at = ?3 WHERE installation_id = ?4 AND id = ?5 AND state = ?6 AND generation = ?7")
         .bind(workspace.state.as_str()).bind(as_i64(workspace.generation)?).bind(now)
         .bind(installation_id).bind(workspace.id.to_string()).bind(prior_state.as_str())
+        .bind(as_i64(prior_generation)?)
         .execute(&mut *connection).await?.rows_affected();
     if affected != 1 {
         return Err(StorageError::WorkspaceNotFound);
@@ -272,6 +294,7 @@ async fn apply_postgres(
             .await?;
     }
     let prior_state = workspace.state;
+    let prior_generation = workspace.generation;
     workspace.state = transition.next_state(prior_state)?;
     if transition.enqueues_reconcile() {
         workspace.generation = workspace
@@ -280,9 +303,10 @@ async fn apply_postgres(
             .ok_or(StorageError::InvalidWorkspace)?;
     }
     workspace.updated_at = now;
-    let affected = sqlx::query("UPDATE workspaces SET state = $1, generation = $2, updated_at = $3 WHERE installation_id = $4 AND id = $5 AND state = $6")
+    let affected = sqlx::query("UPDATE workspaces SET state = $1, generation = $2, updated_at = $3 WHERE installation_id = $4 AND id = $5 AND state = $6 AND generation = $7")
         .bind(workspace.state.as_str()).bind(as_i64(workspace.generation)?).bind(now)
         .bind(installation_id).bind(workspace.id.to_string()).bind(prior_state.as_str())
+        .bind(as_i64(prior_generation)?)
         .execute(&mut *connection).await?.rows_affected();
     if affected != 1 {
         return Err(StorageError::WorkspaceNotFound);
