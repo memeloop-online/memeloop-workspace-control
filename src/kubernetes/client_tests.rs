@@ -31,6 +31,7 @@ mod node_port_tests {
 }
 
 mod coordinator_tests {
+    mod delete_batching;
     mod gated_startup;
 
     use std::{
@@ -1107,7 +1108,7 @@ mod coordinator_tests {
                         StatusCode::OK,
                         serde_json::json!({
                             "apiVersion": "v1", "kind": "ConfigMap",
-                            "metadata": {"name": "w-8000000000000001-config", "labels": ownership_labels("public-a", self.workspace_id)}
+                            "metadata": {"name": "w-8000000000000001-config", "uid": "config-uid", "labels": ownership_labels("public-a", self.workspace_id)}
                         }),
                     );
                 }
@@ -1183,6 +1184,7 @@ mod coordinator_tests {
                             "metadata": {
                                 "name": "workspace-data-w-8000000000000001-0",
                                 "namespace": "memeloop-workspace-control",
+                                "uid": "pvc-uid",
                                 "labels": ownership_labels("public-a", self.workspace_id),
                             },
                             "spec": {"accessModes": ["ReadWriteOnce"], "resources": {}},

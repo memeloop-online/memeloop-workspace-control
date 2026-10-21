@@ -101,13 +101,14 @@ impl GateMock {
                 }),
             );
         }
-        let body: Value =
+        let mut body: Value =
             serde_json::from_slice(&request.into_body().collect().await.unwrap().to_bytes())
                 .unwrap();
         self.patches
             .lock()
             .unwrap()
             .push((path.clone(), body.clone()));
+        body["metadata"]["uid"] = json!(format!("{}-uid", path.rsplit('/').next().unwrap()));
         self.objects
             .lock()
             .unwrap()
