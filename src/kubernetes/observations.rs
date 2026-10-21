@@ -7,7 +7,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use futures::TryStreamExt;
+use futures::{Stream, TryStreamExt};
 use k8s_openapi::{
     api::{apps::v1::StatefulSet, core::v1::Pod},
     apimachinery::pkg::apis::meta::v1::ObjectMeta,
@@ -304,21 +304,12 @@ impl WorkspaceObservations {
         }
     }
 
-    async fn watch_resource<K>(
+    async fn watch_resource<K: ObservedResource>(
         &self,
         finite_client: kube::Client,
         stream_client: kube::Client,
         mut shutdown: watch::Receiver<bool>,
-    ) where
-        K: ObservedResource
-            + Resource<DynamicType = (), Scope = kube::core::NamespaceResourceScope>
-            + Clone
-            + Debug
-            + DeserializeOwned
-            + Send
-            + Sync
-            + 'static,
-    {
+    ) {
         let selector = format!(
             "{OWNER_INSTALLATION_LABEL}={}",
             self.installation_id.as_str()
@@ -335,21 +326,10 @@ impl WorkspaceObservations {
             if resource_version.is_none() {
                 let result = tokio::select! {
                     _ = shutdown.changed() => return,
-                    result = list_snapshot(&finite_api, &list_params, self.installation_id.as_str()) => result,
+                    result = self.publish_snapshot(&finite_api, &list_params) => result,
                 };
                 match result {
-                    Ok((snapshot, version)) => {
-                        resource_version = version;
-                        let reservations = {
-                            let mut state = self
-                                .state
-                                .lock()
-                                .expect("workspace observations lock poisoned");
-                            K::replace(&mut state, snapshot);
-                            state.refresh_all(unix_now())
-                        };
-                        self.deliver(reservations).await;
-                    }
+                    Ok(version) => resource_version = version,
                     Err(error) => {
                         tracing::warn!(%error, resource = %K::kind(&()), "workspace observation list failed");
                         if wait_retry(&mut shutdown).await {
@@ -359,117 +339,154 @@ impl WorkspaceObservations {
                     }
                 }
             }
-            let Some(version) = resource_version.as_deref() else {
+            if resource_version.is_none() {
                 if wait_retry(&mut shutdown).await {
                     return;
                 }
                 continue;
-            };
-            let connected = tokio::select! {
-                _ = shutdown.changed() => return,
-                result = tokio::time::timeout(Duration::from_secs(20), stream_api.watch(&params, version)) => result,
-            };
-            let stream = match connected {
-                Ok(Ok(stream)) => stream,
-                Ok(Err(kube::Error::Api(error))) if error.code == 410 => {
-                    resource_version = None;
-                    continue;
-                }
-                other => {
-                    tracing::warn!(resource = %K::kind(&()), error = ?other.err(), "workspace observation watch connect failed");
+            }
+            match self
+                .watch_once(&stream_api, &params, &mut resource_version, &mut shutdown)
+                .await
+            {
+                WatchOutcome::Shutdown => return,
+                WatchOutcome::Relist => resource_version = None,
+                WatchOutcome::Retry if resource_version.is_some() => {
                     if wait_retry(&mut shutdown).await {
                         return;
                     }
-                    continue;
                 }
-            };
-            tokio::pin!(stream);
-            let started = tokio::time::Instant::now();
-            let mut retry = false;
-            loop {
-                let event = tokio::select! {
-                    _ = shutdown.changed() => return,
-                    result = tokio::time::timeout(Duration::from_secs(75), stream.try_next()) => result,
-                };
-                match event {
-                    Ok(Ok(Some(WatchEvent::Added(object) | WatchEvent::Modified(object)))) => {
-                        resource_version = object.resource_version();
-                        let reservations = {
-                            let mut state = self
-                                .state
-                                .lock()
-                                .expect("workspace observations lock poisoned");
-                            let workspace = owned_workspace(
-                                object.meta(),
-                                self.installation_id.as_str(),
-                                K::IS_POD,
-                            );
-                            K::update(&mut state, object, self.installation_id.as_str(), false);
-                            workspace
-                                .map(|id| state.refresh_workspace(id, unix_now()))
-                                .unwrap_or_default()
-                        };
-                        self.deliver(reservations).await;
-                    }
-                    Ok(Ok(Some(WatchEvent::Deleted(object)))) => {
-                        resource_version = object.resource_version();
-                        let reservations = {
-                            let mut state = self
-                                .state
-                                .lock()
-                                .expect("workspace observations lock poisoned");
-                            let workspace = owned_workspace(
-                                object.meta(),
-                                self.installation_id.as_str(),
-                                K::IS_POD,
-                            );
-                            K::update(&mut state, object, self.installation_id.as_str(), true);
-                            workspace
-                                .map(|id| state.refresh_workspace(id, unix_now()))
-                                .unwrap_or_default()
-                        };
-                        self.deliver(reservations).await;
-                    }
-                    Ok(Ok(Some(WatchEvent::Bookmark(bookmark)))) => {
-                        resource_version = Some(bookmark.metadata.resource_version);
-                    }
-                    Ok(Ok(Some(WatchEvent::Error(error)))) if error.code == 410 => {
-                        resource_version = None;
-                        break;
-                    }
-                    Ok(Ok(Some(WatchEvent::Error(error)))) => {
-                        retry = true;
-                        tracing::warn!(%error, resource = %K::kind(&()), "workspace observation watch error");
-                        break;
-                    }
-                    Ok(Ok(None)) => break,
-                    Ok(Err(error)) => {
-                        retry = true;
-                        if matches!(&error, kube::Error::Api(response) if response.code == 410) {
-                            resource_version = None;
-                        }
-                        tracing::warn!(%error, resource = %K::kind(&()), "workspace observation stream disconnected");
-                        break;
-                    }
-                    Err(_) => {
-                        retry = true;
-                        tracing::warn!(
-                            resource = %K::kind(&()),
-                            "workspace observation stream idle timeout"
-                        );
-                        break;
-                    }
-                }
-            }
-            // Normal server-side watch expiry resumes immediately from opaque RV.
-            // Back off errors and unexpectedly short streams to avoid reconnect loops.
-            if resource_version.is_some()
-                && (retry || started.elapsed() < Duration::from_secs(1))
-                && wait_retry(&mut shutdown).await
-            {
-                return;
+                WatchOutcome::Resume | WatchOutcome::Retry => {}
             }
         }
+    }
+
+    async fn publish_snapshot<K: ObservedResource>(
+        &self,
+        api: &Api<K>,
+        params: &ListParams,
+    ) -> Result<Option<String>, kube::Error> {
+        let (snapshot, version) = list_snapshot(api, params, self.installation_id.as_str()).await?;
+        let reservations = {
+            let mut state = self
+                .state
+                .lock()
+                .expect("workspace observations lock poisoned");
+            K::replace(&mut state, snapshot);
+            state.refresh_all(unix_now())
+        };
+        self.deliver(reservations).await;
+        Ok(version)
+    }
+
+    async fn watch_once<K: ObservedResource>(
+        &self,
+        api: &Api<K>,
+        params: &WatchParams,
+        resource_version: &mut Option<String>,
+        shutdown: &mut watch::Receiver<bool>,
+    ) -> WatchOutcome {
+        let connected = tokio::select! {
+            _ = shutdown.changed() => return WatchOutcome::Shutdown,
+            result = tokio::time::timeout(Duration::from_secs(20), api.watch(params, resource_version.as_deref().expect("listed resource version"))) => result,
+        };
+        match connected {
+            Ok(Ok(stream)) => {
+                self.consume_stream(stream, resource_version, shutdown)
+                    .await
+            }
+            Ok(Err(kube::Error::Api(error))) if error.code == 410 => WatchOutcome::Relist,
+            Ok(Err(error)) => {
+                tracing::warn!(%error, resource = %K::kind(&()), "workspace observation watch connect failed");
+                WatchOutcome::Retry
+            }
+            Err(error) => {
+                tracing::warn!(%error, resource = %K::kind(&()), "workspace observation watch connect timed out");
+                WatchOutcome::Retry
+            }
+        }
+    }
+
+    async fn consume_stream<K: ObservedResource>(
+        &self,
+        stream: impl Stream<Item = Result<WatchEvent<K>, kube::Error>>,
+        resource_version: &mut Option<String>,
+        shutdown: &mut watch::Receiver<bool>,
+    ) -> WatchOutcome {
+        tokio::pin!(stream);
+        let started = tokio::time::Instant::now();
+        loop {
+            let event = tokio::select! {
+                _ = shutdown.changed() => return WatchOutcome::Shutdown,
+                result = tokio::time::timeout(Duration::from_secs(75), stream.try_next()) => result,
+            };
+            match event {
+                Ok(Ok(Some(event))) => {
+                    if let Some(outcome) = self.apply_event(event, resource_version).await {
+                        return outcome;
+                    }
+                }
+                Ok(Ok(None)) => {
+                    // Normal server expiry resumes immediately; unexpectedly short
+                    // streams back off to avoid reconnect loops.
+                    return if started.elapsed() < Duration::from_secs(1) {
+                        WatchOutcome::Retry
+                    } else {
+                        WatchOutcome::Resume
+                    };
+                }
+                Ok(Err(error)) => {
+                    tracing::warn!(%error, resource = %K::kind(&()), "workspace observation stream disconnected");
+                    return if matches!(&error, kube::Error::Api(response) if response.code == 410) {
+                        WatchOutcome::Relist
+                    } else {
+                        WatchOutcome::Retry
+                    };
+                }
+                Err(_) => {
+                    tracing::warn!(resource = %K::kind(&()), "workspace observation stream idle timeout");
+                    return WatchOutcome::Retry;
+                }
+            }
+        }
+    }
+
+    async fn apply_event<K: ObservedResource>(
+        &self,
+        event: WatchEvent<K>,
+        resource_version: &mut Option<String>,
+    ) -> Option<WatchOutcome> {
+        let (object, deleted) = match event {
+            WatchEvent::Added(object) | WatchEvent::Modified(object) => (object, false),
+            WatchEvent::Deleted(object) => (object, true),
+            WatchEvent::Bookmark(bookmark) => {
+                *resource_version = Some(bookmark.metadata.resource_version);
+                return None;
+            }
+            WatchEvent::Error(error) => {
+                tracing::warn!(%error, resource = %K::kind(&()), "workspace observation watch error");
+                return Some(if error.code == 410 {
+                    WatchOutcome::Relist
+                } else {
+                    WatchOutcome::Retry
+                });
+            }
+        };
+        *resource_version = object.resource_version();
+        let reservations = {
+            let mut state = self
+                .state
+                .lock()
+                .expect("workspace observations lock poisoned");
+            let workspace =
+                owned_workspace(object.meta(), self.installation_id.as_str(), K::IS_POD);
+            K::update(&mut state, object, self.installation_id.as_str(), deleted);
+            workspace
+                .map(|id| state.refresh_workspace(id, unix_now()))
+                .unwrap_or_default()
+        };
+        self.deliver(reservations).await;
+        None
     }
 }
 
@@ -716,7 +733,22 @@ impl State {
     }
 }
 
-trait ObservedResource {
+enum WatchOutcome {
+    Resume,
+    Relist,
+    Retry,
+    Shutdown,
+}
+
+trait ObservedResource:
+    Resource<DynamicType = (), Scope = kube::core::NamespaceResourceScope>
+    + Clone
+    + Debug
+    + DeserializeOwned
+    + Send
+    + Sync
+    + 'static
+{
     const IS_POD: bool;
     fn replace(state: &mut State, snapshot: State);
     fn update(state: &mut State, object: Self, installation: &str, deleted: bool)
