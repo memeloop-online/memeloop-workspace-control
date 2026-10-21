@@ -151,7 +151,12 @@ impl KubernetesCoordinator {
             observe_apply_stage(
                 workspace,
                 "workload",
-                Box::pin(self.apply_workload(namespace_name, workspace, &startup.workload)),
+                Box::pin(self.apply_workload(
+                    namespace_name,
+                    workspace,
+                    &startup.workload,
+                    startup.existing.as_ref(),
+                )),
             )
             .await?;
         }
@@ -330,6 +335,7 @@ impl KubernetesCoordinator {
         namespace_name: &str,
         workspace: &Workspace,
         desired: &StatefulSet,
+        existing: Option<&StatefulSet>,
     ) -> Result<(), ReconcileError> {
         let workspace_id = workspace.id;
         let runtime_names = self.builder.runtime_names(workspace)?;
@@ -337,27 +343,19 @@ impl KubernetesCoordinator {
         let apply = PatchParams::apply(FIELD_MANAGER);
         let stateful_sets = Api::<StatefulSet>::namespaced(self.client.clone(), namespace_name);
         let mut stateful_set = desired.clone();
-        if let Some(existing) = observe_request(
-            workspace_id,
-            "StatefulSet",
-            &names.stateful_set,
-            "get",
-            stateful_sets.get_opt(&names.stateful_set),
-        )
-        .await?
-        {
+        if let Some(existing) = existing {
             self.builder
                 .verify_delete_ownership(&existing.metadata, workspace_id)?;
             verify_unpersisted_home(
                 workspace,
-                &existing,
+                existing,
                 &names.data_claim_template,
                 &names.data_pvc_ordinal_zero(),
             )?;
             if existing.metadata.deletion_timestamp.is_some() {
                 return Err(ReconcileError::StatefulSetRecreationPending);
             }
-            preserve_claim_storage_classes(&mut stateful_set, &existing);
+            preserve_claim_storage_classes(&mut stateful_set, existing);
         }
         self.verify_home_volume_binding(workspace).await?;
         let stateful_set_result = observe_apply_stage(

@@ -17,6 +17,7 @@ const FILE_ENCODING: &str = "dictionary-v1";
 
 pub(super) struct StartupPlan {
     pub workload: StatefulSet,
+    pub existing: Option<StatefulSet>,
     pub gate: Option<ConfigMap>,
     pub overlap: bool,
     pub compress_files: bool,
@@ -34,24 +35,26 @@ impl KubernetesCoordinator {
         let existing = observe_apply_stage(
             workspace,
             "startup_workload_metadata",
-            stateful_sets.get_metadata_opt(&names.stateful_set),
+            stateful_sets.get_opt(&names.stateful_set),
         )
         .await?;
         if let Some(existing) = &existing {
             self.builder
                 .verify_delete_ownership(&existing.metadata, workspace.id)?;
         }
-        let annotations = existing
-            .as_ref()
-            .and_then(|object| object.metadata.annotations.as_ref());
-        let previous_gate = annotations.and_then(|a| a.get(GATE_ANNOTATION));
         let mut plan = StartupPlan {
             workload: desired.stateful_set.clone(),
+            existing,
             gate: None,
             overlap: false,
             compress_files: false,
         };
-        let is_new = existing.is_none() && workspace.state == WorkspaceState::Provisioning;
+        let annotations = plan
+            .existing
+            .as_ref()
+            .and_then(|object| object.metadata.annotations.as_ref());
+        let previous_gate = annotations.and_then(|a| a.get(GATE_ANNOTATION));
+        let is_new = plan.existing.is_none() && workspace.state == WorkspaceState::Provisioning;
         if !is_new && previous_gate.is_none() {
             return Ok(plan);
         }
@@ -161,7 +164,12 @@ impl KubernetesCoordinator {
                     observe_apply_stage(
                         workspace,
                         "gated_workload",
-                        Box::pin(self.apply_workload(namespace, workspace, &startup.workload)),
+                        Box::pin(self.apply_workload(
+                            namespace,
+                            workspace,
+                            &startup.workload,
+                            startup.existing.as_ref(),
+                        )),
                     )
                     .await?;
                 }
