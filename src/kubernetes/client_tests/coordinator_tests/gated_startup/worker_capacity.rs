@@ -304,11 +304,8 @@ async fn seed(database: &Database) {
 
 async fn queue(database: &Database) -> Value {
     let sql = "SELECT status, attempts, lease_owner, lease_expires_at, payload_json, available_at FROM jobs";
-    let (rows, leases, ready): (
-        Vec<(String, i64, Option<String>, Option<i64>, String, i64)>,
-        i64,
-        i64,
-    ) = match database {
+    type QueueJob = (String, i64, Option<String>, Option<i64>, String, i64);
+    let (rows, leases, ready): (Vec<QueueJob>, i64, i64) = match database {
         Database::Sqlite { pool, .. } => (
             sqlx::query_as(sql).fetch_all(pool).await.unwrap(),
             sqlx::query_scalar("SELECT COUNT(*) FROM workspace_leases")
