@@ -29,14 +29,19 @@ const ADMIN_TOKEN: &str = "api-admin-000000000000000000000000000000";
 const OUTSIDER_TOKEN: &str = "api-outsider-0000000000000000000000000000";
 
 async fn test_app() -> (Router, Database, Uuid) {
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_secs() as i64;
     let installation_id = "api-test".parse().unwrap();
     let database = Database::connect("sqlite::memory:", installation_id)
         .await
         .unwrap();
+    let (state, admin_id) = test_state(database.clone(), "sqlite::memory:").await;
+    (router(Arc::new(state)), database, admin_id)
+}
+
+async fn test_state(database: Database, database_url: &str) -> (AppState, Uuid) {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
     database.migrate().await.unwrap();
     database
         .upsert_image_policy("registry.example/workspace:1", true, 99)
@@ -65,9 +70,9 @@ async fn test_app() -> (Router, Database, Uuid) {
         .await
         .unwrap();
     let config = AppConfig {
-        installation_id: "api-test".parse().unwrap(),
+        installation_id: database.installation_id().clone(),
         listen_address: SocketAddr::from(([127, 0, 0, 1], 0)),
-        database_url: "sqlite::memory:".to_owned(),
+        database_url: database_url.to_owned(),
         replica_count: 1,
         instance_id: "test".to_owned(),
         ssh_public_host: None,
@@ -78,15 +83,17 @@ async fn test_app() -> (Router, Database, Uuid) {
         plugin_dir: None,
     };
     (
-        router(Arc::new(AppState::with_cipher(
+        AppState::with_cipher(
             config,
             database.clone(),
             EnvelopeCipher::from_base64("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=").unwrap(),
-        ))),
-        database,
+        ),
         admin.user_id,
     )
 }
+
+#[path = "api_workspaces/creation_capacity.rs"]
+mod creation_capacity;
 
 fn request(
     method: Method,
