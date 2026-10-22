@@ -186,7 +186,7 @@ impl Database {
                     drop(connection);
                     let rows = fetched?;
                     let decode_started = Instant::now();
-                    let decoded = rows
+                    let decoded: Result<Vec<InjectionItem>, StorageError> = rows
                         .into_iter()
                         .map(|row| decrypt_sqlite(cipher, installation_id.as_str(), scope_ref, row))
                         .collect();
@@ -212,7 +212,7 @@ impl Database {
                     drop(connection);
                     let rows = fetched?;
                     let decode_started = Instant::now();
-                    let decoded = rows
+                    let decoded: Result<Vec<InjectionItem>, StorageError> = rows
                         .into_iter()
                         .map(|row| {
                             decrypt_postgres(cipher, installation_id.as_str(), scope_ref, row)
