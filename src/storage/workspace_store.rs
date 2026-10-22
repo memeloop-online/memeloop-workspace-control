@@ -1,4 +1,7 @@
-use std::collections::BTreeMap;
+use std::{
+    collections::BTreeMap,
+    time::{Duration, Instant},
+};
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -285,30 +288,75 @@ impl Database {
     }
 
     pub async fn get_workspace(&self, workspace_id: Uuid) -> Result<Workspace, StorageError> {
-        match self {
-            Self::Sqlite {
-                pool,
-                installation_id,
-            } => sqlx::query(&select_workspace_sql("?1", "?2"))
-                .bind(installation_id.as_str())
-                .bind(workspace_id.to_string())
-                .fetch_optional(pool)
-                .await?
-                .map(|row| decode_sqlite(row, installation_id))
-                .transpose()?
-                .ok_or(StorageError::WorkspaceNotFound),
-            Self::Postgres {
-                pool,
-                installation_id,
-            } => sqlx::query(&select_workspace_sql("$1", "$2"))
-                .bind(installation_id.as_str())
-                .bind(workspace_id.to_string())
-                .fetch_optional(pool)
-                .await?
-                .map(|row| decode_postgres(row, installation_id))
-                .transpose()?
-                .ok_or(StorageError::WorkspaceNotFound),
+        let started = Instant::now();
+        let (mut acquire_ms, mut query_ms, mut decode_ms) = (0.0, 0.0, 0.0);
+        let result = async {
+            match self {
+                Self::Sqlite {
+                    pool,
+                    installation_id,
+                } => {
+                    let acquire_started = Instant::now();
+                    let acquired = pool.acquire().await;
+                    acquire_ms = acquire_started.elapsed().as_secs_f64() * 1000.0;
+                    let mut connection = acquired?;
+                    let query_started = Instant::now();
+                    let fetched = sqlx::query(&select_workspace_sql("?1", "?2"))
+                        .bind(installation_id.as_str())
+                        .bind(workspace_id.to_string())
+                        .fetch_optional(&mut *connection)
+                        .await;
+                    query_ms = query_started.elapsed().as_secs_f64() * 1000.0;
+                    drop(connection);
+                    let row = fetched?;
+                    let decode_started = Instant::now();
+                    let decoded = row
+                        .map(|row| decode_sqlite(row, installation_id))
+                        .transpose()
+                        .and_then(|workspace| workspace.ok_or(StorageError::WorkspaceNotFound));
+                    decode_ms = decode_started.elapsed().as_secs_f64() * 1000.0;
+                    decoded
+                }
+                Self::Postgres {
+                    pool,
+                    installation_id,
+                } => {
+                    let acquire_started = Instant::now();
+                    let acquired = pool.acquire().await;
+                    acquire_ms = acquire_started.elapsed().as_secs_f64() * 1000.0;
+                    let mut connection = acquired?;
+                    let query_started = Instant::now();
+                    let fetched = sqlx::query(&select_workspace_sql("$1", "$2"))
+                        .bind(installation_id.as_str())
+                        .bind(workspace_id.to_string())
+                        .fetch_optional(&mut *connection)
+                        .await;
+                    query_ms = query_started.elapsed().as_secs_f64() * 1000.0;
+                    drop(connection);
+                    let row = fetched?;
+                    let decode_started = Instant::now();
+                    let decoded = row
+                        .map(|row| decode_postgres(row, installation_id))
+                        .transpose()
+                        .and_then(|workspace| workspace.ok_or(StorageError::WorkspaceNotFound));
+                    decode_ms = decode_started.elapsed().as_secs_f64() * 1000.0;
+                    decoded
+                }
+            }
         }
+        .await;
+        if started.elapsed() >= Duration::from_secs(1) || result.is_err() {
+            tracing::info!(
+                operation = "get_workspace",
+                scope_kind = "workspace",
+                acquire_ms,
+                query_ms,
+                decode_ms,
+                success = result.is_ok(),
+                "workspace response storage read",
+            );
+        }
+        result
     }
 
     pub async fn get_workspace_by_route_key(

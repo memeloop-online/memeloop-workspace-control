@@ -1,3 +1,5 @@
+use std::time::{Duration, Instant};
+
 use sqlx::{PgConnection, Row, SqliteConnection};
 use uuid::Uuid;
 
@@ -35,24 +37,62 @@ impl Database {
         &self,
         workspace_id: Uuid,
     ) -> Result<WorkspaceInjectionRefs, StorageError> {
-        match self {
-            Self::Sqlite {
-                pool,
-                installation_id,
-            } => {
-                let rows = sqlx::query("SELECT scope, injection_key FROM workspace_injection_refs WHERE installation_id = ?1 AND workspace_id = ?2 ORDER BY scope, injection_key")
-                    .bind(installation_id.as_str()).bind(workspace_id.to_string()).fetch_all(pool).await?;
-                decode_rows(rows)
+        let started = Instant::now();
+        let (mut acquire_ms, mut query_ms, mut decode_ms) = (0.0, 0.0, 0.0);
+        let result = async {
+            match self {
+                Self::Sqlite { pool, installation_id } => {
+                    let acquire_started = Instant::now();
+                    let acquired = pool.acquire().await;
+                    acquire_ms = acquire_started.elapsed().as_secs_f64() * 1000.0;
+                    let mut connection = acquired?;
+                    let query_started = Instant::now();
+                    let fetched = sqlx::query("SELECT scope, injection_key FROM workspace_injection_refs WHERE installation_id = ?1 AND workspace_id = ?2 ORDER BY scope, injection_key")
+                        .bind(installation_id.as_str())
+                        .bind(workspace_id.to_string())
+                        .fetch_all(&mut *connection)
+                        .await;
+                    query_ms = query_started.elapsed().as_secs_f64() * 1000.0;
+                    drop(connection);
+                    let rows = fetched?;
+                    let decode_started = Instant::now();
+                    let decoded = decode_rows(rows);
+                    decode_ms = decode_started.elapsed().as_secs_f64() * 1000.0;
+                    decoded
+                },
+                Self::Postgres { pool, installation_id } => {
+                    let acquire_started = Instant::now();
+                    let acquired = pool.acquire().await;
+                    acquire_ms = acquire_started.elapsed().as_secs_f64() * 1000.0;
+                    let mut connection = acquired?;
+                    let query_started = Instant::now();
+                    let fetched = sqlx::query("SELECT scope, injection_key FROM workspace_injection_refs WHERE installation_id = $1 AND workspace_id = $2 ORDER BY scope, injection_key")
+                        .bind(installation_id.as_str())
+                        .bind(workspace_id.to_string())
+                        .fetch_all(&mut *connection)
+                        .await;
+                    query_ms = query_started.elapsed().as_secs_f64() * 1000.0;
+                    drop(connection);
+                    let rows = fetched?;
+                    let decode_started = Instant::now();
+                    let decoded = decode_rows(rows);
+                    decode_ms = decode_started.elapsed().as_secs_f64() * 1000.0;
+                    decoded
+                }
             }
-            Self::Postgres {
-                pool,
-                installation_id,
-            } => {
-                let rows = sqlx::query("SELECT scope, injection_key FROM workspace_injection_refs WHERE installation_id = $1 AND workspace_id = $2 ORDER BY scope, injection_key")
-                    .bind(installation_id.as_str()).bind(workspace_id.to_string()).fetch_all(pool).await?;
-                decode_rows(rows)
-            }
+        }.await;
+        if started.elapsed() >= Duration::from_secs(1) || result.is_err() {
+            tracing::info!(
+                operation = "workspace_injection_refs",
+                scope_kind = "workspace",
+                acquire_ms,
+                query_ms,
+                decode_ms,
+                success = result.is_ok(),
+                "workspace response storage read",
+            );
         }
+        result
     }
 }
 

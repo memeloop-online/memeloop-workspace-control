@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use axum::{
     Json,
@@ -8,6 +9,7 @@ use axum::{
     response::Response,
 };
 use serde::{Deserialize, Serialize};
+use tracing::Instrument;
 use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
@@ -277,17 +279,46 @@ pub(super) async fn get(
     headers: HeaderMap,
     Path(workspace_id): Path<Uuid>,
 ) -> Result<Json<WorkspaceResponse>, ApiError> {
-    let actor = principal(&state, &headers).await?;
-    let workspace = state.database.get_workspace(workspace_id).await?;
+    let actor = observe_get_stage("principal", principal(&state, &headers)).await?;
+    let workspace =
+        observe_get_stage("workspace_read", state.database.get_workspace(workspace_id)).await?;
     if !actor.allows(Permission::ReadWorkspace, workspace.organization_id)
         || !actor.may_access_workspace_template(workspace.template_id)
     {
         return Err(ApiError::Forbidden);
     }
     let expose_connection = actor.allows(Permission::ConnectWorkspace, workspace.organization_id);
+    let snapshot = tracing::info_span!(
+        "workspace_get_response",
+        workspace_state = ?workspace.state,
+        generation = workspace.generation,
+    );
     Ok(Json(
-        workspace_response(&state, workspace, expose_connection).await?,
+        observe_get_stage(
+            "response",
+            workspace_response(&state, workspace, expose_connection),
+        )
+        .instrument(snapshot)
+        .await?,
     ))
+}
+
+async fn observe_get_stage<T, E>(
+    phase: &'static str,
+    future: impl std::future::Future<Output = Result<T, E>>,
+) -> Result<T, E> {
+    let started = Instant::now();
+    let result = future.await;
+    let elapsed = started.elapsed();
+    if elapsed >= Duration::from_secs(1) || result.is_err() {
+        tracing::info!(
+            phase,
+            elapsed_ms = elapsed.as_secs_f64() * 1_000.0,
+            success = result.is_ok(),
+            "workspace GET stage completed",
+        );
+    }
+    result
 }
 
 #[utoipa::path(

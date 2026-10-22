@@ -1,4 +1,7 @@
-use std::collections::BTreeMap;
+use std::{
+    collections::BTreeMap,
+    time::{Duration, Instant},
+};
 
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Serialize};
@@ -160,36 +163,79 @@ impl Database {
         cipher: &EnvelopeCipher,
         scope_ref: InjectionScopeRef,
     ) -> Result<Vec<InjectionItem>, StorageError> {
-        match self {
-            Self::Sqlite {
-                pool,
-                installation_id,
-            } => {
-                let rows = sqlx::query(&encrypted_sql("?1", "?2", "?3"))
-                    .bind(installation_id.as_str())
-                    .bind(scope_ref.scope.as_str())
-                    .bind(scope_ref.scope_id.to_string())
-                    .fetch_all(pool)
-                    .await?;
-                rows.into_iter()
-                    .map(|row| decrypt_sqlite(cipher, installation_id.as_str(), scope_ref, row))
-                    .collect()
-            }
-            Self::Postgres {
-                pool,
-                installation_id,
-            } => {
-                let rows = sqlx::query(&encrypted_sql("$1", "$2", "$3"))
-                    .bind(installation_id.as_str())
-                    .bind(scope_ref.scope.as_str())
-                    .bind(scope_ref.scope_id.to_string())
-                    .fetch_all(pool)
-                    .await?;
-                rows.into_iter()
-                    .map(|row| decrypt_postgres(cipher, installation_id.as_str(), scope_ref, row))
-                    .collect()
+        let started = Instant::now();
+        let (mut acquire_ms, mut query_ms, mut decode_ms) = (0.0, 0.0, 0.0);
+        let result = async {
+            match self {
+                Self::Sqlite {
+                    pool,
+                    installation_id,
+                } => {
+                    let acquire_started = Instant::now();
+                    let acquired = pool.acquire().await;
+                    acquire_ms = acquire_started.elapsed().as_secs_f64() * 1000.0;
+                    let mut connection = acquired?;
+                    let query_started = Instant::now();
+                    let fetched = sqlx::query(&encrypted_sql("?1", "?2", "?3"))
+                        .bind(installation_id.as_str())
+                        .bind(scope_ref.scope.as_str())
+                        .bind(scope_ref.scope_id.to_string())
+                        .fetch_all(&mut *connection)
+                        .await;
+                    query_ms = query_started.elapsed().as_secs_f64() * 1000.0;
+                    drop(connection);
+                    let rows = fetched?;
+                    let decode_started = Instant::now();
+                    let decoded: Result<Vec<InjectionItem>, StorageError> = rows
+                        .into_iter()
+                        .map(|row| decrypt_sqlite(cipher, installation_id.as_str(), scope_ref, row))
+                        .collect();
+                    decode_ms = decode_started.elapsed().as_secs_f64() * 1000.0;
+                    decoded
+                }
+                Self::Postgres {
+                    pool,
+                    installation_id,
+                } => {
+                    let acquire_started = Instant::now();
+                    let acquired = pool.acquire().await;
+                    acquire_ms = acquire_started.elapsed().as_secs_f64() * 1000.0;
+                    let mut connection = acquired?;
+                    let query_started = Instant::now();
+                    let fetched = sqlx::query(&encrypted_sql("$1", "$2", "$3"))
+                        .bind(installation_id.as_str())
+                        .bind(scope_ref.scope.as_str())
+                        .bind(scope_ref.scope_id.to_string())
+                        .fetch_all(&mut *connection)
+                        .await;
+                    query_ms = query_started.elapsed().as_secs_f64() * 1000.0;
+                    drop(connection);
+                    let rows = fetched?;
+                    let decode_started = Instant::now();
+                    let decoded: Result<Vec<InjectionItem>, StorageError> = rows
+                        .into_iter()
+                        .map(|row| {
+                            decrypt_postgres(cipher, installation_id.as_str(), scope_ref, row)
+                        })
+                        .collect();
+                    decode_ms = decode_started.elapsed().as_secs_f64() * 1000.0;
+                    decoded
+                }
             }
         }
+        .await;
+        if started.elapsed() >= Duration::from_secs(1) || result.is_err() {
+            tracing::info!(
+                operation = "load_injections",
+                scope_kind = scope_ref.scope.as_str(),
+                acquire_ms,
+                query_ms,
+                decode_ms,
+                success = result.is_ok(),
+                "workspace response storage read",
+            );
+        }
+        result
     }
 
     pub async fn load_readable_injection(

@@ -23,11 +23,11 @@ pub(super) fn router(state: Arc<AppState>) -> Router {
         .fallback(ui::asset)
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
-            metrics::count,
+            plugins::api_middleware,
         ))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
-            plugins::api_middleware,
+            metrics::count,
         ))
         .with_state(state)
 }

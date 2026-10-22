@@ -7,7 +7,7 @@ use k8s_openapi::api::{
 };
 use kube::{
     Api,
-    api::{DeleteParams, Patch, PatchParams},
+    api::{DeleteParams, Patch, PatchParams, PostParams},
 };
 use serde::{Serialize, de::DeserializeOwned};
 use std::{error::Error, fmt::Debug, future::Future, time::Instant};
@@ -143,7 +143,13 @@ impl KubernetesCoordinator {
             observe_apply_stage(
                 workspace,
                 "startup_approval",
-                self.apply_owned(&config_maps, name, gate, workspace.id),
+                observe_request(
+                    workspace.id,
+                    "ConfigMap",
+                    name,
+                    "create",
+                    config_maps.create(&PostParams::default(), gate),
+                ),
             )
             .await?;
         }

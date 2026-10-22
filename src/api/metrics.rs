@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Instant};
 
 use axum::{
     extract::{MatchedPath, Request, State},
@@ -6,10 +6,16 @@ use axum::{
     middleware::Next,
     response::{IntoResponse, Response},
 };
+use tracing::Instrument;
+use uuid::Uuid;
 
 use super::AppState;
 
 mod render;
+
+#[cfg(test)]
+#[path = "metrics_tests.rs"]
+mod tests;
 
 const OPENMETRICS_CONTENT_TYPE: &str = "application/openmetrics-text; version=1.0.0; charset=utf-8";
 
@@ -18,18 +24,44 @@ pub(super) async fn count(
     request: Request,
     next: Next,
 ) -> Response {
+    let request_id = Uuid::now_v7();
+    let method = match request.method().as_str() {
+        "GET" => "GET",
+        "POST" => "POST",
+        "PUT" => "PUT",
+        "DELETE" => "DELETE",
+        "PATCH" => "PATCH",
+        "HEAD" => "HEAD",
+        "OPTIONS" => "OPTIONS",
+        _ => "OTHER",
+    };
     let request_bytes = content_length(request.headers());
     let route = route_label(&request);
-    let observation =
-        state
-            .observability
-            .begin_http(request.method().as_str(), route, request_bytes);
-    let response = next.run(request).await;
-    observation.finish(
-        response.status().as_u16(),
-        content_length(response.headers()),
-    );
-    response
+    let span = tracing::info_span!("http_request", %request_id, method, route = %route);
+    let observation = state.observability.begin_http(method, route, request_bytes);
+    async move {
+        let started = Instant::now();
+        let mut response = next.run(request).await;
+        response.headers_mut().insert(
+            "x-request-id",
+            request_id
+                .to_string()
+                .parse()
+                .expect("UUID is a valid header"),
+        );
+        let elapsed = started.elapsed();
+        let status = response.status().as_u16();
+        observation.finish(status, content_length(response.headers()));
+        let elapsed_ms = elapsed.as_secs_f64() * 1_000.0;
+        if elapsed.as_secs() >= 1 || response.status().is_server_error() {
+            tracing::info!(status, elapsed_ms, "HTTP request completed");
+        } else {
+            tracing::debug!(status, elapsed_ms, "HTTP request completed");
+        }
+        response
+    }
+    .instrument(span)
+    .await
 }
 
 pub(super) async fn prometheus(State(state): State<Arc<AppState>>) -> Response {
