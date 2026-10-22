@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{collections::HashSet, time::Duration};
 
 use serde_json::Value;
 use sqlx::Row;
@@ -11,6 +11,20 @@ use super::{
         decode_sqlite_parked_job,
     },
 };
+
+// Decode once, then drive primary-key lookups from candidates before updating the matched IDs.
+const SQLITE_WAKE_PARKED_JOBS: &str = "WITH candidates AS MATERIALIZED (\
+    SELECT json_extract(value, '$.id') AS id, \
+    json_extract(value, '$.payload_json') AS payload_json, \
+    json_extract(value, '$.until') AS until FROM json_each(?3)), \
+    matched AS MATERIALIZED (\
+    SELECT parked.id FROM candidates AS candidate CROSS JOIN jobs AS parked \
+    WHERE parked.id = candidate.id \
+    AND parked.installation_id = ?2 AND parked.kind = 'reconcile_workspace' \
+    AND parked.status = 'pending' AND parked.available_at > ?1 \
+    AND parked.payload_json = candidate.payload_json AND parked.available_at = candidate.until) \
+    UPDATE jobs SET available_at = ?1, updated_at = ?1 \
+    WHERE id IN (SELECT id FROM matched) RETURNING jobs.id";
 
 impl Database {
     pub async fn enqueue_job(&self, new_job: NewJob, now: i64) -> Result<Uuid, StorageError> {
@@ -509,49 +523,74 @@ impl Database {
         }
     }
 
-    /// Only the exact, still-pending park may be accelerated; a stale wake is harmless.
+    /// Only exact, still-pending parks may be accelerated, atomically in one statement.
+    pub async fn wake_parked_workspace_jobs(
+        &self,
+        parked: &[ParkedWorkspaceJob],
+        now: i64,
+    ) -> Result<HashSet<Uuid>, StorageError> {
+        if parked.is_empty() {
+            return Ok(HashSet::new());
+        }
+        let candidates = serde_json::to_string(
+            &parked
+                .iter()
+                .map(|job| {
+                    serde_json::json!({
+                        "id": job.id,
+                        "payload_json": job.payload_json,
+                        "until": job.until,
+                    })
+                })
+                .collect::<Vec<_>>(),
+        )?;
+        let ids: Vec<String> = match self {
+            Self::Sqlite {
+                pool,
+                installation_id,
+            } => {
+                sqlx::query_scalar(SQLITE_WAKE_PARKED_JOBS)
+                    .bind(now)
+                    .bind(installation_id.as_str())
+                    .bind(&candidates)
+                    .fetch_all(pool)
+                    .await?
+            }
+            Self::Postgres {
+                pool,
+                installation_id,
+            } => {
+                sqlx::query_scalar(
+                    "UPDATE jobs SET available_at = $1, updated_at = $1 \
+                FROM jsonb_to_recordset($3::jsonb) \
+                AS candidate(id text, payload_json text, until bigint) \
+                WHERE jobs.id = candidate.id \
+                AND jobs.installation_id = $2 AND jobs.kind = 'reconcile_workspace' \
+                AND jobs.status = 'pending' AND jobs.available_at > $1 \
+                AND jobs.payload_json = candidate.payload_json \
+                AND jobs.available_at = candidate.until RETURNING jobs.id",
+                )
+                .bind(now)
+                .bind(installation_id.as_str())
+                .bind(&candidates)
+                .fetch_all(pool)
+                .await?
+            }
+        };
+        ids.into_iter()
+            .map(|id| Uuid::parse_str(&id).map_err(StorageError::from))
+            .collect()
+    }
+
     pub async fn wake_parked_workspace_job(
         &self,
         parked: &ParkedWorkspaceJob,
         now: i64,
     ) -> Result<bool, StorageError> {
-        let affected = match self {
-            Self::Sqlite {
-                pool,
-                installation_id,
-            } => sqlx::query(
-                "UPDATE jobs SET available_at = ?1, updated_at = ?1 \
-                WHERE id = ?2 AND installation_id = ?3 AND kind = 'reconcile_workspace' \
-                AND status = 'pending' AND payload_json = ?4 AND available_at = ?5 \
-                AND available_at > ?1",
-            )
-            .bind(now)
-            .bind(parked.id.to_string())
-            .bind(installation_id.as_str())
-            .bind(&parked.payload_json)
-            .bind(parked.until)
-            .execute(pool)
+        Ok(self
+            .wake_parked_workspace_jobs(std::slice::from_ref(parked), now)
             .await?
-            .rows_affected(),
-            Self::Postgres {
-                pool,
-                installation_id,
-            } => sqlx::query(
-                "UPDATE jobs SET available_at = $1, updated_at = $1 \
-                WHERE id = $2 AND installation_id = $3 AND kind = 'reconcile_workspace' \
-                AND status = 'pending' AND payload_json = $4 AND available_at = $5 \
-                AND available_at > $1",
-            )
-            .bind(now)
-            .bind(parked.id.to_string())
-            .bind(installation_id.as_str())
-            .bind(&parked.payload_json)
-            .bind(parked.until)
-            .execute(pool)
-            .await?
-            .rows_affected(),
-        };
-        Ok(affected == 1)
+            .contains(&parked.id))
     }
 
     pub async fn defer_job_without_attempt(
@@ -609,3 +648,7 @@ impl Database {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "job_store/bulk_wake_tests.rs"]
+mod bulk_wake_tests;
