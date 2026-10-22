@@ -15,6 +15,8 @@ use super::super::super::{
 use super::super::{FIELD_MANAGER, KubernetesCoordinator, ReconcileError, verify_existing};
 use crate::{storage::PortMapping, workspaces::Workspace};
 
+use super::{observe_runtime_stage, request_observation::observe_request};
+
 impl KubernetesCoordinator {
     pub(super) async fn apply_http_proxy_routes(
         &self,
@@ -27,11 +29,22 @@ impl KubernetesCoordinator {
         let names = self.builder.runtime_names(workspace)?;
         let api = Api::<ConfigMap>::namespaced(self.client.clone(), workspace.runtime.namespace());
         let name = &names.resources.http_proxy_config;
-        verify_existing(&api, name, &self.builder, workspace.id).await?;
-        api.patch(
+        observe_runtime_stage(
+            workspace,
+            "http_proxy_ownership",
+            verify_existing(&api, name, &self.builder, workspace.id),
+        )
+        .await?;
+        observe_request(
+            workspace.id,
+            "ConfigMap",
             name,
-            &PatchParams::apply(FIELD_MANAGER),
-            &Patch::Apply(&config),
+            "apply",
+            api.patch(
+                name,
+                &PatchParams::apply(FIELD_MANAGER),
+                &Patch::Apply(&config),
+            ),
         )
         .await?;
         let content = config
@@ -41,9 +54,26 @@ impl KubernetesCoordinator {
             .map(String::as_str)
             .unwrap_or_default();
         let revision = format!("{:x}", Sha256::digest(content.as_bytes()));
+        self.refresh_http_proxy_pod(workspace, &names.resources.pod_ordinal_zero(), &revision)
+            .await
+    }
+
+    async fn refresh_http_proxy_pod(
+        &self,
+        workspace: &Workspace,
+        pod_name: &str,
+        revision: &str,
+    ) -> Result<(), ReconcileError> {
         let pods = Api::<Pod>::namespaced(self.client.clone(), workspace.runtime.namespace());
-        let pod_name = names.resources.pod_ordinal_zero();
-        if let Some(pod) = pods.get_metadata_opt(&pod_name).await? {
+        if let Some(pod) = observe_request(
+            workspace.id,
+            "Pod",
+            pod_name,
+            "get_metadata",
+            pods.get_metadata_opt(pod_name),
+        )
+        .await?
+        {
             self.builder
                 .verify_delete_ownership(&pod.metadata, workspace.id)?;
             let key = "workspace.memeloop.dev/http-routes";
@@ -53,7 +83,8 @@ impl KubernetesCoordinator {
                     .annotations
                     .as_ref()
                     .and_then(|values| values.get(key))
-                    != Some(&revision)
+                    .map(String::as_str)
+                    != Some(revision)
             {
                 // A metadata update prompts kubelet to refresh projected volumes;
                 // it neither changes the StatefulSet template nor replaces the Pod.
@@ -61,9 +92,14 @@ impl KubernetesCoordinator {
                     "resourceVersion": pod.metadata.resource_version,
                     "annotations": {key: revision},
                 }});
-                match pods
-                    .patch(&pod_name, &PatchParams::default(), &Patch::Merge(&patch))
-                    .await
+                match observe_request(
+                    workspace.id,
+                    "Pod",
+                    pod_name,
+                    "patch_routes",
+                    pods.patch(pod_name, &PatchParams::default(), &Patch::Merge(&patch)),
+                )
+                .await
                 {
                     Ok(_) => {}
                     Err(kube::Error::Api(error)) if matches!(error.code, 404 | 409) => {}
@@ -88,11 +124,22 @@ impl KubernetesCoordinator {
             .as_deref()
             .expect("generated filter is named");
         let api = self.mapping_filters();
-        verify_existing(&api, name, &self.builder, workspace.id).await?;
-        api.patch(
+        observe_runtime_stage(
+            workspace,
+            "mapping_tls_filter_ownership",
+            verify_existing(&api, name, &self.builder, workspace.id),
+        )
+        .await?;
+        observe_request(
+            workspace.id,
+            "EnvoyFilter",
             name,
-            &PatchParams::apply(FIELD_MANAGER),
-            &Patch::Apply(&filter),
+            "apply",
+            api.patch(
+                name,
+                &PatchParams::apply(FIELD_MANAGER),
+                &Patch::Apply(&filter),
+            ),
         )
         .await?;
         Ok(Some(name.to_owned()))
@@ -110,7 +157,15 @@ impl KubernetesCoordinator {
             workspace.id,
             port_mappings::PORT_MAPPING_ID_LABEL,
         );
-        for filter in api.list(&ListParams::default().labels(&selector)).await? {
+        let filters = observe_request(
+            workspace.id,
+            "EnvoyFilter",
+            &self.builder.higress_namespace,
+            "list",
+            api.list(&ListParams::default().labels(&selector)),
+        )
+        .await?;
+        for filter in filters {
             if let Some(name) = filter.metadata.name.as_deref()
                 && !desired.contains(name)
             {
@@ -121,12 +176,18 @@ impl KubernetesCoordinator {
                     .uid
                     .clone()
                     .ok_or(ReconcileError::MissingEnvoyFilterUid)?;
-                api.delete(
+                observe_request(
+                    workspace.id,
+                    "EnvoyFilter",
                     name,
-                    &DeleteParams::default().preconditions(Preconditions {
-                        uid: Some(uid),
-                        resource_version: filter.metadata.resource_version.clone(),
-                    }),
+                    "delete",
+                    api.delete(
+                        name,
+                        &DeleteParams::default().preconditions(Preconditions {
+                            uid: Some(uid),
+                            resource_version: filter.metadata.resource_version.clone(),
+                        }),
+                    ),
                 )
                 .await?;
             }

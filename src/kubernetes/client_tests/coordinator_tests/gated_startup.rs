@@ -13,6 +13,7 @@ struct GateMock {
     release_files: Semaphore,
     workload_applied: Notify,
     workload_reads: AtomicUsize,
+    approval_reads: AtomicUsize,
     fail_suffix: Mutex<Option<String>>,
     hold_request: Mutex<Option<(Method, String)>>,
     request_started: Notify,
@@ -28,6 +29,7 @@ impl Default for GateMock {
             release_files: Semaphore::new(0),
             workload_applied: Notify::new(),
             workload_reads: AtomicUsize::new(0),
+            approval_reads: AtomicUsize::new(0),
             fail_suffix: Mutex::default(),
             hold_request: Mutex::default(),
             request_started: Notify::new(),
@@ -57,6 +59,9 @@ impl GateMock {
             self.release_request.acquire().await.unwrap().forget();
         }
         if method == Method::GET {
+            if path.ends_with("-startup-gate") {
+                self.approval_reads.fetch_add(1, Ordering::SeqCst);
+            }
             if path.contains("/statefulsets/") {
                 self.workload_reads.fetch_add(1, Ordering::SeqCst);
             }
@@ -225,10 +230,33 @@ async fn new_workload_prepares_volumes_before_files_but_approval_waits_for_every
         );
     }
     mock.hold_files.store(false, Ordering::SeqCst);
+    assert_eq!(mock.approval_reads.load(Ordering::SeqCst), 2);
+    // An already validated immutable approval must not be PATCHed again.
+    *mock.fail_suffix.lock().unwrap() = Some("-startup-gate".to_owned());
     workspace.state = WorkspaceState::Ready;
     coordinator.reconcile(&workspace).await.unwrap();
     assert_eq!(mock.workload_reads.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        mock.approval_reads.load(Ordering::SeqCst),
+        3,
+        "approved reconciliation needs only its full validation GET, not another metadata GET"
+    );
+    assert_eq!(
+        mock.patches
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(path, _)| path.ends_with("-startup-gate"))
+            .count(),
+        1
+    );
+    assert_eq!(mock.object("-startup-gate").unwrap(), gate);
     let after = mock.object("/statefulsets/w-8000000000000001").unwrap();
+    assert_gated(&after);
+    assert_eq!(
+        before["metadata"]["annotations"],
+        after["metadata"]["annotations"]
+    );
     assert_eq!(
         before["spec"]["template"], after["spec"]["template"],
         "ready reconciliation must not restart the newly gated Pod"
@@ -258,6 +286,14 @@ async fn failed_files_keep_early_workload_blocked_and_retry_approves_the_same_te
     ));
     assert!(mock.object("-startup-gate").is_none());
     assert!(mock.object("-web-shell").is_none());
+    assert!(
+        !mock
+            .patches
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(path, _)| path.ends_with("-startup-gate"))
+    );
     mock.hold_files.store(false, Ordering::SeqCst);
     *mock.fail_suffix.lock().unwrap() = None;
     coordinator.reconcile(&workspace).await.unwrap();
@@ -307,36 +343,69 @@ async fn failed_access_or_isolation_prevents_early_workload_creation() {
 
 #[tokio::test]
 async fn foreign_or_malformed_approval_is_never_reused_or_overwritten() {
-    for (foreign, approved, immutable) in [
-        (true, "true", true),
-        (false, "false", true),
-        (false, "true", false),
-    ] {
-        let mut workspace = workspace(workspace_id());
-        workspace.state = WorkspaceState::Provisioning;
-        let mock = Arc::new(GateMock::default());
-        let coordinator = coordinator(mock.clone());
-        let names = coordinator
-            .builder
-            .runtime_names(&workspace)
-            .unwrap()
-            .resources;
-        let path = format!(
-            "/api/v1/namespaces/{}/configmaps/{}",
-            workspace.runtime.namespace(),
-            names.startup_gate_config_map()
-        );
-        let gate = json!({"apiVersion":"v1", "kind":"ConfigMap", "metadata":{
-            "name":names.startup_gate_config_map(),
-            "labels":ownership_labels(if foreign {"foreign"} else {"public-a"}, workspace.id)
-        }, "immutable":immutable, "data":{"approved":approved}});
-        mock.objects
-            .lock()
-            .unwrap()
-            .insert(path.clone(), gate.clone());
-        assert!(coordinator.reconcile(&workspace).await.is_err());
-        assert!(mock.object("/statefulsets/w-8000000000000001").is_none());
-        assert_eq!(mock.objects.lock().unwrap().get(&path), Some(&gate));
+    for previously_approved in [false, true] {
+        for (foreign, approved, immutable) in [
+            (true, "true", true),
+            (false, "false", true),
+            (false, "true", false),
+        ] {
+            let mut workspace = workspace(workspace_id());
+            workspace.state = WorkspaceState::Provisioning;
+            let mock = Arc::new(GateMock::default());
+            let coordinator = coordinator(mock.clone());
+            if previously_approved {
+                coordinator.reconcile(&workspace).await.unwrap();
+                workspace.state = WorkspaceState::Ready;
+            }
+            let workload = mock.object("/statefulsets/w-8000000000000001");
+            if !previously_approved {
+                assert!(workload.is_none());
+            }
+            let names = coordinator
+                .builder
+                .runtime_names(&workspace)
+                .unwrap()
+                .resources;
+            let path = format!(
+                "/api/v1/namespaces/{}/configmaps/{}",
+                workspace.runtime.namespace(),
+                names.startup_gate_config_map()
+            );
+            let gate = json!({"apiVersion":"v1", "kind":"ConfigMap", "metadata":{
+                "name":names.startup_gate_config_map(),
+                "labels":ownership_labels(if foreign {"foreign"} else {"public-a"}, workspace.id)
+            }, "immutable":immutable, "data":{"approved":approved}});
+            mock.objects
+                .lock()
+                .unwrap()
+                .insert(path.clone(), gate.clone());
+            let namespace_path = format!("/api/v1/namespaces/{}", workspace.runtime.namespace());
+            let patches = mock
+                .patches
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|(path, _)| path != &namespace_path)
+                .count();
+            let error = coordinator.reconcile(&workspace).await.unwrap_err();
+            if foreign {
+                assert!(matches!(error, ReconcileError::Ownership(_)));
+            } else {
+                assert!(matches!(error, ReconcileError::RuntimeIdentityMismatch));
+            }
+            assert_eq!(mock.object("/statefulsets/w-8000000000000001"), workload);
+            assert_eq!(mock.objects.lock().unwrap().get(&path), Some(&gate));
+            assert_eq!(
+                mock.patches
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .filter(|(path, _)| path != &namespace_path)
+                    .count(),
+                patches,
+                "invalid approvals must be rejected before applying workspace resources"
+            );
+        }
     }
 }
 

@@ -92,6 +92,10 @@ impl<H: JobHandler> JobWorker<H> {
             return Ok(true);
         }
 
+        if job.payload.get("reconciled_generation").is_some() {
+            tracing::info!(job_id = %job.id, workspace_id = ?job.workspace_id,
+                "workspace readiness job execution started");
+        }
         let result = self.handle_with_lease_heartbeat(&job).await?;
         // Slow external calls must not consume the following retry/readiness delay.
         // Anchor elapsed monotonic time to the caller's clock, including synthetic
@@ -149,8 +153,10 @@ impl<H: JobHandler> JobWorker<H> {
                     .saturating_add(CHECKPOINT_REPAIR_SECONDS);
                 self.database
                     .park_workspace_job(job.id, &self.lease_owner, &payload, until, now)
-                    .await
-                    .map(|_| ())
+                    .await?;
+                tracing::info!(job_id = %job.id, workspace_id = ?job.workspace_id,
+                    repair_at = until, "workspace readiness job parked");
+                Ok(())
             }
             Err(JobHandlerError::Pending(error)) => {
                 tracing::debug!(

@@ -4,7 +4,7 @@ use std::{
     collections::{HashMap, HashSet},
     fmt::Debug,
     sync::{Arc, Mutex},
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use futures::{Stream, TryStreamExt};
@@ -285,10 +285,18 @@ impl WorkspaceObservations {
         while let Some(reservation) = batch.pending.pop() {
             batch.current = Some(reservation.clone());
             let now = unix_now();
+            let started = Instant::now();
             let result = self
                 .database
                 .wake_parked_workspace_job(&reservation.job, now)
                 .await;
+            if matches!(&result, Ok(true)) {
+                tracing::info!(job_id = %reservation.job.id,
+                    workspace_id = %reservation.job.workspace_id,
+                    generation = reservation.job.generation,
+                    elapsed_ms = started.elapsed().as_secs_f64() * 1000.0,
+                    "workspace readiness job awakened");
+            }
             if let Err(error) = &result {
                 tracing::warn!(%error, job_id = %reservation.job.id, "workspace observation wake failed");
             }
