@@ -6,6 +6,7 @@ use tokio::sync::{Notify, Semaphore};
 
 mod approval_create;
 mod prerequisite_overlap;
+mod worker_capacity;
 
 struct GateMock {
     objects: Mutex<BTreeMap<String, Value>>,
@@ -54,11 +55,11 @@ impl GateMock {
             .find_map(|(path, value)| path.ends_with(suffix).then(|| value.clone()))
     }
 
-    async fn create_approval(
-        &self,
-        collection: &str,
-        request: Request<kube::client::Body>,
-    ) -> Response<Body> {
+    async fn create_approval<B>(&self, collection: &str, request: Request<B>) -> Response<Body>
+    where
+        B: axum::body::HttpBody<Data = axum::body::Bytes> + Send,
+        B::Error: std::fmt::Debug,
+    {
         assert!(
             collection.starts_with("/api/v1/namespaces/") && collection.ends_with("/configmaps")
         );
@@ -116,7 +117,11 @@ impl GateMock {
         json_response(StatusCode::CREATED, body)
     }
 
-    async fn respond(&self, request: Request<kube::client::Body>) -> Response<Body> {
+    async fn respond<B>(&self, request: Request<B>) -> Response<Body>
+    where
+        B: axum::body::HttpBody<Data = axum::body::Bytes> + Send,
+        B::Error: std::fmt::Debug,
+    {
         let method = request.method().clone();
         let path = request.uri().path().to_owned();
         let held = self.hold_request.lock().unwrap().clone();

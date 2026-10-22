@@ -1,3 +1,6 @@
+#[path = "runtime_job_parking/bulk_wake.rs"]
+mod bulk_wake;
+
 use std::time::Duration;
 
 use memeloop_workspace_control::{

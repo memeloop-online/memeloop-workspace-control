@@ -99,16 +99,15 @@ struct Reservation {
     edge: u64,
 }
 
-/// A cancelled hook/stream must release both its active wake and its queue.
+/// A cancelled hook/stream must release every reservation submitted to SQL.
 struct WakeBatch {
     state: Arc<Mutex<State>>,
-    pending: Vec<Reservation>,
-    current: Option<Reservation>,
+    reservations: Vec<Reservation>,
 }
 
 impl Drop for WakeBatch {
     fn drop(&mut self) {
-        if self.current.is_none() && self.pending.is_empty() {
+        if self.reservations.is_empty() {
             return;
         }
         let mut state = self
@@ -116,7 +115,7 @@ impl Drop for WakeBatch {
             .lock()
             .expect("workspace observations lock poisoned");
         let now = unix_now();
-        for reservation in self.current.iter().chain(self.pending.iter()) {
+        for reservation in &self.reservations {
             state.release_cancelled(reservation, now);
         }
     }
@@ -279,36 +278,50 @@ impl WorkspaceObservations {
     async fn deliver_batch(&self, reservations: Vec<Reservation>) {
         let mut batch = WakeBatch {
             state: self.state.clone(),
-            pending: reservations,
-            current: None,
+            reservations,
         };
-        while let Some(reservation) = batch.pending.pop() {
-            batch.current = Some(reservation.clone());
-            let now = unix_now();
+        while !batch.reservations.is_empty() {
+            let jobs: Vec<_> = batch
+                .reservations
+                .iter()
+                .map(|reservation| reservation.job.clone())
+                .collect();
             let started = Instant::now();
             let result = self
                 .database
-                .wake_parked_workspace_job(&reservation.job, now)
+                .wake_parked_workspace_jobs(&jobs, unix_now())
                 .await;
-            if matches!(&result, Ok(true)) {
-                tracing::info!(job_id = %reservation.job.id,
-                    workspace_id = %reservation.job.workspace_id,
-                    generation = reservation.job.generation,
-                    elapsed_ms = started.elapsed().as_secs_f64() * 1000.0,
-                    "workspace readiness job awakened");
-            }
             if let Err(error) = &result {
-                tracing::warn!(%error, job_id = %reservation.job.id, "workspace observation wake failed");
+                tracing::warn!(%error, count = jobs.len(), "workspace observation wake failed");
             }
-            let next = {
+            if let Ok(awakened) = &result {
+                for reservation in &batch.reservations {
+                    if awakened.contains(&reservation.job.id) {
+                        tracing::info!(job_id = %reservation.job.id,
+                            workspace_id = %reservation.job.workspace_id,
+                            generation = reservation.job.generation,
+                            elapsed_ms = started.elapsed().as_secs_f64() * 1000.0,
+                            batch_size = jobs.len(),
+                            "workspace readiness job awakened");
+                    }
+                }
+            }
+            let mut next = Vec::new();
+            {
                 let mut state = self
                     .state
                     .lock()
                     .expect("workspace observations lock poisoned");
-                state.complete(&reservation, result.map_err(|_| ()), unix_now())
-            };
-            batch.current = None;
-            batch.pending.extend(next);
+                let now = unix_now();
+                for reservation in &batch.reservations {
+                    let outcome = result
+                        .as_ref()
+                        .map(|awakened| awakened.contains(&reservation.job.id))
+                        .map_err(|_| ());
+                    next.extend(state.complete(reservation, outcome, now));
+                }
+            }
+            batch.reservations = next;
         }
     }
 

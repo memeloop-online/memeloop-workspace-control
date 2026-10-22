@@ -292,7 +292,7 @@ fn repeated_not_ready_metadata_updates_have_no_wake_and_ready_is_local() {
 }
 
 #[test]
-fn dropping_wake_batch_releases_current_and_all_queued_items() {
+fn dropping_wake_batch_releases_all_submitted_items() {
     let a = job();
     let b = job();
     let c = job();
@@ -306,8 +306,7 @@ fn dropping_wake_batch_releases_current_and_all_queued_items() {
     {
         let _cancelled = WakeBatch {
             state: shared.clone(),
-            pending: vec![b_wake, c_wake],
-            current: Some(a_wake),
+            reservations: vec![a_wake, b_wake, c_wake],
         };
     }
     let state = shared.lock().unwrap();
