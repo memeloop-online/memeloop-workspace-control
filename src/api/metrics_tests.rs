@@ -59,8 +59,36 @@ impl Write for LogBuffer {
     }
 }
 
+// Other parallel tests use the same static callsites without a subscriber.
+// Keep log-capture assertions in their own process so their dispatcher is isolated.
+fn run_capture_in_child(name: &str) -> bool {
+    const MARKER: &str = "MWC_HTTP_TRACE_CAPTURE_CHILD";
+    if std::env::var(MARKER).as_deref() == Ok(name) {
+        return false;
+    }
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", name, "--nocapture", "--color", "never"])
+        .env(MARKER, name)
+        .output()
+        .expect("start isolated HTTP trace capture test");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success()
+            && stdout.contains(&format!("test {name} ... ok"))
+            && stdout.contains("test result: ok. 1 passed; 0 failed; 0 ignored;"),
+        "isolated HTTP trace capture failed: {name}\n{stdout}\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    true
+}
+
 #[tokio::test]
 async fn public_requests_get_server_ids_and_bounded_safe_trace_fields() {
+    if run_capture_in_child(
+        "api::metrics::tests::public_requests_get_server_ids_and_bounded_safe_trace_fields",
+    ) {
+        return;
+    }
     let state = state().await;
     let app = crate::api::router(state.clone());
     let buffer = LogBuffer::default();
@@ -123,6 +151,11 @@ async fn public_requests_get_server_ids_and_bounded_safe_trace_fields() {
 
 #[tokio::test]
 async fn server_errors_have_info_completion_even_when_fast() {
+    if run_capture_in_child(
+        "api::metrics::tests::server_errors_have_info_completion_even_when_fast",
+    ) {
+        return;
+    }
     let state = state().await;
     let app = Router::new()
         .route(

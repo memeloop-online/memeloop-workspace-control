@@ -12,6 +12,18 @@ use super::{
     },
 };
 
+// Decode each candidate once before joining jobs, rather than inside the join loop.
+const SQLITE_WAKE_PARKED_JOBS: &str = "WITH candidates AS MATERIALIZED (\
+    SELECT json_extract(value, '$.id') AS id, \
+    json_extract(value, '$.payload_json') AS payload_json, \
+    json_extract(value, '$.until') AS until FROM json_each(?3)) \
+    UPDATE jobs SET available_at = ?1, updated_at = ?1 \
+    FROM candidates AS candidate WHERE jobs.id = candidate.id \
+    AND jobs.installation_id = ?2 AND jobs.kind = 'reconcile_workspace' \
+    AND jobs.status = 'pending' AND jobs.available_at > ?1 \
+    AND jobs.payload_json = candidate.payload_json \
+    AND jobs.available_at = candidate.until RETURNING jobs.id";
+
 impl Database {
     pub async fn enqueue_job(&self, new_job: NewJob, now: i64) -> Result<Uuid, StorageError> {
         let id = Uuid::now_v7();
@@ -535,21 +547,12 @@ impl Database {
                 pool,
                 installation_id,
             } => {
-                sqlx::query_scalar(
-                    "UPDATE jobs SET available_at = ?1, updated_at = ?1 \
-                FROM json_each(?3) candidate \
-                WHERE jobs.id = json_extract(candidate.value, '$.id') \
-                AND jobs.installation_id = ?2 AND jobs.kind = 'reconcile_workspace' \
-                AND jobs.status = 'pending' AND jobs.available_at > ?1 \
-                AND jobs.payload_json = json_extract(candidate.value, '$.payload_json') \
-                AND jobs.available_at = json_extract(candidate.value, '$.until') \
-                RETURNING jobs.id",
-                )
-                .bind(now)
-                .bind(installation_id.as_str())
-                .bind(&candidates)
-                .fetch_all(pool)
-                .await?
+                sqlx::query_scalar(SQLITE_WAKE_PARKED_JOBS)
+                    .bind(now)
+                    .bind(installation_id.as_str())
+                    .bind(&candidates)
+                    .fetch_all(pool)
+                    .await?
             }
             Self::Postgres {
                 pool,
@@ -643,3 +646,7 @@ impl Database {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "job_store/bulk_wake_tests.rs"]
+mod bulk_wake_tests;
