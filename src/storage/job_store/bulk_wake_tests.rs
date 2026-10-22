@@ -64,17 +64,48 @@ async fn sqlite_bulk_wake_materializes_candidates_and_uses_an_indexed_join() {
         serde_json::json!({"backend": "sqlite", "batch": 3000, "details": details})
     )
     .unwrap();
+    for name in ["candidates", "matched"] {
+        assert!(
+            details
+                .iter()
+                .any(|detail| detail == &format!("MATERIALIZE {name}"))
+        );
+    }
+    let is_parked_id_lookup = |detail: &str| {
+        let detail = detail.to_ascii_lowercase();
+        let mut words = detail.split_whitespace();
+        words.next() == Some("search")
+            && words.next() == Some("parked")
+            && detail.contains("index")
+            && detail
+                .split(['(', ')', ' ', ','])
+                .any(|token| token == "id=?")
+    };
+    assert!(!is_parked_id_lookup(
+        "SEARCH parked USING INDEX jobs_claim_idx (installation_id=? AND status=? AND available_at>?)"
+    ));
+    assert!(!is_parked_id_lookup(
+        "SEARCH jobs USING INDEX sqlite_autoindex_jobs_1 (id=?)"
+    ));
+    assert!(is_parked_id_lookup(
+        "SEARCH parked USING INDEX sqlite_autoindex_jobs_1 (id=?)"
+    ));
+    let candidate_scan = details
+        .iter()
+        .position(|detail| detail.split_whitespace().take(2).eq(["SCAN", "candidate"]))
+        .expect("matched must scan candidates as its outer loop");
+    let parked_lookup = details
+        .iter()
+        .position(|detail| is_parked_id_lookup(detail))
+        .unwrap_or_else(|| panic!("expected an indexed parked.id lookup: {details:?}"));
     assert!(
-        details
-            .iter()
-            .any(|detail| detail.contains("MATERIALIZE candidates"))
+        candidate_scan < parked_lookup,
+        "candidate must drive the parked lookup: {details:?}"
     );
-    assert!(
-        details.iter().any(|detail| {
-            let detail = detail.to_ascii_lowercase();
-            detail.starts_with("search jobs") && detail.contains("index") && detail.contains("id=?")
-        }),
-        "expected an indexed jobs primary-key lookup: {details:?}"
+    assert_eq!(
+        rows[candidate_scan].get::<i64, _>("parent"),
+        rows[parked_lookup].get::<i64, _>("parent"),
+        "candidate scan and parked lookup must belong to the same matched join"
     );
     pool.close().await;
 }

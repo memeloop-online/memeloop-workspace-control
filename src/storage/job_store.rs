@@ -12,17 +12,19 @@ use super::{
     },
 };
 
-// Decode each candidate once before joining jobs, rather than inside the join loop.
+// Decode once, then drive primary-key lookups from candidates before updating the matched IDs.
 const SQLITE_WAKE_PARKED_JOBS: &str = "WITH candidates AS MATERIALIZED (\
     SELECT json_extract(value, '$.id') AS id, \
     json_extract(value, '$.payload_json') AS payload_json, \
-    json_extract(value, '$.until') AS until FROM json_each(?3)) \
+    json_extract(value, '$.until') AS until FROM json_each(?3)), \
+    matched AS MATERIALIZED (\
+    SELECT parked.id FROM candidates AS candidate CROSS JOIN jobs AS parked \
+    WHERE parked.id = candidate.id \
+    AND parked.installation_id = ?2 AND parked.kind = 'reconcile_workspace' \
+    AND parked.status = 'pending' AND parked.available_at > ?1 \
+    AND parked.payload_json = candidate.payload_json AND parked.available_at = candidate.until) \
     UPDATE jobs SET available_at = ?1, updated_at = ?1 \
-    FROM candidates AS candidate WHERE jobs.id = candidate.id \
-    AND jobs.installation_id = ?2 AND jobs.kind = 'reconcile_workspace' \
-    AND jobs.status = 'pending' AND jobs.available_at > ?1 \
-    AND jobs.payload_json = candidate.payload_json \
-    AND jobs.available_at = candidate.until RETURNING jobs.id";
+    WHERE id IN (SELECT id FROM matched) RETURNING jobs.id";
 
 impl Database {
     pub async fn enqueue_job(&self, new_job: NewJob, now: i64) -> Result<Uuid, StorageError> {
