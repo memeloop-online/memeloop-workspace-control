@@ -107,13 +107,15 @@ impl KubernetesCoordinator {
                 workspace.state,
                 WorkspaceState::Provisioning | WorkspaceState::Starting
             );
-        let mut metadata = desired.workspace_config.metadata.clone();
-        metadata.name = Some(name.clone());
-        plan.gate = Some(ConfigMap {
-            metadata,
-            immutable: Some(true),
-            data: Some(BTreeMap::from([("approved".to_owned(), "true".to_owned())])),
-            ..ConfigMap::default()
+        plan.gate = approved.is_none().then(|| {
+            let mut metadata = desired.workspace_config.metadata.clone();
+            metadata.name = Some(name.clone());
+            ConfigMap {
+                metadata,
+                immutable: Some(true),
+                data: Some(BTreeMap::from([("approved".to_owned(), "true".to_owned())])),
+                ..ConfigMap::default()
+            }
         });
         add_gate(&mut plan.workload, &name)?;
         Ok(plan)

@@ -92,6 +92,10 @@ impl<H: JobHandler> JobWorker<H> {
             return Ok(true);
         }
 
+        if job.payload.get("reconciled_generation").is_some() {
+            tracing::info!(job_id = %job.id, workspace_id = ?job.workspace_id,
+                "workspace readiness job execution started");
+        }
         let result = self.handle_with_lease_heartbeat(&job).await?;
         // Slow external calls must not consume the following retry/readiness delay.
         // Anchor elapsed monotonic time to the caller's clock, including synthetic
@@ -107,23 +111,28 @@ impl<H: JobHandler> JobWorker<H> {
         }
         persistence_result?;
         if checkpoint_deferred {
-            // The durable deadline remains the repair path if registration fails.
-            match tokio::time::timeout(
-                Duration::from_secs(5),
-                self.handler.on_checkpoint_deferred(job.id, finished_at),
-            )
-            .await
-            {
-                Ok(Ok(())) => {}
-                Ok(Err(error)) => {
-                    tracing::warn!(job_id = %job.id, %error, "could not register deferred workspace observation")
-                }
-                Err(_) => {
-                    tracing::warn!(job_id = %job.id, "deferred workspace observation registration timed out")
-                }
-            }
+            self.register_deferred_observation(job.id, finished_at)
+                .await;
         }
         Ok(true)
+    }
+
+    async fn register_deferred_observation(&self, job_id: Uuid, now: i64) {
+        // The durable deadline remains the repair path if registration fails.
+        match tokio::time::timeout(
+            Duration::from_secs(5),
+            self.handler.on_checkpoint_deferred(job_id, now),
+        )
+        .await
+        {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => {
+                tracing::warn!(%job_id, %error, "could not register deferred workspace observation")
+            }
+            Err(_) => {
+                tracing::warn!(%job_id, "deferred workspace observation registration timed out")
+            }
+        }
     }
 
     async fn persist_job_result(
@@ -140,17 +149,7 @@ impl<H: JobHandler> JobWorker<H> {
             }
             Err(JobHandlerError::PendingWithCheckpoint { message, payload }) => {
                 tracing::debug!(job_id = %job.id, error = %message, "job is waiting after applying resources");
-                // Repeated readiness checks share the original apply deadline.
-                // An expired cycle must be claimable immediately for a fresh apply.
-                let until = payload
-                    .get("reconciled_at")
-                    .and_then(serde_json::Value::as_i64)
-                    .unwrap_or(now)
-                    .saturating_add(CHECKPOINT_REPAIR_SECONDS);
-                self.database
-                    .park_workspace_job(job.id, &self.lease_owner, &payload, until, now)
-                    .await
-                    .map(|_| ())
+                self.park_workspace_for_readiness(job, &payload, now).await
             }
             Err(JobHandlerError::Pending(error)) => {
                 tracing::debug!(
@@ -170,6 +169,27 @@ impl<H: JobHandler> JobWorker<H> {
             }
             Err(error) => self.persist_failed_job(job, error, now).await,
         }
+    }
+
+    async fn park_workspace_for_readiness(
+        &self,
+        job: &ClaimedJob,
+        payload: &serde_json::Value,
+        now: i64,
+    ) -> Result<(), StorageError> {
+        // Repeated readiness checks share the original apply deadline.
+        // An expired cycle must be claimable immediately for a fresh apply.
+        let until = payload
+            .get("reconciled_at")
+            .and_then(serde_json::Value::as_i64)
+            .unwrap_or(now)
+            .saturating_add(CHECKPOINT_REPAIR_SECONDS);
+        self.database
+            .park_workspace_job(job.id, &self.lease_owner, payload, until, now)
+            .await?;
+        tracing::info!(job_id = %job.id, workspace_id = ?job.workspace_id,
+            repair_at = until, "workspace readiness job parked");
+        Ok(())
     }
 
     async fn persist_failed_job(
