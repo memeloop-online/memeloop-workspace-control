@@ -75,7 +75,7 @@ async fn volumes_can_prepare_while_identity_or_service_writes_are_pending() {
         mock.release_request.add_permits(1);
         task.await.unwrap().unwrap();
         assert!(mock.object("-startup-gate").is_some());
-        let patches = mock.patches.lock().unwrap();
+        let patches = mock.writes.lock().unwrap();
         let input_position = patches.iter().position(|(path, _)| path == &held).unwrap();
         let gate_position = patches
             .iter()

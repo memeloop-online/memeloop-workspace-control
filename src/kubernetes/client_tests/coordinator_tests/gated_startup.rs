@@ -4,11 +4,15 @@ use serde_json::{Value, json};
 use std::{sync::atomic::AtomicUsize, time::Duration};
 use tokio::sync::{Notify, Semaphore};
 
+mod approval_create;
 mod prerequisite_overlap;
 
 struct GateMock {
     objects: Mutex<BTreeMap<String, Value>>,
     patches: Mutex<Vec<(String, Value)>>,
+    writes: Mutex<Vec<(String, Value)>>,
+    approval_creates: AtomicUsize,
+    lose_approval_response: AtomicBool,
     hold_files: AtomicBool,
     release_files: Semaphore,
     workload_applied: Notify,
@@ -25,6 +29,9 @@ impl Default for GateMock {
         Self {
             objects: Mutex::default(),
             patches: Mutex::default(),
+            writes: Mutex::default(),
+            approval_creates: AtomicUsize::new(0),
+            lose_approval_response: AtomicBool::new(false),
             hold_files: AtomicBool::default(),
             release_files: Semaphore::new(0),
             workload_applied: Notify::new(),
@@ -45,6 +52,68 @@ impl GateMock {
             .unwrap()
             .iter()
             .find_map(|(path, value)| path.ends_with(suffix).then(|| value.clone()))
+    }
+
+    async fn create_approval(
+        &self,
+        collection: &str,
+        request: Request<kube::client::Body>,
+    ) -> Response<Body> {
+        assert!(
+            collection.starts_with("/api/v1/namespaces/") && collection.ends_with("/configmaps")
+        );
+        let mut body: Value =
+            serde_json::from_slice(&request.into_body().collect().await.unwrap().to_bytes())
+                .unwrap();
+        let name = body["metadata"]["name"].as_str().unwrap().to_owned();
+        assert!(name.ends_with("-startup-gate"));
+        assert_eq!(body["kind"], "ConfigMap");
+        let path = format!("{collection}/{name}");
+        let attempt = self.approval_creates.fetch_add(1, Ordering::SeqCst) + 1;
+        if self
+            .fail_suffix
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_some_and(|suffix| path.ends_with(suffix))
+        {
+            return json_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                json!({
+                    "apiVersion":"v1", "kind":"Status", "status":"Failure", "code":500,
+                    "reason":"InternalError", "message":"injected approval create failure"
+                }),
+            );
+        }
+        body["metadata"]["uid"] = json!(format!("{name}-uid-{attempt}"));
+        {
+            let mut objects = self.objects.lock().unwrap();
+            let std::collections::btree_map::Entry::Vacant(entry) = objects.entry(path.clone())
+            else {
+                return json_response(
+                    StatusCode::CONFLICT,
+                    json!({
+                        "apiVersion":"v1", "kind":"Status", "status":"Failure", "code":409,
+                        "reason":"AlreadyExists", "message":"approval already exists"
+                    }),
+                );
+            };
+            entry.insert(body.clone());
+        }
+        self.writes.lock().unwrap().push((path, body.clone()));
+        if self.lose_approval_response.swap(false, Ordering::SeqCst) {
+            let error = std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "injected response loss after approval persistence",
+            );
+            return Response::builder()
+                .status(StatusCode::CREATED)
+                .body(Body::from_stream(futures::stream::once(async move {
+                    Err::<axum::body::Bytes, _>(error)
+                })))
+                .unwrap();
+        }
+        json_response(StatusCode::CREATED, body)
     }
 
     async fn respond(&self, request: Request<kube::client::Body>) -> Response<Body> {
@@ -89,6 +158,9 @@ impl GateMock {
             self.objects.lock().unwrap().remove(&path);
             return success();
         }
+        if method == Method::POST {
+            return self.create_approval(&path, request).await;
+        }
         assert_eq!(method, Method::PATCH);
         if path.ends_with("-files-config") && self.hold_files.load(Ordering::SeqCst) {
             self.release_files.acquire().await.unwrap().forget();
@@ -110,6 +182,10 @@ impl GateMock {
             serde_json::from_slice(&request.into_body().collect().await.unwrap().to_bytes())
                 .unwrap();
         self.patches
+            .lock()
+            .unwrap()
+            .push((path.clone(), body.clone()));
+        self.writes
             .lock()
             .unwrap()
             .push((path.clone(), body.clone()));
@@ -205,8 +281,14 @@ async fn new_workload_prepares_volumes_before_files_but_approval_waits_for_every
     let gate = mock.object("-startup-gate").unwrap();
     assert_eq!(gate["immutable"], true);
     assert_eq!(gate["data"]["approved"], "true");
+    for (key, value) in ownership_labels("public-a", workspace.id)
+        .as_object()
+        .unwrap()
     {
-        let patches = mock.patches.lock().unwrap();
+        assert_eq!(&gate["metadata"]["labels"][key], value);
+    }
+    {
+        let patches = mock.writes.lock().unwrap();
         let gate_position = patches
             .iter()
             .position(|(p, _)| p.ends_with("-startup-gate"))
@@ -230,7 +312,8 @@ async fn new_workload_prepares_volumes_before_files_but_approval_waits_for_every
         );
     }
     mock.hold_files.store(false, Ordering::SeqCst);
-    assert_eq!(mock.approval_reads.load(Ordering::SeqCst), 2);
+    assert_eq!(mock.approval_reads.load(Ordering::SeqCst), 1);
+    assert_eq!(mock.approval_creates.load(Ordering::SeqCst), 1);
     // An already validated immutable approval must not be PATCHed again.
     *mock.fail_suffix.lock().unwrap() = Some("-startup-gate".to_owned());
     workspace.state = WorkspaceState::Ready;
@@ -238,7 +321,7 @@ async fn new_workload_prepares_volumes_before_files_but_approval_waits_for_every
     assert_eq!(mock.workload_reads.load(Ordering::SeqCst), 2);
     assert_eq!(
         mock.approval_reads.load(Ordering::SeqCst),
-        3,
+        2,
         "approved reconciliation needs only its full validation GET, not another metadata GET"
     );
     assert_eq!(
@@ -248,8 +331,9 @@ async fn new_workload_prepares_volumes_before_files_but_approval_waits_for_every
             .iter()
             .filter(|(path, _)| path.ends_with("-startup-gate"))
             .count(),
-        1
+        0
     );
+    assert_eq!(mock.approval_creates.load(Ordering::SeqCst), 1);
     assert_eq!(mock.object("-startup-gate").unwrap(), gate);
     let after = mock.object("/statefulsets/w-8000000000000001").unwrap();
     assert_gated(&after);
@@ -286,6 +370,7 @@ async fn failed_files_keep_early_workload_blocked_and_retry_approves_the_same_te
     ));
     assert!(mock.object("-startup-gate").is_none());
     assert!(mock.object("-web-shell").is_none());
+    assert_eq!(mock.approval_creates.load(Ordering::SeqCst), 0);
     assert!(
         !mock
             .patches
@@ -315,6 +400,10 @@ async fn failed_route_or_approval_never_releases_the_startup_gate() {
         assert!(coordinator.reconcile(&workspace).await.is_err());
         assert_gated(&mock.object("/statefulsets/w-8000000000000001").unwrap());
         assert!(mock.object("-startup-gate").is_none());
+        assert_eq!(
+            mock.approval_creates.load(Ordering::SeqCst),
+            usize::from(suffix == "-startup-gate")
+        );
         *mock.fail_suffix.lock().unwrap() = None;
         coordinator.reconcile(&workspace).await.unwrap();
         assert!(mock.object("-startup-gate").is_some());
