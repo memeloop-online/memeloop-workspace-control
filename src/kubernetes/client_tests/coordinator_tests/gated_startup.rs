@@ -6,12 +6,17 @@ use tokio::sync::{Notify, Semaphore};
 
 mod approval_create;
 mod prerequisite_overlap;
+mod route_overlap;
 mod worker_capacity;
 
 struct GateMock {
     objects: Mutex<BTreeMap<String, Value>>,
     patches: Mutex<Vec<(String, Value)>>,
     writes: Mutex<Vec<(String, Value)>>,
+    events: Mutex<Vec<(String, String)>>,
+    files_pending: Notify,
+    files_applied: Notify,
+    routes_applied: Notify,
     approval_creates: AtomicUsize,
     lose_approval_response: AtomicBool,
     hold_files: AtomicBool,
@@ -31,6 +36,10 @@ impl Default for GateMock {
             objects: Mutex::default(),
             patches: Mutex::default(),
             writes: Mutex::default(),
+            events: Mutex::default(),
+            files_pending: Notify::new(),
+            files_applied: Notify::new(),
+            routes_applied: Notify::new(),
             approval_creates: AtomicUsize::new(0),
             lose_approval_response: AtomicBool::new(false),
             hold_files: AtomicBool::default(),
@@ -124,6 +133,10 @@ impl GateMock {
     {
         let method = request.method().clone();
         let path = request.uri().path().to_owned();
+        self.events
+            .lock()
+            .unwrap()
+            .push((method.to_string(), path.clone()));
         let held = self.hold_request.lock().unwrap().clone();
         if held
             .as_ref()
@@ -168,6 +181,7 @@ impl GateMock {
         }
         assert_eq!(method, Method::PATCH);
         if path.ends_with("-files-config") && self.hold_files.load(Ordering::SeqCst) {
+            self.files_pending.notify_one();
             self.release_files.acquire().await.unwrap().forget();
         }
         let failure = self.fail_suffix.lock().unwrap().clone();
@@ -199,6 +213,16 @@ impl GateMock {
             .lock()
             .unwrap()
             .insert(path.clone(), body.clone());
+        self.events
+            .lock()
+            .unwrap()
+            .push(("APPLIED".to_owned(), path.clone()));
+        if path.ends_with("-files-config") {
+            self.files_applied.notify_one();
+        }
+        if path.ends_with("-web-shell") {
+            self.routes_applied.notify_one();
+        }
         if path.contains("/statefulsets/") {
             self.workload_applied.notify_one();
         }
@@ -280,7 +304,7 @@ async fn new_workload_prepares_volumes_before_files_but_approval_waits_for_every
     );
     assert!(mock.object("-startup-gate").is_none());
     assert!(mock.object("-files-config").is_none());
-    assert!(mock.object("-web-shell").is_none());
+    assert_eq!(mock.approval_creates.load(Ordering::SeqCst), 0);
     mock.release_files.add_permits(1);
     task.await.unwrap().unwrap();
     let gate = mock.object("-startup-gate").unwrap();
@@ -368,13 +392,16 @@ async fn failed_files_keep_early_workload_blocked_and_retry_approves_the_same_te
     wait_for_workload(&mock).await;
     let before = mock.object("/statefulsets/w-8000000000000001").unwrap();
     assert_gated(&before);
+    tokio::time::timeout(Duration::from_secs(3), mock.routes_applied.notified())
+        .await
+        .expect("routes may finish before the pending file upload fails");
     mock.release_files.add_permits(1);
     assert!(matches!(
         task.await.unwrap(),
         Err(ReconcileError::Kubernetes(_))
     ));
     assert!(mock.object("-startup-gate").is_none());
-    assert!(mock.object("-web-shell").is_none());
+    assert!(mock.object("-web-shell").is_some());
     assert_eq!(mock.approval_creates.load(Ordering::SeqCst), 0);
     assert!(
         !mock
@@ -401,8 +428,37 @@ async fn failed_route_or_approval_never_releases_the_startup_gate() {
         workspace.state = WorkspaceState::Provisioning;
         let mock = Arc::new(GateMock::default());
         *mock.fail_suffix.lock().unwrap() = Some(suffix.to_owned());
-        let coordinator = coordinator(mock.clone());
-        assert!(coordinator.reconcile(&workspace).await.is_err());
+        let coordinator = Arc::new(coordinator(mock.clone()));
+        if suffix == "-web-shell" {
+            let name = coordinator
+                .builder
+                .runtime_names(&workspace)
+                .unwrap()
+                .resources
+                .web_shell_ingress;
+            *mock.hold_request.lock().unwrap() = Some((
+                Method::PATCH,
+                format!(
+                    "/apis/networking.k8s.io/v1/namespaces/{}/ingresses/{name}",
+                    workspace.runtime.namespace()
+                ),
+            ));
+        }
+        let task = tokio::spawn({
+            let (coordinator, workspace) = (coordinator.clone(), workspace.clone());
+            async move { coordinator.reconcile(&workspace).await }
+        });
+        if suffix == "-web-shell" {
+            wait_for_workload(&mock).await;
+            mock.release_request.add_permits(1);
+        }
+        assert!(
+            tokio::time::timeout(Duration::from_secs(3), task)
+                .await
+                .unwrap()
+                .unwrap()
+                .is_err()
+        );
         assert_gated(&mock.object("/statefulsets/w-8000000000000001").unwrap());
         assert!(mock.object("-startup-gate").is_none());
         assert_eq!(
@@ -410,6 +466,7 @@ async fn failed_route_or_approval_never_releases_the_startup_gate() {
             usize::from(suffix == "-startup-gate")
         );
         *mock.fail_suffix.lock().unwrap() = None;
+        *mock.hold_request.lock().unwrap() = None;
         coordinator.reconcile(&workspace).await.unwrap();
         assert!(mock.object("-startup-gate").is_some());
     }
@@ -431,7 +488,7 @@ async fn failed_access_or_isolation_prevents_early_workload_creation() {
             .unwrap_err();
         assert!(mock.object("/statefulsets/w-8000000000000001").is_none());
         assert!(mock.object("-startup-gate").is_none());
-        assert!(mock.object("-web-shell").is_none());
+        assert_eq!(mock.approval_creates.load(Ordering::SeqCst), 0);
     }
 }
 

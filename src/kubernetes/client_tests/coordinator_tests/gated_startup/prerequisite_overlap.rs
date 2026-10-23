@@ -57,7 +57,7 @@ async fn volumes_can_prepare_while_identity_or_service_writes_are_pending() {
         assert_gated(&mock.object("/statefulsets/w-8000000000000001").unwrap());
         assert!(!mock.objects.lock().unwrap().contains_key(&held));
         assert!(mock.object("-startup-gate").is_none());
-        assert!(mock.object("-web-shell").is_none());
+        assert_eq!(mock.approval_creates.load(Ordering::SeqCst), 0);
         // Admission identity and network isolation were established before the Pod template.
         let names = coordinator
             .builder
@@ -168,7 +168,7 @@ async fn a_late_input_failure_or_foreign_owner_never_approves_the_early_workload
             assert!(matches!(error, ReconcileError::Kubernetes(_)));
         }
         assert!(mock.object("-startup-gate").is_none());
-        assert!(mock.object("-web-shell").is_none());
+        assert_eq!(mock.approval_creates.load(Ordering::SeqCst), 0);
         assert_eq!(
             before,
             mock.object("/statefulsets/w-8000000000000001").unwrap()

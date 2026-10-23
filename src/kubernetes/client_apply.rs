@@ -122,17 +122,25 @@ impl KubernetesCoordinator {
             Box::pin(self.prepare_startup_plan(workspace, desired)),
         )
         .await?;
-        Box::pin(self.apply_startup_prerequisites(namespace_name, workspace, desired, &startup))
-            .await?;
-        // A new Pod may prepare its volumes while injection writes are pending, but its
-        // required startup ConfigMap keeps every container blocked until all inputs and routes
-        // succeed. Existing workspaces keep the original update ordering.
-        observe_apply_stage(
+        let prerequisites = Box::pin(self.apply_startup_prerequisites(
+            namespace_name,
+            workspace,
+            desired,
+            &startup,
+        ));
+        let network = observe_apply_stage(
             workspace,
             "network",
             self.apply_network(namespace_name, workspace, desired),
-        )
-        .await?;
+        );
+        // Only a new, unapproved gated workload can prepare routes alongside its inputs.
+        // Both branches must succeed before approval; existing workloads keep update ordering.
+        if startup.overlap && startup.existing.is_none() {
+            tokio::try_join!(prerequisites, network)?;
+        } else {
+            prerequisites.await?;
+            network.await?;
+        }
         if let Some(gate) = &startup.gate {
             let config_maps = Api::<ConfigMap>::namespaced(self.client.clone(), namespace_name);
             let name = gate
