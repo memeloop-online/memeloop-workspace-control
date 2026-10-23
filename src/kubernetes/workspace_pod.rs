@@ -128,27 +128,6 @@ impl<'a> WorkspacePod<'a> {
         }
     }
 
-    pub fn workspace_init_container(
-        &self,
-        image: &str,
-        resources: ResourceRequirements,
-        names: &WorkspaceResourceNames,
-    ) -> Container {
-        Container {
-            name: "workspace-bootstrap".to_owned(),
-            image: Some(image.to_owned()),
-            command: Some(vec![BOOTSTRAP.to_owned()]),
-            // The main container performs dependency detection and complete materialization. The
-            // init container only creates PVC-backed layout and never assumes image packages.
-            args: Some(vec!["prepare-layout".to_owned()]),
-            env: Some(self.platform_env()),
-            volume_mounts: Some(self.development_mounts(names)),
-            resources: Some(resources),
-            security_context: Some(root_security_context(false)),
-            ..Container::default()
-        }
-    }
-
     pub fn workspace_container(
         &self,
         image: &str,
