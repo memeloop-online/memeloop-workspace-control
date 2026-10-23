@@ -32,6 +32,7 @@ sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio",
 ssh-key = { version = "0.6.7", default-features = false, features = ["std", "ed25519", "getrandom"] }
 thiserror = "2"
 tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+tower = { version = "0.5", features = ["util"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
 utoipa = { version = "5", features = ["uuid"] }
@@ -49,7 +50,6 @@ tikv-jemallocator = { version = "0.7.0", features = ["profiling", "stats"] }
 [dev-dependencies]
 http-body-util = "0.1"
 tempfile = "3"
-tower = { version = "0.5", features = ["util"] }
 
 [profile.release]
 lto = "thin"
