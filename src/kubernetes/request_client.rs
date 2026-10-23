@@ -27,7 +27,7 @@ pub fn request_client(mut config: Config) -> Result<Client, kube::Error> {
     // Retry-After responses, would keep an executor occupied and unobservable.
     config.default_retry = false;
     let client = ClientBuilder::try_from(config)?
-        .with_layer(&tower::layer::layer_fn(|inner| ApprovalHeaders { inner }))
+        .with_layer(&tower::layer::layer_fn(|inner| StartupHeaders { inner }))
         .build();
     tracing::info!(
         connect_timeout_seconds = CONNECT_TIMEOUT.as_secs(),
@@ -39,8 +39,8 @@ pub fn request_client(mut config: Config) -> Result<Client, kube::Error> {
     Ok(client)
 }
 
-/// Watches have a server-side 60-second lifetime. Keep their transport separate
-/// so finite reconciliation calls still release their executor after 15 seconds.
+/// Watches have a server-side 60-second lifetime. Keep their read inactivity
+/// timeout separate from finite requests; neither timeout is an overall deadline.
 pub fn watch_client(mut config: Config) -> Result<Client, kube::Error> {
     config.connect_timeout = Some(CONNECT_TIMEOUT);
     config.read_timeout = Some(Duration::from_secs(75));
@@ -51,11 +51,11 @@ pub fn watch_client(mut config: Config) -> Result<Client, kube::Error> {
 
 // This layer observes call-to-headers only, inside the SDK's existing buffer.
 // It never polls the response body; cancelled futures produce no completion event.
-struct ApprovalHeaders<S> {
+struct StartupHeaders<S> {
     inner: S,
 }
 
-impl<S, B> Service<Request<Body>> for ApprovalHeaders<S>
+impl<S, B> Service<Request<Body>> for StartupHeaders<S>
 where
     S: Service<Request<Body>, Response = Response<B>>,
     S::Future: Send + 'static,
@@ -72,10 +72,27 @@ where
 
     fn call(&mut self, request: Request<Body>) -> Self::Future {
         let path = request.uri().path();
-        let targeted = request.method() == Method::GET
-            && matches!(path.split('/').collect::<Vec<_>>().as_slice(),
-                ["", "api", "v1", "namespaces", namespace, "configmaps", name]
-                if !namespace.is_empty() && name.ends_with("-startup-gate"));
+        let method = request.method().clone();
+        let targeted = match path.split('/').collect::<Vec<_>>().as_slice() {
+            ["", "api", "v1", "namespaces", namespace, "configmaps", name] => {
+                method == Method::GET && !namespace.is_empty() && name.ends_with("-startup-gate")
+            }
+            [
+                "",
+                "apis",
+                "networking.k8s.io",
+                "v1",
+                "namespaces",
+                namespace,
+                "networkpolicies",
+                name,
+            ] => {
+                matches!(method, Method::GET | Method::PATCH)
+                    && !namespace.is_empty()
+                    && !name.is_empty()
+            }
+            _ => false,
+        };
         let resource_path = targeted.then(|| path.to_owned());
         let started = Instant::now();
         let future = self.inner.call(request);
@@ -91,14 +108,14 @@ where
                             .and_then(|value| value.to_str().ok())
                             .and_then(|value| uuid::Uuid::parse_str(value).ok())
                             .map(|value| value.to_string());
-                        tracing::info!(target: "mwc::kubernetes::approval_headers",
-                            method = "GET", resource_path, headers_ms,
+                        tracing::info!(target: "mwc::kubernetes::startup_headers",
+                            method = %method, resource_path, headers_ms,
                             status = response.status().as_u16(), audit_id,
-                            result = "headers", "startup approval transport completed");
+                            result = "headers", "startup Kubernetes transport completed");
                     }
-                    Err(_) => tracing::info!(target: "mwc::kubernetes::approval_headers",
-                        method = "GET", resource_path, headers_ms,
-                        result = "service_error", "startup approval transport completed"),
+                    Err(_) => tracing::info!(target: "mwc::kubernetes::startup_headers",
+                        method = %method, resource_path, headers_ms,
+                        result = "service_error", "startup Kubernetes transport completed"),
                 }
             }
             result

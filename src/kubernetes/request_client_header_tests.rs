@@ -1,5 +1,5 @@
 use super::*;
-use crate::kubernetes::request_client::ApprovalHeaders;
+use crate::kubernetes::request_client::StartupHeaders;
 use axum::{
     body::{Body, Bytes},
     http::{Request, Response, Uri},
@@ -11,9 +11,11 @@ use std::{
 };
 use tower::{ServiceExt, service_fn};
 
-const TARGET: &str = "mwc::kubernetes::approval_headers";
+const TARGET: &str = "mwc::kubernetes::startup_headers";
 const AUDIT: &str = "019a1234-1234-7000-8000-123456789abc";
 const PATH: &str = "/api/v1/namespaces/default/configmaps/probe-startup-gate";
+const POLICY_PATH: &str =
+    "/apis/networking.k8s.io/v1/namespaces/default/networkpolicies/w-probe-ingress";
 
 #[derive(Clone, Default)]
 struct Capture {
@@ -268,7 +270,7 @@ async fn approval_headers_return_the_same_response_and_service_error_without_sec
             )
         }
     });
-    let response = ApprovalHeaders { inner }
+    let response = StartupHeaders { inner }
         .oneshot(
             Request::get(format!("{PATH}?access_token=query-secret"))
                 .header("authorization", "Bearer header-secret")
@@ -287,7 +289,7 @@ async fn approval_headers_return_the_same_response_and_service_error_without_sec
         let error = error.clone();
         async move { Err::<Response<()>, _>(error) }
     });
-    let returned = ApprovalHeaders { inner }
+    let returned = StartupHeaders { inner }
         .oneshot(
             Request::get(PATH)
                 .body(kube::client::Body::empty())
@@ -313,10 +315,78 @@ async fn approval_headers_return_the_same_response_and_service_error_without_sec
     }
 }
 
+#[tokio::test]
+async fn network_policy_headers_preserve_get_and_patch_methods() {
+    let Some(capture) = capture_in_child(concat!(
+        module_path!(),
+        "::network_policy_headers_preserve_get_and_patch_methods"
+    )) else {
+        return;
+    };
+    for method in ["GET", "PATCH"] {
+        let inner = service_fn(move |request: Request<kube::client::Body>| async move {
+            use http_body_util::BodyExt;
+            assert_eq!(request.method(), method);
+            assert_eq!(request.uri().path(), POLICY_PATH);
+            assert_eq!(request.uri().query(), Some("fieldManager=query-secret"));
+            assert_eq!(request.headers()["authorization"], "Bearer header-secret");
+            assert_eq!(
+                request
+                    .into_body()
+                    .collect()
+                    .await
+                    .unwrap()
+                    .to_bytes()
+                    .as_ref(),
+                b"request-body-secret"
+            );
+            Ok::<_, io::Error>(Response::new("response-body-secret"))
+        });
+        let response = StartupHeaders { inner }
+            .oneshot(
+                Request::builder()
+                    .method(method)
+                    .uri(format!("{POLICY_PATH}?fieldManager=query-secret"))
+                    .header("authorization", "Bearer header-secret")
+                    .body(kube::client::Body::from(b"request-body-secret".to_vec()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.body(), &"response-body-secret");
+    }
+    let events = capture.events();
+    assert_eq!(events.len(), 2);
+    for (event, method) in events.iter().zip(["GET", "PATCH"]) {
+        assert_eq!(event["fields"]["method"], method);
+        assert_eq!(event["fields"]["resource_path"], POLICY_PATH);
+    }
+    excluded_requests(&capture).await;
+    let output = String::from_utf8(capture.bytes.lock().unwrap().clone()).unwrap();
+    for sentinel in [
+        "query-secret",
+        "header-secret",
+        "request-body-secret",
+        "response-body-secret",
+    ] {
+        assert!(!output.contains(sentinel));
+    }
+}
+
 async fn excluded_requests(capture: &Capture) {
     let before = capture.events().len();
     for (method, path) in [
         ("POST", PATH),
+        ("POST", POLICY_PATH),
+        ("DELETE", POLICY_PATH),
+        (
+            "GET",
+            "/apis/networking.k8s.io/v1/namespaces/default/networkpolicies",
+        ),
+        (
+            "GET",
+            "/apis/networking.k8s.io/v1/namespaces/default/networkpolicies/",
+        ),
         (
             "GET",
             "/api/v1/namespaces/default/secrets/probe-startup-gate",
@@ -329,7 +399,7 @@ async fn excluded_requests(capture: &Capture) {
             counter.fetch_add(1, Ordering::SeqCst);
             async { Ok::<_, io::Error>(Response::new(())) }
         });
-        ApprovalHeaders { inner }
+        StartupHeaders { inner }
             .oneshot(
                 Request::builder()
                     .method(method)

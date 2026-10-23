@@ -456,20 +456,27 @@ impl KubernetesCoordinator {
         let names = &runtime_names.resources;
         let network_policies =
             Api::<NetworkPolicy>::namespaced(self.client.clone(), namespace_name);
-        verify_existing(
-            &network_policies,
-            &names.network_policy,
-            &self.builder,
-            workspace_id,
+        observe_apply_stage(
+            workspace,
+            "network_policy_metadata",
+            verify_existing(
+                &network_policies,
+                &names.network_policy,
+                &self.builder,
+                workspace_id,
+            ),
         )
         .await?;
-        network_policies
-            .patch(
+        observe_apply_stage(
+            workspace,
+            "network_policy_apply",
+            network_policies.patch(
                 &names.network_policy,
                 &apply,
                 &Patch::Apply(&desired.network_policy),
-            )
-            .await?;
+            ),
+        )
+        .await?;
         Ok(())
     }
 

@@ -105,10 +105,13 @@ impl KubernetesCoordinator {
     ) -> Result<bool, ReconcileError> {
         let namespace_name = workspace.runtime.namespace();
         let names = self.builder.runtime_names(workspace)?;
-        let Some(stateful_set) =
+        let Some(stateful_set) = apply::observe_runtime_stage(
+            workspace,
+            "observe_statefulset_read",
             Api::<StatefulSet>::namespaced(self.client.clone(), namespace_name)
-                .get_opt(&names.resources.stateful_set)
-                .await?
+                .get_opt(&names.resources.stateful_set),
+        )
+        .await?
         else {
             return Ok(false);
         };
@@ -157,9 +160,13 @@ impl KubernetesCoordinator {
         if expected != 1 {
             return Ok(false);
         }
-        let Some(pod) = Api::<Pod>::namespaced(self.client.clone(), namespace_name)
-            .get_opt(&names.resources.pod_ordinal_zero())
-            .await?
+        let Some(pod) = apply::observe_runtime_stage(
+            workspace,
+            "observe_ready_pod_read",
+            Api::<Pod>::namespaced(self.client.clone(), namespace_name)
+                .get_opt(&names.resources.pod_ordinal_zero()),
+        )
+        .await?
         else {
             return Ok(false);
         };
