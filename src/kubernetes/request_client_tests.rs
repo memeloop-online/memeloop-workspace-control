@@ -135,3 +135,6 @@ async fn only_not_found_is_absence_and_successful_metadata_still_preserves_owner
         "test-installation"
     );
 }
+
+#[path = "request_client_header_tests.rs"]
+mod header_tests;
