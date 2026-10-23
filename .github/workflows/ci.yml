@@ -166,6 +166,7 @@ jobs:
       - run: cargo test --locked --all-features --no-fail-fast
         env:
           MWC_TEST_POSTGRES_URL: postgresql://postgres:postgres@localhost:5432/mwc_test
+          MWC_COLD_START_FIXTURE_DIR: ${{ runner.temp }}/mwc-cold-start-fixtures
       - name: Verify workspace bootstrap survives a full Home
         run: |
           docker build -t mwc-workspace-enospc images/workspace-base
@@ -176,6 +177,15 @@ jobs:
             --tmpfs /var/lib/mwc/codex-scratch:size=4m,mode=0770 \
             -v "$PWD/tests/workspace_bootstrap_enospc.sh:/test-enospc:ro" \
             mwc-workspace-enospc /test-enospc
+      - name: Verify cold workspace serve without a layout init container
+        timeout-minutes: 10
+        run: |
+          shellcheck tests/workspace_cold_start.sh
+          # Permit RootlessKit's nested user namespace on this disposable Ubuntu runner.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          buildkit_image="$(awk '$1 == "buildkitImage:" {gsub(/"/, "", $2); print $2; exit}' deploy/helm/memeloop-workspace-control/values.yaml)"
+          bash tests/workspace_cold_start.sh mwc-workspace-enospc \
+            "$RUNNER_TEMP/mwc-cold-start-fixtures" "$buildkit_image"
       - name: Verify Kali browser desktop Image Contract and loopback-only runtime
         timeout-minutes: 20
         run: |

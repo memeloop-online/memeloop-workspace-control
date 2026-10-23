@@ -1260,27 +1260,13 @@ fn builds_single_replica_workspace_with_standard_components() {
             .iter()
             .any(|mount| mount.name == "runtime-ssh")
     );
-    let pod_spec = resources
-        .stateful_set
-        .spec
-        .as_ref()
-        .unwrap()
-        .template
-        .spec
-        .as_ref()
-        .unwrap();
     assert_eq!(
-        pod_spec
-            .init_containers
-            .as_ref()
-            .unwrap()
-            .iter()
-            .find(|container| container.name == "workspace-bootstrap")
-            .unwrap()
-            .command
-            .as_ref()
-            .unwrap()[0],
+        containers[0].command.as_ref().unwrap()[0],
         "/etc/workspace-platform/mwc-workspace-bootstrap"
+    );
+    assert_eq!(
+        containers[0].args.as_deref(),
+        Some(["serve".to_owned()].as_slice())
     );
     assert_eq!(
         resources.workspace_config.data.as_ref().unwrap()["sshd_config"]
@@ -1329,6 +1315,55 @@ fn builds_single_replica_workspace_with_standard_components() {
         let peer = &rule.from.as_ref().unwrap()[0];
         peer.namespace_selector.is_some() && peer.pod_selector.is_some()
     }));
+}
+
+#[test]
+fn workspace_main_prepares_cold_layout_without_bootstrap_init() {
+    for buildkit in [false, true] {
+        let mut workspace = workspace(WorkspaceState::Ready);
+        workspace.template.buildkit = buildkit;
+        assert_eq!(workspace.template.workspace_user, "workspace");
+        assert_eq!(workspace.template.workspace_home, "/workspace");
+        let resources = builder().build(&workspace).unwrap();
+        let pod = resources.stateful_set.spec.unwrap().template.spec.unwrap();
+        let main = pod
+            .containers
+            .iter()
+            .find(|container| container.name == "workspace")
+            .unwrap();
+        assert_eq!(
+            main.command.as_deref(),
+            Some(["/etc/workspace-platform/mwc-workspace-bootstrap".to_owned()].as_slice())
+        );
+        assert_eq!(main.args.as_deref(), Some(["serve".to_owned()].as_slice()));
+        let expected = if buildkit {
+            vec!["workspace-scratch-init", "buildkit-bootstrap"]
+        } else {
+            vec!["workspace-scratch-init"]
+        };
+        assert_eq!(
+            pod.init_containers
+                .as_ref()
+                .unwrap()
+                .iter()
+                .map(|container| container.name.as_str())
+                .collect::<Vec<_>>(),
+            expected
+        );
+        if let Some(directory) = std::env::var_os("MWC_COLD_START_FIXTURE_DIR") {
+            let directory = std::path::Path::new(&directory);
+            std::fs::create_dir_all(directory).unwrap();
+            std::fs::write(
+                directory.join(format!("buildkit-{buildkit}.json")),
+                serde_json::to_vec_pretty(&serde_json::json!({
+                    "pod": pod,
+                    "config": resources.workspace_config.data.unwrap(),
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+        }
+    }
 }
 
 #[test]
@@ -1437,11 +1472,11 @@ fn node_template_reuses_the_existing_image_with_platform_bootstrap() {
         "Unconfined"
     );
     let init_containers = pod.init_containers.as_ref().unwrap();
-    assert_eq!(init_containers.len(), 3);
+    assert_eq!(init_containers.len(), 2);
     assert_eq!(init_containers[0].name, "workspace-scratch-init");
-    assert_eq!(init_containers[2].name, "buildkit-bootstrap");
+    assert_eq!(init_containers[1].name, "buildkit-bootstrap");
     assert!(
-        init_containers[2].args.as_ref().unwrap()[0]
+        init_containers[1].args.as_ref().unwrap()[0]
             .contains("cp /usr/bin/buildctl /var/lib/mwc-buildkit/bin/buildctl")
     );
     assert!(buildkit.command.is_none());
@@ -1620,11 +1655,7 @@ fn temporary_storage_uses_one_generic_ephemeral_claim_and_isolated_subpaths() {
             .iter()
             .map(|container| container.name.as_str())
             .collect::<Vec<_>>(),
-        [
-            "workspace-scratch-init",
-            "workspace-bootstrap",
-            "buildkit-bootstrap"
-        ]
+        ["workspace-scratch-init", "buildkit-bootstrap"]
     );
     let scratch_init = &init_containers[0];
     let scratch_init_mount = &scratch_init.volume_mounts.as_ref().unwrap()[0];
@@ -1764,7 +1795,7 @@ fn buildkit_disabled_omits_build_cache_initialization_mounts_and_containers() {
             .iter()
             .map(|container| container.name.as_str())
             .collect::<Vec<_>>(),
-        ["workspace-scratch-init", "workspace-bootstrap"]
+        ["workspace-scratch-init"]
     );
     assert!(
         init_containers[0]
@@ -1777,7 +1808,7 @@ fn buildkit_disabled_omits_build_cache_initialization_mounts_and_containers() {
                     && variable.value.as_deref() == Some("false")
             })
     );
-    for container in pod.containers.iter().chain(init_containers.iter().skip(1)) {
+    for container in &pod.containers {
         assert!(
             !container
                 .volume_mounts

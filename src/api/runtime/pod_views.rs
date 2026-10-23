@@ -127,7 +127,6 @@ pub(super) fn pod_event(event: Event) -> PodEvent {
                     | "ttyd"
                     | "buildkitd"
                     | "workspace-scratch-init"
-                    | "workspace-bootstrap"
                     | "buildkit-bootstrap"
             )
         })
