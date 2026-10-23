@@ -1,7 +1,7 @@
 use std::{sync::Arc, time::Duration};
 
 use thiserror::Error;
-use tokio::sync::watch;
+use tokio::sync::{Notify, watch};
 use uuid::Uuid;
 
 use crate::storage::{ClaimedJob, Database, StorageError};
@@ -46,6 +46,7 @@ pub struct JobWorker<H> {
     poll_interval: Duration,
     job_lease_duration: Duration,
     workspace_lease_duration: Duration,
+    job_wakeup: Arc<Notify>,
 }
 
 impl<H: JobHandler> JobWorker<H> {
@@ -57,7 +58,13 @@ impl<H: JobHandler> JobWorker<H> {
             poll_interval: Duration::from_secs(1),
             job_lease_duration: Duration::from_secs(60),
             workspace_lease_duration: Duration::from_secs(60),
+            job_wakeup: Arc::new(Notify::new()),
         }
+    }
+
+    pub fn with_job_wakeup(mut self, job_wakeup: Arc<Notify>) -> Self {
+        self.job_wakeup = job_wakeup;
+        self
     }
 
     pub async fn run_once(&self, now: i64) -> Result<bool, JobWorkerError> {
@@ -264,6 +271,7 @@ impl<H: JobHandler> JobWorker<H> {
                 poll_interval: self.poll_interval,
                 job_lease_duration: self.job_lease_duration,
                 workspace_lease_duration: self.workspace_lease_duration,
+                job_wakeup: self.job_wakeup.clone(),
             };
             let concurrency = receiver.clone();
             let shutdown = shutdown.clone();
@@ -315,12 +323,19 @@ impl<H: JobHandler> JobWorker<H> {
                 return Ok(());
             }
             let admitted = slot < *concurrency.borrow();
+            let notified = self.job_wakeup.notified();
+            tokio::pin!(notified);
+            if admitted {
+                // Register before claiming so a wake during the SQL await is retained.
+                notified.as_mut().enable();
+            }
             if admitted && self.run_once(unix_timestamp()?).await? {
                 continue;
             }
             let active = slot < *concurrency.borrow();
             tokio::select! {
                 () = tokio::time::sleep(self.poll_interval), if active => {},
+                () = &mut notified, if active => {},
                 changed = concurrency.changed() => {
                     if changed.is_err() { return Ok(()); }
                 },
@@ -342,12 +357,15 @@ impl<H: JobHandler> JobWorker<H> {
             if *shutdown.borrow() {
                 return Ok(());
             }
-            let now = unix_timestamp()?;
-            if self.run_once(now).await? {
+            let notified = self.job_wakeup.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if self.run_once(unix_timestamp()?).await? {
                 continue;
             }
             tokio::select! {
                 () = tokio::time::sleep(self.poll_interval) => {},
+                () = &mut notified => {},
                 result = shutdown.changed() => {
                     if result.is_err() || *shutdown.borrow() {
                         return Ok(());
@@ -357,6 +375,9 @@ impl<H: JobHandler> JobWorker<H> {
         }
     }
 }
+
+#[cfg(test)]
+mod wakeup_tests;
 
 fn execution_finished_at(started_at: i64, elapsed: Duration) -> i64 {
     started_at.saturating_add(i64::try_from(elapsed.as_secs()).unwrap_or(i64::MAX))
