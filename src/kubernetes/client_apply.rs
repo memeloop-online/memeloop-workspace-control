@@ -200,6 +200,16 @@ impl KubernetesCoordinator {
                 }
                 .into());
             }
+            if let (None, Some(current), Some(desired)) = (
+                existing.metadata.deletion_timestamp,
+                existing.metadata.labels.as_ref(),
+                desired.namespace.metadata.labels.as_ref(),
+            ) && desired
+                .iter()
+                .all(|(key, value)| current.get(key) == Some(value))
+            {
+                return Ok(());
+            }
         }
         observe_request(
             workspace.id,
