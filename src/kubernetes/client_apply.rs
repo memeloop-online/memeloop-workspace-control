@@ -459,22 +459,22 @@ impl KubernetesCoordinator {
         observe_apply_stage(
             workspace,
             "network_policy_metadata",
-            verify_existing(
+            Box::pin(verify_existing(
                 &network_policies,
                 &names.network_policy,
                 &self.builder,
                 workspace_id,
-            ),
+            )),
         )
         .await?;
         observe_apply_stage(
             workspace,
             "network_policy_apply",
-            network_policies.patch(
+            Box::pin(network_policies.patch(
                 &names.network_policy,
                 &apply,
                 &Patch::Apply(&desired.network_policy),
-            ),
+            )),
         )
         .await?;
         Ok(())

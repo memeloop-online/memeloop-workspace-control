@@ -108,8 +108,10 @@ impl KubernetesCoordinator {
         let Some(stateful_set) = apply::observe_runtime_stage(
             workspace,
             "observe_statefulset_read",
-            Api::<StatefulSet>::namespaced(self.client.clone(), namespace_name)
-                .get_opt(&names.resources.stateful_set),
+            Box::pin(
+                Api::<StatefulSet>::namespaced(self.client.clone(), namespace_name)
+                    .get_opt(&names.resources.stateful_set),
+            ),
         )
         .await?
         else {
@@ -163,8 +165,10 @@ impl KubernetesCoordinator {
         let Some(pod) = apply::observe_runtime_stage(
             workspace,
             "observe_ready_pod_read",
-            Api::<Pod>::namespaced(self.client.clone(), namespace_name)
-                .get_opt(&names.resources.pod_ordinal_zero()),
+            Box::pin(
+                Api::<Pod>::namespaced(self.client.clone(), namespace_name)
+                    .get_opt(&names.resources.pod_ordinal_zero()),
+            ),
         )
         .await?
         else {
