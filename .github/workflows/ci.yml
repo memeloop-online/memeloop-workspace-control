@@ -181,6 +181,8 @@ jobs:
         timeout-minutes: 10
         run: |
           shellcheck tests/workspace_cold_start.sh
+          # Permit RootlessKit's nested user namespace on this disposable Ubuntu runner.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           buildkit_image="$(awk '$1 == "buildkitImage:" {gsub(/"/, "", $2); print $2; exit}' deploy/helm/memeloop-workspace-control/values.yaml)"
           bash tests/workspace_cold_start.sh mwc-workspace-enospc \
             "$RUNNER_TEMP/mwc-cold-start-fixtures" "$buildkit_image"
