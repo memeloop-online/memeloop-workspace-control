@@ -11,7 +11,7 @@ use memeloop_workspace_control::{
     plugins::PluginRuntime,
     storage::Database,
 };
-use tokio::net::TcpListener;
+use tokio::{net::TcpListener, sync::Notify};
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
@@ -50,12 +50,14 @@ async fn serve(config: AppConfig, database: Database) -> Result<(), Box<dyn std:
         jemalloc_pprof::activate_jemalloc_profiling().await;
     }
     let (shutdown_tx, _) = tokio::sync::watch::channel(false);
+    let job_wakeup = Arc::new(Notify::new());
     let (kubernetes_client, workspace_handler, kubernetes_background_handle) = kubernetes_runtime(
         &config,
         &database,
         &cipher,
         kubernetes_enabled,
         shutdown_tx.subscribe(),
+        job_wakeup.clone(),
     )
     .await?;
     let incident_client = kubernetes_client.clone();
@@ -84,6 +86,7 @@ async fn serve(config: AppConfig, database: Database) -> Result<(), Box<dyn std:
         &cipher,
         workspace_handler,
         state.observability(),
+        job_wakeup,
     )?;
     let internal_listen_address =
         internal_listener_address(kubernetes_enabled, diagnostics_enabled)?;
@@ -171,6 +174,7 @@ async fn kubernetes_runtime(
     cipher: &Option<EnvelopeCipher>,
     enabled: bool,
     shutdown: tokio::sync::watch::Receiver<bool>,
+    job_wakeup: Arc<Notify>,
 ) -> Result<
     (
         Option<kube::Client>,
@@ -213,7 +217,8 @@ async fn kubernetes_runtime(
     }
     let refreshed = coordinator.refresh_network_policies(database).await?;
     info!(refreshed, "existing workspace network policies refreshed");
-    let observations = WorkspaceObservations::new(database.clone(), config.installation_id.clone());
+    let observations = WorkspaceObservations::new(database.clone(), config.installation_id.clone())
+        .with_job_wakeup(job_wakeup);
     let handler = WorkspaceReconcileHandler::new(
         database.clone(),
         workspace_cipher,
@@ -245,6 +250,7 @@ fn job_worker(
     cipher: &Option<EnvelopeCipher>,
     workspace_handler: Option<WorkspaceReconcileHandler>,
     observability: memeloop_workspace_control::observability::Observability,
+    job_wakeup: Arc<Notify>,
 ) -> Result<Option<JobWorker<ControlPlaneJobHandler>>, Box<dyn std::error::Error>> {
     let Some(worker_cipher) = cipher.clone() else {
         return Ok(None);
@@ -255,11 +261,10 @@ fn job_worker(
         workspace_handler,
         webhook_handler,
     ));
-    Ok(Some(JobWorker::new(
-        database.clone(),
-        handler,
-        config.instance_id.clone(),
-    )))
+    Ok(Some(
+        JobWorker::new(database.clone(), handler, config.instance_id.clone())
+            .with_job_wakeup(job_wakeup),
+    ))
 }
 
 fn app_state(

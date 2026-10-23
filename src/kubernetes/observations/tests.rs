@@ -388,3 +388,73 @@ fn pruning_old_generations_keeps_only_unexpired_cycle_edges() {
     assert_eq!(state.edges[&job.workspace_id].len(), 1);
     assert!(state.edges[&job.workspace_id].contains_key(&(101, 1)));
 }
+
+#[tokio::test]
+async fn only_successful_nonempty_sql_wakes_notify_job_workers() {
+    use crate::storage::NewJob;
+    use futures::{FutureExt, poll};
+
+    for outcome in ["success", "empty", "failure"] {
+        let installation = "observer-wakeup-test".parse().unwrap();
+        let database = Database::connect("sqlite::memory:", installation)
+            .await
+            .unwrap();
+        database.migrate().await.unwrap();
+        let wakeup = Arc::new(Notify::new());
+        let observer =
+            WorkspaceObservations::new(database.clone(), "observer-wakeup-test".parse().unwrap())
+                .with_job_wakeup(wakeup.clone());
+        let now = unix_now();
+        let mut parked = job();
+        parked.until = now + 60;
+        parked.reconciled_at = now;
+        parked.payload_json = "{}".into();
+        parked.id = database
+            .enqueue_job(
+                NewJob {
+                    kind: "reconcile_workspace".into(),
+                    workspace_id: None,
+                    payload: json!({}),
+                    available_at: parked.until,
+                },
+                now,
+            )
+            .await
+            .unwrap();
+        if outcome == "empty" {
+            parked.payload_json = "{\"different_nonce\":true}".into();
+        }
+        let Database::Sqlite { pool, .. } = &database else {
+            unreachable!()
+        };
+        if outcome == "failure" {
+            sqlx::query("CREATE TRIGGER reject_wake BEFORE UPDATE ON jobs BEGIN SELECT RAISE(FAIL, 'injected wake failure'); END")
+                .execute(pool).await.unwrap();
+        }
+        let reservations = {
+            let mut state = observer.state.lock().unwrap();
+            state.sets.insert(parked.workspace_id, ready_set());
+            state.register(parked.clone(), now)
+        };
+        assert_eq!(reservations.len(), 1);
+        let notified = wakeup.notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
+        observer.deliver(reservations).await;
+        assert_eq!(poll!(notified.as_mut()).is_ready(), outcome == "success");
+        let available_at: i64 = sqlx::query_scalar("SELECT available_at FROM jobs WHERE id = ?1")
+            .bind(parked.id.to_string())
+            .fetch_one(pool)
+            .await
+            .unwrap();
+        if outcome == "success" {
+            assert!(available_at <= unix_now());
+        } else {
+            assert_eq!(available_at, parked.until);
+        }
+        assert!(
+            wakeup.notified().now_or_never().is_none(),
+            "broadcast must not leave a stored permit"
+        );
+    }
+}

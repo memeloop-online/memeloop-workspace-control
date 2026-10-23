@@ -17,7 +17,7 @@ use kube::{
     api::{ListParams, WatchEvent, WatchParams},
 };
 use serde::de::DeserializeOwned;
-use tokio::sync::watch;
+use tokio::sync::{Notify, watch};
 use uuid::Uuid;
 
 use super::{OWNER_INSTALLATION_LABEL, WORKSPACE_ID_LABEL};
@@ -35,6 +35,7 @@ pub struct WorkspaceObservations {
     database: Database,
     installation_id: InstallationId,
     state: Arc<Mutex<State>>,
+    job_wakeup: Arc<Notify>,
 }
 
 #[derive(Default)]
@@ -150,7 +151,13 @@ impl WorkspaceObservations {
             database,
             installation_id,
             state: Arc::new(Mutex::new(State::default())),
+            job_wakeup: Arc::new(Notify::new()),
         }
+    }
+
+    pub fn with_job_wakeup(mut self, job_wakeup: Arc<Notify>) -> Self {
+        self.job_wakeup = job_wakeup;
+        self
     }
 
     /// Called after the atomic park and workspace-lease release. Fetch the exact
@@ -295,6 +302,9 @@ impl WorkspaceObservations {
                 tracing::warn!(%error, count = jobs.len(), "workspace observation wake failed");
             }
             if let Ok(awakened) = &result {
+                if !awakened.is_empty() {
+                    self.job_wakeup.notify_waiters();
+                }
                 for reservation in &batch.reservations {
                     if awakened.contains(&reservation.job.id) {
                         tracing::info!(job_id = %reservation.job.id,
