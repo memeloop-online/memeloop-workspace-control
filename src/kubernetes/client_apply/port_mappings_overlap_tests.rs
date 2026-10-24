@@ -4,7 +4,7 @@ use http_body_util::BodyExt;
 use serde_json::Value;
 use tokio::{sync::Semaphore, task::JoinHandle};
 
-use crate::kubernetes::TtydMtlsConfig;
+use crate::{kubernetes::TtydMtlsConfig, workspace_runtime::workspace_short_id_for};
 
 struct OverlapMock {
     workspace_id: Uuid,
@@ -198,7 +198,9 @@ fn setup_overlap(
     PortMapping,
     Arc<OverlapMock>,
 ) {
-    let (coordinator, workspace, _) = setup(false, false);
+    let (coordinator, mut workspace, _) = setup(false, false);
+    workspace.short_id = workspace_short_id_for(workspace.id);
+    workspace.runtime = WorkspaceRuntimeIdentity::new(workspace.id, &workspace.short_id).unwrap();
     let mut builder = coordinator.builder;
     builder.port_mapping_domain = Some("apps.example".to_owned());
     builder
