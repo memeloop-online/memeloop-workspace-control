@@ -145,16 +145,18 @@ impl KubernetesCoordinator {
                 self.apply_workspace_services(namespace, workspace, desired)
             ),
             async {
-                let access_identity = observe_apply_stage(
+                // These futures cross two alternative nested joins. Keep their concrete
+                // state off the enclosing future and move only pinned pointers between joins.
+                let access_identity = Box::pin(observe_apply_stage(
                     workspace,
                     "access_identity",
                     self.apply_access_identity(namespace, workspace, desired),
-                );
-                let network_policy = observe_apply_stage(
+                ));
+                let network_policy = Box::pin(observe_apply_stage(
                     workspace,
                     "network_policy",
                     self.apply_network_policy(namespace, workspace, desired),
-                );
+                ));
                 let gated_workload = async {
                     if startup.overlap {
                         // The required, unapproved gate blocks every container while
