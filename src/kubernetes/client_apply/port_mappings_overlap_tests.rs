@@ -179,8 +179,13 @@ fn response(status: StatusCode, body: Value) -> Response<Body> {
 }
 
 fn failure(code: u16) -> Value {
+    let reason = if code == 404 {
+        "NotFound"
+    } else {
+        "FixtureFailure"
+    };
     json!({"apiVersion":"v1", "kind":"Status", "status":"Failure",
-        "reason":"FixtureFailure", "message":"controlled fixture response", "code":code})
+        "reason":reason, "message":"controlled fixture response", "code":code})
 }
 
 fn setup_overlap(
@@ -253,12 +258,39 @@ fn setup_overlap(
     )
 }
 
-async fn arrived(signal: &Semaphore, count: u32) {
-    tokio::time::timeout(Duration::from_secs(5), signal.acquire_many(count))
-        .await
-        .expect("the selected independent request must arrive")
-        .unwrap()
-        .forget();
+async fn arrived(
+    mock: &OverlapMock,
+    task: &mut ReconcileTask,
+    name: &str,
+    signal: &Semaphore,
+    count: u32,
+) {
+    let failure = tokio::select! {
+        completed = &mut *task => Some(format!("reconciliation ended: {completed:?}")),
+        received = tokio::time::timeout(Duration::from_secs(5), signal.acquire_many(count)) => {
+            match received {
+                Ok(Ok(permit)) => {
+                    permit.forget();
+                    None
+                }
+                error => {
+                    let task_state = if task.is_finished() {
+                        format!("ended: {:?}", task.await)
+                    } else {
+                        "pending".to_owned()
+                    };
+                    Some(format!("signal failed: {error:?}; reconciliation {task_state}"))
+                }
+            }
+        }
+    };
+    if let Some(failure) = failure {
+        panic!(
+            "waiting for {name} ({count} permits): {failure}; requests={:?}; successful writes={:?}",
+            mock.requests.lock().unwrap(),
+            mock.writes.lock().unwrap(),
+        );
+    }
 }
 
 type ReconcileTask = JoinHandle<Result<(), ReconcileError>>;
@@ -294,16 +326,44 @@ async fn remains_pending(task: &mut ReconcileTask) {
 #[tokio::test]
 async fn inventory_overlaps_routes_and_preserves_desired_objects_before_pruning() {
     let (coordinator, workspace, mapping, mock) = setup_overlap(false, false, false);
-    let task = start(coordinator, workspace, mapping);
-    arrived(&mock.route_started, 1).await;
-    arrived(&mock.lists_started, 3).await;
+    let mut task = start(coordinator, workspace, mapping);
+    arrived(
+        &mock,
+        &mut task,
+        "HTTP routes ownership GET",
+        &mock.route_started,
+        1,
+    )
+    .await;
+    arrived(
+        &mock,
+        &mut task,
+        "all three inventory LIST requests",
+        &mock.lists_started,
+        3,
+    )
+    .await;
     mock.release_lists.add_permits(3);
-    arrived(&mock.lists_finished, 3).await;
+    arrived(
+        &mock,
+        &mut task,
+        "all three successful inventory LIST responses",
+        &mock.lists_finished,
+        3,
+    )
+    .await;
     assert!(mock.deletes().is_empty());
     assert!(mock.writes.lock().unwrap().is_empty());
 
     mock.release_route.add_permits(1);
-    arrived(&mock.desired_started, 1).await;
+    arrived(
+        &mock,
+        &mut task,
+        "desired Service PATCH",
+        &mock.desired_started,
+        1,
+    )
+    .await;
     assert!(mock.deletes().is_empty());
     mock.release_desired.add_permits(1);
     result(task).await.unwrap();
@@ -327,13 +387,41 @@ async fn inventory_overlaps_routes_and_preserves_desired_objects_before_pruning(
 async fn failed_inventory_does_not_cancel_routes_or_desired_writes() {
     let (coordinator, workspace, mapping, mock) = setup_overlap(false, true, false);
     let mut task = start(coordinator, workspace, mapping);
-    arrived(&mock.route_started, 1).await;
-    arrived(&mock.lists_started, 3).await;
+    arrived(
+        &mock,
+        &mut task,
+        "HTTP routes ownership GET",
+        &mock.route_started,
+        1,
+    )
+    .await;
+    arrived(
+        &mock,
+        &mut task,
+        "all three inventory LIST requests",
+        &mock.lists_started,
+        3,
+    )
+    .await;
     mock.release_lists.add_permits(3);
-    arrived(&mock.failed_list_returned, 1).await;
+    arrived(
+        &mock,
+        &mut task,
+        "inventory failure response",
+        &mock.failed_list_returned,
+        1,
+    )
+    .await;
     remains_pending(&mut task).await;
     mock.release_route.add_permits(1);
-    arrived(&mock.desired_started, 1).await;
+    arrived(
+        &mock,
+        &mut task,
+        "desired Service PATCH",
+        &mock.desired_started,
+        1,
+    )
+    .await;
     mock.release_desired.add_permits(1);
     assert!(matches!(
         result(task).await,
@@ -351,10 +439,31 @@ async fn failed_inventory_does_not_cancel_routes_or_desired_writes() {
 async fn failed_routes_still_wait_for_inventory_and_keep_apply_error_priority() {
     let (coordinator, workspace, mapping, mock) = setup_overlap(true, true, false);
     let mut task = start(coordinator, workspace, mapping);
-    arrived(&mock.route_started, 1).await;
-    arrived(&mock.lists_started, 3).await;
+    arrived(
+        &mock,
+        &mut task,
+        "HTTP routes ownership GET",
+        &mock.route_started,
+        1,
+    )
+    .await;
+    arrived(
+        &mock,
+        &mut task,
+        "all three inventory LIST requests",
+        &mock.lists_started,
+        3,
+    )
+    .await;
     mock.release_route.add_permits(1);
-    arrived(&mock.route_finished, 1).await;
+    arrived(
+        &mock,
+        &mut task,
+        "HTTP routes ownership response",
+        &mock.route_finished,
+        1,
+    )
+    .await;
     remains_pending(&mut task).await;
     mock.release_lists.add_permits(3);
     assert!(matches!(
@@ -368,13 +477,41 @@ async fn failed_routes_still_wait_for_inventory_and_keep_apply_error_priority() 
 #[tokio::test]
 async fn failed_desired_write_does_not_prune_a_successful_inventory() {
     let (coordinator, workspace, mapping, mock) = setup_overlap(false, false, true);
-    let task = start(coordinator, workspace, mapping);
-    arrived(&mock.route_started, 1).await;
-    arrived(&mock.lists_started, 3).await;
+    let mut task = start(coordinator, workspace, mapping);
+    arrived(
+        &mock,
+        &mut task,
+        "HTTP routes ownership GET",
+        &mock.route_started,
+        1,
+    )
+    .await;
+    arrived(
+        &mock,
+        &mut task,
+        "all three inventory LIST requests",
+        &mock.lists_started,
+        3,
+    )
+    .await;
     mock.release_lists.add_permits(3);
-    arrived(&mock.lists_finished, 3).await;
+    arrived(
+        &mock,
+        &mut task,
+        "all three successful inventory LIST responses",
+        &mock.lists_finished,
+        3,
+    )
+    .await;
     mock.release_route.add_permits(1);
-    arrived(&mock.desired_started, 1).await;
+    arrived(
+        &mock,
+        &mut task,
+        "desired Service PATCH",
+        &mock.desired_started,
+        1,
+    )
+    .await;
     mock.release_desired.add_permits(1);
     assert!(matches!(
         result(task).await,
