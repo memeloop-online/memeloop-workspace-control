@@ -27,12 +27,24 @@ for enabled in false true; do
   jq -er '.config["mwc-workspace-bootstrap"]' "$fixture" > "$root/config/mwc-workspace-bootstrap"
   jq -er '.config.sshd_config' "$fixture" > "$root/config/sshd_config"
   chmod 0555 "$root/config/mwc-workspace-bootstrap"
-  mapfile -t scratch_env < <(jq -r '.pod.initContainers[] | select(.name == "workspace-scratch-init") | .env[] | "-e", (.name + "=" + .value)' "$fixture")
-  scratch_script=$(jq -er '.pod.initContainers[] | select(.name == "workspace-scratch-init") | .args[0]' "$fixture")
-  docker run --rm --network none --entrypoint sh \
-    "${scratch_env[@]}" \
-    -v "$root/scratch:/var/lib/mwc/workspace-scratch" \
-    "$image" -c "$scratch_script"
+  if [ "$enabled" = true ]; then
+    mapfile -t scratch_env < <(jq -r '.pod.initContainers[] | select(.name == "workspace-scratch-init") | .env[] | "-e", (.name + "=" + .value)' "$fixture")
+    scratch_script=$(jq -er '.pod.initContainers[] | select(.name == "workspace-scratch-init") | .args[0]' "$fixture")
+    docker run --rm --network none --entrypoint sh \
+      "${scratch_env[@]}" \
+      -v "$root/scratch:/var/lib/mwc/workspace-scratch" \
+      "$image" -c "$scratch_script"
+  else
+    # Kubelet creates missing subPath directories before starting the root workspace container.
+    # Leave them empty and root-owned; serve must prepare ownership and children itself.
+    docker run --rm --network none --entrypoint sh \
+      -v "$root/scratch:/var/lib/mwc/workspace-scratch" \
+      "$image" -ec '
+        install -d -m 0755 -o root -g root \
+          /var/lib/mwc/workspace-scratch/workspace-cache \
+          /var/lib/mwc/workspace-scratch/codex-session-scratch
+      '
+  fi
 
   # Seed durable data, not layout. Both cases enter serve without prepare-layout or prepare.
   docker run --rm --network none --entrypoint sh \
@@ -113,6 +125,8 @@ for enabled in false true; do
     test "$(stat -c %a /workspace/.codex/state.sqlite)" = 600
     test "$(readlink /workspace/.codex/tmp)" = /var/lib/mwc/codex-scratch/tmp
     test "$(readlink /workspace/.codex/.tmp)" = /var/lib/mwc/codex-scratch/dot-tmp
+    test "$(stat -c %U:%G /var/lib/mwc/build-scratch)" = workspace:workspace
+    test "$(stat -c %U:%G /var/lib/mwc/codex-scratch)" = workspace:workspace
   '
   # The container and non-login SSH sessions must use the same writable tool locations,
   # independently of a development image's inherited package-manager environment.
@@ -122,7 +136,8 @@ for enabled in false true; do
     test "$(readlink -f "$CARGO_HOME/registry")" = /var/lib/mwc/build-scratch/cargo-registry &&
     test "$(readlink -f "$CARGO_HOME/git")" = /var/lib/mwc/build-scratch/cargo-git &&
     mkdir -p "$NPM_CONFIG_CACHE" &&
-    touch "$CARGO_HOME/registry/write-check" "$NPM_CONFIG_CACHE/write-check"'
+    touch "$CARGO_HOME/registry/write-check" "$NPM_CONFIG_CACHE/write-check" \
+      "$HOME/.codex/tmp/write-check" "$HOME/.codex/.tmp/write-check"'
   docker exec --user 1000:1000 "$workspace_container" sh -ec "$tool_environment"
   docker exec "$workspace_container" ssh -p 2222 \
     -o BatchMode=yes -o IdentitiesOnly=yes -o ConnectTimeout=1 -o StrictHostKeyChecking=yes \

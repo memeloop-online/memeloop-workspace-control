@@ -119,10 +119,11 @@ cmp /tmp/expected-authorized-keys /run/mwc-ssh/authorized_keys
 # Parse failures, invalid modes and missing SSH sources must never clear the warning or
 # replace working authorized keys with a partial key set. Every case must recover in place.
 cp "$injection_config/workspace-files.json" /tmp/good-injection-manifest
-for failure in malformed non_array invalid_mode missing_key; do
+for failure in malformed non_array invalid_metadata invalid_mode missing_key; do
     case "$failure" in
         malformed) printf '{' > "$injection_config/workspace-files.json" ;;
         non_array) printf '{"files":null}' > "$injection_config/workspace-files.json" ;;
+        invalid_metadata) jq '.files[0].owner = []' /tmp/good-injection-manifest > "$injection_config/workspace-files.json" ;;
         invalid_mode) jq '.files[0].mode = "invalid"' /tmp/good-injection-manifest > "$injection_config/workspace-files.json" ;;
         missing_key) jq '.files[1].data_key = "missing-key"' /tmp/good-injection-manifest > "$injection_config/workspace-files.json" ;;
     esac
@@ -136,6 +137,83 @@ for failure in malformed non_array invalid_mode missing_key; do
     cmp /tmp/expected-authorized-keys /run/mwc-ssh/authorized_keys
 done
 test -z "$(find /run/mwc-ssh -maxdepth 1 -name '.injection-sync.*' -print -quit)"
+
+# File metadata is data even when a target contains shell syntax or embedded newlines.
+special_target=$(cat <<'EOF'
+/workspace/metadata space 'single' "double" \backslash
+line $(touch /tmp/mwc-files-command-substitution-ran) `touch /tmp/mwc-files-backtick-ran` end
+EOF
+)
+test ! -e /tmp/mwc-files-command-substitution-ran
+test ! -e /tmp/mwc-files-backtick-ran
+printf '%s' 'exact metadata payload' > "$injection_config/metadata-file"
+jq --arg target "$special_target" '.files += [{
+    object:"config_map",data_key:"metadata-file",target:$target,kind:"config_file",
+    mode:416,owner:"workspace",group:"workspace"
+}]' /tmp/good-injection-manifest > "$injection_config/workspace-files.json"
+prepare_recovery_fixture
+test ! -e /run/mwc-ssh/injection-failed
+cmp "$injection_config/metadata-file" "$special_target"
+test "$(stat -c %a "$special_target")" = 640
+test "$(stat -c %U:%G "$special_target")" = workspace:workspace
+test ! -e /tmp/mwc-files-command-substitution-ran
+test ! -e /tmp/mwc-files-backtick-ran
+cmp /tmp/expected-authorized-keys /run/mwc-ssh/authorized_keys
+cp /tmp/good-injection-manifest "$injection_config/workspace-files.json"
+
+# Parse environment metadata together while reading each actual value from its original
+# Secret/ConfigMap file. Reserved fields must be skipped before their sources are opened.
+install -d /var/run/workspace-injections/secret
+environment_secret=/var/run/workspace-injections/secret
+config_value=$(cat <<'EOF'
+配置 "双引号" \path with spaces
+EOF
+)
+secret_value=$(cat <<'EOF'
+秘密 '单引号' "double" \path $HOME
+EOF
+)
+printf '%s' "$config_value" > "$injection_config/metadata-config"
+printf '%s' "$secret_value" > "$environment_secret/metadata-secret"
+cat > "$injection_config/workspace-environment.json" <<'EOF'
+{"environment":[
+  {"name":"MWC_METADATA_CONFIG","object":"config_map","data_key":"metadata-config"},
+  {"name":"PATH","object":"config_map","data_key":"reserved-missing"},
+  {"name":"MWC_METADATA_SECRET","object":"secret","data_key":"metadata-secret"},
+  {"name":"CARGO_HOME","object":"config_map","data_key":"reserved-missing"},
+  {"name":"NPM_CONFIG_CACHE","object":"secret","data_key":"reserved-missing"},
+  {"name":"HOME","object":"secret","data_key":"reserved-missing"}
+]}
+EOF
+prepare_recovery_fixture
+cat > /tmp/expected-metadata-setenv <<'EOF'
+SetEnv "MWC_METADATA_CONFIG=配置 \"双引号\" \\path with spaces"
+SetEnv "MWC_METADATA_SECRET=秘密 '单引号' \"double\" \\path $HOME"
+EOF
+while IFS= read -r expected_line; do
+    grep -Fx "$expected_line" /run/mwc-ssh/sshd_config
+done < /tmp/expected-metadata-setenv
+test "$(grep -c '^SetEnv ' /run/mwc-ssh/sshd_config)" = 2
+test -z "$(find /run/mwc-ssh -maxdepth 1 -name '.environment-metadata.*' -print -quit)"
+cp "$injection_config/workspace-environment.json" /tmp/good-environment-manifest
+for failure in malformed non_array missing_value invalid_object; do
+    case "$failure" in
+        malformed) printf '{' > "$injection_config/workspace-environment.json" ;;
+        non_array) printf '{"environment":null}' > "$injection_config/workspace-environment.json" ;;
+        missing_value) jq '.environment[0].data_key = "missing-value"' /tmp/good-environment-manifest > "$injection_config/workspace-environment.json" ;;
+        invalid_object) jq '.environment[0].object = "unknown"' /tmp/good-environment-manifest > "$injection_config/workspace-environment.json" ;;
+    esac
+    if MWC_WORKSPACE_USER=workspace MWC_WORKSPACE_HOME=/workspace MWC_HOME_RESERVE_MIB=1 \
+        /usr/local/bin/mwc-workspace-bootstrap prepare; then
+        echo "invalid environment metadata unexpectedly succeeded: $failure" >&2
+        exit 1
+    fi
+    test -z "$(find /run/mwc-ssh -maxdepth 1 -name '.environment-metadata.*' -print -quit)"
+    cp /tmp/good-environment-manifest "$injection_config/workspace-environment.json"
+    prepare_recovery_fixture
+    test "$(grep -c '^SetEnv ' /run/mwc-ssh/sshd_config)" = 2
+done
+rm "$injection_config/workspace-environment.json"
 
 # Dictionary transport must restore exact bytes, including Unicode, CRLF, escaped newlines
 # and the absence of a final newline. A failed decode must preserve the last good file.
