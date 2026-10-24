@@ -23,6 +23,9 @@ use crate::{
     workspaces::{AccessMode, WorkspaceState},
 };
 
+#[path = "port_mappings_overlap_tests.rs"]
+mod overlap;
+
 const NAMESPACE: &str = "memeloop-workspace-control";
 const COLLECTIONS: [(&str, &str); 3] = [
     (
