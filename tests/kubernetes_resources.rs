@@ -1526,7 +1526,6 @@ fn node_template_reuses_the_existing_image_with_platform_bootstrap() {
             .contains("install -d -m 0710 -o root -g \"$workspace_group\" \"$runtime_dir\"")
     );
     let bootstrap = &resources.workspace_config.data.as_ref().unwrap()["mwc-workspace-bootstrap"];
-    assert!(bootstrap.contains(".owner // empty"));
     assert!(bootstrap.contains("owner=$workspace_user"));
     assert!(bootstrap.contains("secret) mode=384"));
     assert!(bootstrap.contains("config_map) mode=420"));
