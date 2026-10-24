@@ -46,11 +46,18 @@ impl KubernetesCoordinator {
         workspace: &Workspace,
         mappings: &[PortMapping],
     ) -> Result<(), ReconcileError> {
-        self.apply_http_proxy_routes(workspace, mappings).await?;
-        let (desired, desired_filters) = self
-            .apply_desired_port_mappings(workspace, mappings)
-            .await?;
-        let inventory = self.list_port_mapping_inventory(workspace).await?;
+        // Inventory reads do not depend on desired writes: newly applied objects
+        // are retained by name. Let both branches finish before checking errors,
+        // so a failed read does not cancel writes that previously ran first.
+        let (applied, inventory) = tokio::join!(
+            Box::pin(async {
+                self.apply_http_proxy_routes(workspace, mappings).await?;
+                self.apply_desired_port_mappings(workspace, mappings).await
+            }),
+            Box::pin(self.list_port_mapping_inventory(workspace)),
+        );
+        let (desired, desired_filters) = applied?;
+        let inventory = inventory?;
         self.prune_port_mapping_inventory(workspace, &desired, inventory)
             .await?;
         if self.builder.http_proxy_enabled() {
