@@ -224,6 +224,8 @@ decode_injected_dictionary() {
     [ "$(wc -c < "$attempt_dir/decoded")" -eq "$expected_bytes" ]
 }
 
+# Entry fields are assigned together from jq's fixed names and quoted scalar values below.
+# shellcheck disable=SC2154
 sync_injected_files() (
     # Keep the previous warning and authorized keys until this complete attempt succeeds.
     # A subshell isolates the temporary paths from the serve process and its other monitors.
