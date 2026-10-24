@@ -112,8 +112,9 @@ fn pod_spec(
     stable_labels: &BTreeMap<String, String>,
     placement: &ResolvedPlacement,
 ) -> PodSpec {
-    let mut init_containers = vec![pod.workspace_scratch_init_container(&workspace.template.image)];
+    let mut init_containers = Vec::new();
     if let Some(buildkit_bootstrap) = pod.buildkit_bootstrap_container(&builder.buildkit_image) {
+        init_containers.push(pod.workspace_scratch_init_container(&workspace.template.image));
         init_containers.push(buildkit_bootstrap);
     }
     let cluster_access = workspace.template.cluster_access;

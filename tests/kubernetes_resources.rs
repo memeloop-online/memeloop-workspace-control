@@ -1339,7 +1339,7 @@ fn workspace_main_prepares_cold_layout_without_bootstrap_init() {
         let expected = if buildkit {
             vec!["workspace-scratch-init", "buildkit-bootstrap"]
         } else {
-            vec!["workspace-scratch-init"]
+            vec![]
         };
         assert_eq!(
             pod.init_containers
@@ -1789,25 +1789,7 @@ fn buildkit_disabled_omits_build_cache_initialization_mounts_and_containers() {
             .iter()
             .any(|container| container.name == "buildkitd")
     );
-    let init_containers = pod.init_containers.as_ref().unwrap();
-    assert_eq!(
-        init_containers
-            .iter()
-            .map(|container| container.name.as_str())
-            .collect::<Vec<_>>(),
-        ["workspace-scratch-init"]
-    );
-    assert!(
-        init_containers[0]
-            .env
-            .as_ref()
-            .unwrap()
-            .iter()
-            .any(|variable| {
-                variable.name == "MWC_BUILDKIT_ENABLED"
-                    && variable.value.as_deref() == Some("false")
-            })
-    );
+    assert!(pod.init_containers.as_ref().unwrap().is_empty());
     for container in &pod.containers {
         assert!(
             !container

@@ -247,14 +247,23 @@ sync_injected_files() (
             exit 0
         fi
         while IFS= read -r entry; do
-            object=$(printf '%s' "$entry" | jq -r '.object')
-            data_key=$(printf '%s' "$entry" | jq -r '.data_key')
-            target=$(printf '%s' "$entry" | jq -r '.target')
-            mode=$(printf '%s' "$entry" | jq -r '.mode // empty')
-            owner=$(printf '%s' "$entry" | jq -r '.owner // empty')
-            group=$(printf '%s' "$entry" | jq -r '.group // empty')
-            kind=$(printf '%s' "$entry" | jq -r '.kind')
-            encoding=$(printf '%s' "$entry" | jq -r '.encoding // empty')
+            if ! fields=$(printf '%s' "$entry" | jq -r '
+                [.object, .data_key, .target, (.mode // ""), (.owner // ""),
+                 (.group // ""), .kind, (.encoding // "")] | @sh'); then
+                : > "$injection_attempt_failed"
+                continue
+            fi
+            # Only jq's complete shell-quoted argument list enters eval, never raw metadata.
+            # This also preserves whitespace and newlines inside a target path.
+            eval "set -- $fields"
+            object=$1
+            data_key=$2
+            target=$3
+            mode=$4
+            owner=$5
+            group=$6
+            kind=$7
+            encoding=$8
             [ -n "$owner" ] || owner=$workspace_user
             [ -n "$group" ] || group=$workspace_group
             case "$object" in
@@ -404,19 +413,18 @@ injection_sync_monitor() {
     done
 }
 
-prepare_runtime_sshd_config() {
+prepare_runtime_sshd_config() (
     install -m 0600 -o root -g root /etc/workspace-platform/sshd_config "$runtime_sshd_config"
-    environment_count=0
+    metadata=$(mktemp "$runtime_dir/.environment-metadata.XXXXXX")
+    trap 'rm -f "$metadata"' EXIT
     if [ -r "$environment_manifest" ]; then
-        environment_count=$(jq -r '.environment | length' "$environment_manifest")
+        # These three nonempty metadata fields are generated identifiers, never values.
+        # Parse the complete list before consuming it so jq failures cannot be hidden.
+        jq -r '.environment[] | [.name, .object, .data_key] | @tsv' \
+            "$environment_manifest" > "$metadata"
     fi
-    environment_index=0
-    while [ "$environment_index" -lt "$environment_count" ]; do
-        entry=$(jq -c ".environment[$environment_index]" "$environment_manifest")
-        environment_index=$((environment_index + 1))
-        name=$(printf '%s' "$entry" | jq -r '.name')
-        object=$(printf '%s' "$entry" | jq -r '.object')
-        data_key=$(printf '%s' "$entry" | jq -r '.data_key')
+    tab=$(printf '\t')
+    while IFS="$tab" read -r name object data_key; do
         case "$name" in
             PATH|HOME|RUSTUP_HOME|CARGO_HOME|NPM_CONFIG_CACHE|TMPDIR|TMP|TEMP|XDG_CACHE_HOME|CARGO_TARGET_DIR|MWC_WORKSPACE_USER|MWC_WORKSPACE_HOME|MWC_IN_CLUSTER_KUBECONFIG|MWC_BUILDKIT_ENABLED|MWC_BUILD_SCRATCH|MWC_HOME_RESERVE_MIB|MWC_DESKTOP_ENABLED|MWC_DESKTOP_PORT)
                 continue
@@ -436,8 +444,8 @@ prepare_runtime_sshd_config() {
         value=$(cat "$source")
         escaped=$(printf '%s=%s' "$name" "$value" | sed 's/\\/\\\\/g; s/"/\\"/g')
         printf 'SetEnv "%s"\n' "$escaped" >> "$runtime_sshd_config"
-    done
-}
+    done < "$metadata"
+)
 
 verify_runtime_dependencies() {
     if [ ! -x /usr/sbin/sshd ] || ! command -v jq >/dev/null 2>&1; then
