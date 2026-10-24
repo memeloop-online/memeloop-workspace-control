@@ -38,11 +38,14 @@ for enabled in false true; do
   docker run --rm --network none --entrypoint sh \
     -v "$root/home:/workspace" -v "$root/identity:/etc/ssh/platform" \
     "$image" -ec '
-      install -d -m 0700 -o workspace -g workspace /workspace/.codex/sessions /workspace/.cache
+      install -d -m 0700 -o workspace -g workspace /workspace/.codex/sessions /workspace/.cache /workspace/.cargo
       printf "%s\n" keep-session > /workspace/.codex/sessions/keep
       printf "%s\n" keep-sqlite > /workspace/.codex/state.sqlite
       printf "%s\n" keep-cache > /workspace/.cache/keep
+      printf "%s\n" keep-cargo-config > /workspace/.cargo/config.toml
+      printf "%s\n" keep-npm-config > /workspace/.npmrc
       chown workspace:workspace /workspace/.codex/sessions/keep /workspace/.codex/state.sqlite /workspace/.cache/keep
+      chown workspace:workspace /workspace/.cargo/config.toml /workspace/.npmrc
       chmod 0600 /workspace/.codex/sessions/keep /workspace/.codex/state.sqlite /workspace/.cache/keep
       chown root:root /workspace
       chmod 0777 /workspace
@@ -105,10 +108,27 @@ for enabled in false true; do
     test "$(cat /workspace/.codex/sessions/keep)" = keep-session
     test "$(cat /workspace/.codex/state.sqlite)" = keep-sqlite
     test "$(cat /workspace/.cache/keep)" = keep-cache
+    test "$(cat /workspace/.cargo/config.toml)" = keep-cargo-config
+    test "$(cat /workspace/.npmrc)" = keep-npm-config
     test "$(stat -c %a /workspace/.codex/state.sqlite)" = 600
     test "$(readlink /workspace/.codex/tmp)" = /var/lib/mwc/codex-scratch/tmp
     test "$(readlink /workspace/.codex/.tmp)" = /var/lib/mwc/codex-scratch/dot-tmp
   '
+  # The container and non-login SSH sessions must use the same writable tool locations,
+  # independently of a development image's inherited package-manager environment.
+  # shellcheck disable=SC2016 # Expand these variables inside each tested session.
+  tool_environment='test "$CARGO_HOME" = "$HOME/.cargo" &&
+    test "$NPM_CONFIG_PREFIX" = "$HOME/.local" &&
+    test "$NPM_CONFIG_CACHE" = /var/lib/mwc/build-scratch/cache/npm &&
+    test "$(readlink -f "$CARGO_HOME/registry")" = /var/lib/mwc/build-scratch/cargo-registry &&
+    test "$(readlink -f "$CARGO_HOME/git")" = /var/lib/mwc/build-scratch/cargo-git &&
+    mkdir -p "$NPM_CONFIG_CACHE" "$NPM_CONFIG_PREFIX/bin" &&
+    touch "$CARGO_HOME/registry/write-check" "$NPM_CONFIG_CACHE/write-check" "$NPM_CONFIG_PREFIX/bin/write-check"'
+  docker exec --user 1000:1000 "$workspace_container" sh -ec "$tool_environment"
+  docker exec "$workspace_container" ssh -p 2222 \
+    -o BatchMode=yes -o IdentitiesOnly=yes -o ConnectTimeout=1 -o StrictHostKeyChecking=yes \
+    -o UserKnownHostsFile=/run/mwc-ssh/known_hosts \
+    -i /run/mwc-ssh/ttyd_client_key workspace@127.0.0.1 "$tool_environment"
   if [ "$enabled" = true ]; then
     ready=false
     for _attempt in $(seq 1 30); do

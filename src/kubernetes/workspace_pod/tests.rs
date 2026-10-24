@@ -32,7 +32,13 @@ fn injected_targets_do_not_remove_canonical_platform_environment() {
     apply_injected_environment_overrides(
         &template,
         &mut container,
-        &BTreeSet::from(["HOME".to_owned(), "MWC_WORKSPACE_HOME".to_owned()]),
+        &BTreeSet::from([
+            "HOME".to_owned(),
+            "MWC_WORKSPACE_HOME".to_owned(),
+            "CARGO_HOME".to_owned(),
+            "NPM_CONFIG_PREFIX".to_owned(),
+            "NPM_CONFIG_CACHE".to_owned(),
+        ]),
     );
 
     let environment = container.env.unwrap();
@@ -44,6 +50,20 @@ fn injected_targets_do_not_remove_canonical_platform_environment() {
             .collect::<Vec<_>>(),
         [Some("/workspace")]
     );
+    for (name, expected) in [
+        ("CARGO_HOME", "/workspace/.cargo"),
+        ("NPM_CONFIG_PREFIX", "/workspace/.local"),
+        ("NPM_CONFIG_CACHE", "/var/lib/mwc/build-scratch/cache/npm"),
+    ] {
+        assert_eq!(
+            environment
+                .iter()
+                .filter(|item| item.name == name)
+                .map(|item| item.value.as_deref())
+                .collect::<Vec<_>>(),
+            [Some(expected)]
+        );
+    }
     assert_eq!(
         environment
             .iter()
@@ -68,7 +88,9 @@ fn sshd_set_env_quotes_spaces_and_quotation_marks() {
     assert!(config.contains(
         "\"PATH=/run/mwc-buildkit/bin:/home/node-dev/.local/bin:/home/node-dev/.local/share/pnpm:/home/node-dev/.cargo/bin:/usr/local/cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\""
     ));
-    assert!(!config.contains("CARGO_HOME="));
+    assert!(config.contains("\"CARGO_HOME=/home/node-dev/.cargo\""));
+    assert!(config.contains("\"NPM_CONFIG_PREFIX=/home/node-dev/.local\""));
+    assert!(config.contains("\"NPM_CONFIG_CACHE=/var/lib/mwc/build-scratch/cache/npm\""));
 }
 
 #[test]
