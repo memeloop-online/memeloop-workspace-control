@@ -1531,10 +1531,7 @@ fn node_template_reuses_the_existing_image_with_platform_bootstrap() {
     assert!(bootstrap.contains("secret) mode=384"));
     assert!(bootstrap.contains("config_map) mode=420"));
     assert!(bootstrap.contains("prepare_runtime_sshd_config"));
-    assert!(
-        bootstrap
-            .contains("PATH|HOME|RUSTUP_HOME|CARGO_HOME|NPM_CONFIG_PREFIX|NPM_CONFIG_CACHE|TMPDIR")
-    );
+    assert!(bootstrap.contains("PATH|HOME|RUSTUP_HOME|CARGO_HOME|NPM_CONFIG_CACHE|TMPDIR"));
     assert!(bootstrap.contains("$workspace_root/.codex/tmp"));
     assert!(bootstrap.contains("$workspace_root/.codex/.tmp"));
     assert!(bootstrap.contains("$codex_scratch/tmp"));

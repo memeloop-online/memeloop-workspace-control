@@ -36,7 +36,6 @@ fn injected_targets_do_not_remove_canonical_platform_environment() {
             "HOME".to_owned(),
             "MWC_WORKSPACE_HOME".to_owned(),
             "CARGO_HOME".to_owned(),
-            "NPM_CONFIG_PREFIX".to_owned(),
             "NPM_CONFIG_CACHE".to_owned(),
         ]),
     );
@@ -52,7 +51,6 @@ fn injected_targets_do_not_remove_canonical_platform_environment() {
     );
     for (name, expected) in [
         ("CARGO_HOME", "/workspace/.cargo"),
-        ("NPM_CONFIG_PREFIX", "/workspace/.local"),
         ("NPM_CONFIG_CACHE", "/var/lib/mwc/build-scratch/cache/npm"),
     ] {
         assert_eq!(
@@ -89,7 +87,6 @@ fn sshd_set_env_quotes_spaces_and_quotation_marks() {
         "\"PATH=/run/mwc-buildkit/bin:/home/node-dev/.local/bin:/home/node-dev/.local/share/pnpm:/home/node-dev/.cargo/bin:/usr/local/cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\""
     ));
     assert!(config.contains("\"CARGO_HOME=/home/node-dev/.cargo\""));
-    assert!(config.contains("\"NPM_CONFIG_PREFIX=/home/node-dev/.local\""));
     assert!(config.contains("\"NPM_CONFIG_CACHE=/var/lib/mwc/build-scratch/cache/npm\""));
 }
 

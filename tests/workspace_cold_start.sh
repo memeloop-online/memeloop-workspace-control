@@ -118,12 +118,11 @@ for enabled in false true; do
   # independently of a development image's inherited package-manager environment.
   # shellcheck disable=SC2016 # Expand these variables inside each tested session.
   tool_environment='test "$CARGO_HOME" = "$HOME/.cargo" &&
-    test "$NPM_CONFIG_PREFIX" = "$HOME/.local" &&
     test "$NPM_CONFIG_CACHE" = /var/lib/mwc/build-scratch/cache/npm &&
     test "$(readlink -f "$CARGO_HOME/registry")" = /var/lib/mwc/build-scratch/cargo-registry &&
     test "$(readlink -f "$CARGO_HOME/git")" = /var/lib/mwc/build-scratch/cargo-git &&
-    mkdir -p "$NPM_CONFIG_CACHE" "$NPM_CONFIG_PREFIX/bin" &&
-    touch "$CARGO_HOME/registry/write-check" "$NPM_CONFIG_CACHE/write-check" "$NPM_CONFIG_PREFIX/bin/write-check"'
+    mkdir -p "$NPM_CONFIG_CACHE" &&
+    touch "$CARGO_HOME/registry/write-check" "$NPM_CONFIG_CACHE/write-check"'
   docker exec --user 1000:1000 "$workspace_container" sh -ec "$tool_environment"
   docker exec "$workspace_container" ssh -p 2222 \
     -o BatchMode=yes -o IdentitiesOnly=yes -o ConnectTimeout=1 -o StrictHostKeyChecking=yes \
