@@ -248,22 +248,15 @@ sync_injected_files() (
         fi
         while IFS= read -r entry; do
             if ! fields=$(printf '%s' "$entry" | jq -r '
-                [.object, .data_key, .target, (.mode // ""), (.owner // ""),
-                 (.group // ""), .kind, (.encoding // "")] | @sh'); then
+                {object, data_key, target, mode:(.mode // ""), owner:(.owner // ""),
+                 group:(.group // ""), kind, encoding:(.encoding // "")} |
+                to_entries | map(.key + "=" + (.value | tostring | @sh)) | join(" ")'); then
                 : > "$injection_attempt_failed"
                 continue
             fi
-            # Only jq's complete shell-quoted argument list enters eval, never raw metadata.
+            # Only fixed names and jq's shell-quoted scalar values enter eval, never raw metadata.
             # This also preserves whitespace and newlines inside a target path.
-            eval "set -- $fields"
-            object=$1
-            data_key=$2
-            target=$3
-            mode=$4
-            owner=$5
-            group=$6
-            kind=$7
-            encoding=$8
+            eval "$fields"
             [ -n "$owner" ] || owner=$workspace_user
             [ -n "$group" ] || group=$workspace_group
             case "$object" in
