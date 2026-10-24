@@ -5,6 +5,7 @@ use std::{sync::atomic::AtomicUsize, time::Duration};
 use tokio::sync::{Notify, Semaphore};
 
 mod approval_create;
+mod disabled_identity_overlap;
 mod prerequisite_overlap;
 mod route_overlap;
 mod worker_capacity;
@@ -25,6 +26,7 @@ struct GateMock {
     workload_reads: AtomicUsize,
     approval_reads: AtomicUsize,
     fail_suffix: Mutex<Option<String>>,
+    fail_request: Mutex<Option<(Method, String)>>,
     hold_request: Mutex<Option<(Method, String)>>,
     request_started: Notify,
     release_request: Semaphore,
@@ -48,6 +50,7 @@ impl Default for GateMock {
             workload_reads: AtomicUsize::new(0),
             approval_reads: AtomicUsize::new(0),
             fail_suffix: Mutex::default(),
+            fail_request: Mutex::default(),
             hold_request: Mutex::default(),
             request_started: Notify::new(),
             release_request: Semaphore::new(0),
@@ -144,6 +147,23 @@ impl GateMock {
         {
             self.request_started.notify_one();
             self.release_request.acquire().await.unwrap().forget();
+        }
+        if self
+            .fail_request
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_some_and(|(failed_method, failed_path)| {
+                method == *failed_method && path == *failed_path
+            })
+        {
+            return json_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                json!({
+                    "apiVersion":"v1", "kind":"Status", "status":"Failure", "code":500,
+                    "reason":"InternalError", "message":"injected request failure"
+                }),
+            );
         }
         if method == Method::GET {
             if path.ends_with("-startup-gate") {

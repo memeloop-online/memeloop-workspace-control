@@ -145,35 +145,61 @@ impl KubernetesCoordinator {
                 self.apply_workspace_services(namespace, workspace, desired)
             ),
             async {
-                // A named ServiceAccount must exist before Pod admission. Establish the
-                // isolation policy too, before a Pod can acquire a network namespace.
-                tokio::try_join!(
-                    observe_apply_stage(
-                        workspace,
-                        "access_identity",
-                        self.apply_access_identity(namespace, workspace, desired)
-                    ),
-                    observe_apply_stage(
-                        workspace,
-                        "network_policy",
-                        self.apply_network_policy(namespace, workspace, desired)
-                    ),
-                )?;
-                if startup.overlap {
-                    // Other projected inputs and Services may still be pending. Every
-                    // container is blocked by the required, unapproved gate ConfigMap,
-                    // while scheduling and volume preparation can already progress.
-                    observe_apply_stage(
-                        workspace,
-                        "gated_workload",
-                        Box::pin(self.apply_workload(
-                            namespace,
+                // These futures cross two alternative nested joins. Keep their concrete
+                // state off the enclosing future and move only pinned pointers between joins.
+                let access_identity = Box::pin(observe_apply_stage(
+                    workspace,
+                    "access_identity",
+                    self.apply_access_identity(namespace, workspace, desired),
+                ));
+                let network_policy = Box::pin(observe_apply_stage(
+                    workspace,
+                    "network_policy",
+                    self.apply_network_policy(namespace, workspace, desired),
+                ));
+                let gated_workload = async {
+                    if startup.overlap {
+                        // The required, unapproved gate blocks every container while
+                        // scheduling and volume preparation can already progress.
+                        observe_apply_stage(
                             workspace,
-                            &startup.workload,
-                            startup.existing.as_ref(),
-                        )),
-                    )
-                    .await?;
+                            "gated_workload",
+                            Box::pin(self.apply_workload(
+                                namespace,
+                                workspace,
+                                &startup.workload,
+                                startup.existing.as_ref(),
+                            )),
+                        )
+                        .await?;
+                    }
+                    Ok::<_, ReconcileError>(())
+                };
+                let overlap_identity_cleanup = startup.overlap
+                    && startup.existing.is_none()
+                    && !workspace.template.cluster_access
+                    && desired.service_account.is_none()
+                    && startup
+                        .workload
+                        .spec
+                        .as_ref()
+                        .and_then(|spec| spec.template.spec.as_ref())
+                        .is_some_and(|pod| {
+                            pod.service_account_name.is_none()
+                                && pod.automount_service_account_token == Some(false)
+                        });
+                if overlap_identity_cleanup {
+                    // An unnamed, tokenless new Pod does not use the old named identity.
+                    // Cleanup must still succeed before its immutable gate is approved.
+                    tokio::try_join!(access_identity, async {
+                        network_policy.await?;
+                        gated_workload.await
+                    })?;
+                } else {
+                    // Named identity must exist before admission; existing workloads keep
+                    // their original ordering. Isolation always precedes Pod creation.
+                    tokio::try_join!(access_identity, network_policy)?;
+                    gated_workload.await?;
                 }
                 Ok::<_, ReconcileError>(())
             },
