@@ -75,7 +75,25 @@ where
         let method = request.method().clone();
         let targeted = match path.split('/').collect::<Vec<_>>().as_slice() {
             ["", "api", "v1", "namespaces", namespace, "configmaps", name] => {
-                method == Method::GET && !namespace.is_empty() && name.ends_with("-startup-gate")
+                !namespace.is_empty()
+                    && ((method == Method::GET && name.ends_with("-startup-gate"))
+                        || (matches!(method, Method::GET | Method::PATCH)
+                            && name.ends_with("-files-config")))
+            }
+            [
+                "",
+                "apis",
+                "apps",
+                "v1",
+                "namespaces",
+                namespace,
+                "statefulsets",
+                name,
+            ] => {
+                method == Method::PATCH
+                    && !namespace.is_empty()
+                    && name.starts_with("w-")
+                    && name.len() > 2
             }
             [
                 "",
