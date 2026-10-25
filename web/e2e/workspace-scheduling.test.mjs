@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import { test } from "node:test";
 import { chromium } from "playwright-core";
 
@@ -144,7 +144,9 @@ test("workspace event log preserves native identity and distinguishes local limi
       const [containerRow, nodeRow, podRow, memoryRow, pidRow] = nativeRows;
       assert.match(await containerRow.innerText(), /\bworkspace\b/);
       assert.match(await containerRow.innerText(), /\b2\.0\s*GiB\b/);
-      await containerRow.getByText("Evicted", { exact: true }).waitFor();
+      const nativeReason = containerRow.locator("span > span").filter({ hasText: /^Evicted$/ });
+      assert.equal(await nativeReason.count(), 1);
+      await nativeReason.waitFor();
       assert.equal(await containerRow.getByText(messages.eventDiagnosticNodeEphemeralPressure, { exact: true }).count(), 0);
       await nodeRow.getByText(messages.eventDiagnosticNodeEphemeralPressure, { exact: true }).waitFor();
       assert.doesNotMatch(await nodeRow.innerText(), /\b2\.0\s*GiB\b/);
@@ -166,6 +168,11 @@ test("workspace event log preserves native identity and distinguishes local limi
       assert.doesNotMatch(await historicalRow.innerText(), /Evicted|\b\d+\s*GiB\b|[0-9a-f]{8}-[0-9a-f-]{27,}/i);
       assert.deepEqual(unexpected, [], `${locale}: unexpected requests`);
       assert.deepEqual(errors, [], `${locale}: browser errors`);
+      if (process.env.RUNNER_TEMP) {
+        const screenshotDir = `${process.env.RUNNER_TEMP}/mwc-settings-screenshots`;
+        await mkdir(screenshotDir, { recursive: true });
+        await page.screenshot({ path: `${screenshotDir}/events-${locale}.png`, fullPage: true });
+      }
       await context.close();
     }
   } finally { await browser.close(); }
