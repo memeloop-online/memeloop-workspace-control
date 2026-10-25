@@ -57,10 +57,7 @@ pub(super) async fn fetch_workspace_runtime_details(
     let mut events = warning_events(event_list.items);
     if show_runtime {
         for event in pod_list.items.iter().filter_map(pod_scheduling_event) {
-            if !events.iter().any(|existing| {
-                existing.category == event.category
-                    && existing.scheduling_blockers == event.scheduling_blockers
-            }) {
+            if !events.iter().any(|existing| existing.id == event.id) {
                 events.push(event);
             }
         }
@@ -165,9 +162,12 @@ fn storage_pvc_identities(
 fn warning_events(events: Vec<Event>) -> Vec<PodEvent> {
     let mut events = events
         .into_iter()
-        .filter(|event| event.type_.as_deref() == Some("Warning"))
-        .map(pod_event)
-        .filter(|event| event.category != RuntimeEventCategory::Other)
+        .filter(|event| {
+            event.type_.as_deref() == Some("Warning")
+                && !crate::runtime_incidents::startup_gate_pending(event)
+        })
+        .filter_map(pod_event)
+        .filter(|event| event.details.is_informative(event.category))
         .collect::<Vec<_>>();
     newest_events(&mut events, 50);
     events

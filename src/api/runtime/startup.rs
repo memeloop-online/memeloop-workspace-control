@@ -1,3 +1,4 @@
+use crate::runtime_incidents::safe_reason;
 use k8s_openapi::{
     api::core::v1::{ContainerStatus, Pod},
     jiff::Timestamp,
@@ -138,72 +139,6 @@ pub(super) fn container_runtime(status: &ContainerStatus) -> ContainerRuntime {
         reason: safe_reason(reason).map(str::to_owned),
         exit_code: terminated.map(|state| state.exit_code),
     }
-}
-
-/// Kubernetes reasons are extensible; only expose known codes, never messages.
-pub(super) fn safe_reason(reason: Option<&str>) -> Option<&str> {
-    reason.filter(|reason| {
-        matches!(
-            *reason,
-            "BackOff"
-                | "CrashLoopBackOff"
-                | "ImagePullBackOff"
-                | "ErrImagePull"
-                | "FailedScheduling"
-                | "Unhealthy"
-                | "FailedMount"
-                | "FailedAttachVolume"
-                | "FailedCreatePodSandBox"
-                | "FailedCreatePodSandbox"
-                | "OOMKilled"
-                | "Error"
-                | "Completed"
-                | "ContainerCreating"
-                | "PodInitializing"
-                | "CreateContainerConfigError"
-                | "CreateContainerError"
-                | "RunContainerError"
-                | "Evicted"
-                | "Failed"
-                | "Scheduled"
-                | "Pulling"
-                | "Pulled"
-                | "Created"
-                | "Started"
-                | "Killing"
-                | "SandboxChanged"
-                | "FailedSync"
-                | "FailedCreate"
-                | "SuccessfulCreate"
-                | "FailedDelete"
-                | "SuccessfulDelete"
-                | "NodeNotReady"
-                | "NodeNotSchedulable"
-                | "Preempted"
-                | "DeadlineExceeded"
-                | "ExceededGracePeriod"
-                | "FailedPostStartHook"
-                | "FailedPreStopHook"
-                | "FailedToRetrieveImagePullSecret"
-                | "ErrImageNeverPull"
-                | "FailedKillPod"
-                | "FailedBinding"
-                | "WaitForFirstConsumer"
-                | "WaitForPodScheduled"
-                | "Provisioning"
-                | "ProvisioningFailed"
-                | "ExternalProvisioning"
-                | "ProvisioningSucceeded"
-                | "SuccessfulAttachVolume"
-                | "SuccessfulMountVolume"
-                | "FailedMapVolume"
-                | "FailedUnmount"
-                | "VolumeResizeFailed"
-                | "FileSystemResizeRequired"
-                | "FileSystemResizeSuccessful"
-                | "Resizing"
-        )
-    })
 }
 
 #[cfg(test)]

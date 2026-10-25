@@ -6,7 +6,33 @@ import { chromium } from "playwright-core";
 const baseUrl = process.env.E2E_BASE_URL ?? "http://127.0.0.1:4173";
 const organizationId = "scheduling-organization";
 const resources = { cpu_millis: 2000, memory_mib: 4096, gpu_count: 0, disk_gib: 24 };
-const names = ["Capacity blocked workspace", "Older API workspace", "Malformed cause workspace"];
+const names = ["Capacity blocked workspace", "Historical scheduling event workspace", "Malformed cause workspace", "Native event diagnostics workspace"];
+const observedAt = "2026-10-18T12:14:00Z";
+const nativeEvents = [
+  { id: "native-container-eviction", category: "evicted", count: 1, observed_at: observedAt, last_observed_at: observedAt,
+    details: { event_uid: "10000000-0000-4000-8000-000000000001", pod_uid: "20000000-0000-4000-8000-000000000001",
+      reason: "Evicted", container: "workspace", scheduling_blockers: [],
+      diagnostic: { kind: "container_local_ephemeral_limit", container: "workspace", limit_bytes: 2 * 1024 ** 3 } } },
+  // Same category and observation time, but a different native event and cause.
+  { id: "native-node-eviction", category: "evicted", count: 3, observed_at: observedAt, last_observed_at: observedAt,
+    details: { event_uid: "10000000-0000-4000-8000-000000000002", pod_uid: "20000000-0000-4000-8000-000000000002",
+      reason: "Evicted", container: null, scheduling_blockers: [],
+      diagnostic: { kind: "node_resource_pressure", resource: "ephemeral_storage" } } },
+  { id: "native-pod-limit", category: "ephemeral_storage", count: 1, observed_at: observedAt, last_observed_at: observedAt,
+    details: { event_uid: "10000000-0000-4000-8000-000000000003", pod_uid: "20000000-0000-4000-8000-000000000003",
+      reason: "Evicted", container: null, scheduling_blockers: [],
+      diagnostic: { kind: "pod_local_ephemeral_limit", limit_bytes: 6 * 1024 ** 3 } } },
+  { id: "native-memory-pressure", category: "memory_pressure", count: 1, observed_at: observedAt, last_observed_at: observedAt,
+    details: { event_uid: "10000000-0000-4000-8000-000000000004", pod_uid: "20000000-0000-4000-8000-000000000004",
+      reason: "Evicted", container: null, scheduling_blockers: [],
+      diagnostic: { kind: "node_resource_pressure", resource: "memory" } } },
+  { id: "native-pid-pressure", category: "pid_pressure", count: 1, observed_at: observedAt, last_observed_at: observedAt,
+    details: { event_uid: "10000000-0000-4000-8000-000000000005", pod_uid: "20000000-0000-4000-8000-000000000005",
+      reason: "Evicted", container: null, scheduling_blockers: [],
+      diagnostic: { kind: "node_resource_pressure", resource: "pids" } } },
+  { id: "historical-other", category: "other", count: 6, observed_at: observedAt, last_observed_at: null,
+    details: { event_uid: null, pod_uid: null, reason: null, container: null, scheduling_blockers: [], diagnostic: null } },
+];
 const workspaces = names.map((name, index) => ({
   workspace: {
     id: `scheduling-${index}`, short_id: `scheduling-${index}`, name, state: "starting", resources,
@@ -27,13 +53,16 @@ const runtimes = workspaces.map(({ workspace }, index) => ({
     allocated: resources, persistent_storage: { configured_bytes: 24 * 1024 ** 3, used_bytes: null, capacity_bytes: null, available_bytes: null, observed_at: null, used_percent: null, coverage: "unavailable", backing: "persistent_volume", pressure: "unknown" },
     temporary_storage: { configured_bytes: 8 * 1024 ** 3, used_bytes: null, capacity_bytes: null, available_bytes: null, observed_at: null, used_percent: null, coverage: "unavailable", backing: "ephemeral_volume", pressure: "unknown" },
     metrics_available: false, node_name: null, pods: [], metrics: [],
-    events: [{ category: "scheduling", count: 1, observed_at: "2026-10-18T12:14:00Z", reason: "FailedScheduling",
-      ...(index === 0 ? { scheduling_blockers: ["cpu_capacity", "storage_capacity", "cpu_capacity", "node_affinity"] }
-        : index === 2 ? { scheduling_blockers: ["__proto__", "unknown_cause", null, {}] } : {}),
+    events: index === 3 ? nativeEvents : [{ id: `scheduling-event-${index}`, category: "scheduling", count: 1,
+      observed_at: observedAt, last_observed_at: observedAt,
+      details: { event_uid: index === 1 ? null : `scheduling-native-event-${index}`, pod_uid: null,
+        reason: index === 1 ? null : "FailedScheduling", container: null, diagnostic: null,
+        scheduling_blockers: index === 0 ? ["cpu_capacity", "storage_capacity", "cpu_capacity", "node_affinity"]
+          : index === 2 ? ["__proto__", "unknown_cause", null, {}] : [] },
     }],
   },
 }));
-const summary = { total_count: 3, requested: resources, temporary_requested_gib: 24, state_counts: { starting: 3 } };
+const summary = { total_count: workspaces.length, requested: resources, temporary_requested_gib: 32, state_counts: { starting: workspaces.length } };
 function fixture(path) {
   if (path === "/api/v1/me") return {
     user_id: "fixture-user", display_name: "Scheduling fixture", system_admin: false,
@@ -50,7 +79,7 @@ function fixture(path) {
   if (path === `/api/v1/organizations/${organizationId}/usage-summary`) return {
     ...summary, actual: { cpu_millis: null, memory_mib: null, disk_bytes: null, temporary_bytes: null }, observed_at: null,
     availability: { cpu: "unknown", memory: "unknown", disk: "unknown", temporary: "unknown" },
-    coverage: { total_workspaces: 3, eligible_workspaces: 3, template_label_coverage: "complete" },
+    coverage: { total_workspaces: workspaces.length, eligible_workspaces: workspaces.length, template_label_coverage: "complete" },
   };
   if (path === "/api/v1/templates") return [{ id: "fixture-template", name: "Fixture template", enabled: true }];
   if (path === "/api/v1/node-pools") return [{ name: "default", display_name: "Fixture pool" }];
@@ -58,7 +87,7 @@ function fixture(path) {
   return undefined;
 }
 
-test("workspace event log explains mixed scheduler causes and safely falls back in each language", { timeout: 90_000 }, async () => {
+test("workspace event log preserves native identity and distinguishes local limits from node pressure in each language", { timeout: 90_000 }, async () => {
   const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_BIN || chromium.executablePath(), headless: true, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
   try {
     for (const locale of ["en", "zh-CN", "ru"]) {
@@ -84,7 +113,7 @@ test("workspace event log explains mixed scheduler causes and safely falls back 
       const page = await context.newPage();
       page.on("pageerror", (error) => errors.push(error.message));
       await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
-      for (const [index, name] of names.entries()) {
+      for (const [index, name] of names.slice(0, 3).entries()) {
         const card = page.getByRole("group", { name, exact: true });
         await card.getByRole("button", { name: messages.eventLog, exact: true }).click();
         const eventLog = page.locator(`#workspace-scheduling-${index}-event-log`);
@@ -100,6 +129,41 @@ test("workspace event log explains mixed scheduler causes and safely falls back 
         }
         assert.doesNotMatch(await eventLog.innerText(), /__proto__|unknown_cause|\[object Object\]/);
       }
+      const nativeCard = page.getByRole("group", { name: names[3], exact: true });
+      await nativeCard.getByRole("button", { name: messages.eventLog, exact: true }).click();
+      const nativeLog = page.locator("#workspace-scheduling-3-event-log");
+      const rows = nativeLog.getByRole("article");
+      await rows.nth(nativeEvents.length - 1).waitFor();
+      assert.equal(await rows.count(), nativeEvents.length);
+      // Native UIDs remain in closed details, so they identify the exact article
+      // without relying on translated summary copy or category/time row keys.
+      const nativeRows = nativeEvents.slice(0, -1).map((event) => rows.filter({
+        has: page.getByText(event.details.event_uid, { exact: true }),
+      }));
+      for (const row of nativeRows) assert.equal(await row.count(), 1);
+      const [containerRow, nodeRow, podRow, memoryRow, pidRow] = nativeRows;
+      assert.match(await containerRow.innerText(), /\bworkspace\b/);
+      assert.match(await containerRow.innerText(), /\b2\.0\s*GiB\b/);
+      await containerRow.getByText("Evicted", { exact: true }).waitFor();
+      assert.equal(await containerRow.getByText(messages.eventDiagnosticNodeEphemeralPressure, { exact: true }).count(), 0);
+      await nodeRow.getByText(messages.eventDiagnosticNodeEphemeralPressure, { exact: true }).waitFor();
+      assert.doesNotMatch(await nodeRow.innerText(), /\b2\.0\s*GiB\b/);
+      assert.match(await podRow.innerText(), /\b6\.0\s*GiB\b/);
+      assert.equal(await podRow.getByText(messages.eventDiagnosticNodeEphemeralPressure, { exact: true }).count(), 0);
+      await memoryRow.getByText(messages.eventDiagnosticNodeMemoryPressure, { exact: true }).waitFor();
+      await pidRow.getByText(messages.eventDiagnosticNodePidPressure, { exact: true }).waitFor();
+      for (const [index, row] of nativeRows.entries()) {
+        const event = nativeEvents[index];
+        assert.equal(await row.getByText(event.details.event_uid, { exact: true }).isVisible(), false);
+        await row.locator("details > summary").click();
+        await row.getByText(event.details.event_uid, { exact: true }).waitFor();
+        await row.getByText(event.details.pod_uid, { exact: true }).waitFor();
+      }
+      const historicalRow = rows.filter({ has: page.getByText(messages.eventCategoryOther, { exact: true }) });
+      assert.equal(await historicalRow.count(), 1);
+      assert.equal(await historicalRow.locator("details").count(), 0);
+      assert.equal(await historicalRow.getByText("workspace", { exact: true }).count(), 0);
+      assert.doesNotMatch(await historicalRow.innerText(), /Evicted|\b\d+\s*GiB\b|[0-9a-f]{8}-[0-9a-f-]{27,}/i);
       assert.deepEqual(unexpected, [], `${locale}: unexpected requests`);
       assert.deepEqual(errors, [], `${locale}: browser errors`);
       await context.close();

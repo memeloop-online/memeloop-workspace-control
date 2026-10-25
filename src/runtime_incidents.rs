@@ -9,7 +9,79 @@ use kube::{Api, api::ListParams};
 use tokio::sync::watch;
 
 mod scheduling;
-pub(crate) use scheduling::{SchedulingBlocker, scheduling_blockers};
+pub use scheduling::SchedulingBlocker;
+pub(crate) use scheduling::scheduling_blockers;
+mod details;
+pub(crate) use details::event_details;
+pub use details::{
+    RuntimeContainer, RuntimeDiagnostic, RuntimeEventDetails, RuntimePressureResource,
+};
+
+/// Kubernetes reasons are extensible; only expose known codes, never messages.
+pub(crate) fn safe_reason(reason: Option<&str>) -> Option<&str> {
+    reason.filter(|reason| {
+        matches!(
+            *reason,
+            "BackOff"
+                | "CrashLoopBackOff"
+                | "ImagePullBackOff"
+                | "ErrImagePull"
+                | "FailedScheduling"
+                | "Unhealthy"
+                | "FailedMount"
+                | "FailedAttachVolume"
+                | "FailedCreatePodSandBox"
+                | "FailedCreatePodSandbox"
+                | "OOMKilled"
+                | "Error"
+                | "Completed"
+                | "ContainerCreating"
+                | "PodInitializing"
+                | "CreateContainerConfigError"
+                | "CreateContainerError"
+                | "RunContainerError"
+                | "Evicted"
+                | "Failed"
+                | "Scheduled"
+                | "Pulling"
+                | "Pulled"
+                | "Created"
+                | "Started"
+                | "Killing"
+                | "SandboxChanged"
+                | "FailedSync"
+                | "FailedCreate"
+                | "SuccessfulCreate"
+                | "FailedDelete"
+                | "SuccessfulDelete"
+                | "NodeNotReady"
+                | "NodeNotSchedulable"
+                | "Preempted"
+                | "DeadlineExceeded"
+                | "ExceededGracePeriod"
+                | "FailedPostStartHook"
+                | "FailedPreStopHook"
+                | "FailedToRetrieveImagePullSecret"
+                | "ErrImageNeverPull"
+                | "FailedKillPod"
+                | "FailedBinding"
+                | "WaitForFirstConsumer"
+                | "WaitForPodScheduled"
+                | "Provisioning"
+                | "ProvisioningFailed"
+                | "ExternalProvisioning"
+                | "ProvisioningSucceeded"
+                | "SuccessfulAttachVolume"
+                | "SuccessfulMountVolume"
+                | "FailedMapVolume"
+                | "FailedUnmount"
+                | "VolumeResizeFailed"
+                | "FileSystemResizeRequired"
+                | "FileSystemResizeSuccessful"
+                | "Resizing"
+        )
+    })
+}
 
 use crate::{
     storage::{Database, NewWorkspaceRuntimeIncident, RuntimeEventCategory, StorageError},
@@ -122,7 +194,8 @@ fn normalized_incident(event: &Event) -> Option<NewWorkspaceRuntimeIncident> {
         return None;
     }
     let category = runtime_event_category(event.reason.as_deref(), event.message.as_deref());
-    if category == RuntimeEventCategory::Other {
+    let details = event_details(event);
+    if !details.is_informative(category) {
         return None;
     }
     let observed_at = event_start(event)?;
@@ -142,6 +215,8 @@ fn normalized_incident(event: &Event) -> Option<NewWorkspaceRuntimeIncident> {
         .unwrap_or(1)
         .max(1);
     Some(NewWorkspaceRuntimeIncident {
+        id: details.event_uid?.to_string(),
+        details,
         category,
         observed_at,
         last_observed_at,

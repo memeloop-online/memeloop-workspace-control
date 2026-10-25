@@ -95,14 +95,12 @@ pub(super) struct PodMetric {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
 pub(super) struct PodEvent {
+    id: String,
+    details: crate::runtime_incidents::RuntimeEventDetails,
     category: RuntimeEventCategory,
     count: Option<i32>,
     observed_at: Option<String>,
     last_observed_at: Option<String>,
-    reason: Option<String>,
-    component: Option<String>,
-    /// Safe known scheduler causes; raw scheduler messages are never exposed.
-    scheduling_blockers: Vec<crate::runtime_incidents::SchedulingBlocker>,
 }
 
 type PodRuntimeMap = BTreeMap<Uuid, Vec<PodRuntime>>;
@@ -487,7 +485,7 @@ pub(super) async fn get(
 }
 
 fn new_runtime_incident(event: &PodEvent) -> Option<NewWorkspaceRuntimeIncident> {
-    if event.category == RuntimeEventCategory::Other {
+    if !event.details.is_informative(event.category) {
         return None;
     }
     let observed_at = event
@@ -497,6 +495,8 @@ fn new_runtime_incident(event: &PodEvent) -> Option<NewWorkspaceRuntimeIncident>
         .ok()?
         .as_second();
     Some(NewWorkspaceRuntimeIncident {
+        id: event.id.clone(),
+        details: event.details.clone(),
         category: event.category,
         observed_at,
         last_observed_at: event
@@ -513,11 +513,10 @@ fn new_runtime_incident(event: &PodEvent) -> Option<NewWorkspaceRuntimeIncident>
 
 fn pod_event_from_incident(incident: WorkspaceRuntimeIncident) -> PodEvent {
     PodEvent {
+        id: incident.id,
+        details: incident.details,
         category: incident.category,
         count: Some(i32::try_from(incident.count).unwrap_or(i32::MAX)),
-        reason: None,
-        component: None,
-        scheduling_blockers: Vec::new(),
         last_observed_at: k8s_openapi::jiff::Timestamp::new(incident.last_observed_at, 0)
             .ok()
             .map(|timestamp| timestamp.to_string()),
@@ -533,27 +532,26 @@ fn merge_current_events(
 ) -> Vec<PodEvent> {
     let mut events = incidents
         .into_iter()
-        .filter(|event| event.category != RuntimeEventCategory::Other)
+        .filter(|event| event.details.is_informative(event.category))
         .map(pod_event_from_incident)
         .collect::<Vec<_>>();
-    for event in &mut events {
-        if let Some(live) = current
-            .iter()
-            .find(|live| live.category == event.category && live.observed_at == event.observed_at)
-        {
-            event.reason = live.reason.clone();
-            event.component = live.component.clone();
-            event.scheduling_blockers = live.scheduling_blockers.clone();
-        }
-    }
     for live in current
         .iter()
-        .filter(|event| event.category != RuntimeEventCategory::Other)
+        .filter(|event| event.details.is_informative(event.category))
     {
-        if !events
-            .iter()
-            .any(|event| event.category == live.category && event.observed_at == live.observed_at)
-        {
+        if let Some(stored) = events.iter_mut().find(|event| event.id == live.id) {
+            let timestamp = |event: &PodEvent| {
+                event
+                    .last_observed_at
+                    .as_deref()
+                    .and_then(|value| value.parse::<k8s_openapi::jiff::Timestamp>().ok())
+            };
+            if timestamp(live) >= timestamp(stored) {
+                stored.details = live.details.clone();
+                stored.last_observed_at = live.last_observed_at.clone();
+            }
+            stored.count = stored.count.max(live.count);
+        } else {
             events.push(live.clone());
         }
     }

@@ -467,7 +467,7 @@ async fn management_api_enforces_system_and_organization_boundaries() {
     let scaling: Value = body_json(scaling).await;
     assert_eq!(scaling["database_mode"], "sqlite");
     assert_eq!(scaling["configured_replicas"], 1);
-    assert_eq!(scaling["schema_version"], 30);
+    assert_eq!(scaling["schema_version"], 31);
     assert_eq!(scaling["job_worker_concurrency"], 32);
     assert_eq!(scaling["cpu_overcommit_ratio"], 10);
     let jobs_before = scaling["jobs"].clone();

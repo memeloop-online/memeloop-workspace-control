@@ -40,7 +40,7 @@ void i18next.use(initReactI18next).init({
 type I18nValue = {
   locale: Locale;
   setLocale: (locale: Locale) => void;
-  t: (key: MessageKey) => string;
+  t: (key: MessageKey, values?: Record<string, string | number>) => string;
 };
 
 export function I18nProvider({ children }: { children: ReactNode }) {
@@ -60,6 +60,6 @@ export function useI18n(): I18nValue {
   return useMemo(() => ({
     locale,
     setLocale,
-    t: (key: MessageKey) => translate(key),
+    t: (key: MessageKey, values?: Record<string, string | number>) => translate(key, values),
   }), [locale, setLocale, translate]);
 }

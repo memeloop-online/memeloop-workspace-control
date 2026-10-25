@@ -11,8 +11,8 @@ use std::{
 
 fn event(message: &str) -> Event {
     serde_json::from_value(json!({
-        "metadata": {"creationTimestamp": "2026-09-16T10:00:00Z"},
-        "involvedObject": {"kind": "Pod", "namespace": WORKSPACE_NAMESPACE, "name": "w-8000000000000001-0"},
+        "metadata": {"uid":"90000000-0000-4000-8000-000000000001", "creationTimestamp": "2026-09-16T10:00:00Z"},
+        "involvedObject": {"uid":"80000000-0000-4000-8000-000000000001", "kind": "Pod", "namespace": WORKSPACE_NAMESPACE, "name": "w-8000000000000001-0"},
         "reason": "Evicted", "message": message, "count": 2, "type": "Warning"
     })).unwrap()
 }
@@ -84,7 +84,9 @@ fn mapping_survives_pod_deletion_but_rejects_unrelated_names_and_namespaces() {
 fn normal_events_and_missing_timestamps_are_not_persisted() {
     let mut event = event("Successfully started container");
     event.reason = Some("Started".into());
+    event.type_ = Some("Normal".into());
     assert!(normalized_incident(&event).is_none());
+    event.type_ = Some("Warning".into());
     event.reason = Some("Evicted".into());
     event.metadata.creation_timestamp = None;
     assert!(normalized_incident(&event).is_none());
@@ -114,7 +116,7 @@ async fn consecutive_series_observations_update_one_history_row() {
         .execute(pool)
         .await
         .unwrap();
-    sqlx::query("CREATE TABLE workspace_runtime_incidents (id TEXT PRIMARY KEY, installation_id TEXT NOT NULL, workspace_id TEXT NOT NULL REFERENCES workspaces(id), category TEXT NOT NULL, observed_at BIGINT NOT NULL, count BIGINT NOT NULL, first_seen_at BIGINT NOT NULL, last_seen_at BIGINT NOT NULL CHECK(last_seen_at >= first_seen_at), UNIQUE(installation_id, workspace_id, category, observed_at))").execute(pool).await.unwrap();
+    sqlx::query("CREATE TABLE workspace_runtime_incidents (id TEXT PRIMARY KEY, installation_id TEXT NOT NULL, workspace_id TEXT NOT NULL REFERENCES workspaces(id), category TEXT NOT NULL, observed_at BIGINT NOT NULL, count BIGINT NOT NULL, first_seen_at BIGINT NOT NULL, last_seen_at BIGINT NOT NULL CHECK(last_seen_at >= first_seen_at), details_json TEXT NOT NULL)").execute(pool).await.unwrap();
     let workspace_id = uuid::Uuid::now_v7();
     sqlx::query("INSERT INTO workspaces VALUES (?1)")
         .bind(workspace_id.to_string())
@@ -160,6 +162,29 @@ async fn consecutive_series_observations_update_one_history_row() {
     assert_eq!(
         rows[0].get::<i64, _>("last_seen_at"),
         normalized_incident(&second).unwrap().last_observed_at
+    );
+    let mut sync_failure = event("private kubelet sync diagnostic");
+    sync_failure.metadata.uid = Some("90000000-0000-4000-8000-000000000002".into());
+    sync_failure.reason = Some("FailedSync".into());
+    let sync_incident = normalized_incident(&sync_failure).unwrap();
+    assert_eq!(sync_incident.category, RuntimeEventCategory::Other);
+    database
+        .upsert_workspace_runtime_incidents(workspace_id, &[sync_incident.clone()], now)
+        .await
+        .unwrap();
+    let history = database
+        .list_workspace_runtime_incidents(&[workspace_id], now + 7200, 50)
+        .await
+        .unwrap();
+    let stored = history[&workspace_id]
+        .iter()
+        .find(|row| row.id == sync_incident.id)
+        .unwrap();
+    assert_eq!(stored.details.reason.as_deref(), Some("FailedSync"));
+    assert!(
+        !serde_json::to_string(&stored.details)
+            .unwrap()
+            .contains("private")
     );
 }
 
@@ -244,4 +269,47 @@ fn startup_failures_are_actionable_and_unknown_warnings_are_not_stored() {
     let mut unknown = event("private arbitrary message");
     unknown.reason = Some("UnknownWarning".into());
     assert!(normalized_incident(&unknown).is_none());
+}
+
+#[test]
+fn normalization_keeps_exact_source_and_pod_identity_with_bounded_details() {
+    let mut source =
+        event("Container workspace exceeded its local ephemeral storage limit \"2Gi\". ");
+    source.involved_object.field_path = Some("spec.containers{workspace}".into());
+    let incident = normalized_incident(&source).unwrap();
+    assert_eq!(incident.id, "90000000-0000-4000-8000-000000000001");
+    assert_eq!(incident.details.event_uid.unwrap().to_string(), incident.id);
+    assert_eq!(
+        incident.details.pod_uid.unwrap().to_string(),
+        "80000000-0000-4000-8000-000000000001"
+    );
+    assert_eq!(incident.details.reason.as_deref(), Some("Evicted"));
+    assert_eq!(
+        incident.details.container,
+        Some(RuntimeContainer::Workspace)
+    );
+    assert_eq!(
+        incident.details.diagnostic,
+        Some(RuntimeDiagnostic::ContainerLocalEphemeralLimit {
+            container: RuntimeContainer::Workspace,
+            limit_bytes: 2 * 1024 * 1024 * 1024,
+        })
+    );
+    source.involved_object.field_path = Some("spec.initContainers{workspace-bootstrap}".into());
+    assert_eq!(
+        event_details(&source).container,
+        Some(RuntimeContainer::WorkspaceBootstrap)
+    );
+    source.involved_object.field_path = Some("spec.containers{private-token}".into());
+    source.involved_object.uid = Some("private-pod-token".into());
+    source.reason = Some("private-reason-token".into());
+    source.message = Some("Readiness probe failed: https://private-token.invalid/secret".into());
+    let details = event_details(&source);
+    assert!(details.container.is_none());
+    assert!(details.pod_uid.is_none());
+    assert!(details.reason.is_none());
+    assert!(details.diagnostic.is_none());
+    assert!(!serde_json::to_string(&details).unwrap().contains("private"));
+    source.metadata.uid = None;
+    assert!(normalized_incident(&source).is_none());
 }

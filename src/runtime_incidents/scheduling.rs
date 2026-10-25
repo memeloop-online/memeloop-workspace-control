@@ -1,10 +1,10 @@
 //! Recognize scheduler causes without returning messages, host names or volume identities.
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum SchedulingBlocker {
+pub enum SchedulingBlocker {
     CpuCapacity,
     MemoryCapacity,
     StorageCapacity,
