@@ -169,7 +169,7 @@ async fn consecutive_series_observations_update_one_history_row() {
     let sync_incident = normalized_incident(&sync_failure).unwrap();
     assert_eq!(sync_incident.category, RuntimeEventCategory::Other);
     database
-        .upsert_workspace_runtime_incidents(workspace_id, &[sync_incident.clone()], now)
+        .upsert_workspace_runtime_incidents(workspace_id, std::slice::from_ref(&sync_incident), now)
         .await
         .unwrap();
     let history = database
