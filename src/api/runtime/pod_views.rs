@@ -93,7 +93,9 @@ pub(super) fn pod_runtime(pod: &Pod) -> PodRuntime {
     }
 }
 
-pub(super) fn pod_event(event: Event) -> PodEvent {
+pub(super) fn pod_event(event: Event) -> Option<PodEvent> {
+    let details = crate::runtime_incidents::event_details(&event);
+    let id = details.event_uid?.to_string();
     let startup_pending = crate::runtime_incidents::startup_gate_pending(&event);
     let observed_at = crate::runtime_incidents::event_start(&event)
         .and_then(|seconds| k8s_openapi::jiff::Timestamp::new(seconds, 0).ok())
@@ -110,34 +112,9 @@ pub(super) fn pod_event(event: Event) -> PodEvent {
         .map(|time| time.0.to_string())
         .or_else(|| event.last_timestamp.as_ref().map(|time| time.0.to_string()))
         .or_else(|| observed_at.clone());
-    let component = event
-        .involved_object
-        .field_path
-        .as_deref()
-        .and_then(|field| {
-            field
-                .strip_prefix("spec.containers{")
-                .or_else(|| field.strip_prefix("spec.initContainers{"))
-        })
-        .and_then(|field| field.strip_suffix('}'))
-        .filter(|name| {
-            matches!(
-                *name,
-                "workspace"
-                    | "ttyd"
-                    | "buildkitd"
-                    | "workspace-scratch-init"
-                    | "buildkit-bootstrap"
-            )
-        })
-        .map(str::to_owned);
-    PodEvent {
-        reason: if startup_pending {
-            Some("ContainerCreating".to_owned())
-        } else {
-            super::startup::safe_reason(event.reason.as_deref()).map(str::to_owned)
-        },
-        component,
+    Some(PodEvent {
+        id,
+        details,
         last_observed_at,
         category: if startup_pending {
             RuntimeEventCategory::Other
@@ -146,12 +123,7 @@ pub(super) fn pod_event(event: Event) -> PodEvent {
         },
         count,
         observed_at,
-        scheduling_blockers: if event.reason.as_deref() == Some("FailedScheduling") {
-            crate::runtime_incidents::scheduling_blockers(event.message.as_deref())
-        } else {
-            Vec::new()
-        },
-    }
+    })
 }
 
 /// Pod conditions keep the current scheduling cause visible after Event TTL expiry,
@@ -181,16 +153,25 @@ pub(super) fn pod_scheduling_event(pod: &Pod) -> Option<PodEvent> {
         .as_ref()
         .or(pod.metadata.creation_timestamp.as_ref())
         .map(|time| time.0.to_string());
+    let pod_uid = pod.metadata.uid.as_deref()?.parse::<Uuid>().ok()?;
+    let id = format!(
+        "pod-condition:{pod_uid}:PodScheduled:{}",
+        observed_at.as_deref()?
+    );
     Some(PodEvent {
+        id,
         category: RuntimeEventCategory::Scheduling,
         count: None,
         observed_at: observed_at.clone(),
         last_observed_at: observed_at,
-        reason: Some("FailedScheduling".to_owned()),
-        component: None,
-        scheduling_blockers: crate::runtime_incidents::scheduling_blockers(
-            condition.message.as_deref(),
-        ),
+        details: crate::runtime_incidents::RuntimeEventDetails {
+            pod_uid: Some(pod_uid),
+            reason: Some("FailedScheduling".to_owned()),
+            scheduling_blockers: crate::runtime_incidents::scheduling_blockers(
+                condition.message.as_deref(),
+            ),
+            ..Default::default()
+        },
     })
 }
 
@@ -283,9 +264,14 @@ mod tests {
 
     use super::{
         PodEvent, RuntimeEventCategory, active_pod_metrics, active_pod_names, active_pod_node_name,
-        has_live_runtime, newest_events, pod_event, pod_scheduling_event, runtime_event_category,
+        has_live_runtime, newest_events, pod_scheduling_event, runtime_event_category,
     };
     use crate::api::runtime::PodMetric;
+
+    fn pod_event(mut event: Event) -> PodEvent {
+        event.metadata.uid = Some("90000000-0000-4000-8000-000000000001".into());
+        super::pod_event(event).expect("fixture Event has UID")
+    }
 
     fn timestamp(value: &str) -> Timestamp {
         value.parse().expect("valid test timestamp")
@@ -294,7 +280,7 @@ mod tests {
     #[test]
     fn unschedulable_condition_survives_event_expiry_but_not_scheduling_or_termination() {
         let mut pod: Pod = serde_json::from_value(serde_json::json!({
-            "metadata": {"creationTimestamp":"2026-10-18T12:13:58Z"},
+            "metadata": {"uid":"80000000-0000-4000-8000-000000000001", "creationTimestamp":"2026-10-18T12:13:58Z"},
             "spec": {"containers": []},
             "status": {"phase":"Pending", "conditions":[{
                 "type":"PodScheduled", "status":"False", "reason":"Unschedulable",
@@ -306,7 +292,7 @@ mod tests {
         assert_eq!(event.category, RuntimeEventCategory::Scheduling);
         assert_eq!(event.observed_at.as_deref(), Some("2026-10-18T12:14:00Z"));
         assert_eq!(
-            event.scheduling_blockers,
+            event.details.scheduling_blockers,
             vec![
                 crate::runtime_incidents::SchedulingBlocker::CpuCapacity,
                 crate::runtime_incidents::SchedulingBlocker::NodeAffinity,
@@ -332,7 +318,7 @@ mod tests {
         });
         assert_eq!(event.category, RuntimeEventCategory::Scheduling);
         assert_eq!(
-            event.scheduling_blockers,
+            event.details.scheduling_blockers,
             vec![crate::runtime_incidents::SchedulingBlocker::StorageCapacity]
         );
         let mount = pod_event(Event {
@@ -340,14 +326,14 @@ mod tests {
             message: Some("private diagnostic mentions Insufficient cpu".into()),
             ..Event::default()
         });
-        assert!(mount.scheduling_blockers.is_empty());
+        assert!(mount.details.scheduling_blockers.is_empty());
         let unknown = pod_event(Event {
             reason: Some("FailedScheduling".into()),
             message: Some("unknown private scheduler diagnostic".into()),
             ..Event::default()
         });
         assert_eq!(unknown.category, RuntimeEventCategory::Scheduling);
-        assert!(unknown.scheduling_blockers.is_empty());
+        assert!(unknown.details.scheduling_blockers.is_empty());
     }
 
     #[test]
@@ -379,7 +365,7 @@ mod tests {
             "eventTime":"2026-08-28T09:00:00Z", "count":6
         })).unwrap();
         let event = pod_event(source.clone());
-        assert_eq!(event.reason.as_deref(), Some("ContainerCreating"));
+        assert_eq!(event.details.reason.as_deref(), Some("ContainerCreating"));
         assert_eq!(event.category, RuntimeEventCategory::Other);
         assert_eq!(event.count, Some(6));
         assert_eq!(event.observed_at.as_deref(), Some("2026-08-28T09:00:00Z"));
@@ -387,7 +373,7 @@ mod tests {
         failure.message =
             Some("MountVolume.SetUp failed: configmap workspace-config not found".to_owned());
         let event = pod_event(failure);
-        assert_eq!(event.reason.as_deref(), Some("FailedMount"));
+        assert_eq!(event.details.reason.as_deref(), Some("FailedMount"));
         assert_eq!(event.category, RuntimeEventCategory::VolumeUnavailable);
     }
 
@@ -413,7 +399,7 @@ mod tests {
                 message: Some("private runtime diagnostics must remain hidden".to_owned()),
                 ..Event::default()
             });
-            assert_eq!(event.reason.as_deref(), Some(reason));
+            assert_eq!(event.details.reason.as_deref(), Some(reason));
             assert!(
                 !serde_json::to_string(&event)
                     .unwrap()
@@ -424,7 +410,7 @@ mod tests {
             reason: Some("arbitrary sensitive diagnostics".to_owned()),
             ..Event::default()
         });
-        assert!(event.reason.is_none());
+        assert!(event.details.reason.is_none());
     }
 
     #[test]

@@ -71,9 +71,9 @@ export function schedulingBlockerPresentationKeys(blocker: string | null | undef
  * categories never surface stale blockers; callers fall back to the generic
  * eventPresentationKeys copy in all of those cases.
  */
-export function eventSchedulingPresentationKeys(event: Pick<WorkspaceRuntimeEvent, "category" | "scheduling_blockers">): EventPresentationKeys[] {
+export function eventSchedulingPresentationKeys(event: Pick<WorkspaceRuntimeEvent, "category" | "details">): EventPresentationKeys[] {
   if (event.category !== "scheduling") return [];
-  const raw = event.scheduling_blockers;
+  const raw = event.details.scheduling_blockers;
   if (!Array.isArray(raw)) return [];
   const seen = new Set<string>();
   const entries: EventPresentationKeys[] = [];
@@ -99,11 +99,13 @@ export function eventReasonKeys(reason: string | null | undefined): EventPresent
 /**
  * Resolves the localized title/description for an event. Reason-specific
  * explanations only apply to the generic "other" category; recognized
- * categories keep their category-specific copy.
+ * categories keep their category-specific copy. Historical events with an
+ * empty details object (no reason, blockers, or diagnostic) honestly keep
+ * the generic category copy.
  */
-export function eventPresentationKeys(event: Pick<WorkspaceRuntimeEvent, "category" | "reason">): EventPresentationKeys {
+export function eventPresentationKeys(event: Pick<WorkspaceRuntimeEvent, "category" | "details">): EventPresentationKeys {
   if (event.category === "other") {
-    const byReason = eventReasonKeys(event.reason);
+    const byReason = eventReasonKeys(event.details.reason);
     if (byReason) return byReason;
   }
   // The category type is strict, but runtime data can still carry an unknown

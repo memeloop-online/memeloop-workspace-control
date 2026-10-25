@@ -10,7 +10,7 @@ import type { ApiClient } from "./api";
 import { nodePoolDisplayName } from "./forms/NodePoolPicker";
 import { safeBootstrapUrl } from "./portMappings";
 import { reserveWebShellWindow } from "./workspaceShell";
-import { ResourceMeter, WorkspaceStatusCard } from "./shared";
+import { formatBytes, ResourceMeter, WorkspaceStatusCard } from "./shared";
 import { aggregateRuntimeUsage, formatCpuMillis, formatMemoryMiB, parseCpuMillis, parseMemoryMiB, usagePercent } from "./workspaceMetrics";
 import { StorageMeter } from "./workspaces/StorageMeter";
 import { useWorkspaceStyles } from "./workspaces/workspaceStyles";
@@ -154,7 +154,7 @@ function EventLog({ id, runtime, locale }: { id: string; runtime: WorkspaceRunti
     <Title3 as="h3">{t("eventLog")}</Title3>
     {startupPods.map((pod) => <StartupSummary key={pod.name} pod={pod} />)}
     {runtime.events.length === 0 && <Text>{t("noEvents")}</Text>}
-    <div className={styles.eventList}>{runtime.events.slice(0, 12).map((event, index) => <EventEntry key={`${event.observed_at}-${event.category}-${index}`} event={event} locale={locale} />)}</div>
+    <div className={styles.eventList}>{runtime.events.slice(0, 12).map((event) => <EventEntry key={event.id} event={event} locale={locale} />)}</div>
   </section>;
 }
 
@@ -163,20 +163,46 @@ function EventEntry({ event, locale }: { event: WorkspaceRuntimeEvent; locale: L
   const styles = useWorkspaceStyles();
   const blockerKeys = eventSchedulingPresentationKeys(event);
   const entries = blockerKeys.length > 0 ? blockerKeys : [eventPresentationKeys(event)];
+  const details = event.details;
+  const diagnostic = eventDiagnosticText(event, t);
   const showLast = event.last_observed_at && event.last_observed_at !== event.observed_at;
   return <article className={styles.event}>
     {entries.map((keys) => <Fragment key={keys.label}>
       <Text weight="semibold">{t(keys.label)}</Text>
-      <Text>{t(keys.description)}</Text>
+      {!diagnostic && <Text>{t(keys.description)}</Text>}
     </Fragment>)}
+    {diagnostic && <Text>{diagnostic}</Text>}
     <Caption1 className={styles.eventMeta}>
       {t("observedAt")} {formatTimestamp(event.observed_at, locale)}
       {showLast && <> · {t("eventLastObserved")} {formatTimestamp(event.last_observed_at ?? null, locale)}</>}
-      {" · "}{t("eventCount")} {event.count ?? 1}
-      {event.component && <> · {t("eventComponent")} <span className={styles.code}>{event.component}</span></>}
-      {event.reason && <> · {t("eventReason")} <span className={styles.code}>{event.reason}</span></>}
+      {event.count !== null && <> · {t("eventCount")} {event.count}</>}
+      {details.reason && <> · {t("eventReason")} <span className={styles.code}>{details.reason}</span></>}
     </Caption1>
+    {(details.event_uid || details.pod_uid) && <details className={styles.eventMeta}>
+      <summary>{t("eventDetails")}</summary>
+      <Caption1>
+        {details.event_uid && <>{t("eventUid")} <span className={styles.code}>{details.event_uid}</span></>}
+        {details.event_uid && details.pod_uid && " · "}
+        {details.pod_uid && <>{t("eventPodUid")} <span className={styles.code}>{details.pod_uid}</span></>}
+      </Caption1>
+    </details>}
   </article>;
+}
+
+function eventDiagnosticText(event: WorkspaceRuntimeEvent, t: ReturnType<typeof useI18n>["t"]): string | null {
+  const diagnostic = event.details.diagnostic;
+  if (!diagnostic) return null;
+  if (diagnostic.kind === "container_local_ephemeral_limit") {
+    const values = { container: diagnostic.container, limit: formatBytes(diagnostic.limit_bytes) };
+    return event.details.reason === "Evicted" ? t("eventDiagnosticContainerLocalLimitEvicted", values) : t("eventDiagnosticContainerLocalLimit", values);
+  }
+  if (diagnostic.kind === "pod_local_ephemeral_limit") return t("eventDiagnosticPodLocalLimit", { limit: formatBytes(diagnostic.limit_bytes) });
+  if (diagnostic.kind === "node_resource_pressure") {
+    if (diagnostic.resource === "memory") return t("eventDiagnosticNodeMemoryPressure");
+    if (diagnostic.resource === "pids") return t("eventDiagnosticNodePidPressure");
+    return t("eventDiagnosticNodeEphemeralPressure");
+  }
+  return null;
 }
 
 function StartupSummary({ pod }: { pod: WorkspaceRuntimePod }) {

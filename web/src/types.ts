@@ -381,17 +381,38 @@ export interface WorkspaceContainerState {
 }
 
 export interface WorkspaceRuntimeEvent {
+  id: string;
   category: "disk_pressure" | "evicted" | "temporary_storage_provisioning" | "temporary_storage_attachment" | "volume_unavailable" | "ephemeral_storage" | "memory_pressure" | "pid_pressure" | "container_backoff" | "image_pull" | "scheduling" | "health_check" | "other";
   count: number | null;
   observed_at: string | null;
-  last_observed_at?: string | null;
-  /** Short machine reason such as BackOff or FailedScheduling; never a raw event message. */
-  reason?: string | null;
-  /** Reporting component such as kubelet or default-scheduler. */
-  component?: string | null;
-  /** Safe known scheduler causes; raw scheduler messages are never exposed. Only meaningful for scheduling events; omitted by older backends. */
-  scheduling_blockers?: SchedulingBlocker[] | null;
+  last_observed_at: string | null;
+  /** Typed, bounded facts parsed from the source event; raw messages are never exposed. Historical rows carry an object with null scalar fields, empty blockers, and no diagnostic. */
+  details: RuntimeEventDetails;
 }
+
+export interface RuntimeEventDetails {
+  event_uid: string | null;
+  pod_uid: string | null;
+  /** Short machine reason such as BackOff or FailedScheduling; never a raw event message. */
+  reason: string | null;
+  container: RuntimeContainer | null;
+  /** Safe known scheduler causes; raw scheduler messages are never exposed. Only meaningful for scheduling events. */
+  scheduling_blockers: SchedulingBlocker[];
+  diagnostic: RuntimeDiagnostic | null;
+}
+
+export type RuntimeContainer =
+  | "workspace"
+  | "ttyd"
+  | "buildkitd"
+  | "workspace-scratch-init"
+  | "workspace-bootstrap"
+  | "buildkit-bootstrap";
+
+export type RuntimeDiagnostic =
+  | { kind: "container_local_ephemeral_limit"; container: RuntimeContainer; limit_bytes: number }
+  | { kind: "pod_local_ephemeral_limit"; limit_bytes: number }
+  | { kind: "node_resource_pressure"; resource: "ephemeral_storage" | "memory" | "pids" };
 
 export type SchedulingBlocker =
   | "cpu_capacity"

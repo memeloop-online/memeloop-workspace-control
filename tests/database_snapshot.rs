@@ -101,7 +101,7 @@ async fn sqlite_snapshot_contains_ciphertext_and_resets_only_pending_work() {
         25
     );
     assert_eq!(snapshot.format_version, 2);
-    assert_eq!(snapshot.schema_version, 30);
+    assert_eq!(snapshot.schema_version, 31);
     assert_eq!(snapshot.installation_id, "snapshot-test");
     assert_eq!(snapshot.tables["injection_items"].len(), 1);
     assert!(snapshot.tables.contains_key("workspace_injection_refs"));

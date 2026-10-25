@@ -8,7 +8,7 @@
     "build": "tsc -b && vite build && node scripts/sanitize-dist.mjs",
     "dev": "vite",
     "check": "tsc -b --pretty false",
-    "test": "node --experimental-strip-types --test src/*.test.ts src/*/*.test.ts && node tests/plugin-sandbox-check.mjs",
+    "test": "node --experimental-strip-types --test src/*.test.ts src/*/*.test.ts && node tests/plugin-sandbox-check.mjs && node --test ../scripts/upgrade-runtime-events-v30-v31.test.ts",
     "test:browser": "node tests/plugin-sandbox-check.mjs",
     "test:e2e": "node --test e2e/user-api-keys.test.mjs e2e/organization-admin-credentials.test.mjs e2e/settings-member.test.mjs e2e/workspace-scheduling.test.mjs",
     "test:e2e:production": "node --test e2e/production-user-credentials.test.mjs"

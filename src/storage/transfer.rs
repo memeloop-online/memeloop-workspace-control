@@ -341,7 +341,7 @@ const EXPORT_QUERIES: &[(&str, &str)] = &[
     ),
     (
         "workspace_runtime_incidents",
-        "SELECT json_object('id', id, 'installation_id', installation_id, 'workspace_id', workspace_id, 'category', category, 'observed_at', observed_at, 'count', count, 'first_seen_at', first_seen_at, 'last_seen_at', last_seen_at) item FROM workspace_runtime_incidents WHERE installation_id = ?1 ORDER BY workspace_id, observed_at, category, id",
+        "SELECT json_object('id', id, 'installation_id', installation_id, 'workspace_id', workspace_id, 'category', category, 'observed_at', observed_at, 'count', count, 'first_seen_at', first_seen_at, 'last_seen_at', last_seen_at, 'details_json', details_json) item FROM workspace_runtime_incidents WHERE installation_id = ?1 ORDER BY workspace_id, observed_at, category, id",
     ),
     (
         "workspace_port_mappings",
