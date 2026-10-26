@@ -119,6 +119,7 @@ async fn assert_locked_batch_rolls_back(database: Database) {
                 template_id,
                 resources: None,
                 temporary_storage_gib: None,
+                use_longhorn: false,
                 organization_injection_refs: None,
                 user_injection_refs: None,
             },

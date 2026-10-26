@@ -455,6 +455,7 @@ async fn second_workspace(fixture: &Fixture) -> memeloop_workspace_control::work
                 template_id: fixture.workspace.template_id.unwrap(),
                 resources: None,
                 temporary_storage_gib: None,
+                use_longhorn: false,
                 organization_injection_refs: None,
                 user_injection_refs: None,
             },

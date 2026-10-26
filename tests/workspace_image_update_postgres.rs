@@ -100,6 +100,7 @@ async fn postgres_updates_a_locked_stopped_workspace_image() {
                 template_id: template.id,
                 resources: None,
                 temporary_storage_gib: None,
+                use_longhorn: true,
                 organization_injection_refs: None,
                 user_injection_refs: None,
             },
@@ -109,6 +110,16 @@ async fn postgres_updates_a_locked_stopped_workspace_image() {
         )
         .await
         .unwrap();
+    assert!(workspace.template.storage_policy.use_longhorn);
+    assert_eq!(
+        database
+            .get_workspace(workspace.id)
+            .await
+            .unwrap()
+            .template
+            .storage_policy,
+        workspace.template.storage_policy
+    );
     let stopping = database
         .request_workspace_action(workspace.id, WorkspaceAction::Stop, admin.user_id, 5)
         .await
@@ -130,6 +141,10 @@ async fn postgres_updates_a_locked_stopped_workspace_image() {
         .await
         .unwrap();
     assert_eq!(updated.template.image, NEW_IMAGE);
+    assert_eq!(
+        updated.template.storage_policy,
+        workspace.template.storage_policy
+    );
     assert_eq!(updated.generation, stopped.generation + 1);
     assert!(matches!(
         database

@@ -55,6 +55,7 @@ spec:
 "#;
     let document = WorkspaceTemplateDocument::parse(yaml).unwrap();
     assert_eq!(document.spec.storage_policy.temporary_storage_gib, 30);
+    assert!(!document.spec.storage_policy.use_longhorn);
     assert_eq!(document.spec.placement, WorkspacePlacement::default());
 }
 
@@ -91,9 +92,11 @@ fn desktop_endpoint_is_optional_and_validated_as_a_browser_http_port() {
 fn storage_policy_round_trips_and_rejects_removed_fields() {
     let policy = WorkspaceStoragePolicy {
         temporary_storage_gib: 64,
+        use_longhorn: true,
     };
     let json = serde_json::to_value(policy).unwrap();
     assert_eq!(json["temporary_storage_gib"], 64);
+    assert_eq!(json["use_longhorn"], true);
     assert_eq!(
         serde_json::from_value::<WorkspaceStoragePolicy>(json).unwrap(),
         policy

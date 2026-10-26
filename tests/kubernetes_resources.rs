@@ -103,6 +103,44 @@ fn metadata_name(metadata: &k8s_openapi::apimachinery::pkg::apis::meta::v1::Obje
 }
 
 #[test]
+fn longhorn_opt_in_changes_only_the_unbound_home_storage_class() {
+    let mut workspace = workspace(WorkspaceState::Ready);
+    let local = builder().build(&workspace).unwrap().stateful_set;
+    let local_spec = local.spec.as_ref().unwrap();
+    assert_eq!(
+        local_spec.volume_claim_templates.as_ref().unwrap()[0]
+            .spec
+            .as_ref()
+            .unwrap()
+            .storage_class_name
+            .as_deref(),
+        Some("managed-delete")
+    );
+
+    workspace.template.storage_policy.use_longhorn = true;
+    let mut replicated = builder().build(&workspace).unwrap().stateful_set;
+    let replicated_claim = &mut replicated
+        .spec
+        .as_mut()
+        .unwrap()
+        .volume_claim_templates
+        .as_mut()
+        .unwrap()[0];
+    assert_eq!(
+        replicated_claim
+            .spec
+            .as_ref()
+            .unwrap()
+            .storage_class_name
+            .as_deref(),
+        Some("mwc-home-longhorn-replicated")
+    );
+    // Every other resource, including the local scratch claim, is identical.
+    replicated_claim.spec.as_mut().unwrap().storage_class_name = Some("managed-delete".to_owned());
+    assert_eq!(replicated, local);
+}
+
+#[test]
 fn bound_home_uses_only_the_persisted_claim_and_preserves_scratch() {
     let builder = builder();
     let mut workspace = workspace(WorkspaceState::Ready);
@@ -114,6 +152,7 @@ fn bound_home_uses_only_the_persisted_claim_and_preserves_scratch() {
         .spec
         .unwrap();
     let unbound_volumes = unbound.template.spec.unwrap().volumes.unwrap();
+    workspace.template.storage_policy.use_longhorn = true;
     workspace.home_volume_binding = Some(WorkspaceHomeVolumeBinding {
         namespace: workspace.runtime.namespace().to_owned(),
         claim_name: "existing-home-20gi".to_owned(),

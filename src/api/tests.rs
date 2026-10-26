@@ -334,6 +334,10 @@ async fn openapi_document_contains_versioned_api() {
         &body["components"]["schemas"]["CreateWorkspace"]["properties"]["temporary_storage_gib"];
     assert_eq!(temporary_storage["minimum"], 1);
     assert_eq!(temporary_storage["maximum"], 2048);
+    assert_eq!(
+        body["components"]["schemas"]["CreateWorkspace"]["properties"]["use_longhorn"]["type"],
+        "boolean"
+    );
     assert!(
         body["paths"]["/api/v1/me/api-keys"]["post"]["description"]
             .as_str()

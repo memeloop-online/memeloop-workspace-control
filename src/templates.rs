@@ -116,12 +116,15 @@ pub enum EgressPolicy {
 pub struct WorkspaceStoragePolicy {
     /// Total high-speed, Pod-lifetime storage reserved for regenerable workspace data.
     pub temporary_storage_gib: u64,
+    /// Whether this workspace Home uses Longhorn live replication.
+    pub use_longhorn: bool,
 }
 
 impl Default for WorkspaceStoragePolicy {
     fn default() -> Self {
         Self {
             temporary_storage_gib: 10,
+            use_longhorn: false,
         }
     }
 }
