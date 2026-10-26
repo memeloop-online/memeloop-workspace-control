@@ -177,3 +177,124 @@ test("workspace event log preserves native identity and distinguishes local limi
     }
   } finally { await browser.close(); }
 });
+
+test("workspace creation edits temporary storage independently and offers only available allowed locations", { timeout: 90_000 }, async () => {
+  const messages = JSON.parse(await readFile(new URL("../src/locales/en.json", import.meta.url), "utf8"));
+  const creationResources = { ...resources, disk_gib: 20 };
+  const pools = [
+    { name: "placement-westlake", display_name: "West Lake" },
+    { name: "placement-haixia", display_name: "Strait" },
+    { name: "placement-unrelated", display_name: "Unrelated location" },
+  ];
+  const templates = [
+    { id: "rust-template", name: "Rust Dev", temporaryStorage: 10 },
+    { id: "other-template", name: "Other development", temporaryStorage: 4 },
+  ].map(({ id, name, temporaryStorage }) => ({
+    id, name, organization_id: organizationId, enabled: true, yaml: "",
+    image: "example.invalid/rust-dev:1", access_mode: "internal", resources: creationResources,
+    pod_requests: { cpu_millis: 500, memory_mib: 512 }, cpu_overcommit_ratio: 10,
+    workspace_user: "user", workspace_home: "/home/user", buildkit: true,
+    storage_policy: { temporary_storage_gib: temporaryStorage }, cluster_access: false,
+    egress_policy: "internet_only", runtime_class_name: null, desktop: null,
+    placement: { allowed_node_pools: [pools[0].name, pools[1].name], default_node_pool: pools[0].name },
+  }));
+  const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_BIN || chromium.executablePath(), headless: true, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
+  try {
+    // An unrelated available pool must not turn a single allowed location into a choice.
+    for (const [availablePools, hasLocationChoice] of [[[], false], [[pools[0], pools[2]], false], [pools, true]]) {
+      const context = await browser.newContext();
+      const unexpected = [];
+      const errors = [];
+      const submissions = [];
+      await context.addInitScript(({ organizationId }) => {
+        sessionStorage.setItem("mwc.api-token", "scheduling-fixture-token");
+        localStorage.setItem("mwc.locale", "en");
+        localStorage.setItem("mwc.organization-id", organizationId);
+        localStorage.setItem("mwc.view", "workspaces");
+      }, { organizationId });
+      await context.route("**/*", async (route) => {
+        const request = route.request();
+        const url = new URL(request.url());
+        if (url.origin !== new URL(baseUrl).origin) { unexpected.push("external request"); return route.abort(); }
+        if (!url.pathname.startsWith("/api/")) return route.continue();
+        if (request.method() === "POST" && url.pathname === "/api/v1/workspaces") {
+          submissions.push(request.postDataJSON());
+          return route.fulfill({ status: 201, contentType: "application/json", body: JSON.stringify(workspaces[0]) });
+        }
+        let response = request.method() === "GET" ? fixture(url.pathname) : undefined;
+        if (request.method() === "GET") {
+          if (url.pathname === "/api/v1/me") response = { ...response, api_key_scopes: ["read_workspace", "create_workspace"] };
+          if (url.pathname === "/api/v1/templates") response = templates;
+          if (url.pathname === "/api/v1/node-pools") response = availablePools;
+        }
+        if (response === undefined) unexpected.push(`${request.method()} ${url.pathname}`);
+        await route.fulfill({ status: response === undefined ? 501 : 200, contentType: "application/json", body: JSON.stringify(response ?? null) });
+      });
+      const page = await context.newPage();
+      page.on("pageerror", (error) => errors.push(error.message));
+      await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
+      await page.getByRole("button", { name: messages.newWorkspace, exact: true }).click();
+      const chooseTemplate = async (name) => {
+        await page.getByRole("combobox", { name: messages.template }).click();
+        await page.getByRole("option", { name, exact: true }).click();
+      };
+      await chooseTemplate(templates[0].name);
+      const temporaryStorage = page.getByRole("spinbutton", { name: messages.workspaceTemporaryStorageGiB, exact: true });
+      const homeStorage = page.getByRole("spinbutton", { name: messages.diskSizeGib, exact: true });
+      assert.equal(await temporaryStorage.inputValue(), "10");
+      assert.equal(await homeStorage.inputValue(), "20");
+      assert.equal(await page.getByRole("spinbutton", { name: messages.cpuLimitMillis, exact: true }).inputValue(), String(creationResources.cpu_millis));
+      assert.equal(await page.getByRole("spinbutton", { name: messages.memoryLimitMib, exact: true }).inputValue(), String(creationResources.memory_mib));
+      assert.equal(await page.getByRole("spinbutton", { name: messages.gpuCount, exact: true }).inputValue(), "0");
+      await page.getByText(messages.workspaceTemporaryStorageHelp, { exact: true }).waitFor();
+      const location = page.getByRole("combobox", { name: messages.workspaceRunLocation, exact: true });
+      if (hasLocationChoice) {
+        await location.waitFor();
+        assert.equal(await location.innerText(), messages.workspaceRunLocationAutomatic);
+        await location.click();
+        assert.equal(await page.getByRole("option", { name: pools[2].display_name, exact: true }).count(), 0);
+        await page.getByRole("option", { name: pools[1].display_name, exact: true }).click();
+      } else {
+        assert.equal(await location.count(), 0);
+      }
+      await temporaryStorage.fill("12");
+      await homeStorage.fill("27");
+      await chooseTemplate(templates[1].name);
+      assert.equal(await temporaryStorage.inputValue(), "4");
+      assert.equal(await homeStorage.inputValue(), "20");
+      if (hasLocationChoice) assert.equal(await location.innerText(), messages.workspaceRunLocationAutomatic);
+      await chooseTemplate(templates[0].name);
+      assert.equal(await temporaryStorage.inputValue(), "10");
+      assert.equal(await homeStorage.inputValue(), "20");
+      await page.getByRole("textbox", { name: messages.name, exact: true }).fill("Payment development");
+      await temporaryStorage.fill("12");
+      const firstPost = page.waitForRequest((request) => request.method() === "POST" && new URL(request.url()).pathname === "/api/v1/workspaces");
+      await page.getByRole("button", { name: messages.submitCreate, exact: true }).click();
+      const automaticPayload = (await firstPost).postDataJSON();
+      assert.equal(automaticPayload.temporary_storage_gib, 12);
+      assert.equal(automaticPayload.node_pool, null);
+      assert.equal(automaticPayload.resources, null, "temporary capacity must not change template CPU, memory, GPU, or Home");
+      assert.equal(automaticPayload.template_id, templates[0].id);
+      await temporaryStorage.waitFor({ state: "hidden" });
+      if (hasLocationChoice) {
+        await page.getByRole("button", { name: messages.newWorkspace, exact: true }).click();
+        await chooseTemplate(templates[0].name);
+        await page.getByRole("textbox", { name: messages.name, exact: true }).fill("Payment development in Strait");
+        await location.click();
+        await page.getByRole("option", { name: pools[1].display_name, exact: true }).click();
+        assert.equal(await location.innerText(), pools[1].display_name);
+        const secondPost = page.waitForRequest((request) => request.method() === "POST" && new URL(request.url()).pathname === "/api/v1/workspaces");
+        await page.getByRole("button", { name: messages.submitCreate, exact: true }).click();
+        const selectedPayload = (await secondPost).postDataJSON();
+        assert.equal(selectedPayload.node_pool, pools[1].name);
+        assert.equal(selectedPayload.resources, null);
+        assert.equal(Object.hasOwn(selectedPayload, "temporary_storage_gib"), false, "unchanged capacity inherits the template");
+        await temporaryStorage.waitFor({ state: "hidden" });
+      }
+      assert.equal(submissions.length, hasLocationChoice ? 2 : 1);
+      assert.deepEqual(unexpected, [], "unexpected creation requests");
+      assert.deepEqual(errors, [], "creation browser errors");
+      await context.close();
+    }
+  } finally { await browser.close(); }
+});

@@ -44,6 +44,7 @@ export function WorkspacePanel(props: Props) {
   const [nodePools, setNodePools] = useState<AvailableNodePool[]>([]);
   const [nodePool, setNodePool] = useState("");
   const [resourceDraft, setResourceDraft] = useState<Resources | null>(null);
+  const [temporaryStorageGiB, setTemporaryStorageGiB] = useState("");
   const [organizationInjections, setOrganizationInjections] = useState<StoredInjection[]>([]);
   const [userInjections, setUserInjections] = useState<StoredInjection[]>([]);
   const [explicitInjectionRefs, setExplicitInjectionRefs] = useState(false);
@@ -224,10 +225,13 @@ export function WorkspacePanel(props: Props) {
       || resourceDraft.disk_gib < 1
       || resourceDraft.gpu_count < 0
     )) return props.onError(t("workspaceResourcesInvalid"));
+    const temporaryStorage = Number(temporaryStorageGiB);
+    if (!Number.isInteger(temporaryStorage) || temporaryStorage < 1 || temporaryStorage > 2048) return props.onError(t("workspaceTemporaryStorageInvalid"));
     const command: CreateWorkspace = {
       organization_id: props.organizationId, owner_id: props.principal.user_id, name: trimmedName, template_id: templateId,
       node_pool: nodePool || null,
       resources: resourceDraft && selectedTemplate && !sameResources(resourceDraft, selectedTemplate.resources) ? resourceDraft : null,
+      ...(selectedTemplate && temporaryStorage !== selectedTemplate.storage_policy.temporary_storage_gib ? { temporary_storage_gib: temporaryStorage } : {}),
       organization_injection_refs: explicitInjectionRefs ? organizationInjections.filter((item) => item.locked || organizationRefs.includes(item.key)).map((item) => item.key) : null,
       user_injection_refs: explicitInjectionRefs ? userRefs : null,
     };
@@ -242,7 +246,7 @@ export function WorkspacePanel(props: Props) {
     setSubmitting(true);
     try {
       await props.api.createWorkspace(command);
-      setName(""); setTemplateId(""); setNodePool(""); setResourceDraft(null); setShowCreate(false); setPendingCreate(null);
+      setName(""); setTemplateId(""); setNodePool(""); setResourceDraft(null); setTemporaryStorageGiB(""); setShowCreate(false); setPendingCreate(null);
       await props.onRefresh(); await resetPage();
     } catch (error) { props.onError(errorMessage(error, t("operationFailed"))); }
     finally { setSubmitting(false); }
@@ -253,6 +257,7 @@ export function WorkspacePanel(props: Props) {
     setNodePool("");
     const template = templates.find((item) => item.id === id);
     setResourceDraft(template ? { ...template.resources } : null);
+    setTemporaryStorageGiB(template ? String(template.storage_policy.temporary_storage_gib) : "");
   }
 
   async function submitPlacement(target: WorkspaceResponse, nextNodePool: string) {
@@ -354,7 +359,7 @@ export function WorkspacePanel(props: Props) {
   const styles = useWorkspaceStyles();
   return <Page title={t("workspaces")} wide actions={canCreate ? <Button appearance="primary" icon={<AddRegular />} aria-expanded={showCreate} onClick={() => setShowCreate((current) => !current)}>{t("newWorkspace")}</Button> : undefined}>
     <WorkspaceStats summary={usageSummaryOrganization === props.organizationId ? usageSummary : null} quota={quota} stale={usageSummaryStale} />
-    {canCreate && showCreate && <WorkspaceCreationForm name={name} templateId={templateId} templates={templates} nodePools={nodePools} nodePool={nodePool} resourceDraft={resourceDraft} explicitInjectionRefs={explicitInjectionRefs} organizationInjections={organizationInjections} userInjections={userInjections} organizationRefs={organizationRefs} userRefs={userRefs} submitting={submitting} onNameChange={setName} onTemplateChange={chooseTemplate} onNodePoolChange={setNodePool} onResourceChange={updateResource} onReferenceModeChange={setReferenceMode} onOrganizationRefsChange={setOrganizationRefs} onUserRefsChange={setUserRefs} onSubmit={create} />}
+    {canCreate && showCreate && <WorkspaceCreationForm name={name} templateId={templateId} templates={templates} nodePools={nodePools} nodePool={nodePool} resourceDraft={resourceDraft} temporaryStorageGiB={temporaryStorageGiB} explicitInjectionRefs={explicitInjectionRefs} organizationInjections={organizationInjections} userInjections={userInjections} organizationRefs={organizationRefs} userRefs={userRefs} submitting={submitting} onNameChange={setName} onTemplateChange={chooseTemplate} onNodePoolChange={setNodePool} onResourceChange={updateResource} onTemporaryStorageChange={setTemporaryStorageGiB} onReferenceModeChange={setReferenceMode} onOrganizationRefsChange={setOrganizationRefs} onUserRefsChange={setUserRefs} onSubmit={create} />}
     <div className={styles.filters}><Field className={styles.searchField} label={t("searchWorkspaces")}><Input type="search" contentBefore={<SearchRegular aria-hidden="true" />} contentAfter={search ? <Button appearance="transparent" size="small" icon={<DismissRegular aria-hidden="true" />} aria-label={t("clearSearch")} onClick={() => setSearch("")} /> : undefined} value={search} onChange={(_, data) => setSearch(data.value)} placeholder={t("searchWorkspacesHint")} /></Field><div className={styles.pagination} role="group" aria-label={t("workspacePagination")}><Button icon={<ChevronLeftRegular />} aria-label={t("previousPage")} disabled={page <= 1 || loading} onClick={() => void previousPage()}>{t("previousPage")}</Button><Text className={styles.paginationStatus} role="status">{t("workspacePageStatus")} {page}</Text><Button icon={<ChevronRightRegular />} iconPosition="after" aria-label={t("nextPage")} disabled={!nextCursor || loading} onClick={() => void nextPage()}>{t("nextPage")}</Button></div></div>
     {runtimeFailed && workspaces.length > 0 && <MessageBar intent="warning"><MessageBarBody>{t("runtimeDataUnavailable")}</MessageBarBody><Button appearance="subtle" onClick={() => setRuntimeRetry((value) => value + 1)}>{t("retryRuntime")}</Button></MessageBar>}
     <div ref={listAnchorRef} className={styles.list} aria-busy={props.busy || loading}>

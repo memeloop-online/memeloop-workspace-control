@@ -516,6 +516,7 @@ export interface CreateWorkspace {
   template_id: string;
   node_pool?: string | null;
   resources: Resources | null;
+  temporary_storage_gib?: number | null;
   organization_injection_refs: string[] | null;
   user_injection_refs: string[] | null;
   inline_workspace_injections?: InjectionDraft[];
