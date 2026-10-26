@@ -262,12 +262,10 @@ async fn exercise(database: Database) {
         )
         .await;
     assert_eq!(database.job_counts().await.unwrap().pending, 0);
+    let pending = runtime.pod.lock().unwrap().clone().unwrap();
     observer
         .apply_event(
-            WatchEvent::Modified(
-                serde_json::from_value::<Pod>(runtime.pod.lock().unwrap().clone().unwrap())
-                    .unwrap(),
-            ),
+            WatchEvent::Modified(serde_json::from_value::<Pod>(pending).unwrap()),
             &mut rv,
         )
         .await;
