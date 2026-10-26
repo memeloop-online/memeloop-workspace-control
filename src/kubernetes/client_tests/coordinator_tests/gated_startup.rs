@@ -212,9 +212,16 @@ impl GateMock {
                 request.headers()["content-type"],
                 "application/apply-patch+yaml"
             );
+            let parameters =
+                url::form_urlencoded::parse(request.uri().query().unwrap_or_default().as_bytes())
+                    .into_owned()
+                    .collect::<Vec<(String, String)>>();
             assert_eq!(
-                request.uri().query(),
-                Some("fieldManager=memeloop-workspace-control"),
+                parameters,
+                vec![(
+                    "fieldManager".to_owned(),
+                    "memeloop-workspace-control".to_owned()
+                )],
                 "preserve the SSA field manager without enabling force"
             );
         }
