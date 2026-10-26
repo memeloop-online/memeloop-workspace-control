@@ -89,9 +89,12 @@ for enabled in false true; do
   fi
 
   mapfile -t workspace_env < <(jq -r '.pod.containers[] | select(.name == "workspace") | .env[] | select(has("value")) | "-e", (.name + "=" + .value)' "$fixture")
+  # Model both image-provided Rustup locations; the controller must not override either one.
+  rustup_home=/usr/local/rustup
+  if [ "$enabled" = true ]; then rustup_home=/workspace/.rustup; fi
   containers+=("$workspace_container")
   docker run --detach --name "$workspace_container" "${network[@]}" \
-    "${workspace_env[@]}" -e MWC_HOME_RESERVE_MIB=0 \
+    "${workspace_env[@]}" -e MWC_HOME_RESERVE_MIB=0 -e RUSTUP_HOME="$rustup_home" \
     --tmpfs /run/mwc-ssh:mode=0700 --tmpfs /tmp:mode=1777 --tmpfs /var/tmp:mode=1777 \
     -v "$root/home:/workspace" -v "$root/config:/etc/workspace-platform:ro" \
     -v "$root/identity:/etc/ssh/platform:ro" \
@@ -143,6 +146,12 @@ for enabled in false true; do
     -o BatchMode=yes -o IdentitiesOnly=yes -o ConnectTimeout=1 -o StrictHostKeyChecking=yes \
     -o UserKnownHostsFile=/run/mwc-ssh/known_hosts \
     -i /run/mwc-ssh/ttyd_client_key workspace@127.0.0.1 "$tool_environment"
+  test "$(docker exec --user 1000:1000 "$workspace_container" printenv RUSTUP_HOME)" = "$rustup_home"
+  # shellcheck disable=SC2016 # Expand the image environment in the non-login SSH session.
+  test "$(docker exec "$workspace_container" ssh -p 2222 \
+    -o BatchMode=yes -o IdentitiesOnly=yes -o ConnectTimeout=1 -o StrictHostKeyChecking=yes \
+    -o UserKnownHostsFile=/run/mwc-ssh/known_hosts \
+    -i /run/mwc-ssh/ttyd_client_key workspace@127.0.0.1 'printf "%s" "$RUSTUP_HOME"')" = "$rustup_home"
   if [ "$enabled" = true ]; then
     ready=false
     for _attempt in $(seq 1 30); do

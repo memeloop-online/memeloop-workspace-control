@@ -410,6 +410,10 @@ injection_sync_monitor() {
 
 prepare_runtime_sshd_config() (
     install -m 0600 -o root -g root /etc/workspace-platform/sshd_config "$runtime_sshd_config"
+    if [ -n "${RUSTUP_HOME:-}" ]; then
+        escaped=$(printf 'RUSTUP_HOME=%s' "$RUSTUP_HOME" | sed 's/\\/\\\\/g; s/"/\\"/g')
+        printf 'SetEnv "%s"\n' "$escaped" >> "$runtime_sshd_config"
+    fi
     metadata=$(mktemp "$runtime_dir/.environment-metadata.XXXXXX")
     trap 'rm -f "$metadata"' EXIT
     if [ -r "$environment_manifest" ]; then

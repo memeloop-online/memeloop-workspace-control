@@ -1,5 +1,6 @@
 #!/bin/sh
 set -eu
+unset RUSTUP_HOME
 
 install -d /etc/ssh/platform /etc/workspace-platform /workspace/.mwc
 install -d -m 0750 -o workspace -g workspace /workspace/.codex /workspace/.codex/sessions /workspace/.codex/logs
@@ -181,6 +182,7 @@ cat > "$injection_config/workspace-environment.json" <<'EOF'
   {"name":"PATH","object":"config_map","data_key":"reserved-missing"},
   {"name":"MWC_METADATA_SECRET","object":"secret","data_key":"metadata-secret"},
   {"name":"CARGO_HOME","object":"config_map","data_key":"reserved-missing"},
+  {"name":"RUSTUP_HOME","object":"secret","data_key":"reserved-missing"},
   {"name":"NPM_CONFIG_CACHE","object":"secret","data_key":"reserved-missing"},
   {"name":"HOME","object":"secret","data_key":"reserved-missing"}
 ]}
@@ -214,6 +216,16 @@ for failure in malformed non_array missing_value invalid_object; do
     test "$(grep -c '^SetEnv ' /run/mwc-ssh/sshd_config)" = 2
 done
 rm "$injection_config/workspace-environment.json"
+
+# Image-provided Rustup paths use the same SSH quoting as injected values. Empty or absent
+# image values must not create a platform default, and injected values cannot replace them.
+RUSTUP_HOME='/workspace/toolchains "quoted" \path' prepare_recovery_fixture
+grep -Fx 'SetEnv "RUSTUP_HOME=/workspace/toolchains \"quoted\" \\path"' /run/mwc-ssh/sshd_config
+RUSTUP_HOME= prepare_recovery_fixture
+! grep -q 'RUSTUP_HOME=' /run/mwc-ssh/sshd_config
+unset RUSTUP_HOME
+prepare_recovery_fixture
+! grep -q 'RUSTUP_HOME=' /run/mwc-ssh/sshd_config
 
 # Dictionary transport must restore exact bytes, including Unicode, CRLF, escaped newlines
 # and the absence of a final newline. A failed decode must preserve the last good file.
