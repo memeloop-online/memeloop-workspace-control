@@ -346,12 +346,17 @@ impl WorkspaceObservations {
                     // An in-flight job may finish from an earlier Ready snapshot.
                     // Keep this hint until it has completed or confirms recovery.
                     Ok(workspace) => {
-                        workspace.state != crate::workspaces::WorkspaceState::Ready
-                            || self
-                                .state
-                                .lock()
-                                .expect("workspace observations lock poisoned")
-                                .runtime_ready(id)
+                        !matches!(
+                            workspace.state,
+                            crate::workspaces::WorkspaceState::Ready
+                                | crate::workspaces::WorkspaceState::Provisioning
+                                | crate::workspaces::WorkspaceState::Starting
+                                | crate::workspaces::WorkspaceState::Restarting
+                        ) || self
+                            .state
+                            .lock()
+                            .expect("workspace observations lock poisoned")
+                            .runtime_ready(id)
                     }
                     Err(StorageError::WorkspaceNotFound) => true,
                     Err(error) => {

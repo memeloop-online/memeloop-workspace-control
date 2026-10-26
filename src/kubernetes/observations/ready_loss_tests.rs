@@ -400,56 +400,84 @@ async fn exercise(database: Database) {
 
 #[tokio::test]
 async fn loss_during_an_earlier_ready_job_is_rechecked_after_that_job_completes() {
-    let database = Database::connect("sqlite::memory:", INSTALLATION.parse().unwrap())
-        .await
-        .unwrap();
-    let workspace = seed(&database).await;
-    let runtime = Arc::new(Runtime::new(&workspace, &builder()));
-    let observer = WorkspaceObservations::new(database.clone(), INSTALLATION.parse().unwrap());
-    assert!(
-        database
-            .enqueue_ready_workspace_observation(workspace.id, unix_now())
+    for recovering in [false, true] {
+        let database = Database::connect("sqlite::memory:", INSTALLATION.parse().unwrap())
+            .await
+            .unwrap();
+        let workspace = seed(&database).await;
+        let runtime = Arc::new(Runtime::new(&workspace, &builder()));
+        let observer = WorkspaceObservations::new(database.clone(), INSTALLATION.parse().unwrap());
+        assert!(
+            database
+                .enqueue_ready_workspace_observation(workspace.id, unix_now())
+                .await
+                .unwrap()
+        );
+        let earlier = database
+            .claim_job("earlier-ready-read", unix_now(), Duration::from_secs(60))
             .await
             .unwrap()
-    );
-    let earlier = database
-        .claim_job("earlier-ready-read", unix_now(), Duration::from_secs(60))
-        .await
-        .unwrap()
-        .unwrap();
-    let pending = runtime.pod.lock().unwrap().clone().unwrap();
-    observer
-        .apply_event(
-            WatchEvent::Modified(serde_json::from_value::<Pod>(pending).unwrap()),
-            &mut None,
-        )
-        .await;
-    assert!(
+            .unwrap();
+        if recovering {
+            database
+                .record_workspace_observation(
+                    workspace.id,
+                    workspace.generation,
+                    WorkspaceObservation::NotReady,
+                    workspace.owner_id,
+                    unix_now(),
+                )
+                .await
+                .unwrap()
+                .unwrap();
+        }
+        let pending = runtime.pod.lock().unwrap().clone().unwrap();
         observer
-            .state
-            .lock()
-            .unwrap()
-            .ready_checks
-            .contains_key(&workspace.id)
-    );
-    assert_eq!(database.job_counts().await.unwrap().pending, 0);
-    // Its GET had already returned Ready before the loss, so it leaves the row Ready.
-    database
-        .complete_job(earlier.id, "earlier-ready-read", unix_now())
-        .await
-        .unwrap();
-    observer.repair().await.unwrap();
-    assert_eq!(database.job_counts().await.unwrap().pending, 1);
-    assert!(
-        worker(&database, &observer, &runtime)
-            .run_once(unix_now())
+            .apply_event(
+                WatchEvent::Modified(serde_json::from_value::<Pod>(pending).unwrap()),
+                &mut None,
+            )
+            .await;
+        assert!(
+            observer
+                .state
+                .lock()
+                .unwrap()
+                .ready_checks
+                .contains_key(&workspace.id)
+        );
+        assert_eq!(database.job_counts().await.unwrap().pending, 0);
+        // Its GET had already returned Ready before the loss, so it leaves the row Ready.
+        if recovering {
+            database
+                .record_workspace_observation(
+                    workspace.id,
+                    workspace.generation,
+                    WorkspaceObservation::Ready,
+                    workspace.owner_id,
+                    unix_now(),
+                )
+                .await
+                .unwrap()
+                .unwrap();
+        }
+        database
+            .complete_job(earlier.id, "earlier-ready-read", unix_now())
             .await
-            .unwrap()
-    );
-    assert_eq!(
-        database.get_workspace(workspace.id).await.unwrap().state,
-        WorkspaceState::Starting
-    );
+            .unwrap();
+        observer.repair().await.unwrap();
+        assert_eq!(database.job_counts().await.unwrap().pending, 1);
+        assert!(
+            worker(&database, &observer, &runtime)
+                .run_once(unix_now())
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            database.get_workspace(workspace.id).await.unwrap().state,
+            WorkspaceState::Starting
+        );
+    }
 }
 
 #[tokio::test]
