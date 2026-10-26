@@ -35,6 +35,11 @@ pub struct CreateWorkspace {
     /// other setting, while these final values are copied into the immutable workspace snapshot.
     #[serde(default)]
     pub resources: Option<Resources>,
+    /// Optional temporary storage capacity in GiB (1–2048). Omitted or null uses the template
+    /// default; the chosen capacity is copied into the immutable workspace snapshot.
+    #[serde(default)]
+    #[schema(minimum = 1, maximum = 2048)]
+    pub temporary_storage_gib: Option<u64>,
     #[serde(default)]
     pub organization_injection_refs: Option<Vec<String>>,
     #[serde(default)]

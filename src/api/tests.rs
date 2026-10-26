@@ -330,6 +330,10 @@ async fn openapi_document_contains_versioned_api() {
     assert!(body["paths"]["/api/v1/plugins"].is_object());
     assert!(body["paths"]["/api/v1/me/profile"]["put"].is_object());
     assert!(body["paths"]["/api/v1/me/api-keys"]["post"].is_object());
+    let temporary_storage =
+        &body["components"]["schemas"]["CreateWorkspace"]["properties"]["temporary_storage_gib"];
+    assert_eq!(temporary_storage["minimum"], 1);
+    assert_eq!(temporary_storage["maximum"], 2048);
     assert!(
         body["paths"]["/api/v1/me/api-keys"]["post"]["description"]
             .as_str()

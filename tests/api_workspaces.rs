@@ -221,6 +221,7 @@ async fn authenticated_workspace_api_enforces_rbac_and_exact_idempotent_replay()
             "gpu_count": 0,
             "disk_gib": 30
         },
+        "temporary_storage_gib": 64,
         "inline_workspace_injections": [{
             "key": "multiline-config",
             "kind": "config_file",
@@ -268,6 +269,28 @@ async fn authenticated_workspace_api_enforces_rbac_and_exact_idempotent_replay()
         .unwrap();
     assert_eq!(invalid.status(), StatusCode::BAD_REQUEST);
 
+    for capacity in [0, 2_049] {
+        let mut invalid_scratch = workspace_request.clone();
+        invalid_scratch["temporary_storage_gib"] = json!(capacity);
+        let rejected = app
+            .clone()
+            .oneshot(request(
+                Method::POST,
+                "/api/v1/workspaces",
+                Some(ADMIN_TOKEN),
+                Some(&format!("invalid-scratch-{capacity}")),
+                Some(invalid_scratch),
+            ))
+            .await
+            .unwrap();
+        let (status, bytes) = body(rejected).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(
+            serde_json::from_slice::<Value>(&bytes).unwrap()["error"]["code"],
+            "invalid_workspace"
+        );
+    }
+
     let first_workspace = app
         .clone()
         .oneshot(request(
@@ -292,6 +315,18 @@ async fn authenticated_workspace_api_enforces_rbac_and_exact_idempotent_replay()
         1500
     );
     assert_eq!(workspace_response["workspace"]["resources"]["disk_gib"], 30);
+    assert_eq!(
+        workspace_response["workspace"]["storage_policy"]["temporary_storage_gib"],
+        64
+    );
+    assert_eq!(
+        database
+            .get_workspace_template(template.id)
+            .await
+            .unwrap()
+            .yaml,
+        template.yaml
+    );
     let workspace_id =
         Uuid::parse_str(workspace_response["workspace"]["id"].as_str().unwrap()).unwrap();
     assert_eq!(
@@ -581,7 +616,11 @@ async fn template_restricted_key_enforces_http_create_action_image_override_and_
             "/api/v1/workspaces",
             Some(&restricted.token),
             Some("restricted-a"),
-            Some(workspace("allowed", template_a.id)),
+            Some({
+                let mut payload = workspace("allowed", template_a.id);
+                payload["temporary_storage_gib"] = Value::Null;
+                payload
+            }),
         ))
         .await
         .unwrap();
@@ -591,6 +630,10 @@ async fn template_restricted_key_enforces_http_create_action_image_override_and_
         StatusCode::CREATED,
         "{}",
         String::from_utf8_lossy(&bytes)
+    );
+    assert_eq!(
+        serde_json::from_slice::<Value>(&bytes).unwrap()["workspace"]["storage_policy"]["temporary_storage_gib"],
+        template_a.template.storage_policy.temporary_storage_gib
     );
     let workspace_id = Uuid::parse_str(
         serde_json::from_slice::<Value>(&bytes).unwrap()["workspace"]["id"]
@@ -633,6 +676,22 @@ async fn template_restricted_key_enforces_http_create_action_image_override_and_
         "resources": { "cpu_millis": 1500, "memory_mib": 2048, "gpu_count": 0, "disk_gib": 20 }
     })))).await.unwrap();
     assert_eq!(overridden.status(), StatusCode::FORBIDDEN);
+    let overridden_scratch = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/v1/workspaces",
+            Some(&restricted.token),
+            Some("restricted-scratch"),
+            Some(json!({
+                "organization_id": organization.id, "owner_id": admin_id,
+                "name": "scratch-override", "template_id": template_a.id,
+                "temporary_storage_gib": 20
+            })),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(overridden_scratch.status(), StatusCode::FORBIDDEN);
     let action = app
         .clone()
         .oneshot(request(

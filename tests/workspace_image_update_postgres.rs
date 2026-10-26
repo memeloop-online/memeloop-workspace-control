@@ -99,6 +99,7 @@ async fn postgres_updates_a_locked_stopped_workspace_image() {
                 name: "PostgreSQL stopped image update".to_owned(),
                 template_id: template.id,
                 resources: None,
+                temporary_storage_gib: None,
                 organization_injection_refs: None,
                 user_injection_refs: None,
             },

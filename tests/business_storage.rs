@@ -110,6 +110,7 @@ async fn unconfigured_image_allowlist_defaults_to_deny() {
                 name: "must-be-rejected".to_owned(),
                 template_id,
                 resources: None,
+                temporary_storage_gib: None,
                 organization_injection_refs: None,
                 user_injection_refs: None,
             },
@@ -170,6 +171,7 @@ async fn inline_injection_failure_rolls_back_workspace_and_first_job() {
                 name: "must-roll-back".to_owned(),
                 template_id,
                 resources: None,
+                temporary_storage_gib: None,
                 organization_injection_refs: None,
                 user_injection_refs: None,
             },
@@ -278,6 +280,7 @@ async fn admitted_template_must_match_the_transactional_workspace_snapshot() {
                 name: "rejected-race".to_owned(),
                 template_id,
                 resources: None,
+                temporary_storage_gib: None,
                 organization_injection_refs: None,
                 user_injection_refs: None,
             },
@@ -352,6 +355,7 @@ async fn workspace_runtime_identity_uses_the_product_namespace() {
                 name: "shared-runtime".to_owned(),
                 template_id,
                 resources: None,
+                temporary_storage_gib: None,
                 organization_injection_refs: None,
                 user_injection_refs: None,
             },
@@ -447,6 +451,7 @@ async fn template_deletion_requires_disabled_unreferenced_template() {
                 name: "keeps-snapshot".to_owned(),
                 template_id,
                 resources: None,
+                temporary_storage_gib: None,
                 organization_injection_refs: None,
                 user_injection_refs: None,
             },
@@ -534,6 +539,25 @@ async fn workspace_resource_override_is_validated_and_snapshotted() {
         gpu_count: 0,
         disk_gib: 100,
     };
+    let template = database.get_workspace_template(template_id).await.unwrap();
+    let command = |name: &str, temporary_storage_gib| CreateWorkspace {
+        organization_id: organization.id,
+        owner_id: admin.user_id,
+        name: name.to_owned(),
+        template_id,
+        resources: None,
+        temporary_storage_gib,
+        organization_injection_refs: None,
+        user_injection_refs: None,
+    };
+    let default_workspace = database
+        .create_workspace(command("template-defaults", None), true, admin.user_id, 103)
+        .await
+        .unwrap();
+    assert_eq!(
+        default_workspace.template.storage_policy,
+        template.template.storage_policy
+    );
     let workspace = database
         .create_workspace(
             CreateWorkspace {
@@ -542,6 +566,7 @@ async fn workspace_resource_override_is_validated_and_snapshotted() {
                 name: "large-workspace".to_owned(),
                 template_id,
                 resources: Some(overridden),
+                temporary_storage_gib: Some(64),
                 organization_injection_refs: None,
                 user_injection_refs: None,
             },
@@ -552,6 +577,11 @@ async fn workspace_resource_override_is_validated_and_snapshotted() {
         .await
         .unwrap();
     assert_eq!(workspace.template.resources, overridden);
+    assert_eq!(workspace.template.storage_policy.temporary_storage_gib, 64);
+    assert_eq!(
+        database.get_workspace(workspace.id).await.unwrap(),
+        workspace
+    );
     assert_eq!(
         database
             .get_workspace(workspace.id)
@@ -575,6 +605,7 @@ async fn workspace_resource_override_is_validated_and_snapshotted() {
                     gpu_count: 0,
                     disk_gib: 20,
                 }),
+                temporary_storage_gib: None,
                 organization_injection_refs: None,
                 user_injection_refs: None,
             },
@@ -584,6 +615,59 @@ async fn workspace_resource_override_is_validated_and_snapshotted() {
         )
         .await;
     assert!(matches!(invalid, Err(StorageError::InvalidWorkspace)));
+
+    let jobs_before_invalid = database.job_counts().await.unwrap();
+    for capacity in [0, 2_049] {
+        let invalid = database
+            .create_workspace(
+                command(&format!("invalid-scratch-{capacity}"), Some(capacity)),
+                true,
+                admin.user_id,
+                104,
+            )
+            .await;
+        assert!(matches!(invalid, Err(StorageError::InvalidWorkspace)));
+    }
+    assert_eq!(
+        database.job_counts().await.unwrap().pending,
+        jobs_before_invalid.pending
+    );
+    assert_eq!(
+        database
+            .get_workspace_template(template_id)
+            .await
+            .unwrap()
+            .yaml,
+        template.yaml
+    );
+    assert_eq!(
+        database.get_workspace(default_workspace.id).await.unwrap(),
+        default_workspace
+    );
+
+    database
+        .set_organization_quota(
+            organization.id,
+            QuotaResources {
+                cpu_millis: 11_000,
+                memory_mib: 12_288,
+                gpu_count: 0,
+                disk_gib: 120,
+                ..QuotaResources::default()
+            },
+            105,
+        )
+        .await
+        .unwrap();
+    let quota_rejected = database
+        .create_workspace(
+            command("scratch-does-not-bypass-quota", Some(1)),
+            true,
+            admin.user_id,
+            106,
+        )
+        .await;
+    assert!(matches!(quota_rejected, Err(StorageError::Quota(_))));
 }
 
 #[tokio::test]
@@ -660,6 +744,7 @@ async fn image_allowlist_and_template_contract_are_admitted_atomically() {
         name: "contract-ok".to_owned(),
         template_id: template.id,
         resources: None,
+        temporary_storage_gib: None,
         organization_injection_refs: Some(vec!["org-key".to_owned()]),
         user_injection_refs: Some(Vec::new()),
     };
@@ -730,6 +815,7 @@ async fn image_allowlist_and_template_contract_are_admitted_atomically() {
         name: "image-rejected".to_owned(),
         template_id: unapproved_template,
         resources: None,
+        temporary_storage_gib: None,
         organization_injection_refs: None,
         user_injection_refs: None,
     };
@@ -872,6 +958,7 @@ async fn workspace_creation_enforces_quota_and_enqueues_lifecycle_actions() {
         name: name.to_owned(),
         template_id,
         resources: None,
+        temporary_storage_gib: None,
         organization_injection_refs: None,
         user_injection_refs: None,
     };
@@ -1033,6 +1120,7 @@ async fn confirmed_deletion_scrubs_sensitive_workspace_state_and_keeps_a_tombsto
                 name: "sensitive-name".to_owned(),
                 template_id,
                 resources: None,
+                temporary_storage_gib: None,
                 organization_injection_refs: None,
                 user_injection_refs: None,
             },
@@ -1197,6 +1285,7 @@ async fn user_injection_change_reconciles_every_workspace_the_user_can_access() 
                 name: "shared".to_owned(),
                 template_id,
                 resources: None,
+                temporary_storage_gib: None,
                 organization_injection_refs: None,
                 user_injection_refs: None,
             },
@@ -1268,6 +1357,7 @@ async fn cpu_overcommit_is_frozen_for_all_creation_paths_and_existing_snapshots_
         name: name.to_owned(),
         template_id,
         resources,
+        temporary_storage_gib: None,
         organization_injection_refs: None,
         user_injection_refs: None,
     };

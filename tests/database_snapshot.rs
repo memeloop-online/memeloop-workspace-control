@@ -451,6 +451,7 @@ async fn create_snapshot_workspace(
                 name: "snapshot-workspace".to_owned(),
                 template_id: template.id,
                 resources: None,
+                temporary_storage_gib: None,
                 organization_injection_refs: None,
                 user_injection_refs: None,
             },

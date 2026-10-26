@@ -96,6 +96,9 @@ fn apply_resource_override(
     if let Some(resources) = command.resources {
         snapshot.spec.resources = resources;
     }
+    if let Some(temporary_storage_gib) = command.temporary_storage_gib {
+        snapshot.spec.storage_policy.temporary_storage_gib = temporary_storage_gib;
+    }
     snapshot.spec.cpu_overcommit_ratio = Some(
         snapshot
             .spec
