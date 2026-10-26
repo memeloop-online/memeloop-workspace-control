@@ -189,13 +189,12 @@ cat > "$injection_config/workspace-environment.json" <<'EOF'
 EOF
 prepare_recovery_fixture
 cat > /tmp/expected-metadata-setenv <<'EOF'
-SetEnv "MWC_METADATA_CONFIG=配置 \"双引号\" \\path with spaces"
-SetEnv "MWC_METADATA_SECRET=秘密 '单引号' \"double\" \\path $HOME"
+SetEnv "MWC_METADATA_CONFIG=配置 \"双引号\" \\path with spaces" "MWC_METADATA_SECRET=秘密 '单引号' \"double\" \\path $HOME"
 EOF
 while IFS= read -r expected_line; do
     grep -Fx "$expected_line" /run/mwc-ssh/sshd_config
 done < /tmp/expected-metadata-setenv
-test "$(grep -c '^SetEnv ' /run/mwc-ssh/sshd_config)" = 2
+test "$(grep -c '^SetEnv ' /run/mwc-ssh/sshd_config)" = 1
 test -z "$(find /run/mwc-ssh -maxdepth 1 -name '.environment-metadata.*' -print -quit)"
 cp "$injection_config/workspace-environment.json" /tmp/good-environment-manifest
 for failure in malformed non_array missing_value invalid_object; do
@@ -213,7 +212,7 @@ for failure in malformed non_array missing_value invalid_object; do
     test -z "$(find /run/mwc-ssh -maxdepth 1 -name '.environment-metadata.*' -print -quit)"
     cp /tmp/good-environment-manifest "$injection_config/workspace-environment.json"
     prepare_recovery_fixture
-    test "$(grep -c '^SetEnv ' /run/mwc-ssh/sshd_config)" = 2
+    test "$(grep -c '^SetEnv ' /run/mwc-ssh/sshd_config)" = 1
 done
 rm "$injection_config/workspace-environment.json"
 
