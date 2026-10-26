@@ -99,6 +99,7 @@ function fixture(path) {
   }];
   if (path === "/api/v1/webhooks" || path === "/api/v1/admin/images") return [];
   if (path === "/api/v1/node-pools") return [{ name: "default", display_name: "Demo pool" }];
+  if (path === "/api/v1/admin/node-pools") return [{ name: "default", display_name: "Demo pool", placement: { selector: {}, required_hosts: [], preferred_hosts: [] }, enabled: true, created_at: 1_700_000_000, updated_at: 1_700_000_000 }];
   if (path === "/api/v1/admin/scaling") return { database_mode: "sqlite", configured_replicas: 1, schema_version: 1, job_worker_concurrency: 32, jobs: { pending: 0, running: 0, completed: 0, failed: 0 } };
   if (path === "/api/v1/audit") return { items: [], next_offset: null };
   return undefined;
@@ -164,6 +165,15 @@ try {
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await page.getByTestId("settings-section-profile").waitFor();
   await page.screenshot({ path: join(screenshotDir, "settings-desktop.png"), fullPage: true, animations: "disabled" });
+
+  await page.getByTestId("settings-search").fill("Run locations");
+  const locations = page.getByTestId("settings-section-run-locations");
+  await locations.getByText("Demo pool", { exact: true }).waitFor();
+  await page.screenshot({ path: join(screenshotDir, "run-locations-desktop.png"), fullPage: true, animations: "disabled" });
+  await locations.getByRole("button", { name: "Create location", exact: true }).click();
+  await page.getByRole("dialog").waitFor();
+  await page.screenshot({ path: join(screenshotDir, "run-location-editor.png"), fullPage: true, animations: "disabled" });
+  await page.getByRole("dialog").getByRole("button", { name: "Cancel", exact: true }).click();
 
   await page.getByTestId("settings-search").fill("appearance");
   await page.getByTestId("settings-section-appearance").waitFor();

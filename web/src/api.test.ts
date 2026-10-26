@@ -124,3 +124,48 @@ test("workspace page requests serialize the sort direction", async () => {
     assert.equal(requests[2], "/api/v1/workspaces?organization_id=org-1", "omitted sort relies on the backend newest-first default");
   } finally { globalThis.fetch = originalFetch; }
 });
+
+test("run location administration uses the admin endpoints with an idempotent upsert", async () => {
+  const originalFetch = globalThis.fetch;
+  const requests: Array<{ input: RequestInfo | URL; init?: RequestInit }> = [];
+  const pool = {
+    name: "gpu-west", display_name: "West GPU",
+    placement: { selector: { accelerator: "gpu" }, required_hosts: ["node-a"], preferred_hosts: [] },
+    enabled: true, created_at: 100, updated_at: 100,
+  };
+  globalThis.fetch = async (input, init) => {
+    requests.push({ input, init });
+    if (requests.length === 1) return Response.json([pool]);
+    if (requests.length === 2) return Response.json({ ...pool, updated_at: 200 });
+    return new Response(null, { status: 204 });
+  };
+  try {
+    const api = new ApiClient("operator-token");
+    assert.deepEqual((await api.adminNodePools())[0]?.name, "gpu-west");
+    await api.putNodePool("gpu-west", { display_name: "West GPU", placement: pool.placement, enabled: false });
+    await api.deleteNodePool("gpu-west");
+    assert.equal(String(requests[0]?.input), "/api/v1/admin/node-pools");
+    assert.equal(String(requests[1]?.input), "/api/v1/admin/node-pools/gpu-west");
+    assert.equal(requests[1]?.init?.method, "PUT");
+    assert.deepEqual(JSON.parse(String(requests[1]?.init?.body)), { display_name: "West GPU", placement: pool.placement, enabled: false });
+    assert.ok(new Headers(requests[1]?.init?.headers).get("Idempotency-Key"), "upsert must be retry-safe");
+    assert.equal(requests[2]?.init?.method, "DELETE");
+    assert.equal(String(requests[2]?.input), "/api/v1/admin/node-pools/gpu-west");
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("run location deletion surfaces actionable backend conflicts instead of a silent success", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => Response.json(
+    { error: { code: "node_pool_in_use", message: "disable the node pool and remove all template and workspace references before deleting it" } },
+    { status: 409 },
+  );
+  try {
+    const failure = await new ApiClient("operator-token").deleteNodePool("gpu-west").catch((reason: unknown) => reason);
+    assert.ok(failure instanceof Error);
+    const error = failure as Error & { code?: string; status?: number };
+    assert.equal(error.message, "disable the node pool and remove all template and workspace references before deleting it");
+    assert.equal(error.code, "node_pool_in_use");
+    assert.equal(error.status, 409);
+  } finally { globalThis.fetch = originalFetch; }
+});
