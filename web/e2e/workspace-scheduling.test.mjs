@@ -361,7 +361,7 @@ test("workspace creation always shows the run location and only submits usable l
       const submit = page.getByRole("button", { name: messages.submitCreate, exact: true });
       assert.equal(await submit.isDisabled(), true, "creation requires an explicit location choice");
       await page.evaluate(() => document.querySelector("form")?.requestSubmit());
-      await page.getByText(messages.workspaceRunLocationInvalid, { exact: true }).waitFor();
+      await page.locator(".fui-ToastTitle").filter({ hasText: messages.workspaceRunLocationInvalid }).waitFor();
       assert.equal(submissions.length, 0, "an unset choice must not reach the API");
       await location.click();
       await page.getByRole("option", { name: pools[1].display_name, exact: true }).click();

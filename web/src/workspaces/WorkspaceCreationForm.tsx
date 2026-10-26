@@ -61,15 +61,16 @@ export function WorkspaceCreationForm(props: Props) {
     <div className={styles.formWide}>
       <Field label={<InfoLabel info={t("workspaceRunLocationHelp")}>{t("workspaceRunLocation")}</InfoLabel>}>
         {props.nodePoolsStatus !== "ready" || !selectedTemplate || selectableLocations.length === 0
-          ? <Input disabled readOnly value={
+          ? <Input disabled readOnly aria-label={t("workspaceRunLocation")} value={
               props.nodePoolsStatus === "loading" ? t("loading")
                 : props.nodePoolsStatus === "failed" ? ""
                 : !selectedTemplate ? t("workspaceRunLocationChooseTemplate")
                 : ""
             } placeholder={props.nodePoolsStatus === "failed" || (selectedTemplate && selectableLocations.length === 0) ? "—" : undefined} />
           : selectableLocations.length === 1
-            ? <Input disabled readOnly value={selectableLocations[0]?.display_name ?? selectableLocations[0]?.name ?? ""} />
+            ? <Input disabled readOnly aria-label={t("workspaceRunLocation")} value={selectableLocations[0]?.display_name ?? selectableLocations[0]?.name ?? ""} />
             : <Dropdown
+                aria-label={t("workspaceRunLocation")}
                 value={props.nodePool ? nodePoolDisplayName(props.nodePools, props.nodePool) : defaultAvailable ? t("workspaceRunLocationTemplateDefault") : ""}
                 selectedOptions={props.nodePool || defaultAvailable ? [props.nodePool] : []}
                 placeholder={defaultAvailable ? undefined : t("workspaceRunLocationChoose")}

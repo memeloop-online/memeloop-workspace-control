@@ -146,9 +146,11 @@ test("system administrators manage run locations with idempotent upserts and see
     await row("Retired location").getByRole("button", { name: messages.deleteRunLocation, exact: true }).click();
     const conflictConfirm = page.getByRole("alertdialog");
     await conflictConfirm.getByRole("button", { name: messages.deleteRunLocation, exact: true }).click();
-    await page.getByText("disable the node pool and remove all template and workspace references before deleting it", { exact: true }).waitFor();
+    await page.locator(".fui-ToastTitle").filter({ hasText: "disable the node pool and remove all template and workspace references before deleting it" }).waitFor();
     // The footer Cancel carries visible text; the title dismiss shares its aria-label.
     await conflictConfirm.getByText(messages.cancel, { exact: true }).click();
+    await conflictConfirm.waitFor({ state: "hidden" });
+    await row("Retired location").waitFor();
     assert.deepEqual(deletes, ["gpu-west", "retired"]);
     assert.equal(await row("Retired location").count(), 1, "a conflicted delete keeps the location listed");
 
