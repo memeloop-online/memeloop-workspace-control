@@ -38,6 +38,7 @@ mod web_shell;
 mod webhook_store;
 mod workspace_actions;
 mod workspace_admission;
+mod workspace_cpu_overcommit;
 mod workspace_events;
 mod workspace_home_capacity;
 mod workspace_home_pvc;
