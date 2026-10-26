@@ -14,6 +14,7 @@ interface Props {
   nodePools: AvailableNodePool[];
   nodePool: string;
   resourceDraft: Resources | null;
+  temporaryStorageGiB: string;
   explicitInjectionRefs: boolean;
   organizationInjections: StoredInjection[];
   userInjections: StoredInjection[];
@@ -24,6 +25,7 @@ interface Props {
   onTemplateChange: (id: string) => void;
   onNodePoolChange: (name: string) => void;
   onResourceChange: (key: keyof Resources, value: string) => void;
+  onTemporaryStorageChange: (value: string) => void;
   onReferenceModeChange: (explicit: boolean) => void;
   onOrganizationRefsChange: (keys: string[]) => void;
   onUserRefsChange: (keys: string[]) => void;
@@ -34,6 +36,7 @@ export function WorkspaceCreationForm(props: Props) {
   const { t } = useI18n();
   const styles = useWorkspaceStyles();
   const selectedTemplate = props.templates.find((template) => template.id === props.templateId);
+  const selectableLocations = props.nodePools.filter((pool) => selectedTemplate?.placement.allowed_node_pools.includes(pool.name));
   const [attempted, setAttempted] = useState(false);
   const nameError = attempted && !props.name.trim() ? t("workspaceNameRequired") : undefined;
   return <Card className={styles.createCard} appearance="filled-alternative">
@@ -45,17 +48,20 @@ export function WorkspaceCreationForm(props: Props) {
       </Dropdown>
     </Field>
     {selectedTemplate && <TemplateSummary template={selectedTemplate} />}
-    {selectedTemplate && selectedTemplate.placement.allowed_node_pools.length > 1 && <Field className={styles.formWide} label={<InfoLabel info={t("workspaceNodePoolHelp")}>{t("nodePool")}</InfoLabel>}>
+    {selectableLocations.length > 1 && <Field className={styles.formWide} label={t("workspaceRunLocation")} hint={t("workspaceRunLocationHelp")}>
       <Dropdown
-        value={props.nodePool ? nodePoolDisplayName(props.nodePools, props.nodePool) : t("nodePoolTemplateDefault")}
+        value={props.nodePool ? nodePoolDisplayName(props.nodePools, props.nodePool) : t("workspaceRunLocationAutomatic")}
         selectedOptions={[props.nodePool]}
         onOptionSelect={(_, data) => props.onNodePoolChange(data.optionValue ?? "")}
       >
-        <Option value="" text={t("nodePoolTemplateDefault")}>{t("nodePoolTemplateDefault")}</Option>
-        {selectedTemplate.placement.allowed_node_pools.map((name) => <Option key={name} value={name} text={nodePoolDisplayName(props.nodePools, name)}>{nodePoolDisplayName(props.nodePools, name)}</Option>)}
+        <Option value="" text={t("workspaceRunLocationAutomatic")}>{t("workspaceRunLocationAutomatic")}</Option>
+        {selectableLocations.map((pool) => <Option key={pool.name} value={pool.name} text={pool.display_name}>{pool.display_name}</Option>)}
       </Dropdown>
     </Field>}
     {selectedTemplate && props.resourceDraft && <ResourceEditor template={selectedTemplate} resources={props.resourceDraft} onChange={props.onResourceChange} />}
+    {selectedTemplate && <Field label={t("workspaceTemporaryStorageGiB")} hint={t("workspaceTemporaryStorageHelp")}>
+      <Input type="number" min={1} max={2048} step={1} required value={props.temporaryStorageGiB} onChange={(_, data) => props.onTemporaryStorageChange(data.value)} />
+    </Field>}
     <Field className={styles.formWide} label={t("injectionReferences")}>
       <Dropdown value={props.explicitInjectionRefs ? t("selectedReferences") : t("allMatching")} selectedOptions={[props.explicitInjectionRefs ? "selected" : "all"]} onOptionSelect={(_, data) => props.onReferenceModeChange(data.optionValue === "selected")}>
         <Option value="all">{t("allMatching")}</Option><Option value="selected">{t("selectedReferences")}</Option>

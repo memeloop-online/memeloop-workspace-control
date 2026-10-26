@@ -77,6 +77,7 @@ async fn seed(database: &Database) -> Workspace {
                 name: "parked workspace".to_owned(),
                 template_id: template.id,
                 resources: None,
+                temporary_storage_gib: None,
                 organization_injection_refs: None,
                 user_injection_refs: None,
             },

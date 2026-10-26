@@ -80,6 +80,7 @@ async fn stopped_workspace() -> (Database, Workspace, Uuid) {
                 name: "Stopped image update".to_owned(),
                 template_id: template.id,
                 resources: None,
+                temporary_storage_gib: None,
                 organization_injection_refs: None,
                 user_injection_refs: None,
             },

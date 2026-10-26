@@ -25,10 +25,13 @@ pub(super) async fn create_admitted_workspace(
     final_template.cpu_overcommit_ratio = Some(cpu_overcommit_ratio);
     if let Some(resources) = command.resources {
         final_template.resources = resources;
-        final_template
-            .validate()
-            .map_err(|_| crate::storage::StorageError::InvalidWorkspace)?;
     }
+    if let Some(temporary_storage_gib) = command.temporary_storage_gib {
+        final_template.storage_policy.temporary_storage_gib = temporary_storage_gib;
+    }
+    final_template
+        .validate()
+        .map_err(|_| crate::storage::StorageError::InvalidWorkspace)?;
     preflight_product_namespace(state).await?;
     validate_inline_injections(
         state,
@@ -110,7 +113,8 @@ pub(super) async fn authorize_creation(
         return Err(ApiError::Forbidden);
     }
     if !actor.may_use_template(command.template_id)
-        || actor.has_template_restriction() && command.resources.is_some()
+        || actor.has_template_restriction()
+            && (command.resources.is_some() || command.temporary_storage_gib.is_some())
     {
         return Err(ApiError::Forbidden);
     }
@@ -201,7 +205,8 @@ mod tests {
 
     #[tokio::test]
     async fn creation_freezes_cpu_ratio_before_preflight_and_plugin_admission() {
-        let (mut state, actor, request, template, _) = setup(NamespaceFixture::Owned).await;
+        let (mut state, actor, mut request, template, _) = setup(NamespaceFixture::Owned).await;
+        request.workspace.temporary_storage_gib = Some(2_048);
         let database = state.database.clone();
         state.set_kubernetes_client(kube::Client::new(
             service_fn(move |_request: Request<kube::client::Body>| {
@@ -221,6 +226,10 @@ mod tests {
             .unwrap();
         assert_eq!(state.database.cpu_overcommit_ratio().await.unwrap(), 20);
         assert_eq!(workspace.template.cpu_overcommit_ratio, Some(10));
+        assert_eq!(
+            workspace.template.storage_policy.temporary_storage_gib,
+            2_048
+        );
         assert_eq!(
             state
                 .database
@@ -307,6 +316,7 @@ mod tests {
                 name: format!("preflight-{fixture:?}"),
                 template_id: template.id,
                 resources: None,
+                temporary_storage_gib: None,
                 organization_injection_refs: None,
                 user_injection_refs: None,
             },

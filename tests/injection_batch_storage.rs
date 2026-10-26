@@ -118,6 +118,7 @@ async fn assert_locked_batch_rolls_back(database: Database) {
                 name: "batch-workspace".to_owned(),
                 template_id,
                 resources: None,
+                temporary_storage_gib: None,
                 organization_injection_refs: None,
                 user_injection_refs: None,
             },
