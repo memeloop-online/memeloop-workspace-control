@@ -36,8 +36,7 @@ case "$(uname -r)" in
     *gvisor*) PATH="/usr/local/lib/mwc-gvisor-compat:$PATH"; export PATH ;;
 esac
 
-# shellcheck disable=SC2317
-cleanup() {
+trap '
     if [ -n "${websockify_pid:-}" ]; then
         kill "$websockify_pid" >/dev/null 2>&1 || true
     fi
@@ -47,8 +46,8 @@ cleanup() {
     if [ -n "${vnc_pid:-}" ]; then
         kill "$vnc_pid" >/dev/null 2>&1 || true
     fi
-}
-trap 'cleanup; exit 0' EXIT INT TERM HUP
+    exit 0
+' EXIT INT TERM HUP
 
 # No VNC password is configured because this listener is strictly loopback-only
 # inside the workspace Pod. Authentication is enforced by the outer HTTPS

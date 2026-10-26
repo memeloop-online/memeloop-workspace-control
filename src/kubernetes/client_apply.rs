@@ -606,7 +606,7 @@ impl KubernetesCoordinator {
             K::KIND,
             name,
             "apply",
-            api.patch(
+            api.patch_metadata(
                 name,
                 &PatchParams::apply(FIELD_MANAGER),
                 &Patch::Apply(desired),

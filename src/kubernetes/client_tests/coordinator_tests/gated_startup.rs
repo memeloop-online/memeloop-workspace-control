@@ -200,6 +200,31 @@ impl GateMock {
             return self.create_approval(&path, request).await;
         }
         assert_eq!(method, Method::PATCH);
+        let metadata_only = request.headers().get("accept").is_some_and(|value| {
+            value == "application/json;as=PartialObjectMetadata;g=meta.k8s.io;v=v1"
+        });
+        if path.ends_with("-files-config") {
+            assert!(
+                metadata_only,
+                "file apply must request only response metadata"
+            );
+            assert_eq!(
+                request.headers()["content-type"],
+                "application/apply-patch+yaml"
+            );
+            let parameters =
+                url::form_urlencoded::parse(request.uri().query().unwrap_or_default().as_bytes())
+                    .into_owned()
+                    .collect::<Vec<(String, String)>>();
+            assert_eq!(
+                parameters,
+                vec![(
+                    "fieldManager".to_owned(),
+                    "memeloop-workspace-control".to_owned()
+                )],
+                "preserve the SSA field manager without enabling force"
+            );
+        }
         if path.ends_with("-files-config") && self.hold_files.load(Ordering::SeqCst) {
             self.files_pending.notify_one();
             self.release_files.acquire().await.unwrap().forget();
@@ -246,7 +271,16 @@ impl GateMock {
         if path.contains("/statefulsets/") {
             self.workload_applied.notify_one();
         }
-        json_response(StatusCode::OK, body)
+        let response = if metadata_only {
+            json!({
+                "apiVersion":"meta.k8s.io/v1",
+                "kind":"PartialObjectMetadata",
+                "metadata":body["metadata"]
+            })
+        } else {
+            body
+        };
+        json_response(StatusCode::OK, response)
     }
 }
 

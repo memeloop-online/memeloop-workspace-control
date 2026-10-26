@@ -41,14 +41,11 @@ config=$(expand_home "$config"); auth=$(expand_home "$auth"); output=$(expand_ho
 [[ -r $config && -r $auth ]] || fail 'Codex config.toml or auth.json is unreadable'
 work=$(mktemp -d)
 curl_pid=''; writer_pid=''
-# Invoked indirectly by the EXIT trap.
-# shellcheck disable=SC2317
-cleanup() {
+trap '
     if [[ -n $curl_pid ]]; then kill "$curl_pid" 2>/dev/null || true; wait "$curl_pid" 2>/dev/null || true; fi
     if [[ -n $writer_pid ]]; then kill "$writer_pid" 2>/dev/null || true; wait "$writer_pid" 2>/dev/null || true; fi
     rm -rf -- "$work"
-}
-trap cleanup EXIT
+' EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 

@@ -316,18 +316,34 @@ async fn approval_headers_return_the_same_response_and_service_error_without_sec
 }
 
 #[tokio::test]
-async fn network_policy_headers_preserve_get_and_patch_methods() {
+async fn startup_headers_preserve_targeted_methods() {
     let Some(capture) = capture_in_child(concat!(
         module_path!(),
-        "::network_policy_headers_preserve_get_and_patch_methods"
+        "::startup_headers_preserve_targeted_methods"
     )) else {
         return;
     };
-    for method in ["GET", "PATCH"] {
+    let cases = [
+        ("GET", POLICY_PATH),
+        ("PATCH", POLICY_PATH),
+        (
+            "GET",
+            "/api/v1/namespaces/default/configmaps/w-probe-files-config",
+        ),
+        (
+            "PATCH",
+            "/api/v1/namespaces/default/configmaps/w-probe-files-config",
+        ),
+        (
+            "PATCH",
+            "/apis/apps/v1/namespaces/default/statefulsets/w-probe",
+        ),
+    ];
+    for (method, path) in cases {
         let inner = service_fn(move |request: Request<kube::client::Body>| async move {
             use http_body_util::BodyExt;
             assert_eq!(request.method(), method);
-            assert_eq!(request.uri().path(), POLICY_PATH);
+            assert_eq!(request.uri().path(), path);
             assert_eq!(request.uri().query(), Some("fieldManager=query-secret"));
             assert_eq!(request.headers()["authorization"], "Bearer header-secret");
             assert_eq!(
@@ -346,7 +362,7 @@ async fn network_policy_headers_preserve_get_and_patch_methods() {
             .oneshot(
                 Request::builder()
                     .method(method)
-                    .uri(format!("{POLICY_PATH}?fieldManager=query-secret"))
+                    .uri(format!("{path}?fieldManager=query-secret"))
                     .header("authorization", "Bearer header-secret")
                     .body(kube::client::Body::from(b"request-body-secret".to_vec()))
                     .unwrap(),
@@ -356,10 +372,10 @@ async fn network_policy_headers_preserve_get_and_patch_methods() {
         assert_eq!(response.body(), &"response-body-secret");
     }
     let events = capture.events();
-    assert_eq!(events.len(), 2);
-    for (event, method) in events.iter().zip(["GET", "PATCH"]) {
+    assert_eq!(events.len(), cases.len());
+    for (event, (method, path)) in events.iter().zip(cases) {
         assert_eq!(event["fields"]["method"], method);
-        assert_eq!(event["fields"]["resource_path"], POLICY_PATH);
+        assert_eq!(event["fields"]["resource_path"], path);
     }
     excluded_requests(&capture).await;
     let output = String::from_utf8(capture.bytes.lock().unwrap().clone()).unwrap();
@@ -392,6 +408,29 @@ async fn excluded_requests(capture: &Capture) {
             "/api/v1/namespaces/default/secrets/probe-startup-gate",
         ),
         ("GET", "/api/v1/namespaces/default/configmaps/probe"),
+        ("PATCH", PATH),
+        (
+            "POST",
+            "/api/v1/namespaces/default/configmaps/w-probe-files-config",
+        ),
+        (
+            "PATCH",
+            "/api/v1/namespaces//configmaps/w-probe-files-config",
+        ),
+        (
+            "GET",
+            "/apis/apps/v1/namespaces/default/statefulsets/w-probe",
+        ),
+        (
+            "POST",
+            "/apis/apps/v1/namespaces/default/statefulsets/w-probe",
+        ),
+        ("PATCH", "/apis/apps/v1/namespaces//statefulsets/w-probe"),
+        (
+            "PATCH",
+            "/apis/apps/v1/namespaces/default/statefulsets/probe",
+        ),
+        ("PATCH", "/apis/apps/v1/namespaces/default/statefulsets/w-"),
     ] {
         let calls = Arc::new(AtomicUsize::new(0));
         let counter = calls.clone();
