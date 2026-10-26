@@ -177,7 +177,6 @@ test("workspace event log preserves native identity and distinguishes local limi
     }
   } finally { await browser.close(); }
 });
-
 test("workspace creation edits temporary storage independently and offers only available allowed locations", { timeout: 90_000 }, async () => {
   const messages = JSON.parse(await readFile(new URL("../src/locales/en.json", import.meta.url), "utf8"));
   const creationResources = { ...resources, disk_gib: 20 };
@@ -294,6 +293,112 @@ test("workspace creation edits temporary storage independently and offers only a
       assert.equal(submissions.length, hasLocationChoice ? 2 : 1);
       assert.deepEqual(unexpected, [], "unexpected creation requests");
       assert.deepEqual(errors, [], "creation browser errors");
+      await context.close();
+    }
+  } finally { await browser.close(); }
+});
+
+test("workspace sorting defaults to newest, resets paging on change, and ignores stale sort responses", { timeout: 90_000 }, async () => {
+  const sortableNames = ["Alpha sorting workspace", "Beta sorting workspace", "Gamma sorting workspace"];
+  const sortable = sortableNames.map((name, index) => ({
+    workspace: {
+      id: `sortable-${index}`, short_id: `sortable-${index}`, name, state: "starting", resources,
+      organization_id: organizationId, owner_id: "fixture-user", template_id: "fixture-template",
+      node_pool: "default", image: "example.invalid/fixture:latest", access_mode: "internal",
+      pod_requests: { cpu_millis: 2000, memory_mib: 4096 }, workspace_user: "fixture", workspace_home: "/home/fixture",
+      buildkit: false, storage_policy: { temporary_storage_gib: 8 }, cluster_access: false,
+      egress_policy: "internet_only", runtime_class_name: null,
+      placement: { allowed_node_pools: ["default"], default_node_pool: "default" },
+      generation: 1, created_at: 1_700_000_000 + index, updated_at: 1_700_000_000 + index,
+    },
+    namespace: "fixture", ssh_connection: null, ssh_host: null, ssh_port: null, ssh_command: null,
+    ssh_config: null, web_shell_url: null, injection_sources: [], workspace_host_key: null, jump_host_key: null,
+  }));
+  const [alpha, beta, gamma] = sortable;
+  const sortSummary = { total_count: 3, requested: resources, temporary_requested_gib: 24, state_counts: { starting: 3 } };
+  const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_BIN || chromium.executablePath(), headless: true, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
+  try {
+    for (const locale of ["en", "zh-CN", "ru"]) {
+      const messages = JSON.parse(await readFile(new URL(`../src/locales/${locale}.json`, import.meta.url), "utf8"));
+      const context = await browser.newContext();
+      const unexpected = [];
+      const errors = [];
+      const listRequests = [];
+      let oldestRequested;
+      const oldestRequestSeen = new Promise((resolve) => { oldestRequested = resolve; });
+      let releaseOldest;
+      const oldestHeld = new Promise((resolve) => { releaseOldest = resolve; });
+      await context.addInitScript(({ locale, organizationId }) => {
+        sessionStorage.setItem("mwc.api-token", "scheduling-fixture-token");
+        localStorage.setItem("mwc.locale", locale);
+        localStorage.setItem("mwc.organization-id", organizationId);
+        localStorage.setItem("mwc.view", "workspaces");
+      }, { locale, organizationId });
+      await context.route("**/*", async (route) => {
+        const request = route.request();
+        const url = new URL(request.url());
+        if (url.origin !== new URL(baseUrl).origin) { unexpected.push("external request"); return route.abort(); }
+        if (!url.pathname.startsWith("/api/")) return route.continue();
+        if (request.method() === "GET" && url.pathname === "/api/v1/workspaces") {
+          const sort = url.searchParams.get("sort");
+          const cursor = url.searchParams.get("cursor");
+          listRequests.push({ sort, cursor });
+          if (sort === "oldest") {
+            // Hold the old-sort response until the newest scope has settled, so a
+            // late response can only corrupt the list if staleness checks fail.
+            oldestRequested();
+            await oldestHeld;
+            return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ items: [alpha, beta], next_cursor: null, summary: sortSummary }) });
+          }
+          const pageItems = cursor === "newest-page-2" ? [alpha] : [gamma, beta];
+          const nextCursor = cursor === "newest-page-2" ? null : "newest-page-2";
+          return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ items: pageItems, next_cursor: nextCursor, summary: sortSummary }) });
+        }
+        if (request.method() === "GET" && url.pathname === "/api/v1/workspace-runtimes") {
+          return route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
+        }
+        const body = request.method() === "GET" ? fixture(url.pathname) : undefined;
+        if (body === undefined) unexpected.push(`${request.method()} ${url.pathname}`);
+        await route.fulfill({ status: body === undefined ? 501 : 200, contentType: "application/json", body: JSON.stringify(body ?? null) });
+      });
+      const page = await context.newPage();
+      page.on("pageerror", (error) => errors.push(error.message));
+      await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
+      const sortControl = page.getByRole("combobox", { name: messages.sortWorkspaces, exact: true });
+      await sortControl.waitFor();
+      assert.equal((await sortControl.innerText()).trim(), messages.sortNewestFirst, `${locale}: default sort shows newest first`);
+      await sortControl.click();
+      await page.getByRole("option", { name: messages.sortNewestFirst, exact: true }).waitFor();
+      await page.getByRole("option", { name: messages.sortOldestFirst, exact: true }).waitFor();
+      await page.keyboard.press("Escape");
+      await page.getByRole("group", { name: sortableNames[2], exact: true }).waitFor();
+      assert.deepEqual(listRequests[0], { sort: "newest", cursor: null }, `${locale}: the default listing requests newest first without a cursor`);
+      assert.deepEqual(unexpected, [], `${locale}: unexpected requests`);
+      assert.deepEqual(errors, [], `${locale}: browser errors`);
+      if (locale !== "en") { await context.close(); continue; }
+      const headings = () => page.getByRole("heading", { level: 2 }).allInnerTexts();
+      assert.deepEqual((await headings()).map((text) => text.trim()), [sortableNames[2], sortableNames[1]], "newest first: Gamma before Beta");
+      await page.getByRole("button", { name: messages.nextPage, exact: true }).click();
+      await page.getByRole("group", { name: sortableNames[0], exact: true }).waitFor();
+      await page.getByText(`${messages.workspacePageStatus} 2`, { exact: true }).waitFor();
+      assert.deepEqual(listRequests[1], { sort: "newest", cursor: "newest-page-2" }, "page two continues the newest keyset");
+      await sortControl.click();
+      await page.getByRole("option", { name: messages.sortOldestFirst, exact: true }).click();
+      await oldestRequestSeen;
+      assert.deepEqual(listRequests[2], { sort: "oldest", cursor: null }, "switching the sort restarts the keyset without the old cursor");
+      await page.getByText(`${messages.workspacePageStatus} 1`, { exact: true }).waitFor();
+      await sortControl.click();
+      await page.getByRole("option", { name: messages.sortNewestFirst, exact: true }).click();
+      await page.getByRole("group", { name: sortableNames[2], exact: true }).waitFor();
+      assert.deepEqual(listRequests[3], { sort: "newest", cursor: null }, "switching back refetches the newest first page");
+      const staleResponse = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/v1/workspaces" && new URL(response.url()).searchParams.get("sort") === "oldest");
+      releaseOldest();
+      await staleResponse;
+      // Let the page event loop process the late response before asserting it was discarded.
+      await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 100)));
+      assert.deepEqual((await headings()).map((text) => text.trim()), [sortableNames[2], sortableNames[1]], "a stale old-sort response must not overwrite the newest list");
+      await page.getByText(`${messages.workspacePageStatus} 1`, { exact: true }).waitFor();
+      assert.deepEqual(errors, [], "browser errors after stale response");
       await context.close();
     }
   } finally { await browser.close(); }

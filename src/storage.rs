@@ -92,7 +92,7 @@ pub use workspace_storage_shrink::{
     StorageShrinkOperation, StorageShrinkPhase, StorageShrinkRequest, StorageShrinkVolume,
 };
 pub use workspace_store::{
-    AdmittedWorkspaceCreation, CreateWorkspace, WorkspacePage, WorkspaceUsageSummary,
+    AdmittedWorkspaceCreation, CreateWorkspace, WorkspacePage, WorkspaceSort, WorkspaceUsageSummary,
 };
 
 #[derive(Debug, Clone)]

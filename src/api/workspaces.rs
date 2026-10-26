@@ -17,7 +17,7 @@ use crate::{
     auth::Permission,
     injections::{InjectionItem, ResolvedInjectionSummary},
     quota::QuotaResources,
-    storage::{CreateWorkspace, IdempotencyDecision},
+    storage::{CreateWorkspace, IdempotencyDecision, WorkspaceSort},
     workspaces::{Workspace, WorkspaceAction},
 };
 
@@ -114,6 +114,8 @@ pub(super) struct WorkspaceListQuery {
     pub limit: Option<u32>,
     pub cursor: Option<String>,
     pub search: Option<String>,
+    /// Creation time order; defaults to newest first.
+    pub sort: Option<WorkspaceSort>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -243,6 +245,7 @@ pub(super) async fn list(
             query.limit,
             query.cursor.as_deref(),
             query.search.as_deref(),
+            query.sort.unwrap_or_default(),
         )
         .await?;
     let mut responses = Vec::with_capacity(workspaces.items.len());

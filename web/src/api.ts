@@ -33,6 +33,7 @@ import type {
   WorkspacePage,
   WorkspaceRuntime,
   WorkspaceRuntimeEntry,
+  WorkspaceSort,
   WorkspaceTemplate,
 } from "./types";
 import i18next from "i18next";
@@ -51,6 +52,11 @@ export interface UsersPageOptions extends PageOptions {
 
 export interface AdminApiKeyPageOptions extends PageOptions {
   status?: "all" | "active" | "revoked";
+}
+
+/** Workspace listing adds creation-time sorting on top of keyset paging. */
+export interface WorkspacesPageOptions extends PageOptions {
+  sort?: WorkspaceSort;
 }
 
 function queryString(values: object): string {
@@ -316,11 +322,11 @@ export class ApiClient {
    * additional pages; callers such as the workspace combobox should use
    * workspacesPage with a search and bounded limit.
    */
-  workspaces(organizationId: string, options: PageOptions = {}): Promise<WorkspaceResponse[]> {
+  workspaces(organizationId: string, options: WorkspacesPageOptions = {}): Promise<WorkspaceResponse[]> {
     return this.workspacesPage(organizationId, options).then((page) => page.items);
   }
 
-  workspacesPage(organizationId: string, options: PageOptions = {}): Promise<WorkspacePage> {
+  workspacesPage(organizationId: string, options: WorkspacesPageOptions = {}): Promise<WorkspacePage> {
     return this.request(`/api/v1/workspaces?${queryString({ organization_id: organizationId, ...options })}`);
   }
 

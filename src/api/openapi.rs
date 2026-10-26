@@ -125,6 +125,7 @@ use super::{
         crate::storage::CreateWorkspaceTemplate,
         crate::storage::CreateOrganization,
         crate::storage::CreateWorkspace,
+        crate::storage::WorkspaceSort,
         workspaces::CreateWorkspaceRequest,
         workspace_image_update::UpdateWorkspaceImageRequest,
         workspace_home_pvc::BindWorkspaceHomePvcRequest,

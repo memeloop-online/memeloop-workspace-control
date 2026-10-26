@@ -16,7 +16,9 @@ use memeloop_workspace_control::{
     config::{AppConfig, InstallationId},
     crypto::EnvelopeCipher,
     quota::{QuotaResources, Resources},
-    storage::{CreateOrganization, CreateWorkspace, CreateWorkspaceTemplate, Database},
+    storage::{
+        CreateOrganization, CreateWorkspace, CreateWorkspaceTemplate, Database, WorkspaceSort,
+    },
     templates::{WorkspaceTemplateDocument, WorkspaceTemplateSpec},
     workspaces::{AccessMode, WorkspaceAction, WorkspaceObservation},
 };
@@ -403,7 +405,7 @@ async fn workspace_page_cursor_and_search_are_keyset_scoped() {
     assert_eq!(status, StatusCode::OK);
     let first: Value = serde_json::from_slice(&first_body).unwrap();
     assert_eq!(first["items"].as_array().unwrap().len(), 1);
-    assert_eq!(first["items"][0]["workspace"]["name"], "alpha-first");
+    assert_eq!(first["items"][0]["workspace"]["name"], "alpha-second");
     let first_cursor = first["next_cursor"].as_str().unwrap();
 
     let second = app
@@ -441,8 +443,76 @@ async fn workspace_page_cursor_and_search_are_keyset_scoped() {
     let (status, filtered_body) = body(filtered).await;
     assert_eq!(status, StatusCode::OK);
     let filtered: Value = serde_json::from_slice(&filtered_body).unwrap();
-    assert_eq!(filtered["items"][0]["workspace"]["name"], "alpha-second");
+    assert_eq!(filtered["items"][0]["workspace"]["name"], "alpha-first");
     assert!(filtered["next_cursor"].is_null());
+}
+
+#[tokio::test]
+async fn workspace_sort_keeps_equal_creation_times_stable_across_pages() {
+    let (app, database, admin_id) = test_app().await;
+    let (organization_id, template_id) =
+        seeded_organization(&database, admin_id, "Workspace sorting", 10).await;
+    let mut workspace_ids = Vec::new();
+    for name in ["same-time-a", "same-time-b", "same-time-c"] {
+        workspace_ids.push(
+            seeded_workspace(&database, organization_id, admin_id, template_id, name, 20).await,
+        );
+    }
+    workspace_ids.sort();
+    for sort in ["newest", "oldest"] {
+        let expected = if sort == "newest" {
+            workspace_ids.iter().rev().copied().collect::<Vec<_>>()
+        } else {
+            workspace_ids.clone()
+        };
+        let mut cursor = None;
+        let mut actual = Vec::new();
+        for _ in 0..3 {
+            let mut uri =
+                format!("/api/v1/workspaces?organization_id={organization_id}&limit=1&sort={sort}");
+            if let Some(cursor) = &cursor {
+                uri.push_str(&format!("&cursor={cursor}"));
+            }
+            let response = app
+                .clone()
+                .oneshot(request(Method::GET, &uri, Some(ADMIN_TOKEN), None, None))
+                .await
+                .unwrap();
+            let (status, response_body) = body(response).await;
+            assert_eq!(status, StatusCode::OK);
+            let page: Value = serde_json::from_slice(&response_body).unwrap();
+            assert_eq!(page["items"].as_array().unwrap().len(), 1);
+            actual.push(
+                Uuid::parse_str(page["items"][0]["workspace"]["id"].as_str().unwrap()).unwrap(),
+            );
+            cursor = page["next_cursor"].as_str().map(str::to_owned);
+        }
+        assert_eq!(actual, expected);
+        assert!(cursor.is_none());
+    }
+
+    let first = database
+        .list_workspaces_page(organization_id, Some(1), None, None, WorkspaceSort::Newest)
+        .await
+        .unwrap();
+    let cursor = first.next_cursor.unwrap();
+    for query in [
+        format!("sort=oldest&cursor={cursor}"),
+        "sort=name".to_owned(),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(request(
+                Method::GET,
+                &format!("/api/v1/workspaces?organization_id={organization_id}&{query}"),
+                Some(ADMIN_TOKEN),
+                None,
+                None,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
 }
 
 #[tokio::test]
@@ -972,6 +1042,17 @@ async fn workspace_page_openapi_declares_the_summary_shape() {
     assert_eq!(summary["properties"]["total_count"]["type"], "integer");
     assert!(summary["properties"]["requested"].is_object());
     assert_eq!(summary["properties"]["state_counts"]["type"], "object");
+    let sort = openapi["paths"]["/api/v1/workspaces"]["get"]["parameters"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|parameter| parameter["name"] == "sort")
+        .unwrap();
+    assert_eq!(sort["required"], false);
+    assert_eq!(
+        openapi["components"]["schemas"]["WorkspaceSort"]["enum"],
+        json!(["newest", "oldest"])
+    );
 }
 
 #[tokio::test]
@@ -1031,10 +1112,17 @@ async fn postgres_workspace_page_summary_matches_the_filtered_collection() {
     }
 
     let page = database
-        .list_workspaces_page(organization_id, Some(1), None, Some("alpha"))
+        .list_workspaces_page(
+            organization_id,
+            Some(1),
+            None,
+            Some("alpha"),
+            WorkspaceSort::Newest,
+        )
         .await
         .unwrap();
     assert_eq!(page.items.len(), 1);
+    assert_eq!(page.items[0].name, "alpha-second");
     assert_eq!(page.total_count, 2);
     assert_eq!(
         page.requested,
@@ -1047,6 +1135,30 @@ async fn postgres_workspace_page_summary_matches_the_filtered_collection() {
         }
     );
     assert_eq!(page.state_counts.get("provisioning"), Some(&2));
+
+    let oldest = database
+        .list_workspaces_page(
+            organization_id,
+            Some(1),
+            None,
+            Some("alpha"),
+            WorkspaceSort::Oldest,
+        )
+        .await
+        .unwrap();
+    assert_eq!(oldest.items[0].name, "alpha-first");
+    let following = database
+        .list_workspaces_page(
+            organization_id,
+            Some(1),
+            oldest.next_cursor.as_deref(),
+            Some("alpha"),
+            WorkspaceSort::Oldest,
+        )
+        .await
+        .unwrap();
+    assert_eq!(following.items[0].name, "alpha-second");
+    assert!(following.next_cursor.is_none());
 
     let summary = database
         .workspace_usage_summary(organization_id, Some(&[template_id]))

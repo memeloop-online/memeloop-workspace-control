@@ -4,12 +4,13 @@ import { makeStyles, tokens } from "@fluentui/react-components";
 export const useWorkspaceStyles = makeStyles({
   filters: {
     display: "grid",
-    gridTemplateColumns: "minmax(220px, 1fr) auto",
+    gridTemplateColumns: "minmax(220px, 1fr) auto auto",
     alignItems: "end",
     gap: tokens.spacingHorizontalL,
     "@media (max-width: 760px)": { gridTemplateColumns: "1fr" },
   },
   searchField: { minWidth: 0 },
+  sortField: { minWidth: "200px" },
   pagination: {
     display: "flex",
     alignItems: "center",

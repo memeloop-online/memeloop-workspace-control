@@ -106,3 +106,21 @@ test("scaling partial updates preserve omitted settings in the request", async (
     assert.deepEqual(bodies, [{ cpu_overcommit_ratio: 20 }, { job_worker_concurrency: 64 }, { cpu_overcommit_ratio: 20, job_worker_concurrency: 64 }]);
   } finally { globalThis.fetch = originalFetch; }
 });
+
+test("workspace page requests serialize the sort direction", async () => {
+  const originalFetch = globalThis.fetch;
+  const requests: string[] = [];
+  globalThis.fetch = async (input) => {
+    requests.push(String(input));
+    return Response.json({ items: [], next_cursor: null, summary: { total_count: 0, requested: {}, temporary_requested_gib: 0, state_counts: {} } });
+  };
+  try {
+    const api = new ApiClient("operator-token");
+    await api.workspacesPage("org-1", { limit: 50, cursor: "cursor-1", search: "ops", sort: "oldest" });
+    await api.workspacesPage("org-1", { sort: "newest" });
+    await api.workspaces("org-1");
+    assert.equal(requests[0], "/api/v1/workspaces?organization_id=org-1&limit=50&cursor=cursor-1&search=ops&sort=oldest");
+    assert.equal(requests[1], "/api/v1/workspaces?organization_id=org-1&sort=newest");
+    assert.equal(requests[2], "/api/v1/workspaces?organization_id=org-1", "omitted sort relies on the backend newest-first default");
+  } finally { globalThis.fetch = originalFetch; }
+});
