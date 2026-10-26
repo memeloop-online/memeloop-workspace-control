@@ -23,10 +23,19 @@ for enabled in false true; do
   root="$fixture_root/$enabled"
   workspace_container="mwc-cold-start-$$-$enabled"
   buildkit_container="mwc-cold-buildkit-$$-$enabled"
-  mkdir -p "$root/home" "$root/scratch" "$root/config" "$root/identity"
+  mkdir -p "$root/home" "$root/scratch" "$root/config" "$root/identity" \
+    "$root/injections/config" "$root/injections/secret"
   jq -er '.config["mwc-workspace-bootstrap"]' "$fixture" > "$root/config/mwc-workspace-bootstrap"
   jq -er '.config.sshd_config' "$fixture" > "$root/config/sshd_config"
   chmod 0555 "$root/config/mwc-workspace-bootstrap"
+  printf '%s' 'config value with spaces' > "$root/injections/config/session-config"
+  printf '%s' 'secret-value' > "$root/injections/secret/session-secret"
+  cat > "$root/injections/config/workspace-environment.json" <<'EOF'
+{"environment":[
+  {"name":"MWC_COLD_CONFIG","object":"config_map","data_key":"session-config"},
+  {"name":"MWC_COLD_SECRET","object":"secret","data_key":"session-secret"}
+]}
+EOF
   if [ "$enabled" = true ]; then
     mapfile -t scratch_env < <(jq -r '.pod.initContainers[] | select(.name == "workspace-scratch-init") | .env[] | "-e", (.name + "=" + .value)' "$fixture")
     scratch_script=$(jq -er '.pod.initContainers[] | select(.name == "workspace-scratch-init") | .args[0]' "$fixture")
@@ -89,12 +98,17 @@ for enabled in false true; do
   fi
 
   mapfile -t workspace_env < <(jq -r '.pod.containers[] | select(.name == "workspace") | .env[] | select(has("value")) | "-e", (.name + "=" + .value)' "$fixture")
+  # Model both image-provided Rustup locations; the controller must not override either one.
+  rustup_home=/usr/local/rustup
+  if [ "$enabled" = true ]; then rustup_home=/workspace/.rustup; fi
   containers+=("$workspace_container")
   docker run --detach --name "$workspace_container" "${network[@]}" \
-    "${workspace_env[@]}" -e MWC_HOME_RESERVE_MIB=0 \
+    "${workspace_env[@]}" -e MWC_HOME_RESERVE_MIB=0 -e RUSTUP_HOME="$rustup_home" \
     --tmpfs /run/mwc-ssh:mode=0700 --tmpfs /tmp:mode=1777 --tmpfs /var/tmp:mode=1777 \
     -v "$root/home:/workspace" -v "$root/config:/etc/workspace-platform:ro" \
     -v "$root/identity:/etc/ssh/platform:ro" \
+    -v "$root/injections/config:/var/run/workspace-injections/config:ro" \
+    -v "$root/injections/secret:/var/run/workspace-injections/secret:ro" \
     -v "$root/scratch/workspace-cache:/var/lib/mwc/build-scratch" \
     -v "$root/scratch/codex-session-scratch:/var/lib/mwc/codex-scratch" \
     "${buildkit_mount[@]}" --entrypoint /etc/workspace-platform/mwc-workspace-bootstrap \
@@ -143,6 +157,14 @@ for enabled in false true; do
     -o BatchMode=yes -o IdentitiesOnly=yes -o ConnectTimeout=1 -o StrictHostKeyChecking=yes \
     -o UserKnownHostsFile=/run/mwc-ssh/known_hosts \
     -i /run/mwc-ssh/ttyd_client_key workspace@127.0.0.1 "$tool_environment"
+  test "$(docker exec --user 1000:1000 "$workspace_container" printenv RUSTUP_HOME)" = "$rustup_home"
+  printf -v expected_environment '%s\n%s\n%s' "$rustup_home" 'config value with spaces' 'secret-value'
+  # shellcheck disable=SC2016 # Expand the image environment in the non-login SSH session.
+  test "$(docker exec "$workspace_container" ssh -p 2222 \
+    -o BatchMode=yes -o IdentitiesOnly=yes -o ConnectTimeout=1 -o StrictHostKeyChecking=yes \
+    -o UserKnownHostsFile=/run/mwc-ssh/known_hosts \
+    -i /run/mwc-ssh/ttyd_client_key workspace@127.0.0.1 \
+    'printf "%s\n" "$RUSTUP_HOME" "$MWC_COLD_CONFIG" "$MWC_COLD_SECRET"')" = "$expected_environment"
   if [ "$enabled" = true ]; then
     ready=false
     for _attempt in $(seq 1 30); do

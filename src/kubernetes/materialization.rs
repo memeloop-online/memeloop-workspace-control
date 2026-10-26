@@ -112,6 +112,10 @@ impl MaterializedData {
         if text.chars().any(char::is_control) {
             return Err(MaterializationError::EnvironmentContainsControl);
         }
+        // The image owns its Rust toolchain home, including the value inherited by SSH.
+        if item.target == "RUSTUP_HOME" {
+            return Ok(());
+        }
         let data_key = format!("env-{index:04}");
         if item.sensitive {
             self.secret_environment

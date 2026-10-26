@@ -262,7 +262,6 @@ impl<'a> WorkspacePod<'a> {
                 ),
             ),
             env("HOME", self.home),
-            env("RUSTUP_HOME", "/usr/local/rustup"),
             env("CARGO_HOME", &format!("{}/.cargo", self.home)),
             env("NPM_CONFIG_CACHE", &format!("{BUILD_SCRATCH}/cache/npm")),
             env("TMPDIR", &format!("{BUILD_SCRATCH}/tmp")),

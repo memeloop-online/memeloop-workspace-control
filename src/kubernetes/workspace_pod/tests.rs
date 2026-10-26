@@ -41,6 +41,8 @@ fn injected_targets_do_not_remove_canonical_platform_environment() {
     );
 
     let environment = container.env.unwrap();
+    assert!(!environment.iter().any(|item| item.name == "RUSTUP_HOME"));
+    assert!(pod.is_platform_environment("RUSTUP_HOME"));
     assert_eq!(
         environment
             .iter()
@@ -80,7 +82,7 @@ fn sshd_set_env_quotes_spaces_and_quotation_marks() {
     template.buildkit = true;
     let config = WorkspacePod::from_template(&template).ssh_set_env();
     assert!(config.contains("\"HOME=/home/node-dev\""));
-    assert!(config.contains("\"RUSTUP_HOME=/usr/local/rustup\""));
+    assert!(!config.contains("RUSTUP_HOME="));
     assert!(config.contains("\"KUBECONFIG=/run/mwc-ssh/kubeconfig\""));
     assert!(config.contains("\"BUILDKIT_HOST=tcp://127.0.0.1:1234\""));
     assert!(config.contains(

@@ -64,6 +64,59 @@ fn environment_manifest_references_projected_data_without_plaintext() {
 }
 
 #[test]
+fn rustup_home_injections_do_not_override_the_image_environment() {
+    for sensitive in [false, true] {
+        let excluded_value = "excluded-image-toolchain-home";
+        let mut excluded =
+            resolved_environment(InjectionValue::Utf8(excluded_value.to_owned()), sensitive);
+        excluded.item.target = "RUSTUP_HOME".to_owned();
+        let materialized = build(
+            &runtime(),
+            &BTreeMap::new(),
+            &[
+                excluded,
+                resolved_environment(InjectionValue::Utf8("ordinary-env".to_owned()), sensitive),
+            ],
+        )
+        .unwrap();
+
+        let secret_environment = materialized.environment_secret.data.as_ref().unwrap();
+        let config_environment = materialized.environment_config_map.data.as_ref().unwrap();
+        let secret_files = materialized.file_secret.data.as_ref().unwrap();
+        let config_files = materialized.file_config_map.data.as_ref().unwrap();
+        assert!(!secret_environment.contains_key("RUSTUP_HOME"));
+        assert!(!config_environment.contains_key("RUSTUP_HOME"));
+        assert!(!secret_files.contains_key("env-0000"));
+        assert!(!config_files.contains_key("env-0000"));
+        assert!(
+            !config_files
+                .values()
+                .any(|value| value.contains(excluded_value))
+        );
+        assert!(
+            !secret_files
+                .values()
+                .any(|value| value.0 == excluded_value.as_bytes())
+        );
+        if sensitive {
+            assert_eq!(secret_environment["REGISTRY_TOKEN"].0, b"ordinary-env");
+            assert_eq!(secret_files["env-0001"].0, b"ordinary-env");
+        } else {
+            assert_eq!(config_environment["REGISTRY_TOKEN"], "ordinary-env");
+            assert_eq!(config_files["env-0001"], "ordinary-env");
+        }
+        let manifest: serde_json::Value =
+            serde_json::from_str(&config_files["workspace-environment.json"]).unwrap();
+        assert_eq!(manifest["environment"].as_array().unwrap().len(), 1);
+        assert_eq!(manifest["environment"][0]["name"], "REGISTRY_TOKEN");
+        assert_eq!(
+            materialized.environment_targets,
+            BTreeSet::from(["REGISTRY_TOKEN".to_owned()])
+        );
+    }
+}
+
+#[test]
 fn environment_values_reject_every_control_character() {
     for value in ["line\nfeed", "carriage\rreturn", "tab\tvalue", "nul\0value"] {
         let result = build(

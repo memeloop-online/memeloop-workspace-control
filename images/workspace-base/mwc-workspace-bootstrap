@@ -410,6 +410,14 @@ injection_sync_monitor() {
 
 prepare_runtime_sshd_config() (
     install -m 0600 -o root -g root /etc/workspace-platform/sshd_config "$runtime_sshd_config"
+    # OpenSSH only consumes the first SetEnv directive. Merge runtime values into the
+    # controller-generated platform assignments so every SSH session receives them.
+    assignments=$(sed -n 's/^SetEnv //p' "$runtime_sshd_config")
+    sed -i '/^SetEnv /d' "$runtime_sshd_config"
+    if [ -n "${RUSTUP_HOME:-}" ]; then
+        escaped=$(printf 'RUSTUP_HOME=%s' "$RUSTUP_HOME" | sed 's/\\/\\\\/g; s/"/\\"/g')
+        assignments="$assignments \"$escaped\""
+    fi
     metadata=$(mktemp "$runtime_dir/.environment-metadata.XXXXXX")
     trap 'rm -f "$metadata"' EXIT
     if [ -r "$environment_manifest" ]; then
@@ -438,8 +446,11 @@ prepare_runtime_sshd_config() (
         esac
         value=$(cat "$source")
         escaped=$(printf '%s=%s' "$name" "$value" | sed 's/\\/\\\\/g; s/"/\\"/g')
-        printf 'SetEnv "%s"\n' "$escaped" >> "$runtime_sshd_config"
+        assignments="$assignments \"$escaped\""
     done < "$metadata"
+    if [ -n "$assignments" ]; then
+        printf 'SetEnv %s\n' "${assignments# }" >> "$runtime_sshd_config"
+    fi
 )
 
 verify_runtime_dependencies() {
