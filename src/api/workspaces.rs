@@ -109,6 +109,7 @@ pub(super) enum SshPortStrategy {
 }
 
 #[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
 pub(super) struct WorkspaceListQuery {
     pub organization_id: Uuid,
     pub limit: Option<u32>,

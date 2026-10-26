@@ -1049,6 +1049,7 @@ async fn workspace_page_openapi_declares_the_summary_shape() {
         .find(|parameter| parameter["name"] == "sort")
         .unwrap();
     assert_eq!(sort["required"], false);
+    assert_eq!(sort["in"], "query");
     assert_eq!(
         openapi["components"]["schemas"]["WorkspaceSort"]["enum"],
         json!(["newest", "oldest"])
