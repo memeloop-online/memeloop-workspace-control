@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from "react";
-import { Button, Card, Caption1, Dropdown, Field, InfoLabel, Input, MessageBar, MessageBarBody, Option, Text } from "@fluentui/react-components";
+import { Button, Card, Caption1, Checkbox, Dropdown, Field, InfoLabel, Input, MessageBar, MessageBarBody, Option, Text } from "@fluentui/react-components";
 import { AddRegular } from "@fluentui/react-icons";
 import { CredentialReferencePicker } from "../forms/CredentialReferencePicker";
 import { nodePoolDisplayName } from "../forms/NodePoolPicker";
@@ -16,6 +16,7 @@ interface Props {
   nodePool: string;
   resourceDraft: Resources | null;
   temporaryStorageGiB: string;
+  useLonghorn: boolean;
   explicitInjectionRefs: boolean;
   organizationInjections: StoredInjection[];
   userInjections: StoredInjection[];
@@ -28,6 +29,7 @@ interface Props {
   onNodePoolsRetry: () => void;
   onResourceChange: (key: keyof Resources, value: string) => void;
   onTemporaryStorageChange: (value: string) => void;
+  onUseLonghornChange: (value: boolean) => void;
   onReferenceModeChange: (explicit: boolean) => void;
   onOrganizationRefsChange: (keys: string[]) => void;
   onUserRefsChange: (keys: string[]) => void;
@@ -88,6 +90,9 @@ export function WorkspaceCreationForm(props: Props) {
     {selectedTemplate && <Field label={t("workspaceTemporaryStorageGiB")} hint={t("workspaceTemporaryStorageHelp")}>
       <Input type="number" min={1} max={2048} step={1} required value={props.temporaryStorageGiB} onChange={(_, data) => props.onTemporaryStorageChange(data.value)} />
     </Field>}
+    <Field className={styles.formWide} label={<InfoLabel info={t("workspaceUseLonghornHelp")}>{t("workspaceUseLonghorn")}</InfoLabel>}>
+      <Checkbox aria-label={t("workspaceUseLonghorn")} checked={props.useLonghorn} onChange={(_, data) => props.onUseLonghornChange(data.checked === true)} />
+    </Field>
     <Field className={styles.formWide} label={t("injectionReferences")}>
       <Dropdown value={props.explicitInjectionRefs ? t("selectedReferences") : t("allMatching")} selectedOptions={[props.explicitInjectionRefs ? "selected" : "all"]} onOptionSelect={(_, data) => props.onReferenceModeChange(data.optionValue === "selected")}>
         <Option value="all">{t("allMatching")}</Option><Option value="selected">{t("selectedReferences")}</Option>

@@ -187,15 +187,15 @@ test("workspace creation always shows the run location and only submits usable l
     { name: "placement-unrelated", display_name: "Unrelated location" },
   ];
   const templates = [
-    { id: "rust-template", name: "Rust Dev", temporaryStorage: 10 },
+    { id: "rust-template", name: "Rust Dev", temporaryStorage: 10, useLonghorn: true },
     { id: "other-template", name: "Other development", temporaryStorage: 4 },
     { id: "wide-template", name: "Wide placement", temporaryStorage: 6, allowed: [pools[0].name, pools[1].name, pools[2].name] },
-  ].map(({ id, name, temporaryStorage, allowed }) => ({
+  ].map(({ id, name, temporaryStorage, allowed, useLonghorn }) => ({
     id, name, organization_id: organizationId, enabled: true, yaml: "",
     image: "example.invalid/rust-dev:1", access_mode: "internal", resources: creationResources,
     pod_requests: { cpu_millis: 500, memory_mib: 512 }, cpu_overcommit_ratio: 10,
     workspace_user: "user", workspace_home: "/home/user", buildkit: true,
-    storage_policy: { temporary_storage_gib: temporaryStorage }, cluster_access: false,
+    storage_policy: { temporary_storage_gib: temporaryStorage, use_longhorn: useLonghorn ?? false }, cluster_access: false,
     egress_policy: "internet_only", runtime_class_name: null, desktop: null,
     placement: { allowed_node_pools: allowed ?? [pools[0].name, pools[1].name], default_node_pool: pools[0].name },
   }));
@@ -254,6 +254,9 @@ test("workspace creation always shows the run location and only submits usable l
       await chooseTemplate(templates[0].name);
       const temporaryStorage = page.getByRole("spinbutton", { name: messages.workspaceTemporaryStorageGiB, exact: true });
       const homeStorage = page.getByRole("spinbutton", { name: messages.diskSizeGib, exact: true });
+      const longhorn = page.getByRole("checkbox", { name: messages.workspaceUseLonghorn, exact: true });
+      await longhorn.waitFor();
+      assert.equal(await longhorn.isChecked(), false, "the Longhorn choice starts off even when the template policy enables it");
       assert.equal(await temporaryStorage.inputValue(), "10");
       assert.equal(await homeStorage.inputValue(), "20");
       assert.equal(await page.getByRole("spinbutton", { name: messages.cpuLimitMillis, exact: true }).inputValue(), String(creationResources.cpu_millis));
@@ -262,6 +265,11 @@ test("workspace creation always shows the run location and only submits usable l
       await page.getByText(messages.workspaceTemporaryStorageHelp, { exact: true }).waitFor();
       const location = page.getByRole("combobox", { name: messages.workspaceRunLocation, exact: true });
       await location.waitFor();
+      if (process.env.RUNNER_TEMP) {
+        const screenshotDir = `${process.env.RUNNER_TEMP}/mwc-settings-screenshots`;
+        await mkdir(screenshotDir, { recursive: true });
+        await page.screenshot({ path: `${screenshotDir}/workspace-longhorn-option.png`, fullPage: true });
+      }
       assert.equal(await location.innerText(), messages.workspaceRunLocationTemplateDefault);
       await location.click();
       assert.equal(await page.getByRole("option", { name: pools[2].display_name, exact: true }).count(), 0);
@@ -284,9 +292,17 @@ test("workspace creation always shows the run location and only submits usable l
       assert.equal(defaultPayload.node_pool, null, "the template default is sent as null, not a guessed pool");
       assert.equal(defaultPayload.resources, null, "temporary capacity must not change template CPU, memory, GPU, or Home");
       assert.equal(defaultPayload.template_id, templates[0].id);
+      assert.equal(defaultPayload.use_longhorn, false, "an untouched checkbox keeps the local Home default");
       await temporaryStorage.waitFor({ state: "hidden" });
       await page.getByRole("button", { name: messages.newWorkspace, exact: true }).click();
       await chooseTemplate(templates[0].name);
+      await longhorn.waitFor();
+      assert.equal(await longhorn.isChecked(), false, "a fresh form starts with the local Home default");
+      await longhorn.check();
+      await chooseTemplate(templates[1].name);
+      assert.equal(await longhorn.isChecked(), true, "template edits keep the explicit Longhorn choice");
+      await chooseTemplate(templates[0].name);
+      assert.equal(await longhorn.isChecked(), true);
       await page.getByRole("textbox", { name: messages.name, exact: true }).fill("Payment development in Strait");
       await location.click();
       await page.getByRole("option", { name: pools[1].display_name, exact: true }).click();
@@ -297,7 +313,11 @@ test("workspace creation always shows the run location and only submits usable l
       assert.equal(selectedPayload.node_pool, pools[1].name);
       assert.equal(selectedPayload.resources, null);
       assert.equal(Object.hasOwn(selectedPayload, "temporary_storage_gib"), false, "unchanged capacity inherits the template");
+      assert.equal(selectedPayload.use_longhorn, true, "the checked box reaches the create command");
       await temporaryStorage.waitFor({ state: "hidden" });
+      await page.getByRole("button", { name: messages.newWorkspace, exact: true }).click();
+      await longhorn.waitFor();
+      assert.equal(await longhorn.isChecked(), false, "a successful create resets the Longhorn choice");
       assert.equal(submissions.length, 2);
       assert.deepEqual(unexpected, [], "unexpected creation requests");
       assert.deepEqual(errors, [], "creation browser errors");
