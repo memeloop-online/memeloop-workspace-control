@@ -1093,9 +1093,11 @@ fn only_templates_requesting_cluster_access_receive_an_owned_cluster_admin_ident
                 .as_deref()
                 .is_some_and(|value| value.contains("/usr/local/cargo/bin"))
     }));
-    assert!(environment.iter().any(|variable| {
-        variable.name == "RUSTUP_HOME" && variable.value.as_deref() == Some("/usr/local/rustup")
-    }));
+    assert!(
+        !environment
+            .iter()
+            .any(|variable| variable.name == "RUSTUP_HOME")
+    );
     assert!(environment.iter().any(|variable| {
         variable.name == "MWC_IN_CLUSTER_KUBECONFIG" && variable.value.as_deref() == Some("true")
     }));
@@ -1503,7 +1505,7 @@ fn node_template_reuses_the_existing_image_with_platform_bootstrap() {
     assert!(sshd_config.contains(
         "\"PATH=/run/mwc-buildkit/bin:/home/user/.local/bin:/home/user/.local/share/pnpm:/home/user/.cargo/bin:/usr/local/cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\""
     ));
-    assert!(sshd_config.contains("\"RUSTUP_HOME=/usr/local/rustup\""));
+    assert!(!sshd_config.contains("RUSTUP_HOME="));
     assert!(sshd_config.contains("\"BUILDKIT_HOST=tcp://127.0.0.1:1234\""));
     assert!(
         resources.workspace_config.data.as_ref().unwrap()["mwc-workspace-bootstrap"]
