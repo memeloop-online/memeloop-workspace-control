@@ -191,6 +191,7 @@ async fn exercise_interleaved_observations(writer: &Database, observer: &Databas
         .await
         .unwrap();
     assert_stale_is_ignored(writer, observer, &old_ready, WorkspaceObservation::Ready).await;
+    assert_stale_is_ignored(writer, observer, &old_ready, WorkspaceObservation::NotReady).await;
     assert_eq!(
         writer.get_workspace(created.id).await.unwrap().state,
         WorkspaceState::Restarting

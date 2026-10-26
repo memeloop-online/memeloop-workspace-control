@@ -142,17 +142,8 @@ impl KubernetesCoordinator {
         if expected == 0 {
             return Ok(status.replicas == 0);
         }
-        if status.replicas == expected
-            && status.ready_replicas.unwrap_or_default() == expected
-            && status.updated_replicas.unwrap_or_default() == expected
-            && status.current_revision.is_some()
-            && status.current_revision == status.update_revision
-        {
-            return Ok(true);
-        }
-        // StatefulSet aggregate status can lag behind an already Ready Pod. Use direct
-        // observation only for the current single-replica workload revision; generation,
-        // ownership and deletion guards prevent a previous Pod from satisfying a restart.
+        // StatefulSet aggregates may still describe a deleted Pod. The current
+        // Pod is authoritative in both directions, including Pending and absent.
         let Some(revision) = status.update_revision.as_deref() else {
             return Ok(false);
         };
@@ -176,7 +167,8 @@ impl KubernetesCoordinator {
         };
         self.builder
             .verify_delete_ownership(&pod.metadata, workspace.id)?;
-        Ok(pod.metadata.deletion_timestamp.is_none()
+        Ok(pod.metadata.uid.is_some()
+            && pod.metadata.deletion_timestamp.is_none()
             && !restart_generation_is_stale(&pod, workspace.generation)
             && pod
                 .metadata

@@ -254,6 +254,7 @@ mod coordinator_tests {
         });
         let mut metadata = stateful_set["spec"]["template"]["metadata"].clone();
         metadata["name"] = serde_json::json!(names.pod_ordinal_zero());
+        metadata["uid"] = serde_json::json!("current-pod-uid");
         metadata["namespace"] = serde_json::json!(workspace.runtime.namespace());
         metadata["labels"]["controller-revision-hash"] = serde_json::json!("current-revision");
         metadata["ownerReferences"] = serde_json::json!([{
@@ -307,6 +308,26 @@ mod coordinator_tests {
             observe_ready_fixture(&workspace, stateful_set, Some(pod), 1).await;
         assert!(result.unwrap());
         assert_eq!(requests.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn stale_ready_aggregate_cannot_hide_a_missing_or_pending_current_pod() {
+        let (workspace, mut stateful_set, mut pod) = ready_pod_fixture();
+        stateful_set["status"]["readyReplicas"] = serde_json::json!(1);
+        stateful_set["status"]["currentRevision"] = serde_json::json!("current-revision");
+        for current in [None, {
+            pod["status"] = serde_json::json!({"phase": "Pending"});
+            Some(pod)
+        }] {
+            let (result, requests) =
+                observe_ready_fixture(&workspace, stateful_set.clone(), current, 1).await;
+            assert!(!result.unwrap());
+            assert_eq!(
+                requests.len(),
+                2,
+                "aggregate Ready must still read the current Pod"
+            );
+        }
     }
 
     #[tokio::test]
@@ -439,7 +460,7 @@ mod coordinator_tests {
     #[tokio::test]
     async fn aggregate_observation_requires_current_owned_workload_for_ready_and_stopped() {
         for expected in [0, 1] {
-            let (workspace, mut stateful_set, _) = ready_pod_fixture();
+            let (workspace, mut stateful_set, pod) = ready_pod_fixture();
             stateful_set["spec"]["replicas"] = serde_json::json!(expected);
             stateful_set["status"] = serde_json::json!({
                 "observedGeneration": 10, "replicas": expected,
@@ -447,9 +468,9 @@ mod coordinator_tests {
                 "currentRevision": "current-revision", "updateRevision": "current-revision",
             });
             let (result, requests) =
-                observe_ready_fixture(&workspace, stateful_set.clone(), None, expected).await;
+                observe_ready_fixture(&workspace, stateful_set.clone(), Some(pod), expected).await;
             assert!(result.unwrap());
-            assert_eq!(requests.len(), 1);
+            assert_eq!(requests.len(), if expected == 0 { 1 } else { 2 });
 
             // A previous startup may still be fully Ready (or scaled to zero) when
             // a later action has advanced the desired workspace generation.

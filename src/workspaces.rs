@@ -37,6 +37,7 @@ pub enum WorkspaceAction {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WorkspaceObservation {
     Ready,
+    NotReady,
     Stopped,
     Deleted,
     Failed,
@@ -164,6 +165,7 @@ impl WorkspaceState {
             (State::Provisioning | State::Starting | State::Restarting, Observation::Ready) => {
                 State::Ready
             }
+            (State::Ready, Observation::NotReady) => State::Starting,
             (State::Stopping, Observation::Stopped) => State::Stopped,
             (State::Deleting, Observation::Deleted) => State::Deleted,
             (
@@ -240,6 +242,7 @@ impl WorkspaceObservation {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Ready => "mark_ready",
+            Self::NotReady => "mark_not_ready",
             Self::Stopped => "mark_stopped",
             Self::Deleted => "mark_deleted",
             Self::Failed => "mark_failed",
@@ -274,6 +277,28 @@ pub struct TransitionError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lost_readiness_only_moves_ready_to_starting() {
+        assert_eq!(
+            WorkspaceState::Ready
+                .observe(WorkspaceObservation::NotReady)
+                .unwrap(),
+            WorkspaceState::Starting
+        );
+        for state in [
+            WorkspaceState::Provisioning,
+            WorkspaceState::Starting,
+            WorkspaceState::Restarting,
+            WorkspaceState::Stopping,
+            WorkspaceState::Stopped,
+            WorkspaceState::Deleting,
+            WorkspaceState::Deleted,
+            WorkspaceState::Failed,
+        ] {
+            assert!(state.observe(WorkspaceObservation::NotReady).is_err());
+        }
+    }
 
     #[test]
     fn supports_stop_and_restart_lifecycle() {

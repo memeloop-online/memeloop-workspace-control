@@ -1,5 +1,6 @@
 //! Shared, advisory runtime observations. The worker's finite GET and database
-//! generation fence remain authoritative; a watch only advances a parked job.
+//! generation fence remain authoritative. Watches wake parked jobs and request
+//! read-only checks when a Ready workspace loses its current Pod.
 use std::{
     collections::{HashMap, HashSet},
     fmt::Debug,
@@ -41,6 +42,10 @@ pub struct WorkspaceObservations {
 #[derive(Default)]
 struct State {
     pods: HashMap<Uuid, PodView>,
+    pods_listed: bool,
+    sets_listed: bool,
+    ready_scan_pending: bool,
+    ready_checks: HashMap<Uuid, u64>,
     sets: HashMap<Uuid, SetView>,
     waiters: HashMap<Uuid, ParkedWorkspaceJob>,
     registration_ticket: u64,
@@ -233,6 +238,8 @@ impl WorkspaceObservations {
     }
 
     async fn repair(&self) -> Result<(), StorageError> {
+        self.scan_ready_after_relist().await?;
+        self.deliver_ready_checks().await;
         let now = unix_now();
         let mut after = None;
         loop {
@@ -271,6 +278,102 @@ impl WorkspaceObservations {
             .expect("workspace observations lock poisoned");
         state.prune(now);
         Ok(())
+    }
+
+    async fn scan_ready_after_relist(&self) -> Result<(), StorageError> {
+        {
+            let mut state = self
+                .state
+                .lock()
+                .expect("workspace observations lock poisoned");
+            if !std::mem::take(&mut state.ready_scan_pending) {
+                return Ok(());
+            }
+        }
+        let mut after = None;
+        loop {
+            let page = match self.database.ready_workspace_ids(after).await {
+                Ok(page) => page,
+                Err(error) => {
+                    self.state
+                        .lock()
+                        .expect("workspace observations lock poisoned")
+                        .ready_scan_pending = true;
+                    return Err(error);
+                }
+            };
+            after = page.last().copied();
+            let more = page.len() == 256;
+            {
+                let mut state = self
+                    .state
+                    .lock()
+                    .expect("workspace observations lock poisoned");
+                for id in page {
+                    if !state.runtime_ready(id) {
+                        state.request_ready_check(id);
+                    }
+                }
+            }
+            self.deliver_ready_checks().await;
+            if !more {
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    async fn deliver_ready_checks(&self) {
+        let checks: Vec<_> = self
+            .state
+            .lock()
+            .expect("workspace observations lock poisoned")
+            .ready_checks
+            .iter()
+            .map(|(id, ticket)| (*id, *ticket))
+            .collect();
+        for (id, ticket) in checks {
+            let result = self
+                .database
+                .enqueue_ready_workspace_observation(id, unix_now())
+                .await;
+            let finished = match result {
+                Ok(true) => {
+                    self.job_wakeup.notify_waiters();
+                    true
+                }
+                Ok(false) => match self.database.get_workspace(id).await {
+                    // An in-flight job may finish from an earlier Ready snapshot.
+                    // Keep this hint until it has completed or confirms recovery.
+                    Ok(workspace) => {
+                        workspace.state != crate::workspaces::WorkspaceState::Ready
+                            || self
+                                .state
+                                .lock()
+                                .expect("workspace observations lock poisoned")
+                                .runtime_ready(id)
+                    }
+                    Err(StorageError::WorkspaceNotFound) => true,
+                    Err(error) => {
+                        tracing::warn!(%error, workspace_id = %id, "workspace readiness check lookup failed");
+                        false
+                    }
+                },
+                Err(error) => {
+                    tracing::warn!(%error, workspace_id = %id, "workspace readiness check enqueue failed");
+                    false
+                }
+            };
+            if finished {
+                let mut state = self
+                    .state
+                    .lock()
+                    .expect("workspace observations lock poisoned");
+                if state.ready_checks.get(&id) == Some(&ticket) {
+                    state.ready_checks.remove(&id);
+                }
+            }
+        }
     }
 
     async fn deliver(&self, reservations: Vec<Reservation>) {
@@ -404,9 +507,13 @@ impl WorkspaceObservations {
                 .lock()
                 .expect("workspace observations lock poisoned");
             K::replace(&mut state, snapshot);
+            state.ready_scan_pending = state.pods_listed && state.sets_listed;
             state.refresh_all(unix_now())
         };
         self.deliver(reservations).await;
+        if let Err(error) = self.scan_ready_after_relist().await {
+            tracing::warn!(%error, "workspace readiness relist repair failed");
+        }
         Ok(version)
     }
 
@@ -512,16 +619,42 @@ impl WorkspaceObservations {
             let workspace =
                 owned_workspace(object.meta(), self.installation_id.as_str(), K::IS_POD);
             K::update(&mut state, object, self.installation_id.as_str(), deleted);
+            if let Some(id) = workspace {
+                if !state.runtime_ready(id) {
+                    state.request_ready_check(id);
+                }
+            }
             workspace
                 .map(|id| state.refresh_workspace(id, unix_now()))
                 .unwrap_or_default()
         };
         self.deliver(reservations).await;
+        self.deliver_ready_checks().await;
         None
     }
 }
 
 impl State {
+    fn request_ready_check(&mut self, id: Uuid) {
+        let ticket = self.next_ticket();
+        self.ready_checks.insert(id, ticket);
+    }
+
+    fn runtime_ready(&self, id: Uuid) -> bool {
+        let Some(set) = self.sets.get(&id) else {
+            return false;
+        };
+        let Some(pod) = self.pods.get(&id) else {
+            return false;
+        };
+        pod.ready
+            && pod.generation == set.generation
+            && pod.owner_uid == set.uid
+            && pod.revision.is_some()
+            && pod.revision == set.update_revision
+            && self.candidate(id, set.generation, 1).is_some()
+    }
+
     fn next_ticket(&mut self) -> u64 {
         self.registration_ticket += 1;
         self.registration_ticket
@@ -834,6 +967,7 @@ impl ObservedResource for StatefulSet {
     const IS_POD: bool = false;
     fn replace(state: &mut State, snapshot: State) {
         state.sets = snapshot.sets;
+        state.sets_listed = true;
     }
 
     fn update(state: &mut State, object: Self, installation: &str, deleted: bool) {
@@ -893,6 +1027,7 @@ impl ObservedResource for Pod {
     const IS_POD: bool = true;
     fn replace(state: &mut State, snapshot: State) {
         state.pods = snapshot.pods;
+        state.pods_listed = true;
     }
 
     fn update(state: &mut State, object: Self, installation: &str, deleted: bool) {
@@ -985,3 +1120,6 @@ mod tests;
 
 #[cfg(test)]
 mod http_tests;
+
+#[cfg(test)]
+mod ready_loss_tests;
