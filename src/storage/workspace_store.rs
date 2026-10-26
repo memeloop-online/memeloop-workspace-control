@@ -18,6 +18,7 @@ mod pagination;
 mod row;
 mod summary;
 
+pub use pagination::WorkspaceSort;
 pub use summary::WorkspaceUsageSummary;
 
 pub(super) use row::{

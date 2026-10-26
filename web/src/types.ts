@@ -125,6 +125,9 @@ export interface WorkspacePage {
   summary: WorkspaceSummary;
 }
 
+/** Creation-time ordering for the workspace list; the backend defaults to "newest". */
+export type WorkspaceSort = "newest" | "oldest";
+
 export interface WorkspaceSummary {
   total_count: number;
   requested: QuotaResources;

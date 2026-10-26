@@ -6,10 +6,19 @@ use super::summary::{workspace_filter_sql, workspace_page_summary};
 use super::{WorkspacePage, decode_postgres, decode_sqlite, row};
 use crate::storage::{Database, StorageError};
 
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceSort {
+    #[default]
+    Newest,
+    Oldest,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 struct WorkspaceCursor {
     created_at: i64,
     id: Uuid,
+    sort: WorkspaceSort,
 }
 
 impl Database {
@@ -19,6 +28,7 @@ impl Database {
         limit: Option<u32>,
         cursor: Option<&str>,
         search: Option<&str>,
+        sort: WorkspaceSort,
     ) -> Result<WorkspacePage, StorageError> {
         let limit = i64::from(limit.unwrap_or(50).clamp(1, 200));
         let cursor = cursor
@@ -30,6 +40,9 @@ impl Database {
                     .map_err(|_| StorageError::InvalidWorkspace)
             })
             .transpose()?;
+        if cursor.as_ref().is_some_and(|cursor| cursor.sort != sort) {
+            return Err(StorageError::InvalidWorkspace);
+        }
         // Search the immutable workspace columns and the serialized template snapshot. The
         // latter is where `workspace_user` lives, so historical workspaces use the same source of
         // truth as reconciliation. Escape LIKE metacharacters so user input remains literal.
@@ -37,10 +50,14 @@ impl Database {
         let pattern = format!("%{}%", escape_like_pattern(&search));
         let summary = workspace_page_summary(self, organization_id, &search, &pattern).await?;
         let filter = workspace_filter_sql("{install}", "{organization}", "{search}", "{pattern}");
+        let (comparison, direction) = match sort {
+            WorkspaceSort::Newest => ("<", "DESC"),
+            WorkspaceSort::Oldest => (">", "ASC"),
+        };
         let sql = format!(
             "SELECT {} FROM workspaces WHERE {filter} \
-             AND ({{cursor_created}} IS NULL OR created_at > {{cursor_created}} OR (created_at = {{cursor_created}} AND id > {{cursor_id}})) \
-             ORDER BY created_at, id LIMIT {{limit}}",
+             AND ({{cursor_created}} IS NULL OR created_at {comparison} {{cursor_created}} OR (created_at = {{cursor_created}} AND id {comparison} {{cursor_id}})) \
+             ORDER BY created_at {direction}, id {direction} LIMIT {{limit}}",
             row::WORKSPACE_COLUMNS
         );
         let rows = match self {
@@ -100,6 +117,7 @@ impl Database {
             Some(URL_SAFE_NO_PAD.encode(serde_json::to_vec(&WorkspaceCursor {
                 created_at: tail.created_at,
                 id: tail.id,
+                sort,
             })?))
         } else {
             None

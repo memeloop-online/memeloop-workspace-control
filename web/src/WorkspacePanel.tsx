@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
-import { Button, Field, Input, MessageBar, MessageBarBody, Spinner, Text } from "@fluentui/react-components";
+import { Button, Dropdown, Field, Input, MessageBar, MessageBarBody, Option, Spinner, Text } from "@fluentui/react-components";
 import { AddRegular, ChevronLeftRegular, ChevronRightRegular, DismissRegular, SearchRegular } from "@fluentui/react-icons";
 import type { ApiClient } from "./api";
 import { useI18n } from "./i18n";
@@ -16,7 +16,7 @@ import { WorkspaceCreationForm } from "./workspaces/WorkspaceCreationForm";
 import { WorkspaceStats } from "./workspaces/WorkspaceStats";
 import { useWorkspaceStyles } from "./workspaces/workspaceStyles";
 import { Page } from "./design-system/Page";
-import type { AvailableNodePool, CreateWorkspace, OrganizationUsageSummary, Principal, QuotaResources, Resources, StoredInjection, WorkspaceResponse, WorkspaceRuntime, WorkspaceSummary, WorkspaceTemplate } from "./types";
+import type { AvailableNodePool, CreateWorkspace, OrganizationUsageSummary, Principal, QuotaResources, Resources, StoredInjection, WorkspaceResponse, WorkspaceRuntime, WorkspaceSort, WorkspaceSummary, WorkspaceTemplate } from "./types";
 
 const PAGE_SIZE = 50;
 const EMPTY_WORKSPACES: WorkspaceResponse[] = [];
@@ -54,6 +54,7 @@ export function WorkspacePanel(props: Props) {
   const [runtime, setRuntime] = useState<Record<string, WorkspaceRuntime>>({});
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [sort, setSort] = useState<WorkspaceSort>("newest");
   const [items, setItems] = useState<WorkspaceResponse[]>([]);
   const [summary, setSummary] = useState<WorkspaceSummary | null>(null);
   const [quota, setQuota] = useState<QuotaResources | null>(null);
@@ -84,7 +85,7 @@ export function WorkspacePanel(props: Props) {
   const usageGeneration = useRef(0);
   const usageRequestActive = useRef(false);
   const actionBusyRef = useRef(false);
-  const scope = `${props.organizationId}\u0000${debouncedSearch.trim()}`;
+  const scope = `${props.organizationId}\u0000${debouncedSearch.trim()}\u0000${sort}`;
   const scopeRef = useRef(scope);
   scopeRef.current = scope;
   const scopeIsCurrent = loadedScope === scope;
@@ -107,9 +108,10 @@ export function WorkspacePanel(props: Props) {
   useEffect(() => {
     const nextGeneration = ++generation.current;
     requestActive.current = true;
+    cursorRef.current = null; nextCursorRef.current = null;
     setLoading(true); setItems([]); setSummary(null); setRuntime({}); setNextCursor(null); setHistory([null]); setPage(1); setLoadedScope(null); setRuntimeFailed(false);
     void fetchPage(null, scope, nextGeneration).finally(() => finishRequest(nextGeneration, scope));
-  }, [props.api, props.organizationId, debouncedSearch]);
+  }, [props.api, props.organizationId, debouncedSearch, sort]);
 
   useEffect(() => {
     let active = true;
@@ -144,7 +146,7 @@ export function WorkspacePanel(props: Props) {
       if (document.visibilityState === "visible" && scopeIsCurrent && !requestActive.current) void loadPage(cursorRef.current, scope, true);
     }, 10_000);
     return () => window.clearInterval(timer);
-  }, [scopeIsCurrent]);
+  }, [scopeIsCurrent, scope]);
 
   useEffect(() => {
     let active = true;
@@ -188,7 +190,7 @@ export function WorkspacePanel(props: Props) {
 
   async function fetchPage(cursor: string | null, requestScope: string, requestGeneration: number) {
     try {
-      const result = await props.api.workspacesPage(props.organizationId, { limit: PAGE_SIZE, cursor: cursor ?? undefined, search: debouncedSearch.trim() || undefined }) as WorkspacePageResult;
+      const result = await props.api.workspacesPage(props.organizationId, { limit: PAGE_SIZE, cursor: cursor ?? undefined, search: debouncedSearch.trim() || undefined, sort }) as WorkspacePageResult;
       if (generation.current !== requestGeneration || scopeRef.current !== requestScope) return false;
       cursorRef.current = cursor; nextCursorRef.current = result.next_cursor;
       setItems(result.items); setSummary(result.summary ?? null); setNextCursor(result.next_cursor); setLoadedScope(requestScope);
@@ -247,7 +249,9 @@ export function WorkspacePanel(props: Props) {
     try {
       await props.api.createWorkspace(command);
       setName(""); setTemplateId(""); setNodePool(""); setResourceDraft(null); setTemporaryStorageGiB(""); setShowCreate(false); setPendingCreate(null);
-      await props.onRefresh(); await resetPage();
+      await props.onRefresh();
+      // A new workspace only appears on the first page in newest-first order; keep the user's search filter untouched.
+      if (sort === "newest") await resetPage(); else setSort("newest");
     } catch (error) { props.onError(errorMessage(error, t("operationFailed"))); }
     finally { setSubmitting(false); }
   }
@@ -333,7 +337,10 @@ export function WorkspacePanel(props: Props) {
   }
 
   async function resetPage() {
+    if (scopeRef.current !== scope) return;
     setHistory([null]); setPage(1); cursorRef.current = null;
+    // Refresh after creation supersedes any in-flight poll of the previous page.
+    requestActive.current = false;
     await loadPage(null, scope, false, true);
   }
 
@@ -360,7 +367,7 @@ export function WorkspacePanel(props: Props) {
   return <Page title={t("workspaces")} wide actions={canCreate ? <Button appearance="primary" icon={<AddRegular />} aria-expanded={showCreate} onClick={() => setShowCreate((current) => !current)}>{t("newWorkspace")}</Button> : undefined}>
     <WorkspaceStats summary={usageSummaryOrganization === props.organizationId ? usageSummary : null} quota={quota} stale={usageSummaryStale} />
     {canCreate && showCreate && <WorkspaceCreationForm name={name} templateId={templateId} templates={templates} nodePools={nodePools} nodePool={nodePool} resourceDraft={resourceDraft} temporaryStorageGiB={temporaryStorageGiB} explicitInjectionRefs={explicitInjectionRefs} organizationInjections={organizationInjections} userInjections={userInjections} organizationRefs={organizationRefs} userRefs={userRefs} submitting={submitting} onNameChange={setName} onTemplateChange={chooseTemplate} onNodePoolChange={setNodePool} onResourceChange={updateResource} onTemporaryStorageChange={setTemporaryStorageGiB} onReferenceModeChange={setReferenceMode} onOrganizationRefsChange={setOrganizationRefs} onUserRefsChange={setUserRefs} onSubmit={create} />}
-    <div className={styles.filters}><Field className={styles.searchField} label={t("searchWorkspaces")}><Input type="search" contentBefore={<SearchRegular aria-hidden="true" />} contentAfter={search ? <Button appearance="transparent" size="small" icon={<DismissRegular aria-hidden="true" />} aria-label={t("clearSearch")} onClick={() => setSearch("")} /> : undefined} value={search} onChange={(_, data) => setSearch(data.value)} placeholder={t("searchWorkspacesHint")} /></Field><div className={styles.pagination} role="group" aria-label={t("workspacePagination")}><Button icon={<ChevronLeftRegular />} aria-label={t("previousPage")} disabled={page <= 1 || loading} onClick={() => void previousPage()}>{t("previousPage")}</Button><Text className={styles.paginationStatus} role="status">{t("workspacePageStatus")} {page}</Text><Button icon={<ChevronRightRegular />} iconPosition="after" aria-label={t("nextPage")} disabled={!nextCursor || loading} onClick={() => void nextPage()}>{t("nextPage")}</Button></div></div>
+    <div className={styles.filters}><Field className={styles.searchField} label={t("searchWorkspaces")}><Input type="search" contentBefore={<SearchRegular aria-hidden="true" />} contentAfter={search ? <Button appearance="transparent" size="small" icon={<DismissRegular aria-hidden="true" />} aria-label={t("clearSearch")} onClick={() => setSearch("")} /> : undefined} value={search} onChange={(_, data) => setSearch(data.value)} placeholder={t("searchWorkspacesHint")} /></Field><Field className={styles.sortField} label={t("sortWorkspaces")}><Dropdown value={sort === "newest" ? t("sortNewestFirst") : t("sortOldestFirst")} selectedOptions={[sort]} onOptionSelect={(_, data) => { if (data.optionValue === "newest" || data.optionValue === "oldest") setSort(data.optionValue); }}><Option value="newest" text={t("sortNewestFirst")}>{t("sortNewestFirst")}</Option><Option value="oldest" text={t("sortOldestFirst")}>{t("sortOldestFirst")}</Option></Dropdown></Field><div className={styles.pagination} role="group" aria-label={t("workspacePagination")}><Button icon={<ChevronLeftRegular />} aria-label={t("previousPage")} disabled={page <= 1 || loading} onClick={() => void previousPage()}>{t("previousPage")}</Button><Text className={styles.paginationStatus} role="status">{t("workspacePageStatus")} {page}</Text><Button icon={<ChevronRightRegular />} iconPosition="after" aria-label={t("nextPage")} disabled={!nextCursor || loading} onClick={() => void nextPage()}>{t("nextPage")}</Button></div></div>
     {runtimeFailed && workspaces.length > 0 && <MessageBar intent="warning"><MessageBarBody>{t("runtimeDataUnavailable")}</MessageBarBody><Button appearance="subtle" onClick={() => setRuntimeRetry((value) => value + 1)}>{t("retryRuntime")}</Button></MessageBar>}
     <div ref={listAnchorRef} className={styles.list} aria-busy={props.busy || loading}>
       {workspaces.length === 0 && loading && <div className={styles.empty} role="status"><Spinner label={t("loadingWorkspaces")} /></div>}
