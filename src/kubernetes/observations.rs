@@ -619,10 +619,10 @@ impl WorkspaceObservations {
             let workspace =
                 owned_workspace(object.meta(), self.installation_id.as_str(), K::IS_POD);
             K::update(&mut state, object, self.installation_id.as_str(), deleted);
-            if let Some(id) = workspace {
-                if !state.runtime_ready(id) {
-                    state.request_ready_check(id);
-                }
+            if let Some(id) = workspace
+                && !state.runtime_ready(id)
+            {
+                state.request_ready_check(id);
             }
             workspace
                 .map(|id| state.refresh_workspace(id, unix_now()))
