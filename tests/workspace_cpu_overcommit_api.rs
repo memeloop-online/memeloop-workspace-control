@@ -324,6 +324,24 @@ async fn system_admin_updates_a_stopped_workspace_once_and_replays_the_response(
             .count(),
         1
     );
+    let starting = database
+        .request_workspace_action(
+            workspace.id,
+            WorkspaceAction::Start,
+            workspace.owner_id,
+            updated.updated_at + 1,
+        )
+        .await
+        .unwrap();
+    assert_eq!(starting.template, expected_template);
+    let workload = builder()
+        .build(&starting)
+        .unwrap()
+        .stateful_set
+        .spec
+        .unwrap();
+    assert_eq!(workload.replicas, Some(1));
+    assert_eq!(workload.template.spec.unwrap(), after_pod);
 }
 
 #[tokio::test]
