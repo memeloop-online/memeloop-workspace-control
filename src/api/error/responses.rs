@@ -196,6 +196,16 @@ fn workspace_storage_response(error: &StorageError) -> Option<ErrorResponse> {
             "invalid_workspace_image_update",
             "workspace image must be pinned to an exact lowercase sha256 digest",
         ),
+        StorageError::InvalidCpuOvercommitRatio => response(
+            StatusCode::BAD_REQUEST,
+            "invalid_cpu_overcommit_ratio",
+            "CPU overcommit ratio must be between 1 and 1000",
+        ),
+        StorageError::WorkspaceCpuOvercommitUpdateConflict => response(
+            StatusCode::CONFLICT,
+            "workspace_cpu_overcommit_update_conflict",
+            "workspace must be stopped and at the expected generation before CPU overcommit can change",
+        ),
         StorageError::WorkspaceImageUpdateConflict => response(
             StatusCode::CONFLICT,
             "workspace_image_update_conflict",

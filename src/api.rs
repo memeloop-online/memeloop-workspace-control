@@ -34,6 +34,7 @@ mod webhooks;
 mod workspace_creation;
 mod workspace_home_capacity;
 mod workspace_home_pvc;
+mod workspace_cpu_overcommit;
 mod workspace_image_update;
 mod workspace_placement;
 mod workspace_response;
