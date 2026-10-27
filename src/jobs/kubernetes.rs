@@ -8,8 +8,8 @@ use crate::{
     },
     jobs::{JobHandler, JobHandlerError},
     kubernetes::{
-        DeleteProgress, KubernetesCoordinator, ReconcileError, ResourceBuilder,
-        WorkspaceObservations,
+        DeleteProgress, InjectionMaterialization, KubernetesCoordinator, ReconcileError,
+        ResourceBuilder, WorkspaceObservations,
     },
     storage::{ClaimedJob, Database, InjectionScopeRef, StorageError},
     workspaces::{Workspace, WorkspaceObservation, WorkspaceState},
@@ -95,16 +95,7 @@ impl WorkspaceReconcileHandler {
                 .map_err(|error| checkpoint_error(error, job, workspace, None));
         }
 
-        let resolved = self.resolve_workspace_injections(workspace).await?;
-        let materialization = self
-            .builder
-            .materialize_injections(
-                workspace.id,
-                &workspace.short_id,
-                &workspace.runtime,
-                &resolved,
-            )
-            .map_err(job_error)?;
+        let materialization = self.materialize_workspace_injections(workspace).await?;
         let identity = self
             .database
             .ensure_workspace_ssh_identity(&self.cipher, workspace.id, unix_timestamp()?)
@@ -252,6 +243,21 @@ impl WorkspaceReconcileHandler {
                 ))
             }
         }
+    }
+
+    async fn materialize_workspace_injections(
+        &self,
+        workspace: &Workspace,
+    ) -> Result<InjectionMaterialization, JobHandlerError> {
+        let resolved = self.resolve_workspace_injections(workspace).await?;
+        self.builder
+            .materialize_injections(
+                workspace.id,
+                &workspace.short_id,
+                &workspace.runtime,
+                &resolved,
+            )
+            .map_err(job_error)
     }
 
     async fn resolve_workspace_injections(
@@ -503,6 +509,25 @@ impl JobHandler for WorkspaceReconcileHandler {
         {
             return Ok(());
         }
+        if job
+            .payload
+            .get("reason")
+            .and_then(serde_json::Value::as_str)
+            == Some("injection_changed")
+        {
+            if matches!(
+                workspace.state,
+                WorkspaceState::Deleting | WorkspaceState::Deleted
+            ) {
+                return Ok(());
+            }
+            let materialization = self.materialize_workspace_injections(&workspace).await?;
+            return self
+                .coordinator
+                .reconcile_injections(&workspace, &materialization)
+                .await
+                .map_err(reconcile_error);
+        }
         self.reconcile_workspace(&workspace, job).await
     }
 
@@ -518,6 +543,11 @@ impl JobHandler for WorkspaceReconcileHandler {
             return self.storage_shrink_terminal_failure(job, now).await;
         }
         if job.kind != "reconcile_workspace"
+            || job
+                .payload
+                .get("reason")
+                .and_then(serde_json::Value::as_str)
+                == Some("injection_changed")
             || job
                 .payload
                 .get("runtime_observation")

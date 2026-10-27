@@ -90,6 +90,30 @@ async fn observe_stage<T, E: Error + 'static>(
 }
 
 impl KubernetesCoordinator {
+    pub async fn reconcile_injections(
+        &self,
+        workspace: &Workspace,
+        injections: &InjectionMaterialization,
+    ) -> Result<(), ReconcileError> {
+        let names = self.builder.runtime_names(workspace)?.resources;
+        let stateful_sets =
+            Api::<StatefulSet>::namespaced(self.client.clone(), workspace.runtime.namespace());
+        let Some(existing) = stateful_sets.get_opt(&names.stateful_set).await? else {
+            // A lifecycle job will create the workload with the latest inputs.
+            return Ok(());
+        };
+        self.builder
+            .verify_delete_ownership(&existing.metadata, workspace.id)?;
+        if existing.metadata.deletion_timestamp.is_some() {
+            return Ok(());
+        }
+        let compress_files = startup_gate::uses_compressed_files(&existing)?;
+        // Projected inputs update files and new SSH sessions without reconciling the Pod
+        // template, whose renderer may have changed since this workspace was created.
+        self.apply_injections(workspace, injections, compress_files)
+            .await
+    }
+
     pub(super) async fn apply_desired(
         &self,
         workspace: &Workspace,

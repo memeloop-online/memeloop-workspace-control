@@ -58,13 +58,15 @@ impl KubernetesCoordinator {
         if !is_new && previous_gate.is_none() {
             return Ok(plan);
         }
-        let previous_encoding = annotations.and_then(|a| a.get(FILE_ENCODING_ANNOTATION));
-        if previous_encoding.is_some_and(|value| value != FILE_ENCODING) {
-            return Err(ReconcileError::RuntimeIdentityMismatch);
-        }
         // Existing bootstrap monitor shells do not reload their functions when their script
         // projection changes. Only newly created Pods may opt in to the new transport.
-        plan.compress_files = is_new || previous_encoding.is_some();
+        plan.compress_files = is_new
+            || plan
+                .existing
+                .as_ref()
+                .map(uses_compressed_files)
+                .transpose()?
+                .unwrap_or(false);
         if plan.compress_files {
             plan.workload
                 .metadata
@@ -205,6 +207,18 @@ impl KubernetesCoordinator {
             },
         )?;
         Ok(())
+    }
+}
+
+pub(super) fn uses_compressed_files(workload: &StatefulSet) -> Result<bool, ReconcileError> {
+    let annotations = workload.metadata.annotations.as_ref();
+    if annotations.and_then(|a| a.get(GATE_ANNOTATION)).is_none() {
+        return Ok(false);
+    }
+    match annotations.and_then(|a| a.get(FILE_ENCODING_ANNOTATION)) {
+        None => Ok(false),
+        Some(value) if value == FILE_ENCODING => Ok(true),
+        Some(_) => Err(ReconcileError::RuntimeIdentityMismatch),
     }
 }
 

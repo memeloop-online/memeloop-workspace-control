@@ -74,9 +74,6 @@ impl KubernetesCoordinator {
         );
         desired.injections = injections;
         desired.ssh_identity = ssh_identity;
-        // Injection objects are projected volumes. Updating them must not alter the Pod template:
-        // the workspace bootstrap watches the projection and atomically replaces injected files in
-        // place. Changing this template would restart every matching running workspace.
         self.apply_desired(workspace, &desired).await
     }
 
