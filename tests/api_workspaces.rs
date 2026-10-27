@@ -222,6 +222,7 @@ async fn authenticated_workspace_api_enforces_rbac_and_exact_idempotent_replay()
             "disk_gib": 30
         },
         "temporary_storage_gib": 64,
+        "use_longhorn": true,
         "inline_workspace_injections": [{
             "key": "multiline-config",
             "kind": "config_file",
@@ -315,6 +316,10 @@ async fn authenticated_workspace_api_enforces_rbac_and_exact_idempotent_replay()
         1500
     );
     assert_eq!(workspace_response["workspace"]["resources"]["disk_gib"], 30);
+    assert_eq!(
+        workspace_response["workspace"]["storage_policy"]["use_longhorn"],
+        true
+    );
     assert_eq!(
         workspace_response["workspace"]["storage_policy"]["temporary_storage_gib"],
         64

@@ -174,6 +174,7 @@ async fn exercise_interleaved_observations(writer: &Database, observer: &Databas
                 template_id: template.id,
                 resources: None,
                 temporary_storage_gib: None,
+                use_longhorn: false,
                 organization_injection_refs: None,
                 user_injection_refs: None,
             },

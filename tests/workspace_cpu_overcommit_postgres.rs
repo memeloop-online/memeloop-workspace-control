@@ -95,6 +95,7 @@ async fn postgres_updates_a_locked_stopped_workspace_cpu_overcommit() {
                 template_id: template.id,
                 resources: None,
                 temporary_storage_gib: None,
+                use_longhorn: false,
                 organization_injection_refs: None,
                 user_injection_refs: None,
             },

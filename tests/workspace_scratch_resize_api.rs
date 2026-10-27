@@ -101,6 +101,7 @@ async fn app() -> (Router, Database, Workspace) {
                 template_id: template.id,
                 resources: None,
                 temporary_storage_gib: None,
+                use_longhorn: false,
                 organization_injection_refs: None,
                 user_injection_refs: None,
             },
