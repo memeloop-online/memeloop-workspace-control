@@ -107,7 +107,10 @@ fn seed_workload(mock: &GateMock, coordinator: &KubernetesCoordinator, workspace
     spec["containers"][0]["env"] = json!([{"name":"RUSTUP_HOME","value":"/opt/rustup"}]);
     spec["containers"][0]["readinessProbe"] =
         json!({"exec":{"command":["/bin/sh","-c","test -f /tmp/old-ready"]}});
-    spec["initContainers"][0]["command"] = json!(["/bin/sh", "-c", "echo old-init"]);
+    spec["initContainers"] = json!([{
+        "name":"workspace-bootstrap", "image":"example/workspace:1",
+        "command":["/bin/sh", "-c", "echo old-init"]
+    }]);
     let name = old["metadata"]["name"].as_str().unwrap();
     let path = format!(
         "/apis/apps/v1/namespaces/{}/statefulsets/{name}",
