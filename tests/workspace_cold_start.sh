@@ -6,6 +6,7 @@ fixtures=${2:?missing generated fixture directory}
 buildkit_image=${3:?missing pinned BuildKit image}
 fixture_root=$(mktemp -d)
 containers=()
+scratch_mounts=()
 success=false
 cleanup() {
   for container in "${containers[@]}"; do
@@ -13,6 +14,9 @@ cleanup() {
       docker logs "$container" 2>&1 || true
     fi
     docker rm --force "$container" >/dev/null 2>&1 || true
+  done
+  for scratch_mount in "${scratch_mounts[@]}"; do
+    sudo umount "$scratch_mount"
   done
   sudo rm -rf -- "$fixture_root"
 }
@@ -25,6 +29,8 @@ for enabled in false true; do
   buildkit_container="mwc-cold-buildkit-$$-$enabled"
   mkdir -p "$root/home" "$root/scratch" "$root/config" "$root/identity" \
     "$root/injections/config" "$root/injections/secret"
+  sudo mount -t tmpfs -o size=128m,mode=0755 tmpfs "$root/scratch"
+  scratch_mounts+=("$root/scratch")
   jq -er '.config["mwc-workspace-bootstrap"]' "$fixture" > "$root/config/mwc-workspace-bootstrap"
   jq -er '.config.sshd_config' "$fixture" > "$root/config/sshd_config"
   chmod 0555 "$root/config/mwc-workspace-bootstrap"
@@ -54,6 +60,8 @@ EOF
           /var/lib/mwc/workspace-scratch/codex-session-scratch
       '
   fi
+  # Kubelet creates a missing subPath before launching the main container.
+  sudo mkdir -p "$root/scratch/tmp"
 
   # Seed durable data, not layout. Both cases enter serve without prepare-layout or prepare.
   docker run --rm --network none --entrypoint sh \
@@ -104,7 +112,8 @@ EOF
   containers+=("$workspace_container")
   docker run --detach --name "$workspace_container" "${network[@]}" \
     "${workspace_env[@]}" -e MWC_HOME_RESERVE_MIB=0 -e RUSTUP_HOME="$rustup_home" \
-    --tmpfs /run/mwc-ssh:mode=0700 --tmpfs /tmp:mode=1777 --tmpfs /var/tmp:mode=1777 \
+    --tmpfs /run/mwc-ssh:mode=0700 \
+    -v "$root/scratch/tmp:/tmp" -v "$root/scratch/tmp:/var/tmp" \
     -v "$root/home:/workspace" -v "$root/config:/etc/workspace-platform:ro" \
     -v "$root/identity:/etc/ssh/platform:ro" \
     -v "$root/injections/config:/var/run/workspace-injections/config:ro" \
@@ -141,6 +150,11 @@ EOF
     test "$(readlink /workspace/.codex/.tmp)" = /var/lib/mwc/codex-scratch/dot-tmp
     test "$(stat -c %U:%G /var/lib/mwc/build-scratch)" = workspace:workspace
     test "$(stat -c %U:%G /var/lib/mwc/codex-scratch)" = workspace:workspace
+    test "$(stat -c %a /tmp)" = 1777
+    test "$(stat -c %a /var/tmp)" = 1777
+    test "$(stat -c %d /tmp)" = "$(stat -c %d /var/lib/mwc/build-scratch)"
+    test "$(stat -c %d /var/tmp)" = "$(stat -c %d /tmp)"
+    test "$(stat -c %d /workspace)" != "$(stat -c %d /tmp)"
   '
   # The container and non-login SSH sessions must use the same writable tool locations,
   # independently of a development image's inherited package-manager environment.
@@ -178,6 +192,26 @@ EOF
     test "$ready" = true
     docker exec "$buildkit_container" sh -ec 'test "$(id -u)" = 1000'
   fi
+  # A full temporary filesystem rejects ordinary writes without consuming Home or stopping SSH.
+  if docker exec --user 1000:1000 "$workspace_container" \
+    env LC_ALL=C dd if=/dev/zero of=/tmp/capacity-fill bs=1M count=256 \
+    2>"$root/tmp-full.stderr"; then
+    echo "temporary storage unexpectedly exceeded its filesystem capacity" >&2
+    exit 1
+  fi
+  grep -q 'No space left on device' "$root/tmp-full.stderr"
+  docker exec "$workspace_container" ssh -p 2222 \
+    -o BatchMode=yes -o IdentitiesOnly=yes -o ConnectTimeout=1 -o StrictHostKeyChecking=yes \
+    -o UserKnownHostsFile=/run/mwc-ssh/known_hosts \
+    -i /run/mwc-ssh/ttyd_client_key workspace@127.0.0.1 \
+    'printf "%s\n" home-still-writable > "$HOME/tmp-capacity-home"'
+  docker exec --user 1000:1000 "$workspace_container" sh -ec '
+    ! printf x > /var/lib/mwc/build-scratch/cache/tmp-capacity-full
+    rm /var/tmp/capacity-fill
+    printf "%s\n" recovered > /tmp/tmp-capacity-recovered
+    test "$(cat /var/tmp/tmp-capacity-recovered)" = recovered
+    test "$(cat /workspace/tmp-capacity-home)" = home-still-writable
+  '
   echo "cold serve strict SSH and durable-data preservation passed (buildkit=$enabled)"
 done
 success=true

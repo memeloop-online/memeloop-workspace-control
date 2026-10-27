@@ -239,11 +239,6 @@ fn workspace_volumes(
             ..Volume::default()
         },
         Volume {
-            name: "runtime-tmp".to_owned(),
-            empty_dir: Some(bounded_empty_dir("512Mi", Some("Memory"))),
-            ..Volume::default()
-        },
-        Volume {
             name: "ttyd-tmp".to_owned(),
             empty_dir: Some(bounded_empty_dir("128Mi", Some("Memory"))),
             ..Volume::default()

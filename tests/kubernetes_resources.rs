@@ -479,6 +479,23 @@ fn workspace_pod_uses_the_template_runtime_class_without_a_fallback() {
         .spec
         .unwrap();
     assert_eq!(standard_pod.runtime_class_name, None);
+    for spec in [&pod, &standard_pod] {
+        let mounts = spec
+            .containers
+            .iter()
+            .find(|container| container.name == "workspace")
+            .unwrap()
+            .volume_mounts
+            .as_ref()
+            .unwrap();
+        for path in ["/tmp", "/var/tmp"] {
+            assert!(mounts.iter().any(|mount| {
+                mount.mount_path == path
+                    && mount.name == "workspace-scratch"
+                    && mount.sub_path.as_deref() == Some("tmp")
+            }));
+        }
+    }
 }
 
 #[test]
@@ -1673,10 +1690,12 @@ fn temporary_storage_uses_one_generic_ephemeral_claim_and_isolated_subpaths() {
             .count(),
         1
     );
-    assert_eq!(empty_dir("runtime-tmp").medium.as_deref(), Some("Memory"));
-    assert_eq!(
-        empty_dir("runtime-tmp").size_limit.as_ref().unwrap().0,
-        "512Mi"
+    assert!(
+        !pod.volumes
+            .as_ref()
+            .unwrap()
+            .iter()
+            .any(|volume| volume.name == "runtime-tmp")
     );
     assert_eq!(empty_dir("runtime-ssh").medium.as_deref(), Some("Memory"));
     assert_eq!(
@@ -1715,6 +1734,8 @@ fn temporary_storage_uses_one_generic_ephemeral_claim_and_isolated_subpaths() {
         .unwrap();
     let mounts = workspace_container.volume_mounts.as_ref().unwrap();
     for (path, sub_path) in [
+        ("/tmp", "tmp"),
+        ("/var/tmp", "tmp"),
         ("/var/lib/mwc/build-scratch", "workspace-cache"),
         ("/var/lib/mwc/codex-scratch", "codex-session-scratch"),
         ("/run/mwc-buildkit", "build-cache"),
@@ -1725,9 +1746,6 @@ fn temporary_storage_uses_one_generic_ephemeral_claim_and_isolated_subpaths() {
                 && mount.sub_path.as_deref() == Some(sub_path)
         }));
     }
-    assert!(mounts.iter().any(|mount| {
-        mount.name == "runtime-tmp" && matches!(mount.mount_path.as_str(), "/tmp" | "/var/tmp")
-    }));
     assert!(!mounts.iter().any(|mount| {
         mount.name == names.resources.data_claim_template
             && matches!(mount.mount_path.as_str(), "/tmp" | "/var/tmp")
