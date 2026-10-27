@@ -762,6 +762,8 @@
   "workspaceTemporaryStorageGiB": "Temporary disk capacity (GiB)",
   "workspaceTemporaryStorageHelp": "Used for data that can be recreated: the default TMP directory, temporary build files, and caches such as Cargo build output and npm cache. Keep important code and personal files in the separately configured persistent Home.",
   "workspaceTemporaryStorageInvalid": "Temporary disk capacity must be a whole number from 1 to 2048 GiB.",
+  "workspaceUseLonghorn": "Enable Longhorn",
+  "workspaceUseLonghornHelp": "By default Home uses fast local thin storage. Enabling stores the persistent Home on Longhorn with two real-time replicas; mounting and syncing can slow workspace startup. Temporary storage always stays local.",
   "workspaceRunLocation": "Run location",
   "workspaceRunLocationTemplateDefault": "Use template default location",
   "workspaceRunLocationChoose": "Choose a run location",

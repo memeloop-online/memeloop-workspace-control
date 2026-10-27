@@ -762,6 +762,8 @@
   "workspaceTemporaryStorageGiB": "Объём временного диска (GiB)",
   "workspaceTemporaryStorageHelp": "Для данных, которые можно создать заново: каталога TMP по умолчанию, временных файлов сборки и кешей, например результатов сборки Cargo и кеша npm. Храните важный код и личные файлы в отдельно настраиваемом постоянном Home.",
   "workspaceTemporaryStorageInvalid": "Объём временного диска должен быть целым числом от 1 до 2048 GiB.",
+  "workspaceUseLonghorn": "Включить Longhorn",
+  "workspaceUseLonghornHelp": "По умолчанию Home использует быстрое локальное thin-хранилище. Включение переводит постоянный Home на Longhorn с двумя репликами в реальном времени; монтирование и синхронизация могут замедлить запуск рабочей области. Временное хранилище всегда остаётся локальным.",
   "workspaceRunLocation": "Место запуска",
   "workspaceRunLocationTemplateDefault": "Использовать место по умолчанию из шаблона",
   "workspaceRunLocationChoose": "Выберите место запуска",

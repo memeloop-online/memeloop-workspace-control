@@ -762,6 +762,8 @@
   "workspaceTemporaryStorageGiB": "临时盘容量 (GiB)",
   "workspaceTemporaryStorageHelp": "用于默认 TMP 目录、临时构建文件和缓存（如 Cargo 构建产物、npm 缓存）等可再生成数据。重要代码和个人文件请保存在单独配置的持久 Home 中。",
   "workspaceTemporaryStorageInvalid": "临时盘容量须为 1–2048 GiB 的整数。",
+  "workspaceUseLonghorn": "启用 Longhorn",
+  "workspaceUseLonghornHelp": "默认 Home 使用本地高速 thin 存储。启用后持久 Home 改用 Longhorn 双副本实时复制，挂载与同步可能减慢工作区启动；临时存储始终保持本地。",
   "workspaceRunLocation": "运行位置",
   "workspaceRunLocationTemplateDefault": "使用模板默认位置",
   "workspaceRunLocationChoose": "请选择运行位置",

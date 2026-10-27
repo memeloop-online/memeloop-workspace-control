@@ -228,6 +228,8 @@ export interface WorkspaceDesktopTemplate {
 
 export interface WorkspaceStoragePolicy {
   temporary_storage_gib: number;
+  /** Whether the persistent Home uses Longhorn live replication; omitted values default to false. */
+  use_longhorn: boolean;
 }
 
 export interface PodResourceRequest {
@@ -543,6 +545,8 @@ export interface CreateWorkspace {
   node_pool?: string | null;
   resources: Resources | null;
   temporary_storage_gib?: number | null;
+  /** Persistent Home on Longhorn with two live replicas; omitted means the local default. */
+  use_longhorn?: boolean;
   organization_injection_refs: string[] | null;
   user_injection_refs: string[] | null;
   inline_workspace_injections?: InjectionDraft[];
