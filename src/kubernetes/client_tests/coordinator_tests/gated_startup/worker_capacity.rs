@@ -210,6 +210,7 @@ impl HttpState {
     fn ready(&self) {
         let mut objects = self.mock.objects.lock().unwrap();
         let mut count = 0;
+        let mut pods = Vec::new();
         for (path, value) in objects
             .iter_mut()
             .filter(|(path, _)| path.contains("/statefulsets/"))
@@ -219,9 +220,24 @@ impl HttpState {
             value["status"] = json!({"replicas":1,"readyReplicas":1,"updatedReplicas":1,
                 "observedGeneration":1,"currentRevision":"ready","updateRevision":"ready"});
             assert!(path.starts_with("/apis/apps/v1/namespaces/"));
+            let name = value["metadata"]["name"].as_str().unwrap();
+            let namespace = value["metadata"]["namespace"].as_str().unwrap();
+            let mut metadata = value["spec"]["template"]["metadata"].clone();
+            metadata["name"] = json!(format!("{name}-0"));
+            metadata["namespace"] = json!(namespace);
+            metadata["uid"] = json!(format!("{name}-pod-uid"));
+            metadata["labels"]["controller-revision-hash"] = json!("ready");
+            metadata["ownerReferences"] = json!([{"apiVersion":"apps/v1","kind":"StatefulSet",
+                "name":name,"uid":value["metadata"]["uid"],"controller":true}]);
+            pods.push((
+                format!("/api/v1/namespaces/{namespace}/pods/{name}-0"),
+                json!({"apiVersion":"v1","kind":"Pod","metadata":metadata,
+                    "status":{"phase":"Running","conditions":[{"type":"Ready","status":"True"}]}}),
+            ));
             count += 1;
         }
         assert_eq!(count, TOTAL);
+        objects.extend(pods);
     }
 }
 

@@ -27,7 +27,7 @@ async fn guarded_pending_job_adopts_current_home_and_reloads_binding_without_fal
     fixture.ready().await;
     let (pod, sts) = fixture.adopted_runtime();
     let patches = Arc::new(Mutex::new(Vec::new()));
-    let coordinator = coordinator(&fixture, sts.clone(), patches.clone());
+    let coordinator = coordinator(&fixture, sts.clone(), pod.clone(), patches.clone());
     let builder = builder();
     let cipher =
         EnvelopeCipher::from_base64(&EnvelopeCipher::generate_base64_key().unwrap()).unwrap();
@@ -122,11 +122,19 @@ async fn guarded_pending_job_adopts_current_home_and_reloads_binding_without_fal
 fn coordinator(
     fixture: &Fixture,
     sts: Value,
+    pod: Value,
     patches: Arc<Mutex<Vec<Value>>>,
 ) -> KubernetesCoordinator {
     let claim = fixture.claim();
+    let observed = Arc::new(Mutex::new(None::<Value>));
     let service = service_fn(move |request: Request<kube::client::Body>| {
-        let sts = sts.clone();
+        let observed = observed.clone();
+        let sts = observed
+            .lock()
+            .unwrap()
+            .clone()
+            .unwrap_or_else(|| sts.clone());
+        let pod = pod.clone();
         let claim = claim.clone();
         let patches = patches.clone();
         async move {
@@ -137,6 +145,12 @@ fn coordinator(
                 let body: Value = serde_json::from_slice(&bytes).unwrap();
                 if path.contains("/statefulsets/") {
                     patches.lock().unwrap().push(body.clone());
+                    let mut current = body.clone();
+                    current["metadata"]["uid"] = sts["metadata"]["uid"].clone();
+                    current["metadata"]["generation"] = json!(1);
+                    current["status"] = json!({"observedGeneration":1,"replicas":1,"readyReplicas":1,
+                        "updatedReplicas":1,"currentRevision":"current","updateRevision":"current"});
+                    *observed.lock().unwrap() = Some(current);
                 }
                 (StatusCode::OK, body)
             } else {
@@ -147,6 +161,12 @@ fn coordinator(
                 );
                 if path.contains("/statefulsets/") {
                     (StatusCode::OK, sts)
+                } else if path.contains("/pods/") {
+                    let mut pod = pod;
+                    pod["metadata"]["annotations"] =
+                        sts["spec"]["template"]["metadata"]["annotations"].clone();
+                    pod["metadata"]["labels"]["controller-revision-hash"] = json!("current");
+                    (StatusCode::OK, pod)
                 } else if path.ends_with("/persistentvolumeclaims/migrated-home-20gi") {
                     (StatusCode::OK, claim)
                 } else if let Some(kind) = [

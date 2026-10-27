@@ -52,6 +52,35 @@ impl WorkspaceReconcileHandler {
         workspace: &Workspace,
         job: &ClaimedJob,
     ) -> Result<(), JobHandlerError> {
+        if job
+            .payload
+            .get("runtime_observation")
+            .and_then(serde_json::Value::as_bool)
+            == Some(true)
+        {
+            // Watch hints never authorize resource writes or replay an old intent.
+            if job
+                .payload
+                .get("generation")
+                .and_then(serde_json::Value::as_u64)
+                != Some(workspace.generation)
+                || !matches!(
+                    workspace.state,
+                    WorkspaceState::Ready | WorkspaceState::Starting
+                )
+            {
+                return Ok(());
+            }
+            let now = unix_timestamp()?;
+            return self.observe_workspace(workspace).await.map_err(|error| {
+                let error = match error {
+                    JobHandlerError::Failed(message) => JobHandlerError::Pending(message),
+                    error => error,
+                };
+                checkpoint_error(error, job, workspace, Some(now))
+            });
+        }
+
         if workspace.state == WorkspaceState::Deleted {
             return Ok(());
         }
@@ -146,6 +175,20 @@ impl WorkspaceReconcileHandler {
                 self.record_observation(workspace, WorkspaceObservation::Ready)
                     .await?;
             }
+            WorkspaceState::Ready => {
+                if !self
+                    .coordinator
+                    .has_observed_replicas(workspace, 1)
+                    .await
+                    .map_err(|error| JobHandlerError::Pending(error.to_string()))?
+                {
+                    self.record_observation(workspace, WorkspaceObservation::NotReady)
+                        .await?;
+                    return Err(JobHandlerError::Pending(
+                        "workspace Pod is recovering readiness".to_owned(),
+                    ));
+                }
+            }
             WorkspaceState::Stopping => {
                 if !self
                     .coordinator
@@ -160,7 +203,7 @@ impl WorkspaceReconcileHandler {
                 self.record_observation(workspace, WorkspaceObservation::Stopped)
                     .await?;
             }
-            WorkspaceState::Ready | WorkspaceState::Stopped | WorkspaceState::Failed => {}
+            WorkspaceState::Stopped | WorkspaceState::Failed => {}
             WorkspaceState::Deleting | WorkspaceState::Deleted => unreachable!(),
         }
         Ok(())
@@ -474,7 +517,13 @@ impl JobHandler for WorkspaceReconcileHandler {
         if job.kind == "workspace_storage_shrink" {
             return self.storage_shrink_terminal_failure(job, now).await;
         }
-        if job.kind != "reconcile_workspace" {
+        if job.kind != "reconcile_workspace"
+            || job
+                .payload
+                .get("runtime_observation")
+                .and_then(serde_json::Value::as_bool)
+                == Some(true)
+        {
             return Ok(());
         }
         let Some(workspace_id) = job.workspace_id else {

@@ -44,6 +44,7 @@ mod workspace_home_capacity;
 mod workspace_home_pvc;
 mod workspace_image_update;
 mod workspace_injection_refs;
+mod workspace_observation_jobs;
 mod workspace_placement_update;
 mod workspace_scratch_resize;
 mod workspace_storage_shrink;
