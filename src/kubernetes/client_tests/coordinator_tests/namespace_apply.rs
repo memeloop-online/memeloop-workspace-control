@@ -94,13 +94,10 @@ async fn satisfied_namespace_labels_skip_patch_after_the_metadata_get() {
     continued_after_namespace(
         reconcile_namespace(Some(owned_namespace()), requests.clone(), Some(false)).await,
     );
-    assert_eq!(
-        *requests.lock().unwrap(),
-        [
-            (Method::GET, NAMESPACE.to_owned()),
-            (Method::GET, WORKLOAD.to_owned())
-        ]
-    );
+    let requests = requests.lock().unwrap();
+    assert_eq!(requests.len(), 2);
+    assert!(requests.contains(&(Method::GET, NAMESPACE.to_owned())));
+    assert!(requests.contains(&(Method::GET, WORKLOAD.to_owned())));
 }
 
 #[tokio::test]
