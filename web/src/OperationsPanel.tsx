@@ -24,6 +24,7 @@ import type { TableColumnDefinition } from "@fluentui/react-components";
 import { AddRegular, OpenRegular, SaveRegular } from "@fluentui/react-icons";
 
 import { CreateUserForm } from "./admin/CreateUserForm";
+import { RunLocationsCard } from "./admin/RunLocationsCard";
 import { workspaceStateCounts } from "./admin/workspaceSummary";
 import { AdminCard, SaveButton, useAdminStyles } from "./admin/fluentAdmin";
 import type { ApiClient } from "./api";
@@ -101,6 +102,8 @@ export function AdminPanel({ api, principal, organizationId, onError, onOrganiza
   const canManageQuota = canManageOrganization(principal, organizationId, "manage_organization");
   const canManageMembers = canManageOrganization(principal, organizationId, "manage_members");
   const canManageGlobalState = canManageSystem(principal);
+  // Matches the backend node-pool guard: template-restricted keys never manage locations.
+  const canManageRunLocations = canManageGlobalState && principal.allowed_template_ids === null;
   const canManageOwnApiKeys = hasApiKeyScope(principal, "manage_api_keys");
   const canManageOtherApiKeys = canManageOtherUserApiKeys(principal);
   const selfServiceOnly = !canManageGlobalState && !canManageQuota && !canManageMembers;
@@ -299,6 +302,7 @@ export function AdminPanel({ api, principal, organizationId, onError, onOrganiza
 
       {show("users") && (canManageMembers || canManageOtherApiKeys) && <section data-testid="settings-section-users" className={styles.wide}><AdminCard title={t("usersRoles")} action={canManageGlobalState ? <Button icon={<AddRegular />} aria-expanded={showCreateUser} onClick={() => setShowCreateUser((visible) => !visible)}>{t("createUser")}</Button> : undefined}>{canManageGlobalState && showCreateUser && <CreateUserForm api={api} principal={principal} organizationId={organizationId} onCancel={() => setShowCreateUser(false)} onError={onError} onCreated={async () => { setShowCreateUser(false); setDirectoryVersion((value) => value + 1); await refresh(); }} />}<UsersDirectory api={api} organizationId={organizationId} principal={principal} canListUsers={principal.system_admin} canManageUsers={canManageGlobalState} canEditMembership={canManageMembers} canEditQuota={canManageGlobalState} refreshVersion={directoryVersion} onError={onError} onEditQuota={(userId) => void editUserQuota(userId)} /></AdminCard></section>}
       {show("images") && canManageGlobalState && <section data-testid="settings-section-images" className={styles.wide}><ImageAllowlist images={images} image={image} adding={addingImage} busyImage={imageBusy} onImageChange={setImage} onAllow={() => void allowImage()} onToggle={(policy) => void toggleImage(policy)} /></section>}
+      {show("run-locations") && canManageRunLocations && <section data-testid="settings-section-run-locations" className={styles.wide}><RunLocationsCard api={api} onError={onError} /></section>}
       {show("templates") && canManageQuota && <section data-testid="settings-section-templates" className={styles.wide}><AdminCard title={t("templates")}><TemplateEditor api={api} organizationId={organizationId} templates={templates} canGrantClusterAccess={canManageGlobalState} onRefresh={refresh} onError={onError} /></AdminCard></section>}
       {show("webhooks") && canManageQuota && <section data-testid="settings-section-webhooks" className={styles.wide}><AdminCard title={t("webhook")} action={<Button icon={<AddRegular />} onClick={() => setShowWebhookForm(true)}>{t("addWebhook")}</Button>}><DataGrid items={webhooks} columns={webhookColumns(t)}><DataGridHeader><DataGridRow<WebhookSubscription>>{(column) => <DataGridHeaderCell>{column.renderHeaderCell()}</DataGridHeaderCell>}</DataGridRow></DataGridHeader><DataGridBody<WebhookSubscription>>{({ item }) => <DataGridRow<WebhookSubscription>>{(column) => <DataGridCell>{column.renderCell(item)}</DataGridCell>}</DataGridRow>}</DataGridBody></DataGrid>{webhooks.length === 0 && <Text>{t("noWebhooks")}</Text>}</AdminCard></section>}
     </div>

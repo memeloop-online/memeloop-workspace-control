@@ -147,6 +147,29 @@ export interface AvailableNodePool {
   display_name: string;
 }
 
+/** Private node selection rules stored by a system-managed run location. */
+export interface NodePoolPlacement {
+  selector: Record<string, string>;
+  required_hosts: string[];
+  preferred_hosts: string[];
+}
+
+/** Administrator view of a run location; the public list stays AvailableNodePool. */
+export interface NodePool {
+  name: string;
+  display_name: string;
+  placement: NodePoolPlacement;
+  enabled: boolean;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface PutNodePoolInput {
+  display_name: string;
+  placement: NodePoolPlacement;
+  enabled: boolean;
+}
+
 export interface WorkspacePlacement {
   allowed_node_pools: string[];
   default_node_pool: string;
@@ -205,6 +228,8 @@ export interface WorkspaceDesktopTemplate {
 
 export interface WorkspaceStoragePolicy {
   temporary_storage_gib: number;
+  /** Whether the persistent Home uses Longhorn live replication; omitted values default to false. */
+  use_longhorn: boolean;
 }
 
 export interface PodResourceRequest {
@@ -520,6 +545,8 @@ export interface CreateWorkspace {
   node_pool?: string | null;
   resources: Resources | null;
   temporary_storage_gib?: number | null;
+  /** Persistent Home on Longhorn with two live replicas; omitted means the local default. */
+  use_longhorn?: boolean;
   organization_injection_refs: string[] | null;
   user_injection_refs: string[] | null;
   inline_workspace_injections?: InjectionDraft[];

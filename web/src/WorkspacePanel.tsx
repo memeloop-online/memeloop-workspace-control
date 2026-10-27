@@ -42,9 +42,12 @@ export function WorkspacePanel(props: Props) {
   const [templateId, setTemplateId] = useState("");
   const [name, setName] = useState("");
   const [nodePools, setNodePools] = useState<AvailableNodePool[]>([]);
+  const [nodePoolsStatus, setNodePoolsStatus] = useState<"loading" | "ready" | "failed">("loading");
+  const [nodePoolsRetry, setNodePoolsRetry] = useState(0);
   const [nodePool, setNodePool] = useState("");
   const [resourceDraft, setResourceDraft] = useState<Resources | null>(null);
   const [temporaryStorageGiB, setTemporaryStorageGiB] = useState("");
+  const [useLonghorn, setUseLonghorn] = useState(false);
   const [organizationInjections, setOrganizationInjections] = useState<StoredInjection[]>([]);
   const [userInjections, setUserInjections] = useState<StoredInjection[]>([]);
   const [explicitInjectionRefs, setExplicitInjectionRefs] = useState(false);
@@ -174,9 +177,12 @@ export function WorkspacePanel(props: Props) {
 
   useEffect(() => {
     let active = true;
-    void props.api.nodePools().then((value) => active && setNodePools(value)).catch(() => active && setNodePools([]));
+    setNodePoolsStatus("loading");
+    void props.api.nodePools()
+      .then((value) => { if (active) { setNodePools(value); setNodePoolsStatus("ready"); } })
+      .catch(() => { if (active) { setNodePools([]); setNodePoolsStatus("failed"); } });
     return () => { active = false; };
-  }, [props.api]);
+  }, [props.api, nodePoolsRetry]);
 
   useEffect(() => {
     let active = true;
@@ -221,6 +227,23 @@ export function WorkspacePanel(props: Props) {
     if (!templateId) return props.onError(t("chooseTemplateError"));
     const trimmedName = name.trim();
     if (!trimmedName || [...trimmedName].length > 120) return props.onError(t("workspaceNameInvalid"));
+    let requestedNodePool = nodePool;
+    if (selectedTemplate) {
+      // The create handler enforces the same location rule as the form: without
+      // the public list, or with no allowed-and-enabled location, there is
+      // nothing usable to schedule onto.
+      if (nodePoolsStatus !== "ready") return props.onError(t("workspaceRunLocationUnavailable"));
+      const selectable = nodePools.filter((pool) => selectedTemplate.placement.allowed_node_pools.includes(pool.name));
+      if (selectable.length === 0) return props.onError(t("workspaceRunLocationNone"));
+      const defaultAvailable = selectable.some((pool) => pool.name === selectedTemplate.placement.default_node_pool);
+      if (!requestedNodePool && !defaultAvailable) {
+        // A disabled or removed template default is never submitted as null: pin the
+        // single remaining location explicitly, or demand a choice among several.
+        if (selectable.length === 1) requestedNodePool = selectable[0]?.name ?? "";
+        else return props.onError(t("workspaceRunLocationInvalid"));
+      }
+      if (requestedNodePool && !selectable.some((pool) => pool.name === requestedNodePool)) return props.onError(t("workspaceRunLocationInvalid"));
+    }
     if (selectedTemplate && resourceDraft && (
       resourceDraft.cpu_millis < selectedTemplate.pod_requests.cpu_millis
       || resourceDraft.memory_mib < selectedTemplate.pod_requests.memory_mib
@@ -231,9 +254,10 @@ export function WorkspacePanel(props: Props) {
     if (!Number.isInteger(temporaryStorage) || temporaryStorage < 1 || temporaryStorage > 2048) return props.onError(t("workspaceTemporaryStorageInvalid"));
     const command: CreateWorkspace = {
       organization_id: props.organizationId, owner_id: props.principal.user_id, name: trimmedName, template_id: templateId,
-      node_pool: nodePool || null,
+      node_pool: requestedNodePool || null,
       resources: resourceDraft && selectedTemplate && !sameResources(resourceDraft, selectedTemplate.resources) ? resourceDraft : null,
       ...(selectedTemplate && temporaryStorage !== selectedTemplate.storage_policy.temporary_storage_gib ? { temporary_storage_gib: temporaryStorage } : {}),
+      use_longhorn: useLonghorn,
       organization_injection_refs: explicitInjectionRefs ? organizationInjections.filter((item) => item.locked || organizationRefs.includes(item.key)).map((item) => item.key) : null,
       user_injection_refs: explicitInjectionRefs ? userRefs : null,
     };
@@ -248,7 +272,7 @@ export function WorkspacePanel(props: Props) {
     setSubmitting(true);
     try {
       await props.api.createWorkspace(command);
-      setName(""); setTemplateId(""); setNodePool(""); setResourceDraft(null); setTemporaryStorageGiB(""); setShowCreate(false); setPendingCreate(null);
+      setName(""); setTemplateId(""); setNodePool(""); setResourceDraft(null); setTemporaryStorageGiB(""); setUseLonghorn(false); setShowCreate(false); setPendingCreate(null);
       await props.onRefresh();
       // A new workspace only appears on the first page in newest-first order; keep the user's search filter untouched.
       if (sort === "newest") await resetPage(); else setSort("newest");
@@ -366,7 +390,7 @@ export function WorkspacePanel(props: Props) {
   const styles = useWorkspaceStyles();
   return <Page title={t("workspaces")} wide actions={canCreate ? <Button appearance="primary" icon={<AddRegular />} aria-expanded={showCreate} onClick={() => setShowCreate((current) => !current)}>{t("newWorkspace")}</Button> : undefined}>
     <WorkspaceStats summary={usageSummaryOrganization === props.organizationId ? usageSummary : null} quota={quota} stale={usageSummaryStale} />
-    {canCreate && showCreate && <WorkspaceCreationForm name={name} templateId={templateId} templates={templates} nodePools={nodePools} nodePool={nodePool} resourceDraft={resourceDraft} temporaryStorageGiB={temporaryStorageGiB} explicitInjectionRefs={explicitInjectionRefs} organizationInjections={organizationInjections} userInjections={userInjections} organizationRefs={organizationRefs} userRefs={userRefs} submitting={submitting} onNameChange={setName} onTemplateChange={chooseTemplate} onNodePoolChange={setNodePool} onResourceChange={updateResource} onTemporaryStorageChange={setTemporaryStorageGiB} onReferenceModeChange={setReferenceMode} onOrganizationRefsChange={setOrganizationRefs} onUserRefsChange={setUserRefs} onSubmit={create} />}
+    {canCreate && showCreate && <WorkspaceCreationForm name={name} templateId={templateId} templates={templates} nodePools={nodePools} nodePoolsStatus={nodePoolsStatus} nodePool={nodePool} resourceDraft={resourceDraft} temporaryStorageGiB={temporaryStorageGiB} useLonghorn={useLonghorn} explicitInjectionRefs={explicitInjectionRefs} organizationInjections={organizationInjections} userInjections={userInjections} organizationRefs={organizationRefs} userRefs={userRefs} submitting={submitting} onNameChange={setName} onTemplateChange={chooseTemplate} onNodePoolChange={setNodePool} onNodePoolsRetry={() => setNodePoolsRetry((value) => value + 1)} onResourceChange={updateResource} onTemporaryStorageChange={setTemporaryStorageGiB} onUseLonghornChange={setUseLonghorn} onReferenceModeChange={setReferenceMode} onOrganizationRefsChange={setOrganizationRefs} onUserRefsChange={setUserRefs} onSubmit={create} />}
     <div className={styles.filters}><Field className={styles.searchField} label={t("searchWorkspaces")}><Input type="search" contentBefore={<SearchRegular aria-hidden="true" />} contentAfter={search ? <Button appearance="transparent" size="small" icon={<DismissRegular aria-hidden="true" />} aria-label={t("clearSearch")} onClick={() => setSearch("")} /> : undefined} value={search} onChange={(_, data) => setSearch(data.value)} placeholder={t("searchWorkspacesHint")} /></Field><Field className={styles.sortField} label={t("sortWorkspaces")}><Dropdown value={sort === "newest" ? t("sortNewestFirst") : t("sortOldestFirst")} selectedOptions={[sort]} onOptionSelect={(_, data) => { if (data.optionValue === "newest" || data.optionValue === "oldest") setSort(data.optionValue); }}><Option value="newest" text={t("sortNewestFirst")}>{t("sortNewestFirst")}</Option><Option value="oldest" text={t("sortOldestFirst")}>{t("sortOldestFirst")}</Option></Dropdown></Field><div className={styles.pagination} role="group" aria-label={t("workspacePagination")}><Button icon={<ChevronLeftRegular />} aria-label={t("previousPage")} disabled={page <= 1 || loading} onClick={() => void previousPage()}>{t("previousPage")}</Button><Text className={styles.paginationStatus} role="status">{t("workspacePageStatus")} {page}</Text><Button icon={<ChevronRightRegular />} iconPosition="after" aria-label={t("nextPage")} disabled={!nextCursor || loading} onClick={() => void nextPage()}>{t("nextPage")}</Button></div></div>
     {runtimeFailed && workspaces.length > 0 && <MessageBar intent="warning"><MessageBarBody>{t("runtimeDataUnavailable")}</MessageBarBody><Button appearance="subtle" onClick={() => setRuntimeRetry((value) => value + 1)}>{t("retryRuntime")}</Button></MessageBar>}
     <div ref={listAnchorRef} className={styles.list} aria-busy={props.busy || loading}>

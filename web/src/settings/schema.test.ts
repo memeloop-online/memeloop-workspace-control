@@ -85,3 +85,22 @@ test("CPU settings are searchable in all supported languages and hidden from mem
     }
   }
 });
+
+test("run locations section is system-only and searchable by node selection terms", () => {
+  const administrator: Principal = { ...member, system_admin: true, api_key_scopes: ["manage_system"] };
+  const runLocationsTranslation = (key: MessageKey) => ({ runLocations: "运行位置", runLocationsHelp: "节点选择规则" } as Partial<Record<MessageKey, string>>)[key] ?? key;
+  for (const query of ["运行位置", "节点选择规则", "node pool", "required_hosts", "placement"]) {
+    assert.deepEqual(visibleSettingsSections(administrator, "", "system", query, runLocationsTranslation).map((section) => section.id), ["run-locations"], query);
+    assert.deepEqual(visibleSettingsSections(member, "", "all", query, runLocationsTranslation), [], query);
+  }
+  // An organization administrator without manage_system must not reach the section.
+  const organizationAdmin: Principal = { ...member, memberships: [{ organization_id: "org-1", role: "organization_admin" }], api_key_scopes: ["manage_organization", "manage_members"] };
+  assert.deepEqual(visibleSettingsSections(organizationAdmin, "org-1", "system", "", runLocationsTranslation), []);
+});
+
+test("run locations stay hidden from template-restricted system administrators", () => {
+  const restricted: Principal = { ...member, system_admin: true, api_key_scopes: ["manage_system"], allowed_template_ids: ["template-1"] };
+  assert.deepEqual(visibleSettingsSections(restricted, "", "system", "", translation).map((section) => section.id), ["images", "scaling"]);
+  assert.deepEqual(visibleSettingsSections(restricted, "", "all", "node pool", translation), []);
+  assert.deepEqual(visibleSettingsSections(restricted, "", "system", "run location", translation), []);
+});

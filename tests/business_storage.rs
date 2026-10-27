@@ -111,6 +111,7 @@ async fn unconfigured_image_allowlist_defaults_to_deny() {
                 template_id,
                 resources: None,
                 temporary_storage_gib: None,
+                use_longhorn: false,
                 organization_injection_refs: None,
                 user_injection_refs: None,
             },
@@ -172,6 +173,7 @@ async fn inline_injection_failure_rolls_back_workspace_and_first_job() {
                 template_id,
                 resources: None,
                 temporary_storage_gib: None,
+                use_longhorn: false,
                 organization_injection_refs: None,
                 user_injection_refs: None,
             },
@@ -281,6 +283,7 @@ async fn admitted_template_must_match_the_transactional_workspace_snapshot() {
                 template_id,
                 resources: None,
                 temporary_storage_gib: None,
+                use_longhorn: false,
                 organization_injection_refs: None,
                 user_injection_refs: None,
             },
@@ -356,6 +359,7 @@ async fn workspace_runtime_identity_uses_the_product_namespace() {
                 template_id,
                 resources: None,
                 temporary_storage_gib: None,
+                use_longhorn: false,
                 organization_injection_refs: None,
                 user_injection_refs: None,
             },
@@ -452,6 +456,7 @@ async fn template_deletion_requires_disabled_unreferenced_template() {
                 template_id,
                 resources: None,
                 temporary_storage_gib: None,
+                use_longhorn: false,
                 organization_injection_refs: None,
                 user_injection_refs: None,
             },
@@ -547,6 +552,7 @@ async fn workspace_resource_override_is_validated_and_snapshotted() {
         template_id,
         resources: None,
         temporary_storage_gib,
+        use_longhorn: false,
         organization_injection_refs: None,
         user_injection_refs: None,
     };
@@ -567,6 +573,7 @@ async fn workspace_resource_override_is_validated_and_snapshotted() {
                 template_id,
                 resources: Some(overridden),
                 temporary_storage_gib: Some(64),
+                use_longhorn: true,
                 organization_injection_refs: None,
                 user_injection_refs: None,
             },
@@ -578,6 +585,8 @@ async fn workspace_resource_override_is_validated_and_snapshotted() {
         .unwrap();
     assert_eq!(workspace.template.resources, overridden);
     assert_eq!(workspace.template.storage_policy.temporary_storage_gib, 64);
+    assert!(workspace.template.storage_policy.use_longhorn);
+    assert!(!default_workspace.template.storage_policy.use_longhorn);
     assert_eq!(
         database.get_workspace(workspace.id).await.unwrap(),
         workspace
@@ -606,6 +615,7 @@ async fn workspace_resource_override_is_validated_and_snapshotted() {
                     disk_gib: 20,
                 }),
                 temporary_storage_gib: None,
+                use_longhorn: false,
                 organization_injection_refs: None,
                 user_injection_refs: None,
             },
@@ -745,6 +755,7 @@ async fn image_allowlist_and_template_contract_are_admitted_atomically() {
         template_id: template.id,
         resources: None,
         temporary_storage_gib: None,
+        use_longhorn: false,
         organization_injection_refs: Some(vec!["org-key".to_owned()]),
         user_injection_refs: Some(Vec::new()),
     };
@@ -816,6 +827,7 @@ async fn image_allowlist_and_template_contract_are_admitted_atomically() {
         template_id: unapproved_template,
         resources: None,
         temporary_storage_gib: None,
+        use_longhorn: false,
         organization_injection_refs: None,
         user_injection_refs: None,
     };
@@ -959,6 +971,7 @@ async fn workspace_creation_enforces_quota_and_enqueues_lifecycle_actions() {
         template_id,
         resources: None,
         temporary_storage_gib: None,
+        use_longhorn: false,
         organization_injection_refs: None,
         user_injection_refs: None,
     };
@@ -1121,6 +1134,7 @@ async fn confirmed_deletion_scrubs_sensitive_workspace_state_and_keeps_a_tombsto
                 template_id,
                 resources: None,
                 temporary_storage_gib: None,
+                use_longhorn: false,
                 organization_injection_refs: None,
                 user_injection_refs: None,
             },
@@ -1286,6 +1300,7 @@ async fn user_injection_change_reconciles_every_workspace_the_user_can_access() 
                 template_id,
                 resources: None,
                 temporary_storage_gib: None,
+                use_longhorn: false,
                 organization_injection_refs: None,
                 user_injection_refs: None,
             },
@@ -1358,6 +1373,7 @@ async fn cpu_overcommit_is_frozen_for_all_creation_paths_and_existing_snapshots_
         template_id,
         resources,
         temporary_storage_gib: None,
+        use_longhorn: false,
         organization_injection_refs: None,
         user_injection_refs: None,
     };

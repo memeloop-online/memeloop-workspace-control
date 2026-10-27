@@ -31,6 +31,7 @@ mod ui;
 mod user_quota;
 mod web_shell;
 mod webhooks;
+mod workspace_cpu_overcommit;
 mod workspace_creation;
 mod workspace_home_capacity;
 mod workspace_home_pvc;

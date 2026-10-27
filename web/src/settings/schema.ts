@@ -4,7 +4,7 @@ import { canManageOrganization, canManageOtherUserApiKeys, canManageSystem, hasA
 import { settingsFields } from "./fields.ts";
 
 export type SettingsCategory = "personal" | "organization" | "system";
-export type SettingsSectionId = "profile" | "appearance" | "organization" | "organization-management" | "api-keys" | "quota" | "workspace-state" | "users" | "templates" | "webhooks" | "images" | "scaling";
+export type SettingsSectionId = "profile" | "appearance" | "organization" | "organization-management" | "api-keys" | "quota" | "workspace-state" | "users" | "templates" | "webhooks" | "images" | "scaling" | "run-locations";
 
 export interface SettingsSection {
   id: SettingsSectionId;
@@ -19,6 +19,8 @@ const anyUser = () => true;
 const manageOrganization = (principal: Principal, organizationId: string) => Boolean(organizationId) && canManageOrganization(principal, organizationId, "manage_organization");
 const manageMembers = (principal: Principal, organizationId: string) => Boolean(organizationId) && canManageOrganization(principal, organizationId, "manage_members");
 const systemAdmin = (principal: Principal) => canManageSystem(principal);
+// Mirrors the /api/v1/admin/node-pools guard: template-restricted keys never manage locations.
+const unrestrictedSystemAdmin = (principal: Principal) => canManageSystem(principal) && principal.allowed_template_ids === null;
 
 export const settingsSections: readonly SettingsSection[] = [
   { id: "profile", category: "personal", title: "profileSettings", keywords: ["display_name", "avatar_url", "avatar", "name", "displayName"], available: anyUser },
@@ -33,6 +35,7 @@ export const settingsSections: readonly SettingsSection[] = [
   { id: "webhooks", category: "organization", title: "webhook", keywords: ["webhook", "url", "secret", "event_prefix"], available: manageOrganization },
   { id: "images", category: "system", title: "imageAllowlist", keywords: ["oci", "image", "allowlist", "enabled"], available: systemAdmin },
   { id: "scaling", category: "system", title: "scaling", keywords: ["database", "replicas", "jobs", "schema_version", "job_worker_concurrency", "concurrency", "worker", "cpu_overcommit_ratio", "overcommit"], available: systemAdmin },
+  { id: "run-locations", category: "system", title: "runLocations", description: "runLocationsHelp", keywords: ["node pool", "node_pool", "placement", "run location", "location", "selector", "hostname", "required_hosts", "preferred_hosts"], available: unrestrictedSystemAdmin },
 ];
 
 export const JOB_WORKER_CONCURRENCY_MIN = 1;

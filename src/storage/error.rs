@@ -17,6 +17,10 @@ pub enum StorageError {
     InvalidJobWorkerConcurrency,
     #[error("CPU overcommit ratio must be between 1 and 1000")]
     InvalidCpuOvercommitRatio,
+    #[error(
+        "workspace must be stopped at the expected generation before CPU overcommit can change"
+    )]
+    WorkspaceCpuOvercommitUpdateConflict,
     #[error("lease owner must not be empty")]
     EmptyLeaseOwner,
     #[error("lease duration overflowed")]

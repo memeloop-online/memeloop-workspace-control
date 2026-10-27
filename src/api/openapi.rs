@@ -6,8 +6,9 @@ use crate::config::{DatabaseMode, InstallationId};
 use super::{
     ErrorBody, ErrorEnvelope, admin, auth, catalog, events, injections, node_pools,
     organization_usage, organizations, plugins, port_mappings, runtime, ssh, system, user_quota,
-    web_shell, webhooks, workspace_home_capacity, workspace_home_pvc, workspace_image_update,
-    workspace_placement, workspace_scratch_resize, workspace_storage_shrink, workspaces,
+    web_shell, webhooks, workspace_cpu_overcommit, workspace_home_capacity, workspace_home_pvc,
+    workspace_image_update, workspace_placement, workspace_scratch_resize,
+    workspace_storage_shrink, workspaces,
 };
 
 #[derive(OpenApi)]
@@ -72,6 +73,7 @@ use super::{
         runtime::get,
         organization_usage::get,
         workspaces::action,
+        workspace_cpu_overcommit::update,
         workspace_image_update::update,
         workspace_home_pvc::update,
         workspace_home_capacity::update,
@@ -127,6 +129,7 @@ use super::{
         crate::storage::CreateWorkspace,
         crate::storage::WorkspaceSort,
         workspaces::CreateWorkspaceRequest,
+        workspace_cpu_overcommit::UpdateWorkspaceCpuOvercommitRequest,
         workspace_image_update::UpdateWorkspaceImageRequest,
         workspace_home_pvc::BindWorkspaceHomePvcRequest,
         workspace_home_capacity::CorrectWorkspaceHomeCapacityRequest,

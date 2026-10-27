@@ -4,6 +4,7 @@ import type { AccessMode, EgressPolicy, WorkspacePlacement, WorkspaceStoragePoli
 
 export const DEFAULT_STORAGE_POLICY: WorkspaceStoragePolicy = {
   temporary_storage_gib: 10,
+  use_longhorn: false,
 };
 
 export const DEFAULT_PLACEMENT: WorkspacePlacement = {
@@ -30,6 +31,7 @@ export const TEMPLATE_NUMBER_POLICIES = {
 
 export interface TemplateStoragePolicyDraft {
   temporary_storage_gib: string;
+  use_longhorn: boolean;
 }
 
 export interface TemplateDraft {
@@ -83,6 +85,7 @@ const TEMPLATE_FIELD_SCHEMA: TemplateFieldSchema = {
     buildkit: null,
     storage_policy: {
       temporary_storage_gib: null,
+      use_longhorn: null,
     },
     cluster_access: null,
     egress_policy: null,
@@ -148,6 +151,7 @@ export function templateDraftToYaml(draft: TemplateDraft): string {
   const desktopPort = draft.desktopEnabled ? parseDesktopPort(draft.desktopPort) : null;
   const storagePolicy: WorkspaceStoragePolicy = {
     temporary_storage_gib: parseRequiredNumber(draft.storagePolicy.temporary_storage_gib, TEMPLATE_NUMBER_POLICIES.temporaryStorage),
+    use_longhorn: draft.storagePolicy.use_longhorn,
   };
   const placement = placementFromDraft(draft);
 
@@ -292,8 +296,13 @@ function isDesktopPort(port: number): boolean {
 
 function parseStoragePolicy(value: unknown): WorkspaceStoragePolicy {
   const policy = requiredRecord(value);
+  const useLonghorn = policy.use_longhorn;
+  if (useLonghorn !== undefined && typeof useLonghorn !== "boolean") {
+    throw new Error("Invalid WorkspaceTemplate YAML: storage_policy.use_longhorn must be a boolean");
+  }
   return {
     temporary_storage_gib: Number(policy.temporary_storage_gib ?? DEFAULT_STORAGE_POLICY.temporary_storage_gib),
+    use_longhorn: useLonghorn ?? DEFAULT_STORAGE_POLICY.use_longhorn,
   };
 }
 
@@ -319,6 +328,7 @@ function knownFields(value: unknown, schema: TemplateFieldSchema, path: string):
 function storagePolicyDraft(policy: WorkspaceStoragePolicy): TemplateStoragePolicyDraft {
   return {
     temporary_storage_gib: String(policy.temporary_storage_gib),
+    use_longhorn: policy.use_longhorn,
   };
 }
 

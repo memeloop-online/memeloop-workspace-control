@@ -41,7 +41,7 @@ export function TemplateForm({ draft, setDraft, canGrantClusterAccess, nodePools
       <legend className={styles.groupLegend}><Text weight="semibold">{t("storagePolicyTitle")}</Text></legend>
       <Caption1 className={styles.muted}>{t("storagePolicyHelp")}</Caption1>
       <div className={styles.formGrid}>
-        <NumberField label={`${t("temporaryStorage")} (GiB)`} help={t("temporaryStorageHelp")} value={draft.storagePolicy.temporary_storage_gib} policy={TEMPLATE_NUMBER_POLICIES.temporaryStorage} update={(temporary_storage_gib) => setDraft({ ...draft, storagePolicy: { temporary_storage_gib } })} />
+        <NumberField label={`${t("temporaryStorage")} (GiB)`} help={t("temporaryStorageHelp")} value={draft.storagePolicy.temporary_storage_gib} policy={TEMPLATE_NUMBER_POLICIES.temporaryStorage} update={(temporary_storage_gib) => setDraft({ ...draft, storagePolicy: { ...draft.storagePolicy, temporary_storage_gib } })} />
       </div>
     </fieldset>
     <Field className={styles.full} hint={t("imageBuildServiceHelp")}><Checkbox checked={draft.buildkit} onChange={(_, data) => setDraft({ ...draft, buildkit: Boolean(data.checked) })} label={t("imageBuildService")} /></Field>

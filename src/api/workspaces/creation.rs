@@ -29,6 +29,7 @@ pub(super) async fn create_admitted_workspace(
     if let Some(temporary_storage_gib) = command.temporary_storage_gib {
         final_template.storage_policy.temporary_storage_gib = temporary_storage_gib;
     }
+    final_template.storage_policy.use_longhorn = command.use_longhorn;
     final_template
         .validate()
         .map_err(|_| crate::storage::StorageError::InvalidWorkspace)?;
@@ -207,6 +208,7 @@ mod tests {
     async fn creation_freezes_cpu_ratio_before_preflight_and_plugin_admission() {
         let (mut state, actor, mut request, template, _) = setup(NamespaceFixture::Owned).await;
         request.workspace.temporary_storage_gib = Some(2_048);
+        request.workspace.use_longhorn = true;
         let database = state.database.clone();
         state.set_kubernetes_client(kube::Client::new(
             service_fn(move |_request: Request<kube::client::Body>| {
@@ -226,6 +228,7 @@ mod tests {
             .unwrap();
         assert_eq!(state.database.cpu_overcommit_ratio().await.unwrap(), 20);
         assert_eq!(workspace.template.cpu_overcommit_ratio, Some(10));
+        assert!(workspace.template.storage_policy.use_longhorn);
         assert_eq!(
             workspace.template.storage_policy.temporary_storage_gib,
             2_048
@@ -317,6 +320,7 @@ mod tests {
                 template_id: template.id,
                 resources: None,
                 temporary_storage_gib: None,
+                use_longhorn: false,
                 organization_injection_refs: None,
                 user_injection_refs: None,
             },

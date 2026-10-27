@@ -36,6 +36,7 @@ test("template form normalization preserves the bounded storage policy", () => {
   draft.name = "storage";
   draft.storagePolicy = {
     temporary_storage_gib: "48",
+    use_longhorn: true,
   };
   const parsed = templateDraftFromYaml(templateDraftToYaml(draft));
   assert.deepEqual(parsed.storagePolicy, draft.storagePolicy);
@@ -45,10 +46,21 @@ test("new templates emit backend-compatible storage defaults", () => {
   const draft = { ...emptyTemplateDraft(), name: "defaults" };
   const yaml = templateDraftToYaml(draft);
   assert.match(yaml, /temporary_storage_gib: 10/u);
+  assert.match(yaml, /use_longhorn: false/u);
   assert.match(yaml, /allowed_node_pools:\n      - default/u);
   assert.match(yaml, /default_node_pool: default/u);
   assert.doesNotMatch(yaml, /runtime_class_name/u);
   assert.match(yaml, /egress_policy: unrestricted/u);
+});
+
+test("an omitted Longhorn flag keeps the local Home default and rejects non-boolean values", () => {
+  const yaml = templateDraftToYaml({ ...emptyTemplateDraft(), name: "local-home" });
+  const omitted = yaml.replace("    use_longhorn: false\n", "");
+  assert.equal(templateDraftFromYaml(omitted).storagePolicy.use_longhorn, false);
+  assert.throws(
+    () => templateDraftFromYaml(yaml.replace("    use_longhorn: false\n", "    use_longhorn: yes\n")),
+    /use_longhorn/u,
+  );
 });
 
 test("internet-only egress policy round-trips through template YAML", () => {

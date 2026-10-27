@@ -41,6 +41,10 @@ pub struct CreateWorkspace {
     #[serde(default)]
     #[schema(minimum = 1, maximum = 2048)]
     pub temporary_storage_gib: Option<u64>,
+    /// Store the persistent Home on Longhorn with two live replicas.
+    /// Defaults to local storage; temporary storage is always local.
+    #[serde(default)]
+    pub use_longhorn: bool,
     #[serde(default)]
     pub organization_injection_refs: Option<Vec<String>>,
     #[serde(default)]
@@ -433,5 +437,22 @@ impl Database {
             .map(|row| decode_postgres(row, installation_id))
             .collect(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::CreateWorkspace;
+
+    #[test]
+    fn omitted_longhorn_option_uses_local_home() {
+        let command: CreateWorkspace = serde_json::from_value(serde_json::json!({
+            "organization_id": "00000000-0000-7000-8000-000000000001",
+            "owner_id": "00000000-0000-7000-8000-000000000002",
+            "template_id": "00000000-0000-7000-8000-000000000003",
+            "name": "local-home"
+        }))
+        .unwrap();
+        assert!(!command.use_longhorn);
     }
 }

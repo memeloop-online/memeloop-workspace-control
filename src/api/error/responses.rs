@@ -104,6 +104,11 @@ pub(super) fn storage_response(error: StorageError) -> ErrorResponse {
         return response;
     }
     match error {
+        StorageError::InvalidCpuOvercommitRatio => response(
+            StatusCode::BAD_REQUEST,
+            "invalid_cpu_overcommit_ratio",
+            "CPU overcommit ratio must be between 1 and 1000",
+        ),
         StorageError::OrganizationNotFound => response(
             StatusCode::NOT_FOUND,
             "organization_not_found",
@@ -195,6 +200,11 @@ fn workspace_storage_response(error: &StorageError) -> Option<ErrorResponse> {
             StatusCode::BAD_REQUEST,
             "invalid_workspace_image_update",
             "workspace image must be pinned to an exact lowercase sha256 digest",
+        ),
+        StorageError::WorkspaceCpuOvercommitUpdateConflict => response(
+            StatusCode::CONFLICT,
+            "workspace_cpu_overcommit_update_conflict",
+            "workspace must be stopped and at the expected generation before CPU overcommit can change",
         ),
         StorageError::WorkspaceImageUpdateConflict => response(
             StatusCode::CONFLICT,
