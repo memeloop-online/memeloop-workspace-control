@@ -100,6 +100,8 @@ test("Settings selects only the clicked user's API keys and manages their UI", {
         response = { body: [] };
       } else if (method === "GET" && path === "/api/v1/admin/scaling") {
         response = { body: null };
+      } else if (method === "GET" && path === "/api/v1/admin/node-pools") {
+        response = { body: [{ name: "default", display_name: "Default location", placement: { selector: {}, required_hosts: [], preferred_hosts: [] }, enabled: true, created_at: 1_700_000_000, updated_at: 1_700_000_000 }] };
       } else if (method === "GET" && path === "/api/v1/workspaces") {
         response = { body: { items: [], next_cursor: null, summary: { total_count: 0, requested: { cpu_millis: 0, memory_mib: 0, gpu_count: 0, disk_gib: 0 }, temporary_requested_gib: 0, state_counts: {} } } };
       } else if (method === "GET" && path === "/api/v1/admin/users") {

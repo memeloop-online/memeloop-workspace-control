@@ -12,10 +12,12 @@ import type {
   InjectionScope,
   ImagePolicy,
   MembershipPage,
+  NodePool,
   Organization,
   OrganizationPage,
   OrganizationUsageSummary,
   Principal,
+  PutNodePoolInput,
   QuotaResources,
   ResolvedInjection,
   Role,
@@ -217,6 +219,23 @@ export class ApiClient {
 
   nodePools(): Promise<AvailableNodePool[]> {
     return this.request("/api/v1/node-pools");
+  }
+
+  /** Administrator list of every run location, including disabled ones. */
+  adminNodePools(): Promise<NodePool[]> {
+    return this.request("/api/v1/admin/node-pools");
+  }
+
+  /** Upsert a run location; `name` is the stable ID and never changes. */
+  putNodePool(name: string, input: PutNodePoolInput): Promise<NodePool> {
+    return this.request(`/api/v1/admin/node-pools/${encodeURIComponent(name)}`, {
+      method: "PUT", body: JSON.stringify(input), idempotent: true,
+    });
+  }
+
+  /** Only a disabled, unreferenced, non-default location can be deleted. */
+  deleteNodePool(name: string): Promise<void> {
+    return this.request(`/api/v1/admin/node-pools/${encodeURIComponent(name)}`, { method: "DELETE", idempotent: true });
   }
 
   updateWorkspacePlacement(workspaceId: string, input: { node_pool: string; expected_generation: number }): Promise<WorkspaceResponse> {

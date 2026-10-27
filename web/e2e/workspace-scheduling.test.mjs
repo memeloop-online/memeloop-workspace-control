@@ -177,7 +177,8 @@ test("workspace event log preserves native identity and distinguishes local limi
     }
   } finally { await browser.close(); }
 });
-test("workspace creation edits temporary storage independently and offers only available allowed locations", { timeout: 90_000 }, async () => {
+
+test("workspace creation always shows the run location and only submits usable locations", { timeout: 120_000 }, async () => {
   const messages = JSON.parse(await readFile(new URL("../src/locales/en.json", import.meta.url), "utf8"));
   const creationResources = { ...resources, disk_gib: 20 };
   const pools = [
@@ -188,23 +189,24 @@ test("workspace creation edits temporary storage independently and offers only a
   const templates = [
     { id: "rust-template", name: "Rust Dev", temporaryStorage: 10 },
     { id: "other-template", name: "Other development", temporaryStorage: 4 },
-  ].map(({ id, name, temporaryStorage }) => ({
+    { id: "wide-template", name: "Wide placement", temporaryStorage: 6, allowed: [pools[0].name, pools[1].name, pools[2].name] },
+  ].map(({ id, name, temporaryStorage, allowed }) => ({
     id, name, organization_id: organizationId, enabled: true, yaml: "",
     image: "example.invalid/rust-dev:1", access_mode: "internal", resources: creationResources,
     pod_requests: { cpu_millis: 500, memory_mib: 512 }, cpu_overcommit_ratio: 10,
     workspace_user: "user", workspace_home: "/home/user", buildkit: true,
     storage_policy: { temporary_storage_gib: temporaryStorage }, cluster_access: false,
     egress_policy: "internet_only", runtime_class_name: null, desktop: null,
-    placement: { allowed_node_pools: [pools[0].name, pools[1].name], default_node_pool: pools[0].name },
+    placement: { allowed_node_pools: allowed ?? [pools[0].name, pools[1].name], default_node_pool: pools[0].name },
   }));
   const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_BIN || chromium.executablePath(), headless: true, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
   try {
-    // An unrelated available pool must not turn a single allowed location into a choice.
-    for (const [availablePools, hasLocationChoice] of [[[], false], [[pools[0], pools[2]], false], [pools, true]]) {
+    const openCreationPage = async ({ availablePools, nodePoolFailures = 0 }) => {
       const context = await browser.newContext();
       const unexpected = [];
       const errors = [];
       const submissions = [];
+      let nodePoolRequests = 0;
       await context.addInitScript(({ organizationId }) => {
         sessionStorage.setItem("mwc.api-token", "scheduling-fixture-token");
         localStorage.setItem("mwc.locale", "en");
@@ -224,7 +226,13 @@ test("workspace creation edits temporary storage independently and offers only a
         if (request.method() === "GET") {
           if (url.pathname === "/api/v1/me") response = { ...response, api_key_scopes: ["read_workspace", "create_workspace"] };
           if (url.pathname === "/api/v1/templates") response = templates;
-          if (url.pathname === "/api/v1/node-pools") response = availablePools;
+          if (url.pathname === "/api/v1/node-pools") {
+            nodePoolRequests += 1;
+            if (nodePoolRequests <= nodePoolFailures) {
+              return route.fulfill({ status: 500, contentType: "application/json", body: "{}" });
+            }
+            response = availablePools;
+          }
         }
         if (response === undefined) unexpected.push(`${request.method()} ${url.pathname}`);
         await route.fulfill({ status: response === undefined ? 501 : 200, contentType: "application/json", body: JSON.stringify(response ?? null) });
@@ -237,6 +245,12 @@ test("workspace creation edits temporary storage independently and offers only a
         await page.getByRole("combobox", { name: messages.template }).click();
         await page.getByRole("option", { name, exact: true }).click();
       };
+      return { context, page, unexpected, errors, submissions, chooseTemplate };
+    };
+
+    // Multiple allowed locations: a real choice with an explicit template default.
+    {
+      const { context, page, unexpected, errors, submissions, chooseTemplate } = await openCreationPage({ availablePools: pools });
       await chooseTemplate(templates[0].name);
       const temporaryStorage = page.getByRole("spinbutton", { name: messages.workspaceTemporaryStorageGiB, exact: true });
       const homeStorage = page.getByRole("spinbutton", { name: messages.diskSizeGib, exact: true });
@@ -247,21 +261,17 @@ test("workspace creation edits temporary storage independently and offers only a
       assert.equal(await page.getByRole("spinbutton", { name: messages.gpuCount, exact: true }).inputValue(), "0");
       await page.getByText(messages.workspaceTemporaryStorageHelp, { exact: true }).waitFor();
       const location = page.getByRole("combobox", { name: messages.workspaceRunLocation, exact: true });
-      if (hasLocationChoice) {
-        await location.waitFor();
-        assert.equal(await location.innerText(), messages.workspaceRunLocationAutomatic);
-        await location.click();
-        assert.equal(await page.getByRole("option", { name: pools[2].display_name, exact: true }).count(), 0);
-        await page.getByRole("option", { name: pools[1].display_name, exact: true }).click();
-      } else {
-        assert.equal(await location.count(), 0);
-      }
+      await location.waitFor();
+      assert.equal(await location.innerText(), messages.workspaceRunLocationTemplateDefault);
+      await location.click();
+      assert.equal(await page.getByRole("option", { name: pools[2].display_name, exact: true }).count(), 0);
+      await page.getByRole("option", { name: pools[1].display_name, exact: true }).click();
       await temporaryStorage.fill("12");
       await homeStorage.fill("27");
       await chooseTemplate(templates[1].name);
       assert.equal(await temporaryStorage.inputValue(), "4");
       assert.equal(await homeStorage.inputValue(), "20");
-      if (hasLocationChoice) assert.equal(await location.innerText(), messages.workspaceRunLocationAutomatic);
+      assert.equal(await location.innerText(), messages.workspaceRunLocationTemplateDefault, "switching the template resets the location choice");
       await chooseTemplate(templates[0].name);
       assert.equal(await temporaryStorage.inputValue(), "10");
       assert.equal(await homeStorage.inputValue(), "20");
@@ -269,30 +279,141 @@ test("workspace creation edits temporary storage independently and offers only a
       await temporaryStorage.fill("12");
       const firstPost = page.waitForRequest((request) => request.method() === "POST" && new URL(request.url()).pathname === "/api/v1/workspaces");
       await page.getByRole("button", { name: messages.submitCreate, exact: true }).click();
-      const automaticPayload = (await firstPost).postDataJSON();
-      assert.equal(automaticPayload.temporary_storage_gib, 12);
-      assert.equal(automaticPayload.node_pool, null);
-      assert.equal(automaticPayload.resources, null, "temporary capacity must not change template CPU, memory, GPU, or Home");
-      assert.equal(automaticPayload.template_id, templates[0].id);
+      const defaultPayload = (await firstPost).postDataJSON();
+      assert.equal(defaultPayload.temporary_storage_gib, 12);
+      assert.equal(defaultPayload.node_pool, null, "the template default is sent as null, not a guessed pool");
+      assert.equal(defaultPayload.resources, null, "temporary capacity must not change template CPU, memory, GPU, or Home");
+      assert.equal(defaultPayload.template_id, templates[0].id);
       await temporaryStorage.waitFor({ state: "hidden" });
-      if (hasLocationChoice) {
-        await page.getByRole("button", { name: messages.newWorkspace, exact: true }).click();
-        await chooseTemplate(templates[0].name);
-        await page.getByRole("textbox", { name: messages.name, exact: true }).fill("Payment development in Strait");
-        await location.click();
-        await page.getByRole("option", { name: pools[1].display_name, exact: true }).click();
-        assert.equal(await location.innerText(), pools[1].display_name);
-        const secondPost = page.waitForRequest((request) => request.method() === "POST" && new URL(request.url()).pathname === "/api/v1/workspaces");
-        await page.getByRole("button", { name: messages.submitCreate, exact: true }).click();
-        const selectedPayload = (await secondPost).postDataJSON();
-        assert.equal(selectedPayload.node_pool, pools[1].name);
-        assert.equal(selectedPayload.resources, null);
-        assert.equal(Object.hasOwn(selectedPayload, "temporary_storage_gib"), false, "unchanged capacity inherits the template");
-        await temporaryStorage.waitFor({ state: "hidden" });
-      }
-      assert.equal(submissions.length, hasLocationChoice ? 2 : 1);
+      await page.getByRole("button", { name: messages.newWorkspace, exact: true }).click();
+      await chooseTemplate(templates[0].name);
+      await page.getByRole("textbox", { name: messages.name, exact: true }).fill("Payment development in Strait");
+      await location.click();
+      await page.getByRole("option", { name: pools[1].display_name, exact: true }).click();
+      assert.equal(await location.innerText(), pools[1].display_name);
+      const secondPost = page.waitForRequest((request) => request.method() === "POST" && new URL(request.url()).pathname === "/api/v1/workspaces");
+      await page.getByRole("button", { name: messages.submitCreate, exact: true }).click();
+      const selectedPayload = (await secondPost).postDataJSON();
+      assert.equal(selectedPayload.node_pool, pools[1].name);
+      assert.equal(selectedPayload.resources, null);
+      assert.equal(Object.hasOwn(selectedPayload, "temporary_storage_gib"), false, "unchanged capacity inherits the template");
+      await temporaryStorage.waitFor({ state: "hidden" });
+      assert.equal(submissions.length, 2);
       assert.deepEqual(unexpected, [], "unexpected creation requests");
       assert.deepEqual(errors, [], "creation browser errors");
+      await context.close();
+    }
+
+    // One allowed location: visible fixed human name, no hidden selector, and the
+    // unrelated available pool must not turn it into a choice.
+    {
+      const { context, page, unexpected, errors, submissions, chooseTemplate } = await openCreationPage({ availablePools: [pools[0], pools[2]] });
+      await chooseTemplate(templates[0].name);
+      assert.equal(await page.getByRole("combobox", { name: messages.workspaceRunLocation, exact: true }).count(), 0);
+      const fixed = page.getByRole("textbox", { name: messages.workspaceRunLocation, exact: true });
+      await fixed.waitFor();
+      assert.equal(await fixed.inputValue(), pools[0].display_name);
+      await page.getByText(messages.workspaceRunLocationFixed, { exact: true }).waitFor();
+      await page.getByRole("textbox", { name: messages.name, exact: true }).fill("Single location workspace");
+      const post = page.waitForRequest((request) => request.method() === "POST" && new URL(request.url()).pathname === "/api/v1/workspaces");
+      await page.getByRole("button", { name: messages.submitCreate, exact: true }).click();
+      const payload = (await post).postDataJSON();
+      assert.equal(payload.node_pool, null, "the single allowed location stays the template default");
+      assert.equal(submissions.length, 1);
+      assert.deepEqual(unexpected, [], "single location: unexpected requests");
+      assert.deepEqual(errors, [], "single location: browser errors");
+      await context.close();
+    }
+
+    // Disabled template default with a single enabled alternate: the fixed
+    // location is submitted explicitly instead of pointing null at the default.
+    {
+      const { context, page, unexpected, errors, submissions, chooseTemplate } = await openCreationPage({ availablePools: [pools[1]] });
+      await chooseTemplate(templates[0].name);
+      const fixed = page.getByRole("textbox", { name: messages.workspaceRunLocation, exact: true });
+      await fixed.waitFor();
+      assert.equal(await fixed.inputValue(), pools[1].display_name);
+      await page.getByText(messages.workspaceRunLocationFixed, { exact: true }).waitFor();
+      await page.getByRole("textbox", { name: messages.name, exact: true }).fill("Alternate location workspace");
+      const post = page.waitForRequest((request) => request.method() === "POST" && new URL(request.url()).pathname === "/api/v1/workspaces");
+      await page.getByRole("button", { name: messages.submitCreate, exact: true }).click();
+      const payload = (await post).postDataJSON();
+      assert.equal(payload.node_pool, pools[1].name, "the single remaining location is sent explicitly");
+      assert.equal(submissions.length, 1);
+      assert.deepEqual(unexpected, [], "alternate location: unexpected requests");
+      assert.deepEqual(errors, [], "alternate location: browser errors");
+      await context.close();
+    }
+
+    // Disabled template default with several alternates: the default option is
+    // never offered and an explicit choice is required before submitting.
+    {
+      const { context, page, unexpected, errors, submissions, chooseTemplate } = await openCreationPage({ availablePools: [pools[1], pools[2]] });
+      await chooseTemplate(templates[2].name);
+      const location = page.getByRole("combobox", { name: messages.workspaceRunLocation, exact: true });
+      await location.waitFor();
+      assert.equal((await location.innerText()).trim(), messages.workspaceRunLocationChoose, "an unusable default leaves a choose-location placeholder");
+      await location.click();
+      assert.equal(await page.getByRole("option", { name: messages.workspaceRunLocationTemplateDefault, exact: true }).count(), 0, "an unusable default is never offered");
+      await page.getByRole("option", { name: pools[2].display_name, exact: true }).waitFor();
+      await page.keyboard.press("Escape");
+      await page.getByRole("textbox", { name: messages.name, exact: true }).fill("Needs an explicit location");
+      const submit = page.getByRole("button", { name: messages.submitCreate, exact: true });
+      assert.equal(await submit.isDisabled(), true, "creation requires an explicit location choice");
+      await page.evaluate(() => document.querySelector("form")?.requestSubmit());
+      await page.locator(".fui-ToastTitle").filter({ hasText: messages.workspaceRunLocationInvalid }).waitFor();
+      assert.equal(submissions.length, 0, "an unset choice must not reach the API");
+      await location.click();
+      await page.getByRole("option", { name: pools[1].display_name, exact: true }).click();
+      assert.equal(await submit.isDisabled(), false);
+      const post = page.waitForRequest((request) => request.method() === "POST" && new URL(request.url()).pathname === "/api/v1/workspaces");
+      await submit.click();
+      const payload = (await post).postDataJSON();
+      assert.equal(payload.node_pool, pools[1].name);
+      assert.equal(submissions.length, 1);
+      assert.deepEqual(unexpected, [], "explicit choice: unexpected requests");
+      assert.deepEqual(errors, [], "explicit choice: browser errors");
+      await context.close();
+    }
+
+    // No allowed location: an explicit message and no way to submit, even when
+    // the form submit event is forced around the disabled button.
+    {
+      const { context, page, unexpected, errors, submissions, chooseTemplate } = await openCreationPage({ availablePools: [] });
+      await chooseTemplate(templates[0].name);
+      await page.getByText(messages.workspaceRunLocationNone, { exact: true }).waitFor();
+      assert.equal(await page.getByRole("combobox", { name: messages.workspaceRunLocation, exact: true }).count(), 0);
+      await page.getByRole("textbox", { name: messages.name, exact: true }).fill("Nowhere to run");
+      const submit = page.getByRole("button", { name: messages.submitCreate, exact: true });
+      assert.equal(await submit.isDisabled(), true);
+      await page.evaluate(() => document.querySelector("form")?.requestSubmit());
+      await page.waitForTimeout(300);
+      assert.equal(submissions.length, 0, "a template without an available location must not be creatable");
+      assert.deepEqual(unexpected, [], "no location: unexpected requests");
+      assert.deepEqual(errors, [], "no location: browser errors");
+      await context.close();
+    }
+
+    // Failed public list: explicit error with a retry that recovers the selector.
+    {
+      const { context, page, unexpected, errors, submissions, chooseTemplate } = await openCreationPage({ availablePools: pools, nodePoolFailures: 1 });
+      await chooseTemplate(templates[0].name);
+      await page.getByText(messages.runLocationsLoadFailed, { exact: true }).waitFor();
+      const submit = page.getByRole("button", { name: messages.submitCreate, exact: true });
+      assert.equal(await submit.isDisabled(), true, "creation stays blocked while locations failed to load");
+      await page.getByRole("button", { name: messages.retry, exact: true }).click();
+      const location = page.getByRole("combobox", { name: messages.workspaceRunLocation, exact: true });
+      await location.waitFor();
+      assert.equal(await location.innerText(), messages.workspaceRunLocationTemplateDefault);
+      assert.equal(await submit.isDisabled(), false);
+      await page.getByRole("textbox", { name: messages.name, exact: true }).fill("Recovered location load");
+      const post = page.waitForRequest((request) => request.method() === "POST" && new URL(request.url()).pathname === "/api/v1/workspaces");
+      await submit.click();
+      const payload = (await post).postDataJSON();
+      assert.equal(payload.node_pool, null);
+      assert.equal(submissions.length, 1);
+      assert.deepEqual(unexpected, [], "retry: unexpected requests");
+      assert.deepEqual(errors, [], "retry: browser errors");
       await context.close();
     }
   } finally { await browser.close(); }

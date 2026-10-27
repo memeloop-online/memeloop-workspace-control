@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from "react";
-import { Button, Card, Caption1, Dropdown, Field, InfoLabel, Input, Option, Text } from "@fluentui/react-components";
+import { Button, Card, Caption1, Dropdown, Field, InfoLabel, Input, MessageBar, MessageBarBody, Option, Text } from "@fluentui/react-components";
 import { AddRegular } from "@fluentui/react-icons";
 import { CredentialReferencePicker } from "../forms/CredentialReferencePicker";
 import { nodePoolDisplayName } from "../forms/NodePoolPicker";
@@ -12,6 +12,7 @@ interface Props {
   templateId: string;
   templates: WorkspaceTemplate[];
   nodePools: AvailableNodePool[];
+  nodePoolsStatus: "loading" | "ready" | "failed";
   nodePool: string;
   resourceDraft: Resources | null;
   temporaryStorageGiB: string;
@@ -24,6 +25,7 @@ interface Props {
   onNameChange: (value: string) => void;
   onTemplateChange: (id: string) => void;
   onNodePoolChange: (name: string) => void;
+  onNodePoolsRetry: () => void;
   onResourceChange: (key: keyof Resources, value: string) => void;
   onTemporaryStorageChange: (value: string) => void;
   onReferenceModeChange: (explicit: boolean) => void;
@@ -39,6 +41,14 @@ export function WorkspaceCreationForm(props: Props) {
   const selectableLocations = props.nodePools.filter((pool) => selectedTemplate?.placement.allowed_node_pools.includes(pool.name));
   const [attempted, setAttempted] = useState(false);
   const nameError = attempted && !props.name.trim() ? t("workspaceNameRequired") : undefined;
+  // A template default that is disabled or absent from the public list is not a
+  // usable choice: a single remaining location is submitted explicitly, and with
+  // several remaining locations the user must pick one.
+  const defaultAvailable = selectedTemplate !== undefined && selectableLocations.some((pool) => pool.name === selectedTemplate.placement.default_node_pool);
+  const explicitChoiceRequired = selectableLocations.length > 1 && !defaultAvailable;
+  // Location choice is only submittable once the public list settled and the
+  // template actually intersects it; the create handler re-checks the same rule.
+  const locationBlocked = props.nodePoolsStatus !== "ready" || (selectedTemplate !== undefined && selectableLocations.length === 0) || (explicitChoiceRequired && !props.nodePool);
   return <Card className={styles.createCard} appearance="filled-alternative">
     <form className={styles.formGrid} onSubmit={(event) => { setAttempted(true); props.onSubmit(event); }}>
     <Field label={t("name")} required validationState={nameError ? "error" : undefined} validationMessage={nameError}><Input value={props.name} maxLength={120} onChange={(_, data) => props.onNameChange(data.value)} /></Field>
@@ -48,16 +58,32 @@ export function WorkspaceCreationForm(props: Props) {
       </Dropdown>
     </Field>
     {selectedTemplate && <TemplateSummary template={selectedTemplate} />}
-    {selectableLocations.length > 1 && <Field className={styles.formWide} label={t("workspaceRunLocation")} hint={t("workspaceRunLocationHelp")}>
-      <Dropdown
-        value={props.nodePool ? nodePoolDisplayName(props.nodePools, props.nodePool) : t("workspaceRunLocationAutomatic")}
-        selectedOptions={[props.nodePool]}
-        onOptionSelect={(_, data) => props.onNodePoolChange(data.optionValue ?? "")}
-      >
-        <Option value="" text={t("workspaceRunLocationAutomatic")}>{t("workspaceRunLocationAutomatic")}</Option>
-        {selectableLocations.map((pool) => <Option key={pool.name} value={pool.name} text={pool.display_name}>{pool.display_name}</Option>)}
-      </Dropdown>
-    </Field>}
+    <div className={styles.formWide}>
+      <Field label={<InfoLabel info={t("workspaceRunLocationHelp")}>{t("workspaceRunLocation")}</InfoLabel>}>
+        {props.nodePoolsStatus !== "ready" || !selectedTemplate || selectableLocations.length === 0
+          ? <Input disabled readOnly aria-label={t("workspaceRunLocation")} value={
+              props.nodePoolsStatus === "loading" ? t("loading")
+                : props.nodePoolsStatus === "failed" ? ""
+                : !selectedTemplate ? t("workspaceRunLocationChooseTemplate")
+                : ""
+            } placeholder={props.nodePoolsStatus === "failed" || (selectedTemplate && selectableLocations.length === 0) ? "—" : undefined} />
+          : selectableLocations.length === 1
+            ? <Input disabled readOnly aria-label={t("workspaceRunLocation")} value={selectableLocations[0]?.display_name ?? selectableLocations[0]?.name ?? ""} />
+            : <Dropdown
+                aria-label={t("workspaceRunLocation")}
+                value={props.nodePool ? nodePoolDisplayName(props.nodePools, props.nodePool) : defaultAvailable ? t("workspaceRunLocationTemplateDefault") : ""}
+                selectedOptions={props.nodePool || defaultAvailable ? [props.nodePool] : []}
+                placeholder={defaultAvailable ? undefined : t("workspaceRunLocationChoose")}
+                onOptionSelect={(_, data) => props.onNodePoolChange(data.optionValue ?? "")}
+              >
+                {defaultAvailable && <Option value="" text={t("workspaceRunLocationTemplateDefault")}>{t("workspaceRunLocationTemplateDefault")}</Option>}
+                {selectableLocations.map((pool) => <Option key={pool.name} value={pool.name} text={pool.display_name}>{pool.display_name}</Option>)}
+              </Dropdown>}
+      </Field>
+      {props.nodePoolsStatus === "ready" && selectedTemplate && selectableLocations.length === 1 && <Caption1 className={styles.meterHint}>{t("workspaceRunLocationFixed")}</Caption1>}
+      {props.nodePoolsStatus === "ready" && selectedTemplate && selectableLocations.length === 0 && <MessageBar intent="warning"><MessageBarBody>{t("workspaceRunLocationNone")}</MessageBarBody></MessageBar>}
+      {props.nodePoolsStatus === "failed" && <MessageBar intent="error"><MessageBarBody>{t("runLocationsLoadFailed")}</MessageBarBody><Button appearance="subtle" onClick={props.onNodePoolsRetry}>{t("retry")}</Button></MessageBar>}
+    </div>
     {selectedTemplate && props.resourceDraft && <ResourceEditor template={selectedTemplate} resources={props.resourceDraft} onChange={props.onResourceChange} />}
     {selectedTemplate && <Field label={t("workspaceTemporaryStorageGiB")} hint={t("workspaceTemporaryStorageHelp")}>
       <Input type="number" min={1} max={2048} step={1} required value={props.temporaryStorageGiB} onChange={(_, data) => props.onTemporaryStorageChange(data.value)} />
@@ -68,7 +94,7 @@ export function WorkspaceCreationForm(props: Props) {
       </Dropdown>
     </Field>
     {props.explicitInjectionRefs && <div className={styles.formWide}><CredentialReferencePicker organizationItems={props.organizationInjections} userItems={props.userInjections} organizationSelected={props.organizationRefs} userSelected={props.userRefs} onOrganizationSelected={props.onOrganizationRefsChange} onUserSelected={props.onUserRefsChange} /></div>}
-    <div className={`${styles.formActions} ${styles.formWide}`}><Button appearance="primary" icon={<AddRegular />} type="submit" disabled={props.submitting || !props.templateId}>{props.submitting ? t("creating") : t("submitCreate")}</Button></div>
+    <div className={`${styles.formActions} ${styles.formWide}`}><Button appearance="primary" icon={<AddRegular />} type="submit" disabled={props.submitting || !props.templateId || locationBlocked}>{props.submitting ? t("creating") : t("submitCreate")}</Button></div>
     </form>
   </Card>;
 }

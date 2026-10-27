@@ -147,6 +147,29 @@ export interface AvailableNodePool {
   display_name: string;
 }
 
+/** Private node selection rules stored by a system-managed run location. */
+export interface NodePoolPlacement {
+  selector: Record<string, string>;
+  required_hosts: string[];
+  preferred_hosts: string[];
+}
+
+/** Administrator view of a run location; the public list stays AvailableNodePool. */
+export interface NodePool {
+  name: string;
+  display_name: string;
+  placement: NodePoolPlacement;
+  enabled: boolean;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface PutNodePoolInput {
+  display_name: string;
+  placement: NodePoolPlacement;
+  enabled: boolean;
+}
+
 export interface WorkspacePlacement {
   allowed_node_pools: string[];
   default_node_pool: string;
