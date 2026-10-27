@@ -81,14 +81,21 @@ impl WorkspaceReconcileHandler {
             });
         }
 
-        if workspace.state == WorkspaceState::Deleted {
+        let injection_changed = job
+            .payload
+            .get("reason")
+            .and_then(serde_json::Value::as_str)
+            == Some("injection_changed");
+        if workspace.state == WorkspaceState::Deleted
+            || (injection_changed && workspace.state == WorkspaceState::Deleting)
+        {
             return Ok(());
         }
         if workspace.state == WorkspaceState::Deleting {
             return self.reconcile_deletion(workspace).await;
         }
 
-        if startup_checkpoint_matches(workspace, job, unix_timestamp()?) {
+        if !injection_changed && startup_checkpoint_matches(workspace, job, unix_timestamp()?) {
             return self
                 .observe_workspace(workspace)
                 .await
@@ -105,6 +112,13 @@ impl WorkspaceReconcileHandler {
                 &resolved,
             )
             .map_err(job_error)?;
+        if injection_changed {
+            return self
+                .coordinator
+                .reconcile_injections(workspace, &materialization)
+                .await
+                .map_err(reconcile_error);
+        }
         let identity = self
             .database
             .ensure_workspace_ssh_identity(&self.cipher, workspace.id, unix_timestamp()?)
@@ -518,6 +532,11 @@ impl JobHandler for WorkspaceReconcileHandler {
             return self.storage_shrink_terminal_failure(job, now).await;
         }
         if job.kind != "reconcile_workspace"
+            || job
+                .payload
+                .get("reason")
+                .and_then(serde_json::Value::as_str)
+                == Some("injection_changed")
             || job
                 .payload
                 .get("runtime_observation")
