@@ -110,18 +110,20 @@ impl KubernetesCoordinator {
             self.verify_home_volume_binding(workspace),
         )
         .await?;
-        observe_apply_stage(
-            workspace,
-            "namespace",
-            self.apply_namespace(workspace, desired),
-        )
-        .await?;
-        let startup = observe_apply_stage(
-            workspace,
-            "startup_plan",
-            Box::pin(self.prepare_startup_plan(workspace, desired)),
-        )
-        .await?;
+        // Planning only reads existing resources. Both branches must succeed before
+        // any workspace inputs, isolation, workload or approval can be written.
+        let ((), startup) = tokio::try_join!(
+            observe_apply_stage(
+                workspace,
+                "namespace",
+                self.apply_namespace(workspace, desired),
+            ),
+            observe_apply_stage(
+                workspace,
+                "startup_plan",
+                Box::pin(self.prepare_startup_plan(workspace, desired)),
+            ),
+        )?;
         let prerequisites = Box::pin(self.apply_startup_prerequisites(
             namespace_name,
             workspace,

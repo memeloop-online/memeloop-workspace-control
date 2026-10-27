@@ -6,6 +6,7 @@ use tokio::sync::{Notify, Semaphore};
 
 mod approval_create;
 mod disabled_identity_overlap;
+mod namespace_plan_overlap;
 mod prerequisite_overlap;
 mod route_overlap;
 mod worker_capacity;
