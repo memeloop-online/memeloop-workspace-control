@@ -304,18 +304,23 @@ impl WorkspaceObservations {
             };
             after = page.last().copied();
             let more = page.len() == 256;
-            {
+            let checks = {
                 let mut state = self
                     .state
                     .lock()
                     .expect("workspace observations lock poisoned");
+                let mut checks = Vec::new();
                 for id in page {
                     if !state.runtime_ready(id) {
                         state.request_ready_check(id);
+                        checks.push((id, state.ready_checks[&id]));
                     }
                 }
+                checks
+            };
+            for (id, ticket) in checks {
+                self.deliver_ready_check(id, ticket).await;
             }
-            self.deliver_ready_checks().await;
             if !more {
                 break;
             }
@@ -333,50 +338,54 @@ impl WorkspaceObservations {
             .map(|(id, ticket)| (*id, *ticket))
             .collect();
         for (id, ticket) in checks {
-            let result = self
-                .database
-                .enqueue_ready_workspace_observation(id, unix_now())
-                .await;
-            let finished = match result {
-                Ok(true) => {
-                    self.job_wakeup.notify_waiters();
-                    true
+            self.deliver_ready_check(id, ticket).await;
+        }
+    }
+
+    async fn deliver_ready_check(&self, id: Uuid, ticket: u64) {
+        let result = self
+            .database
+            .enqueue_ready_workspace_observation(id, unix_now())
+            .await;
+        let finished = match result {
+            Ok(true) => {
+                self.job_wakeup.notify_waiters();
+                true
+            }
+            Ok(false) => match self.database.get_workspace(id).await {
+                // An in-flight job may finish from an earlier Ready snapshot.
+                // Keep this hint until it has completed or confirms recovery.
+                Ok(workspace) => {
+                    !matches!(
+                        workspace.state,
+                        crate::workspaces::WorkspaceState::Ready
+                            | crate::workspaces::WorkspaceState::Provisioning
+                            | crate::workspaces::WorkspaceState::Starting
+                            | crate::workspaces::WorkspaceState::Restarting
+                    ) || self
+                        .state
+                        .lock()
+                        .expect("workspace observations lock poisoned")
+                        .runtime_ready(id)
                 }
-                Ok(false) => match self.database.get_workspace(id).await {
-                    // An in-flight job may finish from an earlier Ready snapshot.
-                    // Keep this hint until it has completed or confirms recovery.
-                    Ok(workspace) => {
-                        !matches!(
-                            workspace.state,
-                            crate::workspaces::WorkspaceState::Ready
-                                | crate::workspaces::WorkspaceState::Provisioning
-                                | crate::workspaces::WorkspaceState::Starting
-                                | crate::workspaces::WorkspaceState::Restarting
-                        ) || self
-                            .state
-                            .lock()
-                            .expect("workspace observations lock poisoned")
-                            .runtime_ready(id)
-                    }
-                    Err(StorageError::WorkspaceNotFound) => true,
-                    Err(error) => {
-                        tracing::warn!(%error, workspace_id = %id, "workspace readiness check lookup failed");
-                        false
-                    }
-                },
+                Err(StorageError::WorkspaceNotFound) => true,
                 Err(error) => {
-                    tracing::warn!(%error, workspace_id = %id, "workspace readiness check enqueue failed");
+                    tracing::warn!(%error, workspace_id = %id, "workspace readiness check lookup failed");
                     false
                 }
-            };
-            if finished {
-                let mut state = self
-                    .state
-                    .lock()
-                    .expect("workspace observations lock poisoned");
-                if state.ready_checks.get(&id) == Some(&ticket) {
-                    state.ready_checks.remove(&id);
-                }
+            },
+            Err(error) => {
+                tracing::warn!(%error, workspace_id = %id, "workspace readiness check enqueue failed");
+                false
+            }
+        };
+        if finished {
+            let mut state = self
+                .state
+                .lock()
+                .expect("workspace observations lock poisoned");
+            if state.ready_checks.get(&id) == Some(&ticket) {
+                state.ready_checks.remove(&id);
             }
         }
     }
@@ -616,7 +625,7 @@ impl WorkspaceObservations {
             }
         };
         *resource_version = object.resource_version();
-        let reservations = {
+        let (reservations, check) = {
             let mut state = self
                 .state
                 .lock()
@@ -629,12 +638,17 @@ impl WorkspaceObservations {
             {
                 state.request_ready_check(id);
             }
-            workspace
+            let check =
+                workspace.and_then(|id| state.ready_checks.get(&id).map(|ticket| (id, *ticket)));
+            let reservations = workspace
                 .map(|id| state.refresh_workspace(id, unix_now()))
-                .unwrap_or_default()
+                .unwrap_or_default();
+            (reservations, check)
         };
         self.deliver(reservations).await;
-        self.deliver_ready_checks().await;
+        if let Some((id, ticket)) = check {
+            self.deliver_ready_check(id, ticket).await;
+        }
         None
     }
 }

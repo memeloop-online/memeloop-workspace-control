@@ -511,6 +511,95 @@ async fn complete_relist_finds_ready_rows_with_no_cached_pod_or_statefulset() {
 }
 
 #[tokio::test]
+async fn events_deliver_only_the_current_workspace_hint_and_repair_handles_the_rest() {
+    let database = Database::connect("sqlite::memory:", INSTALLATION.parse().unwrap())
+        .await
+        .unwrap();
+    let workspace = seed(&database).await;
+    let runtime = Runtime::new(&workspace, &builder());
+    let observer = WorkspaceObservations::new(database.clone(), INSTALLATION.parse().unwrap());
+    let unrelated = Uuid::now_v7();
+    observer
+        .state
+        .lock()
+        .unwrap()
+        .request_ready_check(unrelated);
+    let pending = runtime.pod.lock().unwrap().clone().unwrap();
+    let mut foreign = pending.clone();
+    foreign["metadata"]["labels"][OWNER_INSTALLATION_LABEL] = json!("another-installation");
+    observer
+        .apply_event(
+            WatchEvent::Modified(serde_json::from_value::<Pod>(foreign).unwrap()),
+            &mut None,
+        )
+        .await;
+    assert!(
+        observer
+            .state
+            .lock()
+            .unwrap()
+            .ready_checks
+            .contains_key(&unrelated),
+        "an unowned event must not deliver another workspace's hint"
+    );
+    assert_eq!(database.job_counts().await.unwrap().pending, 0);
+    observer
+        .apply_event(
+            WatchEvent::Modified(serde_json::from_value::<Pod>(pending).unwrap()),
+            &mut None,
+        )
+        .await;
+    assert_eq!(database.job_counts().await.unwrap().pending, 1);
+    assert!(
+        observer
+            .state
+            .lock()
+            .unwrap()
+            .ready_checks
+            .contains_key(&unrelated),
+        "an owned event must deliver only its own workspace hint"
+    );
+    observer.repair().await.unwrap();
+    assert!(
+        !observer
+            .state
+            .lock()
+            .unwrap()
+            .ready_checks
+            .contains_key(&unrelated),
+        "the existing repair pass must process unrelated retained hints"
+    );
+}
+
+#[tokio::test]
+async fn newer_hint_ticket_survives_an_older_delivery_result() {
+    let database = Database::connect("sqlite::memory:", INSTALLATION.parse().unwrap())
+        .await
+        .unwrap();
+    let workspace = seed(&database).await;
+    let observer = WorkspaceObservations::new(database.clone(), INSTALLATION.parse().unwrap());
+    let (old, new) = {
+        let mut state = observer.state.lock().unwrap();
+        state.request_ready_check(workspace.id);
+        let old = state.ready_checks[&workspace.id];
+        state.request_ready_check(workspace.id);
+        (old, state.ready_checks[&workspace.id])
+    };
+    observer.deliver_ready_check(workspace.id, old).await;
+    assert_eq!(database.job_counts().await.unwrap().pending, 1);
+    assert_eq!(
+        observer
+            .state
+            .lock()
+            .unwrap()
+            .ready_checks
+            .get(&workspace.id),
+        Some(&new),
+        "a delayed delivery may clear only the ticket it captured"
+    );
+}
+
+#[tokio::test]
 async fn sqlite_ready_loss_recovers_without_reapplying_or_changing_generation() {
     exercise(
         Database::connect("sqlite::memory:", INSTALLATION.parse().unwrap())
