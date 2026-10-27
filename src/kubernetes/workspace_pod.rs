@@ -306,8 +306,8 @@ impl<'a> WorkspacePod<'a> {
         let mut mounts =
             workspace_mounts(&names.data_claim_template, self.home, self.secondary_home());
         mounts.extend([
-            mount("runtime-tmp", "/tmp", false),
-            mount("runtime-tmp", "/var/tmp", false),
+            scratch_sub_path_mount("/tmp", "tmp"),
+            scratch_sub_path_mount("/var/tmp", "tmp"),
             scratch_sub_path_mount(BUILD_SCRATCH, WORKSPACE_CACHE_SUB_PATH),
             scratch_sub_path_mount(CODEX_SCRATCH, CODEX_SESSION_SUB_PATH),
         ]);
