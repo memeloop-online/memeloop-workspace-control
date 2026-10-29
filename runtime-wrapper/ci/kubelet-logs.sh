@@ -2,6 +2,10 @@
 # Sourced only by the disposable privileged fixture. Real kubelet owns log
 # reading/rotation/reopen/previous/summary/GC; no simulated du/GC acceptance.
 set -euo pipefail
+live_kubelet_root="$base/kubelet-live"
+mkdir -p "$live_kubelet_root"
+jq --arg root "$live_kubelet_root" ' .kubelet_root=$root' /etc/mwc-runtime-wrapper.json > "$base/logs-runtime-config.json"
+install -m 0600 "$base/logs-runtime-config.json" /etc/mwc-runtime-wrapper.json
 jq -n --arg logs "$base/pod-logs" '{apiVersion:"kubelet.config.k8s.io/v1beta1",kind:"KubeletConfiguration",podLogsDir:$logs,containerLogMaxSize:"1Mi",containerLogMaxFiles:3,containerLogMonitorInterval:"15s",cgroupDriver:"cgroupfs"}' > "$base/kubelet-logs.conf"
 K3S_DATA_DIR="$base/k3s-control" "$base/k3s-bin" server \
  --data-dir "$base/k3s-control" --write-kubeconfig "$base/kubeconfig" \
@@ -9,7 +13,7 @@ K3S_DATA_DIR="$base/k3s-control" "$base/k3s-bin" server \
  --flannel-backend none --disable-network-policy --disable-kube-proxy \
  --disable coredns,traefik,servicelb,local-storage,metrics-server \
  --disable-helm-controller --disable-cloud-controller \
- --kubelet-arg "root-dir=$base/kubelet" --kubelet-arg "config=$base/kubelet-logs.conf" \
+ --kubelet-arg "root-dir=$live_kubelet_root" --kubelet-arg "config=$base/kubelet-logs.conf" \
  > "$base/k3s-control.log" 2>&1 &
 k3s_pid=$!
 kube() { KUBECONFIG="$base/kubeconfig" "$base/k3s-bin" kubectl "$@"; }
@@ -19,6 +23,7 @@ for n in $(seq 1 120); do
  sleep 1
 done
 kube create namespace memeloop-workspace-control
+kube create serviceaccount -n memeloop-workspace-control mwc-ci
 kube apply -f - <<'YAML'
 apiVersion: node.k8s.io/v1
 kind: RuntimeClass
@@ -28,10 +33,10 @@ handler: mwc-ci
 YAML
 # schedulingGates keeps kubelet away until the API-assigned UID has a trusted
 # fixture publish root. This is CI plumbing, not a production resolver bypass.
-jq -n --arg home "$home" --arg data "$scratch/data" '{apiVersion:"v1",kind:"Pod",metadata:{name:"mwc-log-ci",namespace:"memeloop-workspace-control"},spec:{runtimeClassName:"mwc-ci",hostNetwork:true,dnsPolicy:"Default",schedulingGates:[{name:"mwc-ci/publish-ready"}],containers:[{name:"workspace",image:"docker.io/library/mwc-runtime-fixture:ci",imagePullPolicy:"Never",command:["/usr/local/bin/mwc-budget-workload","serve"],volumeMounts:[{name:"home",mountPath:"/home/user"},{name:"scratch",mountPath:"/scratch"}]},{name:"terminal",image:"docker.io/library/mwc-runtime-fixture:ci",imagePullPolicy:"Never",tty:true,command:["/bin/bash","-c","echo tty-stdout-start; echo tty-stderr-start >&2; exec sleep infinity"]}],volumes:[{name:"home",hostPath:{path:$home,type:"Directory"}},{name:"scratch",hostPath:{path:$data,type:"Directory"}}]}}' > "$base/kubelet-pod.json"
+jq -n --arg home "$home" --arg data "$scratch/data" '{apiVersion:"v1",kind:"Pod",metadata:{name:"mwc-log-ci",namespace:"memeloop-workspace-control"},spec:{serviceAccountName:"mwc-ci",automountServiceAccountToken:false,runtimeClassName:"mwc-ci",hostNetwork:true,dnsPolicy:"Default",schedulingGates:[{name:"mwc-ci/publish-ready"}],containers:[{name:"workspace",image:"docker.io/library/mwc-runtime-fixture:ci",imagePullPolicy:"Never",command:["/usr/local/bin/mwc-budget-workload","serve"],volumeMounts:[{name:"home",mountPath:"/home/user"},{name:"scratch",mountPath:"/scratch"}]},{name:"terminal",image:"docker.io/library/mwc-runtime-fixture:ci",imagePullPolicy:"Never",tty:true,command:["/bin/bash","-c","echo tty-stdout-start; echo tty-stderr-start >&2; exec sleep infinity"]}],volumes:[{name:"home",hostPath:{path:$home,type:"Directory"}},{name:"scratch",hostPath:{path:$data,type:"Directory"}}]}}' > "$base/kubelet-pod.json"
 kube apply -f "$base/kubelet-pod.json"
 kube_uid="$(kube get pod -n memeloop-workspace-control mwc-log-ci -o jsonpath='{.metadata.uid}')"
-kubelet_publish="$base/kubelet/pods/$kube_uid/volumes/kubernetes.io~csi/$scratch_pv/mount"
+kubelet_publish="$live_kubelet_root/pods/$kube_uid/volumes/kubernetes.io~csi/$scratch_pv/mount"
 mkdir -p "$kubelet_publish"
 mount --bind "$scratch" "$kubelet_publish"
 cp "$(dirname "$scratch")/vol_data.json" "$(dirname "$kubelet_publish")/vol_data.json"
