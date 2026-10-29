@@ -1600,13 +1600,15 @@ fn node_template_reuses_the_existing_image_with_platform_bootstrap() {
 }
 
 #[test]
-fn temporary_storage_uses_one_generic_ephemeral_claim_and_isolated_subpaths() {
+fn temporary_storage_uses_one_workspace_owned_claim_and_isolated_subpaths() {
     let mut workspace = workspace(WorkspaceState::Ready);
     workspace.template.buildkit = true;
     workspace.template.storage_policy.temporary_storage_gib = 26;
 
     let names = runtime_names(&workspace);
     let resources = builder().build(&workspace).unwrap();
+    let claim_template = resources.scratch_claim.as_ref().unwrap();
+    let claim_spec = claim_template.spec.as_ref().unwrap();
     let stateful_set = resources.stateful_set.spec.unwrap();
     let durable_claims = stateful_set.volume_claim_templates.as_ref().unwrap();
     assert_eq!(durable_claims.len(), 1);
@@ -1630,26 +1632,23 @@ fn temporary_storage_uses_one_generic_ephemeral_claim_and_isolated_subpaths() {
     let empty_dir = |name: &str| volume(name).empty_dir.as_ref().unwrap();
     let scratch = volume("workspace-scratch");
     assert!(scratch.empty_dir.is_none());
-    assert!(scratch.persistent_volume_claim.is_none());
-    let claim_template = scratch
-        .ephemeral
-        .as_ref()
-        .unwrap()
-        .volume_claim_template
-        .as_ref()
-        .unwrap();
+    assert!(scratch.ephemeral.is_none());
+    assert_eq!(
+        scratch.persistent_volume_claim.as_ref().unwrap().claim_name,
+        names.resources.scratch_pvc()
+    );
+    assert!(claim_template.metadata.owner_references.is_none());
     let expected_workspace_id = workspace.id.to_string();
     assert_eq!(
-        claim_template.spec.access_modes.as_deref(),
+        claim_spec.access_modes.as_deref(),
         Some(["ReadWriteOnce".to_owned()].as_slice())
     );
     assert_eq!(
-        claim_template.spec.storage_class_name.as_deref(),
+        claim_spec.storage_class_name.as_deref(),
         Some("local-nvme-scratch")
     );
     assert_eq!(
-        claim_template
-            .spec
+        claim_spec
             .resources
             .as_ref()
             .unwrap()
@@ -1662,8 +1661,6 @@ fn temporary_storage_uses_one_generic_ephemeral_claim_and_isolated_subpaths() {
     assert_eq!(
         claim_template
             .metadata
-            .as_ref()
-            .unwrap()
             .labels
             .as_ref()
             .unwrap()
@@ -1672,13 +1669,7 @@ fn temporary_storage_uses_one_generic_ephemeral_claim_and_isolated_subpaths() {
         Some(expected_workspace_id.as_str())
     );
     assert_eq!(
-        claim_template
-            .metadata
-            .as_ref()
-            .unwrap()
-            .labels
-            .as_ref()
-            .unwrap()[STORAGE_ROLE_LABEL],
+        claim_template.metadata.labels.as_ref().unwrap()[STORAGE_ROLE_LABEL],
         "temporary"
     );
     assert_eq!(
@@ -2145,4 +2136,56 @@ fn snapshot_cpu_overcommit_scales_every_container_request_without_changing_other
     assert_eq!(effective_request(&scaled), 126);
     assert!(effective_request(&scaled) <= 460);
     assert!(effective_request(&original) > 460);
+}
+
+#[test]
+fn scratch_claim_is_shared_by_native_sandbox_and_buildkit_and_absent_when_stopped() {
+    for runtime in [None, Some("gvisor")] {
+        for buildkit in [false, true] {
+            let mut workspace = workspace(WorkspaceState::Ready);
+            workspace.template.runtime_class_name = runtime.map(str::to_owned);
+            workspace.template.buildkit = buildkit;
+            let built = builder().build(&workspace).unwrap();
+            let name = runtime_names(&workspace).resources.scratch_pvc();
+            assert_eq!(
+                built.scratch_claim.unwrap().metadata.name.as_deref(),
+                Some(name.as_str())
+            );
+            let pod = built.stateful_set.spec.unwrap().template.spec.unwrap();
+            assert!(pod.volumes.unwrap().iter().any(|volume| {
+                volume.name == "workspace-scratch"
+                    && volume
+                        .persistent_volume_claim
+                        .as_ref()
+                        .is_some_and(|claim| claim.claim_name == name)
+            }));
+            workspace.state = WorkspaceState::Stopped;
+            assert!(builder().build(&workspace).unwrap().scratch_claim.is_none());
+        }
+    }
+}
+
+#[test]
+fn explicitly_bound_scratch_keeps_its_claim_without_allocating_a_default_claim() {
+    let mut workspace = workspace(WorkspaceState::Ready);
+    workspace.scratch_volume_binding = Some(WorkspaceHomeVolumeBinding {
+        namespace: workspace.runtime.namespace().into(),
+        claim_name: "bound-scratch".into(),
+        claim_uid: "bound-uid".into(),
+        capacity_gib: workspace.template.storage_policy.temporary_storage_gib,
+    });
+    let resources = builder().build(&workspace).unwrap();
+    assert!(resources.scratch_claim.is_none());
+    let pod = resources.stateful_set.spec.unwrap().template.spec.unwrap();
+    let scratch = pod
+        .volumes
+        .unwrap()
+        .into_iter()
+        .find(|volume| volume.name == "workspace-scratch")
+        .unwrap();
+    assert_eq!(
+        scratch.persistent_volume_claim.unwrap().claim_name,
+        "bound-scratch"
+    );
+    assert!(scratch.ephemeral.is_none());
 }

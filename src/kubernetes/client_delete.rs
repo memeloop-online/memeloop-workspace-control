@@ -57,6 +57,30 @@ impl KubernetesCoordinator {
         self.delete_workspace_resources(workspace, names).await
     }
 
+    pub async fn delete_stopped_scratch(
+        &self,
+        workspace: &Workspace,
+    ) -> Result<bool, ReconcileError> {
+        let names = self.builder.runtime_names(workspace)?.resources;
+        if self
+            .workspace_pod_or_pvc_reference_is_present(workspace, &names)
+            .await?
+        {
+            return Ok(false);
+        }
+        if workspace.scratch_volume_binding.is_some() {
+            return Ok(true);
+        }
+        let claims = Api::<PersistentVolumeClaim>::namespaced(
+            self.client.clone(),
+            workspace.runtime.namespace(),
+        );
+        Ok(
+            !delete_owned_if_present(&claims, &names.scratch_pvc(), &self.builder, workspace.id)
+                .await?,
+        )
+    }
+
     async fn delete_workspace_resources(
         &self,
         workspace: &Workspace,
@@ -206,7 +230,10 @@ impl KubernetesCoordinator {
                     .verify_delete_ownership(pod.meta(), workspace_id)?;
                 return Ok(true);
             }
-            if workspace.home_volume_binding.is_none() && pod_references_pvc(&pod, &data_pvc) {
+            if (workspace.home_volume_binding.is_none() && pod_references_pvc(&pod, &data_pvc))
+                || (workspace.scratch_volume_binding.is_none()
+                    && pod_references_pvc(&pod, &names.scratch_pvc()))
+            {
                 return Ok(true);
             }
         }
@@ -260,15 +287,23 @@ impl KubernetesCoordinator {
             return Ok(DeleteProgress::DeletionRequested);
         }
         let pvcs = Api::<PersistentVolumeClaim>::namespaced(self.client.clone(), namespace);
-        if workspace.home_volume_binding.is_none()
-            && delete_owned_if_present(
-                &pvcs,
-                &names.data_pvc_ordinal_zero(),
-                &self.builder,
-                workspace_id,
-            )
-            .await?
-        {
+        let home_name = names.data_pvc_ordinal_zero();
+        let scratch_name = names.scratch_pvc();
+        let (home_present, scratch_present) = tokio::try_join!(
+            async {
+                if workspace.home_volume_binding.is_some() {
+                    return Ok(false);
+                }
+                delete_owned_if_present(&pvcs, &home_name, &self.builder, workspace_id).await
+            },
+            async {
+                if workspace.scratch_volume_binding.is_some() {
+                    return Ok(false);
+                }
+                delete_owned_if_present(&pvcs, &scratch_name, &self.builder, workspace_id).await
+            }
+        )?;
+        if home_present || scratch_present {
             return Ok(DeleteProgress::DeletionRequested);
         }
         Ok(DeleteProgress::Gone)

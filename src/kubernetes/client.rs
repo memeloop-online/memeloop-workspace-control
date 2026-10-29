@@ -303,4 +303,6 @@ pub enum ReconcileError {
     WebShellIngressTerminating,
     #[error("waiting for an immutable workspace StatefulSet to be recreated")]
     StatefulSetRecreationPending,
+    #[error("waiting for temporary scratch PVC removal or concurrent creation")]
+    ScratchVolumeRecreationPending,
 }
