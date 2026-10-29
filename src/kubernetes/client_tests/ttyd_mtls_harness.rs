@@ -162,6 +162,16 @@ impl FakeKube {
                 .get(&path)
                 .map_or_else(not_found, |value| json_response(StatusCode::OK, value)),
             Method::PATCH => json_response(StatusCode::OK, body.unwrap_or_else(|| json!({}))),
+            Method::POST if path.ends_with("/persistentvolumeclaims") => {
+                let claim = body.unwrap();
+                assert!(
+                    claim["metadata"]["name"]
+                        .as_str()
+                        .unwrap()
+                        .ends_with("-scratch")
+                );
+                json_response(StatusCode::CREATED, claim)
+            }
             Method::DELETE => {
                 if path == state.ingress_path && !state.retain_ingress_on_delete {
                     state.ingress = None;
