@@ -91,6 +91,11 @@ grep -F follow-before-rotation "$artifacts/kubectl-follow-rotation.txt"
 grep -F follow-after-rotation "$artifacts/kubectl-follow-rotation.txt"
 kill "$follow_pid"; wait "$follow_pid" || true
 # Restart only the container in the active Pod; kubelet must expose --previous.
+cri exec "$work_id" python3 -c 'open("/proc/1/fd/1","wb",buffering=0).write(b"previous-container-marker\n")'
+for n in $(seq 1 10); do
+ if kube logs -n memeloop-workspace-control mwc-log-ci -c workspace | grep -F previous-container-marker; then break; fi
+ sleep .2
+done
 cri stop "$work_id"
 for n in $(seq 1 90); do
  next_id="$(kube get pod -n memeloop-workspace-control mwc-log-ci -o json | jq -r '.status.containerStatuses[]|select(.name=="workspace").containerID // ""|sub("containerd://";"")')"
@@ -99,7 +104,7 @@ for n in $(seq 1 90); do
 done
 kube wait -n memeloop-workspace-control --for=condition=Ready pod/mwc-log-ci --timeout=90s
 kube logs --previous -n memeloop-workspace-control mwc-log-ci -c workspace > "$artifacts/kubectl-previous-logs.txt"
-test -s "$artifacts/kubectl-previous-logs.txt"
+grep -F previous-container-marker "$artifacts/kubectl-previous-logs.txt"
 test -L "$kube_log"
 work_id="$next_id"
 # Fill via the actual container stdout/CRI logger within one monitor interval.
