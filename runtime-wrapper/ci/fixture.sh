@@ -118,7 +118,7 @@ state = "$base/containerd-state"
 TOML
 # Fault injection belongs to the disposable harness, never to wrapper options.
 for fault in mount unmount loglink; do
- if [ "$fault" = mount ]; then injection='mount:error=EIO:when=1'; elif [ "$fault" = unmount ]; then injection='umount2:error=EBUSY:when=1'; else injection='symlinkat:error=EINTR:when=1'; fi
+ if [ "$fault" = mount ]; then injection='mount:error=EIO:when=1'; elif [ "$fault" = unmount ]; then injection='umount2:error=EBUSY:when=1'; else injection='symlinkat:error=EIO:when=1'; fi
  cat > "$base/fail-$fault-runtime" <<SCRIPT
 #!/bin/sh
 exec /usr/bin/strace -ff -qq -o '$artifacts/fault-$fault-syscalls.txt' -e trace=mount,umount2,rmdir,symlink,symlinkat -e inject=$injection '$base/mwc-runtime-wrapper' "\$@"
@@ -357,7 +357,7 @@ gap_log="$base/pod-logs/memeloop-workspace-control_mwc-log-gap_$uid"
 jq --arg log "$gap_log" '.metadata.name="mwc-log-gap"|.log_directory=$log' "$base/pod.json" > "$base/log-gap-pod.json"
 mkdir "$gap_log"
 if cri runp --runtime mwc-ci-fail-loglink "$base/log-gap-pod.json" > "$artifacts/log-gap-failed-runp.txt" 2>&1; then echo 'log-link interruption unexpectedly started'; exit 1; fi
-grep -F 'EINTR (Interrupted system call) (INJECTED)' "$artifacts/fault-loglink-syscalls.txt"*
+grep -F 'EIO (Input/output error) (INJECTED)' "$artifacts/fault-loglink-syscalls.txt"*
 test ! -e "$gap_log"; test ! -L "$gap_log"
 mkdir -p "$gap_log"
 gap_id="$(cri runp --runtime mwc-ci "$base/log-gap-pod.json")"; containers+=("$gap_id")
