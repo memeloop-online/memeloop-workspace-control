@@ -308,6 +308,7 @@ if cri start "$bad_id" > "$artifacts/bad-start.txt" 2>&1; then echo 'invalid exe
 cp "$base/state/$bad_id.json" "$artifacts/bad-wrapper.json"
 test "$(jq -r .phase "$base/state/$bad_id.json")" = deleted
 # Each actual normal delete must run wrapper -> real delete -> unmount -> cleanup.
+printf '%s\n' 'Pod-scoped history survives sandbox deletion' > "$pod_log/ci-pod-marker"
 for id in "$main_id" "$ttyd_id" "$init_id"; do
  cri stop "$id"; cri rm "$id"
  test "$(jq -r .phase "$base/state/$id.json")" = deleted
@@ -322,13 +323,13 @@ test "$(jq -r .phase "$base/state/$sandbox.json")" = deleted
 # Reuse must be scoped to a sandbox, because its Pod IP may have changed.
 old_sandbox="$sandbox"
 test -L "$pod_log"
-cp -a "$pod_log/workspace/0.log" "$artifacts/log-workspace-preserved-after-delete.txt"
+cp "$pod_log/ci-pod-marker" "$artifacts/log-pod-marker-preserved-after-delete.txt"
 printf '127.0.0.1 mwc-budget-new.local\n' >> "$kubelet_hosts"
 sandbox="$(cri runp --runtime mwc-ci "$base/pod.json")"
 containers+=("$sandbox")
 test "$sandbox" != "$old_sandbox"
 test "$(readlink "$pod_log")" = "$scratch/runtime-private/logs/$uid"
-cmp "$pod_log/workspace/0.log" "$artifacts/log-workspace-preserved-after-delete.txt"
+cmp "$pod_log/ci-pod-marker" "$artifacts/log-pod-marker-preserved-after-delete.txt"
 make_container replacement idle
 replacement_id="$last_id"
 cri exec "$replacement_id" getent hosts mwc-budget-new.local > "$artifacts/replacement-sandbox-hosts.txt"
