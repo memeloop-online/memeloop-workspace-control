@@ -620,7 +620,7 @@ func overlay(c config, m mount) (lower, upper, work string, flags uintptr, data 
 			upper = value
 		case "workdir":
 			work = value
-		case "index", "metacopy", "redirect_dir", "xino", "userxattr", "volatile", "uuid":
+		case "index", "metacopy", "redirect_dir", "xino", "userxattr", "nouserxattr", "volatile", "uuid":
 			data = append(data, o)
 		default:
 			err = fmt.Errorf("unsupported overlay super option %s", key)

@@ -32,7 +32,10 @@ jobs:
           sudo apt-get install -y lvm2 thin-provisioning-tools xfsprogs jq openssh-client
       - name: Actual pinned CRI and shim acceptance
         run: |
-          sudo --preserve-env=GITHUB_ACTIONS,RUNNER_TEMP,GITHUB_WORKSPACE unshare --mount --propagation private ./runtime-wrapper/ci/fixture.sh
+          status=0
+          sudo --preserve-env=GITHUB_ACTIONS,RUNNER_TEMP,GITHUB_WORKSPACE unshare --mount --propagation private ./runtime-wrapper/ci/fixture.sh || status=$?
+          sudo chown -R "$(id -u):$(id -g)" runtime-wrapper/artifacts
+          exit "$status"
       - name: Preserve all evidence, including failures
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
