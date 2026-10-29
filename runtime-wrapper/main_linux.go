@@ -29,6 +29,7 @@ type config struct {
 	KubeletRoot        string `json:"kubelet_root"`
 	CRIRoot            string `json:"cri_root"`
 	WorkspaceNamespace string `json:"workspace_namespace"`
+	PodLogRoot         string `json:"pod_log_root"`
 	BundleRoot         string `json:"bundle_root"`
 	SnapshotRoot       string `json:"snapshot_root"`
 	StateRoot          string `json:"state_root"`
@@ -89,6 +90,7 @@ type record struct {
 	MountInventory           []ociMount    `json:"oci_mount_inventory"`
 	RedirectedMountInventory []ociMount    `json:"redirected_oci_mount_inventory"`
 	ManagedFiles             []managedFile `json:"managed_files"`
+	Logs                     *podLogs      `json:"pod_logs,omitempty"`
 }
 type invocation struct {
 	Command string
@@ -248,7 +250,7 @@ func loadConfig() (config, error) {
 	if err = d.Decode(&c); err != nil {
 		return c, err
 	}
-	for _, p := range []string{c.RealRuntime, c.KubeletRoot, c.CRIRoot, c.BundleRoot, c.SnapshotRoot, c.StateRoot, c.DMSetup} {
+	for _, p := range []string{c.RealRuntime, c.KubeletRoot, c.CRIRoot, c.PodLogRoot, c.BundleRoot, c.SnapshotRoot, c.StateRoot, c.DMSetup} {
 		if !filepath.IsAbs(p) || filepath.Clean(p) != p {
 			return c, fmt.Errorf("noncanonical configured path %q", p)
 		}
@@ -259,7 +261,7 @@ func loadConfig() (config, error) {
 	if !lvmRE.MatchString(c.ScratchVG) || !strings.HasPrefix(c.ScratchPool, "LVM-"+c.ScratchVG) || !strings.HasSuffix(c.ScratchPool, "-tpool") {
 		return c, errors.New("expected full trusted scratch VG and thin-pool identity")
 	}
-	for _, p := range []string{c.RealRuntime, c.DMSetup, c.KubeletRoot, c.CRIRoot, c.BundleRoot, c.SnapshotRoot, c.StateRoot} {
+	for _, p := range []string{c.RealRuntime, c.DMSetup, c.KubeletRoot, c.CRIRoot, c.PodLogRoot, c.BundleRoot, c.SnapshotRoot, c.StateRoot} {
 		f, err := openTrusted(p, p != c.RealRuntime && p != c.DMSetup)
 		if err != nil {
 			return c, err
@@ -773,6 +775,13 @@ func prepare(c config, in invocation) (record, error) {
 	if err != nil || ps.Mode&0777 != 0700 {
 		return r, errors.New("untrusted runtime-private permissions")
 	}
+	var logs *podLogs
+	if kind == "sandbox" {
+		logs, err = redirectPodLogs(c, sc, s)
+		if err != nil {
+			return r, err
+		}
+	}
 	containerDir := filepath.Join(private, in.ID)
 	if err = os.Mkdir(containerDir, 0700); err != nil {
 		return r, fmt.Errorf("container directory must be new: %w", err)
@@ -784,7 +793,7 @@ func prepare(c config, in invocation) (record, error) {
 			os.RemoveAll(containerDir)
 		}
 	}()
-	r = record{ID: in.ID, PodUID: pod, Bundle: in.Bundle, Rootfs: rootfs, Scratch: sc, Original: original, Upper: filepath.Join(containerDir, "upper"), Work: filepath.Join(containerDir, "work"), Lower: lower, Phase: "prepared", MountInventory: s.Mounts}
+	r = record{ID: in.ID, PodUID: pod, Bundle: in.Bundle, Rootfs: rootfs, Scratch: sc, Original: original, Upper: filepath.Join(containerDir, "upper"), Work: filepath.Join(containerDir, "work"), Lower: lower, Phase: "prepared", MountInventory: s.Mounts, Logs: logs}
 	if err = os.Mkdir(r.Upper, 0755); err != nil {
 		return r, err
 	}

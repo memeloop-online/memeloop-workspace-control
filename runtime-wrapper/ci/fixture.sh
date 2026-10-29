@@ -21,6 +21,8 @@ podroot="$base/kubelet/pods/$uid/volumes/kubernetes.io~csi"
 scratch="$podroot/$scratch_pv/mount"
 home="$podroot/$home_pv/mount"
 containerd_pid=''
+k3s_pid=''
+kubelet_publish=''
 sandbox=''
 containers=()
 loops=()
@@ -31,6 +33,8 @@ cleanup() {
  cat /proc/self/mountinfo > "$artifacts/final-mountinfo.txt"
  if [ -d "$base/state" ]; then cp -a "$base/state" "$artifacts/failure-or-final-state"; fi
  if [ -f "$base/state/errors.log" ]; then cat "$base/state/errors.log"; fi
+ if [ -n "$k3s_pid" ]; then kill "$k3s_pid"; wait "$k3s_pid"; fi
+ if [ -n "$kubelet_publish" ]; then umount "$kubelet_publish"; fi
  if [ -n "$containerd_pid" ]; then kill "$containerd_pid"; wait "$containerd_pid"; fi
  # Normal unmounts only. EBUSY is evidence/failure, never hidden by lazy/force.
  umount "$scratch"; umount "$home"
@@ -86,12 +90,12 @@ printf '[127.0.0.1]:2222 %s\n' "$(cut -d ' ' -f 1,2 "$home/host_ed25519.pub")" >
 
 docker build -t mwc-runtime-fixture:ci "$GITHUB_WORKSPACE/runtime-wrapper/ci"
 docker save mwc-runtime-fixture:ci -o "$base/image.tar"
-mkdir -p "$base/containerd-root/io.containerd.snapshotter.v1.overlayfs/snapshots" "$base/containerd-state/io.containerd.runtime.v2.task/k8s.io" "$base/state" "$base/kubelet"
+mkdir -p "$base/containerd-root/io.containerd.snapshotter.v1.overlayfs/snapshots" "$base/containerd-state/io.containerd.runtime.v2.task/k8s.io" "$base/state" "$base/kubelet" "$base/pod-logs"
 chmod 0700 "$base/state"
 vg_uuid="$(vgs --noheadings -o vg_uuid "$vg" | tr -d '[:space:]-')"
 pool_uuid="$(dmsetup info -c --noheadings -o uuid "${vg//-/--}-pool-tpool" | xargs)"
 real_runc="$(readlink -f "$(command -v runc)")"
-jq -n --arg runtime "$real_runc" --arg criroot "$base/containerd-root/io.containerd.grpc.v1.cri" --arg kubelet "$base/kubelet" --arg bundle "$base/containerd-state/io.containerd.runtime.v2.task/k8s.io" --arg snapshot "$base/containerd-root/io.containerd.snapshotter.v1.overlayfs/snapshots" --arg state "$base/state" --arg namespace "/proc/$$/ns/mnt" --arg vg "$vg_uuid" --arg pool "$pool_uuid" --arg dmsetup "$(readlink -f "$(command -v dmsetup)")" '{real_runtime:$runtime,kubelet_root:$kubelet,cri_root:$criroot,workspace_namespace:"memeloop-workspace-control",bundle_root:$bundle,snapshot_root:$snapshot,state_root:$state,mount_namespace:$namespace,scratch_vg_uuid:$vg,scratch_pool_dm_uuid:$pool,dmsetup:$dmsetup}' > /etc/mwc-runtime-wrapper.json
+jq -n --arg runtime "$real_runc" --arg logroot "$base/pod-logs" --arg criroot "$base/containerd-root/io.containerd.grpc.v1.cri" --arg kubelet "$base/kubelet" --arg bundle "$base/containerd-state/io.containerd.runtime.v2.task/k8s.io" --arg snapshot "$base/containerd-root/io.containerd.snapshotter.v1.overlayfs/snapshots" --arg state "$base/state" --arg namespace "/proc/$$/ns/mnt" --arg vg "$vg_uuid" --arg pool "$pool_uuid" --arg dmsetup "$(readlink -f "$(command -v dmsetup)")" '{real_runtime:$runtime,kubelet_root:$kubelet,cri_root:$criroot,workspace_namespace:"memeloop-workspace-control",pod_log_root:$logroot,bundle_root:$bundle,snapshot_root:$snapshot,state_root:$state,mount_namespace:$namespace,scratch_vg_uuid:$vg,scratch_pool_dm_uuid:$pool,dmsetup:$dmsetup}' > /etc/mwc-runtime-wrapper.json
 chmod 0600 /etc/mwc-runtime-wrapper.json
 cat > "$base/containerd.toml" <<TOML
 version = 3
@@ -113,11 +117,11 @@ state = "$base/containerd-state"
         SystemdCgroup = false
 TOML
 # Fault injection belongs to the disposable harness, never to wrapper options.
-for fault in mount unmount; do
- if [ "$fault" = mount ]; then injection='mount:error=EIO:when=1'; else injection='umount2:error=EBUSY:when=1'; fi
+for fault in mount unmount loglink; do
+ if [ "$fault" = mount ]; then injection='mount:error=EIO:when=1'; elif [ "$fault" = unmount ]; then injection='umount2:error=EBUSY:when=1'; else injection='symlinkat:error=EINTR:when=1'; fi
  cat > "$base/fail-$fault-runtime" <<SCRIPT
 #!/bin/sh
-exec /usr/bin/strace -ff -qq -o '$artifacts/fault-$fault-syscalls.txt' -e trace=mount,umount2 -e inject=$injection '$base/mwc-runtime-wrapper' "\$@"
+exec /usr/bin/strace -ff -qq -o '$artifacts/fault-$fault-syscalls.txt' -e trace=mount,umount2,rmdir,symlink,symlinkat -e inject=$injection '$base/mwc-runtime-wrapper' "\$@"
 SCRIPT
  chmod 0755 "$base/fail-$fault-runtime"
  cat >> "$base/containerd.toml" <<TOML
@@ -134,8 +138,9 @@ for n in $(seq 1 60); do if cri info > "$artifacts/cri-info.json"; then break; f
 cri info > "$artifacts/cri-info.json"
 ctr_ci images import "$base/image.tar"
 cri pull registry.k8s.io/pause:3.10
-jq -n --arg uid "$uid" --arg log "$base/pod-logs" '{metadata:{name:"mwc-budget-ci",namespace:"memeloop-workspace-control",uid:$uid,attempt:0},log_directory:$log,linux:{security_context:{namespace_options:{network:2}}}}' > "$base/pod.json"
-mkdir -p "$base/pod-logs"
+pod_log="$base/pod-logs/memeloop-workspace-control_mwc-budget-ci_$uid"
+jq -n --arg uid "$uid" --arg log "$pod_log" '{metadata:{name:"mwc-budget-ci",namespace:"memeloop-workspace-control",uid:$uid,attempt:0},log_directory:$log,linux:{security_context:{namespace_options:{network:2}}}}' > "$base/pod.json"
+mkdir -p "$pod_log"
 sandbox="$(cri runp --runtime mwc-ci "$base/pod.json")"
 containers+=("$sandbox")
 
@@ -150,13 +155,22 @@ sha256sum "$kubelet_hosts" "$managed_host_root/hostname" "$managed_host_root/res
 
 make_container() {
  local name="$1"; shift
- jq -n --arg name "$name" --arg home "$home" --arg data "$scratch/data" --arg hosts "$kubelet_hosts" --args '{metadata:{name:$name,attempt:0},image:{image:"docker.io/library/mwc-runtime-fixture:ci"},command:["/usr/local/bin/mwc-budget-workload"],args:$ARGS.positional,log_path:($name+".log"),mounts:[{container_path:"/etc/hosts",host_path:$hosts},{container_path:"/home/user",host_path:$home},{container_path:"/scratch",host_path:$data},{container_path:"/tmp",host_path:($data+"/tmp")},{container_path:"/var/tmp",host_path:($data+"/tmp")}],linux:{security_context:{capabilities:{drop_capabilities:["SYS_ADMIN"]},no_new_privs:false}}}' "$@" > "$base/$name.json"
+ jq -n --arg name "$name" --arg home "$home" --arg data "$scratch/data" --arg hosts "$kubelet_hosts" --args '{metadata:{name:$name,attempt:0},image:{image:"docker.io/library/mwc-runtime-fixture:ci"},command:["/usr/local/bin/mwc-budget-workload"],args:$ARGS.positional,log_path:($name+"/0.log"),mounts:[{container_path:"/etc/hosts",host_path:$hosts},{container_path:"/home/user",host_path:$home},{container_path:"/scratch",host_path:$data},{container_path:"/tmp",host_path:($data+"/tmp")},{container_path:"/var/tmp",host_path:($data+"/tmp")}],linux:{security_context:{capabilities:{drop_capabilities:["SYS_ADMIN"]},no_new_privs:false}}}' "$@" > "$base/$name.json"
  local id
  id="$(cri create "$sandbox" "$base/$name.json" "$base/pod.json")"
  containers+=("$id"); last_id="$id"
  cp "$base/containerd-state/io.containerd.runtime.v2.task/k8s.io/$id/config.json" "$artifacts/$name-oci.json" 2>/dev/null || true
  cri start "$id"
 }
+test -L "$pod_log"
+test "$(readlink "$pod_log")" = "$scratch/runtime-private/logs/$uid"
+# Overlapping sandboxes of the same Pod must share the exact log target.
+jq '.metadata.attempt=1' "$base/pod.json" > "$base/overlap-pod.json"
+overlap_id="$(cri runp --runtime mwc-ci "$base/overlap-pod.json")"
+containers+=("$overlap_id")
+test "$(readlink "$pod_log")" = "$scratch/runtime-private/logs/$uid"
+cri stopp "$overlap_id"; cri rmp "$overlap_id"
+test -L "$pod_log"
 make_container init init
 init_id="$last_id"
 for n in $(seq 1 20); do if [ "$(cri inspect "$init_id" | jq -r .status.state)" = CONTAINER_EXITED ]; then break; fi; sleep 1; done
@@ -176,6 +190,27 @@ done
 cri inspect "$main_id" > "$artifacts/workspace-inspect.json"
 cri inspect "$ttyd_id" > "$artifacts/ttyd-inspect.json"
 python3 "$GITHUB_WORKSPACE/runtime-wrapper/ci/managed-files.py" "$artifacts"
+for pair in "init:$init_id" "workspace:$main_id" "sidecar:$ttyd_id"; do
+ name="${pair%%:*}"; id="${pair#*:}"
+ cri logs "$id" > "$artifacts/log-$name.txt" 2>&1
+ grep -F "$name-stdout-start" "$artifacts/log-$name.txt"
+ grep -F "$name-stderr-start" "$artifacts/log-$name.txt"
+done
+python3 - "$pod_log" "$scratch" "$containerd_pid" "$artifacts" <<'PYX'
+import json,os,pathlib,sys
+log,scratch,pid,out=map(pathlib.Path,sys.argv[1:])
+dev=scratch.stat().st_dev
+files=list(log.glob('*/*.log'))
+assert len(files)>=3,files
+assert all(f.stat().st_dev==dev for f in files)
+fds=[]
+for fd in pathlib.Path('/proc',str(pid),'fd').iterdir():
+ try:
+  if fd.stat().st_dev==dev and '/runtime-private/logs/' in os.readlink(fd):fds.append(os.readlink(fd))
+ except FileNotFoundError:pass
+assert len(fds)>=2,fds
+(out/'real-cri-log-files.json').write_text(json.dumps({'files':[str(f.resolve()) for f in files],'containerd_open_log_fds':fds,'device':dev},indent=2))
+PYX
 # Both containers see the same managed inodes; node-managed originals stay intact.
 cri exec "$main_id" bash -c 'set -e; for name in hosts hostname resolv.conf; do printf "\n# shared-%s\n" "$name" >> "/etc/$name"; done; sync'
 cri exec "$ttyd_id" bash -c 'set -e; for name in hosts hostname resolv.conf; do grep -F "# shared-$name" "/etc/$name"; done; getent hosts mwc-budget.local; getent ahostsv4 registry.k8s.io' > "$artifacts/managed-shared-dns.txt"
@@ -282,14 +317,18 @@ for id in "$main_id" "$ttyd_id" "$init_id"; do
 cri rm "$bad_id"
 cri stopp "$sandbox";cri rmp "$sandbox"
 test "$(jq -r .phase "$base/state/$sandbox.json")" = deleted
-! find "$scratch/runtime-private" -mindepth 1 -maxdepth 1 ! -name managed-files -print -quit | grep .
+! find "$scratch/runtime-private" -mindepth 1 -maxdepth 1 ! -name managed-files ! -name logs -print -quit | grep .
 # A replacement sandbox with the same Pod UID must receive fresh kubelet hosts.
 # Reuse must be scoped to a sandbox, because its Pod IP may have changed.
 old_sandbox="$sandbox"
+test -L "$pod_log"
+cp -a "$pod_log/workspace/0.log" "$artifacts/log-workspace-preserved-after-delete.txt"
 printf '127.0.0.1 mwc-budget-new.local\n' >> "$kubelet_hosts"
 sandbox="$(cri runp --runtime mwc-ci "$base/pod.json")"
 containers+=("$sandbox")
 test "$sandbox" != "$old_sandbox"
+test "$(readlink "$pod_log")" = "$scratch/runtime-private/logs/$uid"
+cmp "$pod_log/workspace/0.log" "$artifacts/log-workspace-preserved-after-delete.txt"
 make_container replacement idle
 replacement_id="$last_id"
 cri exec "$replacement_id" getent hosts mwc-budget-new.local > "$artifacts/replacement-sandbox-hosts.txt"
@@ -300,11 +339,36 @@ cri stopp "$sandbox"; cri rmp "$sandbox"
 test "$(jq -r .phase "$base/state/$replacement_id.json")" = deleted
 test "$(jq -r .phase "$base/state/$sandbox.json")" = deleted
 ! grep -F "$scratch/runtime-private/managed-files/" /proc/self/mountinfo
+# Reject nonempty node log directories and wrong links without moving/deleting
+# existing data. A failed pause must never cause application log fallback.
+for gate in nonempty wronglink; do
+ gate_name="mwc-log-$gate"
+ gate_log="$base/pod-logs/memeloop-workspace-control_${gate_name}_$uid"
+ jq --arg name "$gate_name" --arg log "$gate_log" '.metadata.name=$name|.log_directory=$log' "$base/pod.json" > "$base/log-gate-pod.json"
+ if [ "$gate" = nonempty ]; then mkdir "$gate_log"; echo keep > "$gate_log/keep"; else ln -s "$base" "$gate_log"; fi
+ if cri runp --runtime mwc-ci "$base/log-gate-pod.json" > "$artifacts/log-gate-$gate.txt" 2>&1; then echo "log gate $gate unexpectedly started"; exit 1; fi
+ if [ "$gate" = nonempty ]; then test "$(cat "$gate_log/keep")" = keep; rm "$gate_log/keep"; rmdir "$gate_log"; else test "$(readlink "$gate_log")" = "$base"; rm "$gate_log"; fi
+done
+# Inject the post-rmdir/pre-link interruption externally, then repeat kubelet's
+# normal MkdirAll and retry. A correct link survives failures after link creation
+# as the mount/unmount fault cases below separately prove.
+gap_log="$base/pod-logs/memeloop-workspace-control_mwc-log-gap_$uid"
+jq --arg log "$gap_log" '.metadata.name="mwc-log-gap"|.log_directory=$log' "$base/pod.json" > "$base/log-gap-pod.json"
+mkdir "$gap_log"
+if cri runp --runtime mwc-ci-fail-loglink "$base/log-gap-pod.json" > "$artifacts/log-gap-failed-runp.txt" 2>&1; then echo 'log-link interruption unexpectedly started'; exit 1; fi
+grep -F 'EINTR (Interrupted system call) (INJECTED)' "$artifacts/fault-loglink-syscalls.txt"*
+test ! -e "$gap_log"; test ! -L "$gap_log"
+mkdir -p "$gap_log"
+gap_id="$(cri runp --runtime mwc-ci "$base/log-gap-pod.json")"; containers+=("$gap_id")
+test "$(readlink "$gap_log")" = "$scratch/runtime-private/logs/$uid"
+cri stopp "$gap_id"; cri rmp "$gap_id"
+test -L "$gap_log"
 # Inject failures at the actual switch syscalls through a separate traced CRI
 # handler. The ordinary shim must remove even the restored original root mount.
 for fault in mount unmount; do
  find "$base/state" -name '*.json' -printf '%f\n' | sort > "$base/states-before.txt"
- jq --arg name "mwc-budget-ci-fault-$fault" '.metadata.name=$name' "$base/pod.json" > "$base/fault-$fault-pod.json"
+ jq --arg name "mwc-budget-ci-fault-$fault" --arg log "$base/pod-logs/memeloop-workspace-control_mwc-budget-ci-fault-${fault}_$uid" '.metadata.name=$name | .log_directory=$log' "$base/pod.json" > "$base/fault-$fault-pod.json"
+ mkdir -p "$(jq -r .log_directory "$base/fault-$fault-pod.json")"
  if cri runp --runtime "mwc-ci-fail-$fault" "$base/fault-$fault-pod.json" > "$artifacts/fault-$fault-runp.txt" 2>&1; then echo "injected $fault failure unexpectedly started sandbox"; exit 1; fi
  find "$base/state" -name '*.json' -printf '%f\n' | sort > "$base/states-after.txt"
  comm -13 "$base/states-before.txt" "$base/states-after.txt" > "$base/new-state.txt"
@@ -325,8 +389,10 @@ for fault in mount unmount; do
  # arbitrary hard-kill/orphan recovery is not inferred from it.
  test "$(jq -r .phase "$base/state/$fault_id.json")" = deleted
  test ! -e "$scratch/runtime-private/$fault_id"
+ test -L "$(jq -r .log_directory "$base/fault-$fault-pod.json")"
  jq -cn --arg fault "$fault" --arg id "$fault_id" '{gate:$fault,container_id:$id,rejected:true,rootfs_mount_leak:false,normal_shim_failure_cleanup_deleted_upper:true,production_orphan_gc_implemented:false}' >> "$artifacts/fault-results.jsonl"
 done
+source "$GITHUB_WORKSPACE/runtime-wrapper/ci/kubelet-logs.sh"
 df -B1 "$scratch" "$home" > "$artifacts/after-container-delete-df.txt"
 cp -a "$base/state" "$artifacts/final-wrapper-state"
 printf '%s\n' 'native mechanism, shared capacity including managed /etc, Home/SSH/DNS, cleanup, identity/path/namespace negative gates, checkpoint rejection passed' > "$artifacts/acceptance.txt"

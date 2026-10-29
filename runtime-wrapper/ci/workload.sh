@@ -2,12 +2,16 @@
 set -euo pipefail
 case "${1:-serve}" in
  serve)
+  echo "workspace-stdout-start"
+  echo "workspace-stderr-start" >&2
   mkdir -p /run/sshd
   # CI has independent Home; host keys/auth were provisioned there before create.
   exec /usr/sbin/sshd -D -e -p 2222 -o HostKey=/home/user/host_ed25519 -o AuthorizedKeysFile=/home/user/authorized_keys -o PasswordAuthentication=no -o UsePAM=no -o PidFile=/home/user/sshd.pid
   ;;
- idle) exec sleep infinity ;;
+ idle) echo "sidecar-stdout-start"; echo "sidecar-stderr-start" >&2; exec sleep infinity ;;
  init)
+  echo "init-stdout-start"
+  echo "init-stderr-start" >&2
   python3 - <<'PY'
 with open('/init-allocation','wb') as f:
  f.write(b'i' * (8 * 1024 * 1024)); f.flush()

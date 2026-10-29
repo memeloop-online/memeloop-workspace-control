@@ -59,6 +59,23 @@ and DNS settings are immutable; this does not implement a host-file update watch
 or arbitrary dynamic DNS/hosts reconfiguration. Individual-container deletion is
 proven, while shared-file orphan GC remains outside this prototype.
 
+At pause create, a trusted empty Pod log directory is replaced with a symlink to
+`scratch/runtime-private/logs/<PodUID>`. The source must exactly match the
+configured log root plus CRI namespace/name/UID. An existing correct link is
+verified and reused; a nonempty directory or wrong link fails create. This runs
+under the existing Pod lock before ordinary container loggers can open files.
+No log bind mount is added. The rmdir/symlink interval is a short, recoverable
+gap, not an atomic replacement. Single-container or sandbox deletion and failed
+pause creation preserve the shared link and logs. Existing kubelet Pod log GC
+owns unlinking the top-level link; scratch lifecycle owns reclaiming its target.
+
+Logs are temporary storage. Active-Pod restarts and previous logs must work;
+after the whole Pod ends and its scratch is unmounted, logs can become
+unavailable. Persistent scratch bindings can retain old Pod-UID log directories
+until their existing lifecycle owner clears them. No archive, log daemon, extra
+mount hold, or historical backup is introduced. Log usage still contributes to
+kubelet ephemeral statistics, whose reported capacity remains the node capacity.
+
 Create/delete supervision forwards signals and inherited descriptors. A failed
 create is cleaned only after real runc reports that no task exists. Normal delete
 waits for real runc success, unmounts the same rootfs target normally, checks visible
@@ -91,13 +108,18 @@ Only CI results prove a gate passed. Source code and workflow intent do not.
 
 ## Required remaining work before deployment
 
-- CRI logs and other writable host binds, including image-defined volumes, remain
-  inventoried **outside this prototype's capacity coverage**. Log redirection and
-  rotation/reopen/previous/GC are not implemented. Actual current CRI has
+- Other writable host binds, including image-defined volumes, remain
+  inventoried **outside this prototype's capacity coverage**. Actual current CRI has
   `ignoreImageDefinedVolumes=false`: Rust Dev's `/home/user` VOLUME is overridden
   by its Home PVC; ttyd has none; BuildKit rootless declares
   `/home/user/.local/share/buildkit`. Its current anonymous CRI directory requires
   an explicit product scratch mount, not a generic runtime volume-copy feature.
+- Log symlink code requires the separate actual-CRI and real-kubelet gates to
+  pass before it is accepted. The workflow starts the exact pinned k3s kubelet
+  against its existing isolated containerd for API logs/follow, rotation/reopen,
+  previous logs, summary usage and normal Pod GC. It uses fixture CSI-shaped
+  publish paths, not a deployed CSI driver's lifecycle; successful ordinary
+  unmount does not prove all production CSI crash/unpublish semantics.
 - Full wrapper/shim/containerd crashes, hard-kill transaction recovery, reboot,
   orphan ownership/GC, overlapping sandboxes and real CSI unpublish need a real
   lifecycle owner and acceptance. Visible mountinfo alone does not prove absence
