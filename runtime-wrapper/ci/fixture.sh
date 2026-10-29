@@ -162,6 +162,63 @@ cri inspect "$main_id" > "$artifacts/main-after-full.json"
 test "$(jq -r .status.state "$artifacts/main-after-full.json")" = CONTAINER_RUNNING
 cri exec "$main_id" bash -c 'rm /rootfs-fill /scratch/data-fill /scratch/data-initial; echo recovered > /rootfs-after-free; sync'
 df -B1 "$scratch" "$home" > "$artifacts/after-delete-df.txt"
+# Negative gates use real CRI starts and ordinary root-owned fixture config.
+# No test-only switch or fallback path is added to the production resolver.
+cp /etc/mwc-runtime-wrapper.json "$base/trusted-config.json"
+negative_start() {
+ local name="$1" expected="$2" config_file="${3:-$base/workspace.json}"
+ local id before
+ before="$(wc -l < "$base/state/errors.log" 2>/dev/null || printf '0')"
+ jq --arg name "$name" '.metadata.name=$name' "$config_file" > "$base/negative-$name.json"
+ id="$(cri create "$sandbox" "$base/negative-$name.json" "$base/pod.json")"
+ containers+=("$id")
+ if cri start "$id" > "$artifacts/negative-$name-start.txt" 2>&1; then echo "negative $name unexpectedly started"; exit 1; fi
+ tail -n "+$((before+1))" "$base/state/errors.log" > "$artifacts/negative-$name-errors.txt"
+ grep -F "$expected" "$artifacts/negative-$name-errors.txt"
+ test ! -e "$scratch/runtime-private/$id"
+ ! grep -F "/$id/rootfs " /proc/self/mountinfo
+ cri rm "$id"
+ jq -n --arg name "$name" --arg id "$id" '{gate:$name,container_id:$id,rejected:true,rootfs_mount_leak:false,private_upper_created:false}' >> "$artifacts/negative-results.jsonl"
+}
+# A different protected VG cannot be accepted merely because it is XFS.
+jq '.scratch_vg_uuid="ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ" | .scratch_pool_dm_uuid="LVM-ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY-tpool"' "$base/trusted-config.json" > /etc/mwc-runtime-wrapper.json
+negative_start wrong-vg 'expected exactly one trusted scratch publish, got 0'
+cp "$base/trusted-config.json" /etc/mwc-runtime-wrapper.json
+# CSI metadata must be opened without following a symlink.
+mv "$(dirname "$scratch")/vol_data.json" "$base/saved-vol-data.json"
+ln -s "$base/saved-vol-data.json" "$(dirname "$scratch")/vol_data.json"
+negative_start metadata-symlink 'vol_data.json'
+rm "$(dirname "$scratch")/vol_data.json"
+mv "$base/saved-vol-data.json" "$(dirname "$scratch")/vol_data.json"
+# Two valid candidates are ambiguous even if they alias the same LV.
+ambiguous_pv=pvc-44444444-5555-4666-8777-888888888888
+ambiguous="$podroot/$ambiguous_pv/mount"
+mkdir -p "$ambiguous"
+mount --bind "$scratch" "$ambiguous"
+jq --arg pv "$ambiguous_pv" '.specVolID=$pv' "$(dirname "$scratch")/vol_data.json" > "$(dirname "$ambiguous")/vol_data.json"
+negative_start ambiguous-publish 'expected exactly one trusted scratch publish, got 2'
+umount "$ambiguous"
+rm -r "$(dirname "$ambiguous")"
+# A genuine namespace mismatch must reject before touching the rootfs.
+unshare --mount sleep 60 &
+other_namespace_pid=$!
+for n in $(seq 1 20); do
+ if [ "$(readlink "/proc/$other_namespace_pid/ns/mnt")" != "$(readlink /proc/self/ns/mnt)" ]; then break; fi
+ sleep .05
+done
+jq --arg namespace "/proc/$other_namespace_pid/ns/mnt" '.mount_namespace=$namespace' "$base/trusted-config.json" > /etc/mwc-runtime-wrapper.json
+negative_start namespace-mismatch 'mount namespaces differ'
+cp "$base/trusted-config.json" /etc/mwc-runtime-wrapper.json
+kill "$other_namespace_pid"
+wait "$other_namespace_pid" || true
+# A container-root user must not receive the scratch volume root/private tree.
+jq --arg root "$scratch" '.mounts[0].host_path=$root' "$base/workspace.json" > "$base/exposes-root.json"
+negative_start exposed-scratch-root 'scratch OCI mount exposes volume root/private area' "$base/exposes-root.json"
+if "$base/mwc-runtime-wrapper" checkpoint "$main_id" > "$artifacts/checkpoint-stdout.txt" 2> "$artifacts/checkpoint-stderr.txt"; then echo 'checkpoint bypass unexpectedly accepted'; exit 1; else test "$?" = 125; fi
+test ! -s "$artifacts/checkpoint-stdout.txt"
+"$base/mwc-runtime-wrapper" features > "$artifacts/real-runc-features.json"
+jq -e '.ociVersionMax | startswith("1.")' "$artifacts/real-runc-features.json"
+
 # Invalid real-runc create must not leave redirected mounts/upper behind.
 make_bad="$base/bad.json"
 jq '.metadata.name="bad" | .command=["/not-an-executable"] | .args=[]' "$base/workspace.json" > "$make_bad"
@@ -181,6 +238,6 @@ cri stopp "$sandbox";cri rmp "$sandbox"
 test "$(jq -r .phase "$base/state/$sandbox.json")" = deleted
 ! find "$scratch/runtime-private" -mindepth 1 -print -quit | grep .
 cp -a "$base/state" "$artifacts/final-wrapper-state"
-printf '%s\n' 'native mechanism, shared-rootfs/data capacity, Home independence, strict SSH, normal cleanup, failed executable cleanup passed' > "$artifacts/acceptance.txt"
+printf '%s\n' 'native mechanism, shared capacity, Home/SSH, cleanup, identity/path/namespace negative gates, checkpoint rejection passed' > "$artifacts/acceptance.txt"
 # Deliberately NOT accepted: logs, arbitrary writable host binds, runsc, kubelet
 # eviction/statistics, crash/reboot/orphan lifecycle, or complete two-budget scope.

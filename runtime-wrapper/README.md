@@ -56,7 +56,8 @@ an independent Home VG/XFS, and trusted CSI metadata/publish roots. Evidence
 artifacts include actual OCI configs/writable mount inventory, wrapper records,
 mountinfo, pinned runtime versions, kernel/XFS details, capacity before/after,
 process ENOSPC/EDQUOT results, strict host-key SSH before/after full scratch,
-copy-up/multiple-UID/sudo checks, normal delete and failed-executable cleanup.
+copy-up/multiple-UID/sudo checks, normal delete, failed-executable cleanup, wrong-VG/metadata-symlink/ambiguous-
+publish/namespace-mismatch/whole-scratch-root rejection and checkpoint rejection.
 Unit input tests supplement this runtime path; they do not substitute for it.
 
 Only CI results prove a gate passed. Source code and workflow intent do not.
@@ -77,7 +78,7 @@ Only CI results prove a gate passed. Source code and workflow intent do not.
 - gVisor/runsc is a separate required implementation/acceptance, preserving its
   sandbox. This native-only job says nothing about runsc or all product images.
 - BuildKit, complete product init/sidecar composition, apt package mutation,
-  namespace mismatch, malicious identity/path races and all fault boundaries need
+  malicious identity/path replacement races and all fault boundaries need
   expanded real integration coverage. The initial fixture is a mechanism gate.
 
 Passing this job supports a bounded native mechanism experiment, **not completion
