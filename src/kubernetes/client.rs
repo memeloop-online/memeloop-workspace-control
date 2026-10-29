@@ -90,7 +90,7 @@ impl KubernetesCoordinator {
         apply::observe_runtime_stage(
             workspace,
             phase,
-            self.has_observed_replicas_inner(workspace, expected),
+            Box::pin(self.has_observed_replicas_inner(workspace, expected)),
         )
         .await
     }
