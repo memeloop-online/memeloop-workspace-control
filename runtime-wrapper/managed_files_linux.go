@@ -110,7 +110,7 @@ func seedManagedFile(m managedFile, sc scratch) error {
 			return errors.New("invalid existing managed scratch file")
 		}
 		return nil
-	} else if !os.IsNotExist(err) {
+	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
 	source, err := openTrusted(m.Original, false)
