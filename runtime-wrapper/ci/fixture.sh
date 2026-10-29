@@ -117,7 +117,7 @@ for fault in mount unmount; do
  if [ "$fault" = mount ]; then injection='mount:error=EIO:when=1'; else injection='umount2:error=EBUSY:when=1'; fi
  cat > "$base/fail-$fault-runtime" <<SCRIPT
 #!/bin/sh
-exec /usr/bin/strace -f -qq -o '$artifacts/fault-$fault-syscalls.txt' -e trace=mount,umount2 -e inject=$injection '$base/mwc-runtime-wrapper' "\$@"
+exec /usr/bin/strace -ff -qq -o '$artifacts/fault-$fault-syscalls.txt' -e trace=mount,umount2 -e inject=$injection '$base/mwc-runtime-wrapper' "\$@"
 SCRIPT
  chmod 0755 "$base/fail-$fault-runtime"
  cat >> "$base/containerd.toml" <<TOML
@@ -272,10 +272,10 @@ for fault in mount unmount; do
  ! grep -F "/$fault_id/rootfs " /proc/self/mountinfo
  ! grep -F "upperdir=$scratch/runtime-private/$fault_id/upper" /proc/self/mountinfo
  if [ "$fault" = mount ]; then
-  grep -F 'EIO (Input/output error) (INJECTED)' "$artifacts/fault-$fault-syscalls.txt"
+  grep -F 'EIO (Input/output error) (INJECTED)' "$artifacts/fault-$fault-syscalls.txt"*
   grep -F 'original cleanup mount restore: <nil>' "$base/state/errors.log"
  else
-  grep -F 'EBUSY (Device or resource busy) (INJECTED)' "$artifacts/fault-$fault-syscalls.txt"
+  grep -F 'EBUSY (Device or resource busy) (INJECTED)' "$artifacts/fault-$fault-syscalls.txt"*
  fi
  # Honest limitation: failed transaction directories are preserved, not blindly
  # deleted. CI VM disposal owns them; production orphan recovery is still absent.
