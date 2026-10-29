@@ -22,9 +22,7 @@ jobs:
         working-directory: runtime-wrapper
         run: |
           mkdir -p artifacts
-          gofmt -w *.go
-          git diff -- . > artifacts/gofmt.patch
-          cp *.go artifacts/
+          test -z "$(gofmt -l *.go)"
           go vet ./...
           go test ./...
           CGO_ENABLED=0 go build -trimpath -o "$RUNNER_TEMP/mwc-runtime-prototype/mwc-runtime-wrapper" .
