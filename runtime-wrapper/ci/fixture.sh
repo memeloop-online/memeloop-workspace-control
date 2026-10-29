@@ -87,7 +87,7 @@ docker save mwc-runtime-fixture:ci -o "$base/image.tar"
 mkdir -p "$base/containerd-root/io.containerd.snapshotter.v1.overlayfs/snapshots" "$base/containerd-state/io.containerd.runtime.v2.task/k8s.io" "$base/state" "$base/kubelet"
 chmod 0700 "$base/state"
 vg_uuid="$(vgs --noheadings -o vg_uuid "$vg" | tr -d '[:space:]-')"
-pool_uuid="$(dmsetup info -c --noheadings -o uuid "$vg-pool-tpool" | xargs)"
+pool_uuid="$(dmsetup info -c --noheadings -o uuid "${vg//-/--}-pool-tpool" | xargs)"
 real_runc="$(readlink -f "$(command -v runc)")"
 jq -n --arg runtime "$real_runc" --arg kubelet "$base/kubelet" --arg bundle "$base/containerd-state/io.containerd.runtime.v2.task/k8s.io" --arg snapshot "$base/containerd-root/io.containerd.snapshotter.v1.overlayfs/snapshots" --arg state "$base/state" --arg namespace "/proc/$$/ns/mnt" --arg vg "$vg_uuid" --arg pool "$pool_uuid" --arg dmsetup "$(readlink -f "$(command -v dmsetup)")" '{real_runtime:$runtime,kubelet_root:$kubelet,bundle_root:$bundle,snapshot_root:$snapshot,state_root:$state,mount_namespace:$namespace,scratch_vg_uuid:$vg,scratch_pool_dm_uuid:$pool,dmsetup:$dmsetup}' > /etc/mwc-runtime-wrapper.json
 chmod 0600 /etc/mwc-runtime-wrapper.json
