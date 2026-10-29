@@ -277,10 +277,12 @@ for fault in mount unmount; do
  else
   grep -F 'EBUSY (Device or resource busy) (INJECTED)' "$artifacts/fault-$fault-syscalls.txt"*
  fi
- # Honest limitation: failed transaction directories are preserved, not blindly
- # deleted. CI VM disposal owns them; production orphan recovery is still absent.
- test -d "$scratch/runtime-private/$fault_id/upper"
- jq -n --arg fault "$fault" --arg id "$fault_id" '{gate:$fault,container_id:$id,rejected:true,rootfs_mount_leak:false,preserved_orphan_upper:true,production_orphan_gc_implemented:false}' >> "$artifacts/fault-results.jsonl"
+ # The real shim's failed-create cleanup has normally unmounted the original,
+ # then invoked runtime delete. Only this tested path permits ordinary cleanup;
+ # arbitrary hard-kill/orphan recovery is not inferred from it.
+ test "$(jq -r .phase "$base/state/$fault_id.json")" = deleted
+ test ! -e "$scratch/runtime-private/$fault_id"
+ jq -n --arg fault "$fault" --arg id "$fault_id" '{gate:$fault,container_id:$id,rejected:true,rootfs_mount_leak:false,normal_shim_failure_cleanup_deleted_upper:true,production_orphan_gc_implemented:false}' >> "$artifacts/fault-results.jsonl"
 done
 df -B1 "$scratch" "$home" > "$artifacts/after-container-delete-df.txt"
 cp -a "$base/state" "$artifacts/final-wrapper-state"

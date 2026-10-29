@@ -60,9 +60,10 @@ copy-up/multiple-UID/sudo checks, normal delete, failed-executable cleanup, wron
 publish/namespace-mismatch/whole-scratch-root rejection and checkpoint rejection.
 Two dedicated CI handlers use external strace syscall injection (mount EIO,
 unmount EBUSY) to test shim cleanup after the switch fails; no wrapper test flag
-or production fallback exists. Failed transactions preserve empty private upper
-directories and records. Their production orphan recovery remains unimplemented,
-even when the tested shim leaves no rootfs mount.
+or production fallback exists. These normal failed-create paths also exercise the
+real shim's cleanup and runtime delete, which can safely remove the unused upper
+after unmount. Arbitrary hard-kill/orphan recovery remains unimplemented; it is not
+inferred from successful normal shim failure cleanup.
 Unit input tests supplement this runtime path; they do not substitute for it.
 
 Only CI results prove a gate passed. Source code and workflow intent do not.
