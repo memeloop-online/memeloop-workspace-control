@@ -143,6 +143,11 @@ impl KubernetesCoordinator {
             ),
             observe_apply_stage(
                 workspace,
+                "scratch_claim",
+                Box::pin(self.apply_scratch_claim(workspace, desired.scratch_claim.as_ref()))
+            ),
+            observe_apply_stage(
+                workspace,
                 "services",
                 self.apply_workspace_services(namespace, workspace, desired)
             ),

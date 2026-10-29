@@ -140,7 +140,19 @@ fn coordinator(
         async move {
             let method = request.method().clone();
             let path = request.uri().path().to_owned();
-            let (status, body) = if method == Method::PATCH {
+            let (status, body) = if method == Method::POST
+                && path.ends_with("/persistentvolumeclaims")
+            {
+                let bytes = request.into_body().collect().await.unwrap().to_bytes();
+                let body: Value = serde_json::from_slice(&bytes).unwrap();
+                assert!(
+                    body["metadata"]["name"]
+                        .as_str()
+                        .unwrap()
+                        .ends_with("-scratch")
+                );
+                (StatusCode::CREATED, body)
+            } else if method == Method::PATCH {
                 let bytes = request.into_body().collect().await.unwrap().to_bytes();
                 let body: Value = serde_json::from_slice(&bytes).unwrap();
                 if path.contains("/statefulsets/") {

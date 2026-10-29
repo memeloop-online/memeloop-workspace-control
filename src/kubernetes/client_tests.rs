@@ -118,7 +118,11 @@ mod coordinator_tests {
                 if request.method() == Method::GET {
                     return Ok::<_, Infallible>(not_found());
                 }
-                assert_eq!(request.method(), Method::PATCH);
+                assert!(
+                    request.method() == Method::PATCH
+                        || (request.method() == Method::POST
+                            && request.uri().path().ends_with("/persistentvolumeclaims"))
+                );
                 let path = request.uri().path().to_owned();
                 let body: serde_json::Value = serde_json::from_slice(
                     &request.into_body().collect().await.unwrap().to_bytes(),
@@ -186,7 +190,11 @@ mod coordinator_tests {
                             }
                             return Ok(not_found());
                         }
-                        assert_eq!(method, Method::PATCH);
+                        assert!(
+                            method == Method::PATCH
+                                || (method == Method::POST
+                                    && path.ends_with("/persistentvolumeclaims"))
+                        );
                         if foreign && path == blocked {
                             assert!(
                                 !fail.load(Ordering::SeqCst),
@@ -723,7 +731,7 @@ mod coordinator_tests {
                 .lock()
                 .unwrap()
                 .iter()
-                .all(|(_, uri)| !uri.contains("persistentvolumeclaims"))
+                .all(|(_, uri)| !uri.contains("persistentvolumeclaims/workspace-data-"))
         );
     }
 
@@ -871,7 +879,9 @@ mod coordinator_tests {
                         .lock()
                         .unwrap()
                         .push((method.clone(), path.clone()));
-                    if path.contains("persistentvolumeclaims") {
+                    if path.ends_with("/workspace-data-w-8000000000000001-0")
+                        || path.ends_with("/existing-home")
+                    {
                         assert_eq!(method, Method::GET);
                         if !bound {
                             assert!(path.ends_with("/workspace-data-w-8000000000000001-0"));
@@ -890,7 +900,12 @@ mod coordinator_tests {
                     if method == Method::GET {
                         return Ok(not_found());
                     }
-                    assert_eq!(method, Method::PATCH, "unexpected mutation: {path}");
+                    assert!(
+                        method == Method::PATCH
+                            || (method == Method::POST
+                                && path.ends_with("/persistentvolumeclaims")),
+                        "unexpected mutation: {method} {path}"
+                    );
                     let bytes = request.into_body().collect().await.unwrap().to_bytes();
                     let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
                     if path.contains("/statefulsets/") {
@@ -1008,7 +1023,12 @@ mod coordinator_tests {
                     if method == Method::GET {
                         return Ok(not_found());
                     }
-                    assert_eq!(method, Method::PATCH, "unexpected mutation: {path}");
+                    assert!(
+                        method == Method::PATCH
+                            || (method == Method::POST
+                                && path.ends_with("/persistentvolumeclaims")),
+                        "unexpected mutation: {method} {path}"
+                    );
                     let bytes = request.into_body().collect().await.unwrap().to_bytes();
                     let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
                     if path.contains("/statefulsets/") {
@@ -1050,7 +1070,7 @@ mod coordinator_tests {
                 assert!(
                     requests
                         .iter()
-                        .all(|(_, path)| !path.contains("/persistentvolumeclaims/"))
+                        .all(|(_, path)| !path.ends_with("/workspace-data-w-8000000000000001-0"))
                 );
             }
         }

@@ -191,6 +191,14 @@ impl WorkspaceReconcileHandler {
                         "workspace StatefulSet has not scaled to zero yet".to_owned(),
                     ));
                 }
+                if !Box::pin(self.coordinator.delete_stopped_scratch(workspace))
+                    .await
+                    .map_err(job_error)?
+                {
+                    return Err(JobHandlerError::Pending(
+                        "waiting for temporary scratch PVC removal".to_owned(),
+                    ));
+                }
                 self.record_observation(workspace, WorkspaceObservation::Stopped)
                     .await?;
             }
@@ -590,6 +598,7 @@ fn job_error(error: impl std::fmt::Display) -> JobHandlerError {
 fn reconcile_error(error: ReconcileError) -> JobHandlerError {
     match error {
         ReconcileError::StatefulSetRecreationPending
+        | ReconcileError::ScratchVolumeRecreationPending
         | ReconcileError::UnpersistedHomeVolumeBinding { .. } => {
             JobHandlerError::Pending(error.to_string())
         }

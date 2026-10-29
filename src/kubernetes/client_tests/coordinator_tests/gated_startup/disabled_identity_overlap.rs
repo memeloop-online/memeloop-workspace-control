@@ -95,7 +95,7 @@ async fn new_tokenless_workload_prepares_volumes_while_old_identity_cleanup_is_p
             .unwrap();
         let approval = events
             .iter()
-            .position(|(method, _)| method == "POST")
+            .position(|(method, path)| method == "POST" && path.ends_with("/configmaps"))
             .unwrap();
         assert!(cleanup < approval);
     }

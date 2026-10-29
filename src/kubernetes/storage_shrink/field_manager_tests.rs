@@ -304,3 +304,51 @@ async fn stopping_retention_uses_workload_field_manager_with_identity_guards() {
 async fn stopping_replicas_uses_workload_field_manager_with_identity_guards() {
     assert_workload_patch(WorkloadPatch::StopReplicas).await;
 }
+
+#[tokio::test]
+async fn scratch_discovery_reads_owned_default_or_explicit_claim_without_a_pod() {
+    for explicit in [false, true] {
+        let (base, mut workspace, _, _) = mock_coordinator(WorkloadPatch::RetainSources);
+        workspace.state = crate::workspaces::WorkspaceState::Stopped;
+        let name = if explicit {
+            "retained-scratch".to_owned()
+        } else {
+            base.builder
+                .runtime_names(&workspace)
+                .unwrap()
+                .resources
+                .scratch_pvc()
+        };
+        if explicit {
+            workspace.scratch_volume_binding = Some(super::binding(&name, 10));
+        }
+        let labels = base.builder.labels(workspace.id);
+        let expected_path = format!(
+            "/api/v1/namespaces/{}/persistentvolumeclaims/{name}",
+            workspace.runtime.namespace()
+        );
+        let claim = json!({"apiVersion":"v1","kind":"PersistentVolumeClaim","metadata":{"name":name,"namespace":workspace.runtime.namespace(),"uid":format!("uid-{name}"),"labels":labels},"spec":{"accessModes":["ReadWriteOnce"],"resources":{"requests":{"storage":"10Gi"}}},"status":{"phase":"Bound","capacity":{"storage":"10Gi"}}});
+        let service = service_fn(move |request: Request<kube::client::Body>| {
+            assert_eq!(request.method(), "GET");
+            assert_eq!(request.uri().path(), expected_path);
+            let claim = claim.clone();
+            async move {
+                Ok::<_, Infallible>(
+                    Response::builder()
+                        .status(200)
+                        .header("content-type", "application/json")
+                        .body(Body::from(claim.to_string()))
+                        .unwrap(),
+                )
+            }
+        });
+        let coordinator =
+            KubernetesCoordinator::new(kube::Client::new(service, "default"), base.builder);
+        let mut operation = super::operation(&workspace);
+        coordinator
+            .discover_scratch_source(&workspace, &mut operation)
+            .await
+            .unwrap();
+        assert_eq!(operation.temporary.source, Some(super::binding(&name, 10)));
+    }
+}

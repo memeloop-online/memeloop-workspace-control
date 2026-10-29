@@ -151,6 +151,10 @@ impl WorkspaceResourceNames {
         format!("{}-{}-0", self.data_claim_template, self.stateful_set)
     }
 
+    pub fn scratch_pvc(&self) -> String {
+        format!("{}-scratch", self.stateful_set)
+    }
+
     pub fn startup_gate_config_map(&self) -> String {
         format!("{}-startup-gate", self.stateful_set)
     }

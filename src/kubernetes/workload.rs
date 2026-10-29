@@ -4,12 +4,11 @@ use k8s_openapi::{
     api::{
         apps::v1::{StatefulSet, StatefulSetSpec},
         core::v1::{
-            Affinity, ConfigMapVolumeSource, Container, EmptyDirVolumeSource,
-            EphemeralVolumeSource, KeyToPath, NodeAffinity, NodeSelector, NodeSelectorRequirement,
-            NodeSelectorTerm, PersistentVolumeClaim, PersistentVolumeClaimSpec,
-            PersistentVolumeClaimTemplate, PersistentVolumeClaimVolumeSource, PodSpec,
-            PodTemplateSpec, PreferredSchedulingTerm, ProjectedVolumeSource, ResourceRequirements,
-            SecretProjection, SecretVolumeSource, Volume, VolumeProjection,
+            Affinity, ConfigMapVolumeSource, Container, EmptyDirVolumeSource, KeyToPath,
+            NodeAffinity, NodeSelector, NodeSelectorRequirement, NodeSelectorTerm,
+            PersistentVolumeClaim, PersistentVolumeClaimSpec, PersistentVolumeClaimVolumeSource,
+            PodSpec, PodTemplateSpec, PreferredSchedulingTerm, ProjectedVolumeSource,
+            ResourceRequirements, SecretProjection, SecretVolumeSource, Volume, VolumeProjection,
             VolumeResourceRequirements,
         },
     },
@@ -20,7 +19,6 @@ use k8s_openapi::{
 };
 
 use crate::{
-    templates::WorkspaceStoragePolicy,
     workspace_runtime::{WorkspaceResourceNames, WorkspaceRuntimeNames},
     workspaces::Workspace,
 };
@@ -65,13 +63,7 @@ pub(super) fn stateful_set(
                     ..ObjectMeta::default()
                 }),
                 spec: Some(pod_spec(
-                    builder,
-                    pod,
-                    workspace,
-                    containers,
-                    names,
-                    &stable_labels,
-                    placement,
+                    builder, pod, workspace, containers, names, placement,
                 )),
             },
             volume_claim_templates: workspace
@@ -109,7 +101,6 @@ fn pod_spec(
     workspace: &Workspace,
     containers: Vec<Container>,
     names: &WorkspaceResourceNames,
-    stable_labels: &BTreeMap<String, String>,
     placement: &ResolvedPlacement,
 ) -> PodSpec {
     let mut init_containers = Vec::new();
@@ -130,12 +121,9 @@ fn pod_spec(
         image_pull_secrets: pod.image_pull_secrets(),
         volumes: Some(workspace_volumes(
             workspace,
-            &workspace.template.storage_policy,
             names,
             builder.ttyd_mtls.as_ref(),
             builder.http_proxy_enabled(),
-            &builder.scratch_storage_class_name,
-            stable_labels,
         )),
         ..PodSpec::default()
     }
@@ -191,12 +179,9 @@ fn workspace_resources(pod: WorkspacePod<'_>, workspace: &Workspace) -> Resource
 
 fn workspace_volumes(
     workspace: &Workspace,
-    policy: &WorkspaceStoragePolicy,
     names: &WorkspaceResourceNames,
     ttyd_mtls: Option<&super::TtydMtlsConfig>,
     http_proxy_enabled: bool,
-    scratch_storage_class_name: &str,
-    stable_labels: &BTreeMap<String, String>,
 ) -> Vec<Volume> {
     let mut volumes = vec![
         Volume {
@@ -243,12 +228,7 @@ fn workspace_volumes(
             empty_dir: Some(bounded_empty_dir("128Mi", Some("Memory"))),
             ..Volume::default()
         },
-        scratch_volume(
-            workspace.scratch_volume_binding.as_ref(),
-            policy.temporary_storage_gib,
-            scratch_storage_class_name,
-            stable_labels,
-        ),
+        scratch_volume(workspace, names),
     ];
     if let Some(binding) = &workspace.home_volume_binding {
         volumes.push(Volume {
@@ -277,41 +257,44 @@ fn workspace_volumes(
     volumes
 }
 
-fn scratch_volume(
-    binding: Option<&crate::workspaces::WorkspaceHomeVolumeBinding>,
-    size_gib: u64,
-    storage_class_name: &str,
-    stable_labels: &BTreeMap<String, String>,
-) -> Volume {
-    if let Some(binding) = binding {
-        return Volume {
-            name: "workspace-scratch".to_owned(),
-            persistent_volume_claim: Some(PersistentVolumeClaimVolumeSource {
-                claim_name: binding.claim_name.clone(),
-                read_only: Some(false),
-            }),
-            ..Volume::default()
-        };
-    }
-    let mut labels = stable_labels.clone();
-    labels.insert(super::STORAGE_ROLE_LABEL.to_owned(), "temporary".to_owned());
+fn scratch_volume(workspace: &Workspace, names: &WorkspaceResourceNames) -> Volume {
     Volume {
         name: "workspace-scratch".to_owned(),
-        ephemeral: Some(EphemeralVolumeSource {
-            volume_claim_template: Some(PersistentVolumeClaimTemplate {
-                metadata: Some(ObjectMeta {
-                    labels: Some(labels),
-                    ..ObjectMeta::default()
-                }),
-                spec: PersistentVolumeClaimSpec {
-                    access_modes: Some(vec!["ReadWriteOnce".to_owned()]),
-                    storage_class_name: Some(storage_class_name.to_owned()),
-                    resources: Some(storage_resources(&format!("{size_gib}Gi"))),
-                    ..PersistentVolumeClaimSpec::default()
-                },
-            }),
+        persistent_volume_claim: Some(PersistentVolumeClaimVolumeSource {
+            claim_name: workspace
+                .scratch_volume_binding
+                .as_ref()
+                .map_or_else(|| names.scratch_pvc(), |binding| binding.claim_name.clone()),
+            read_only: Some(false),
         }),
         ..Volume::default()
+    }
+}
+
+pub(super) fn scratch_claim(
+    builder: &ResourceBuilder,
+    runtime: &WorkspaceRuntimeNames,
+    stable_labels: &BTreeMap<String, String>,
+    workspace: &Workspace,
+) -> PersistentVolumeClaim {
+    let mut labels = stable_labels.clone();
+    labels.insert(super::STORAGE_ROLE_LABEL.to_owned(), "temporary".to_owned());
+    PersistentVolumeClaim {
+        metadata: namespaced_metadata(
+            &runtime.resources.scratch_pvc(),
+            &runtime.namespace,
+            &labels,
+        ),
+        spec: Some(PersistentVolumeClaimSpec {
+            access_modes: Some(vec!["ReadWriteOnce".to_owned()]),
+            storage_class_name: Some(builder.scratch_storage_class_name.clone()),
+            resources: Some(storage_resources(&format!(
+                "{}Gi",
+                workspace.template.storage_policy.temporary_storage_gib
+            ))),
+            ..PersistentVolumeClaimSpec::default()
+        }),
+        ..PersistentVolumeClaim::default()
     }
 }
 

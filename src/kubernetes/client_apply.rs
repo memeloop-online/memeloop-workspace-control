@@ -203,6 +203,58 @@ impl KubernetesCoordinator {
         Ok(())
     }
 
+    pub(super) async fn apply_scratch_claim(
+        &self,
+        workspace: &Workspace,
+        desired: Option<&PersistentVolumeClaim>,
+    ) -> Result<(), ReconcileError> {
+        let Some(desired) = desired else {
+            return Ok(());
+        };
+        let name = desired
+            .metadata
+            .name
+            .as_deref()
+            .ok_or(ReconcileError::MissingObjectName)?;
+        let claims = Api::<PersistentVolumeClaim>::namespaced(
+            self.client.clone(),
+            workspace.runtime.namespace(),
+        );
+        if let Some(existing) = observe_request(
+            workspace.id,
+            "PersistentVolumeClaim",
+            name,
+            "get_metadata",
+            claims.get_metadata_opt(name),
+        )
+        .await?
+        {
+            self.builder
+                .verify_delete_ownership(&existing.metadata, workspace.id)?;
+            return if existing.metadata.deletion_timestamp.is_some() {
+                Err(ReconcileError::ScratchVolumeRecreationPending)
+            } else {
+                // WFFC claims bind only after scheduling. Existing claims need no write.
+                Ok(())
+            };
+        }
+        match observe_request(
+            workspace.id,
+            "PersistentVolumeClaim",
+            name,
+            "create",
+            claims.create(&PostParams::default(), desired),
+        )
+        .await
+        {
+            Ok(_) => Ok(()),
+            Err(kube::Error::Api(error)) if error.code == 409 => {
+                Err(ReconcileError::ScratchVolumeRecreationPending)
+            }
+            Err(error) => Err(error.into()),
+        }
+    }
+
     async fn apply_namespace(
         &self,
         workspace: &Workspace,
@@ -680,36 +732,6 @@ fn preserve_claim_storage_classes(desired: &mut StatefulSet, existing: &Stateful
                 .and_then(|spec| spec.storage_class_name.clone());
         }
     }
-    let existing_volumes = existing
-        .spec
-        .as_ref()
-        .and_then(|spec| spec.template.spec.as_ref())
-        .and_then(|spec| spec.volumes.as_ref());
-    let desired_volumes = desired_spec
-        .template
-        .spec
-        .as_mut()
-        .and_then(|spec| spec.volumes.as_mut());
-    for volume in desired_volumes.into_iter().flatten() {
-        let Some(claim_spec) = volume
-            .ephemeral
-            .as_mut()
-            .and_then(|ephemeral| ephemeral.volume_claim_template.as_mut())
-            .map(|claim| &mut claim.spec)
-        else {
-            continue;
-        };
-        if let Some(existing_spec) = existing_volumes
-            .into_iter()
-            .flatten()
-            .find(|existing| existing.name == volume.name)
-            .and_then(|existing| existing.ephemeral.as_ref())
-            .and_then(|ephemeral| ephemeral.volume_claim_template.as_ref())
-            .map(|claim| &claim.spec)
-        {
-            claim_spec.storage_class_name = existing_spec.storage_class_name.clone();
-        }
-    }
 }
 
 fn immutable_stateful_set_update(error: &kube::Error) -> bool {
@@ -842,93 +864,6 @@ mod immutable_stateful_set_tests {
                 .as_deref(),
             Some("new-default")
         );
-    }
-
-    fn scratch_workload(class: Option<&str>, size: &str) -> StatefulSet {
-        serde_json::from_value(serde_json::json!({
-            "spec": {
-                "serviceName": "workspace",
-                "selector": {},
-                "template": {
-                    "spec": {
-                        "containers": [],
-                        "volumes": [{
-                            "name": "workspace-scratch",
-                            "ephemeral": {
-                                "volumeClaimTemplate": {
-                                    "spec": {
-                                        "storageClassName": class,
-                                        "accessModes": ["ReadWriteOnce"],
-                                        "resources": {"requests": {"storage": size}}
-                                    }
-                                }
-                            }
-                        }]
-                    }
-                }
-            }
-        }))
-        .unwrap()
-    }
-
-    #[test]
-    fn changed_default_preserves_scratch_class_without_losing_capacity_updates() {
-        // No Home claim template: explicitly bound Homes must not skip scratch.
-        for original in [Some("original-scratch"), None] {
-            let existing = scratch_workload(original, "4Gi");
-            let mut desired = scratch_workload(Some("new-default"), "8Gi");
-            let expected = scratch_workload(original, "8Gi");
-            preserve_claim_storage_classes(&mut desired, &existing);
-            assert_eq!(desired, expected);
-        }
-    }
-
-    #[test]
-    fn explicit_scratch_binding_is_not_replaced_with_an_ephemeral_claim() {
-        let existing = scratch_workload(Some("original-scratch"), "4Gi");
-        let mut desired = scratch_workload(Some("new-default"), "8Gi");
-        let volume = &mut desired
-            .spec
-            .as_mut()
-            .unwrap()
-            .template
-            .spec
-            .as_mut()
-            .unwrap()
-            .volumes
-            .as_mut()
-            .unwrap()[0];
-        volume.ephemeral = None;
-        volume.persistent_volume_claim = Some(
-            k8s_openapi::api::core::v1::PersistentVolumeClaimVolumeSource {
-                claim_name: "migrated-scratch".to_owned(),
-                ..Default::default()
-            },
-        );
-        let expected = desired.clone();
-        preserve_claim_storage_classes(&mut desired, &existing);
-        assert_eq!(desired, expected);
-    }
-
-    #[test]
-    fn new_scratch_volume_keeps_the_configured_default() {
-        let mut existing = scratch_workload(Some("original-scratch"), "4Gi");
-        existing
-            .spec
-            .as_mut()
-            .unwrap()
-            .template
-            .spec
-            .as_mut()
-            .unwrap()
-            .volumes
-            .as_mut()
-            .unwrap()[0]
-            .name = "unrelated-volume".to_owned();
-        let mut desired = scratch_workload(Some("new-default"), "8Gi");
-        let expected = desired.clone();
-        preserve_claim_storage_classes(&mut desired, &existing);
-        assert_eq!(desired, expected);
     }
 
     #[test]
