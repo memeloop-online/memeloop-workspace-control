@@ -102,16 +102,27 @@ impl KubernetesCoordinator {
     ) -> Result<bool, ReconcileError> {
         let namespace_name = workspace.runtime.namespace();
         let names = self.builder.runtime_names(workspace)?;
-        let Some(stateful_set) = apply::observe_runtime_stage(
-            workspace,
-            "observe_statefulset_read",
-            Box::pin(
-                Api::<StatefulSet>::namespaced(self.client.clone(), namespace_name)
-                    .get_opt(&names.resources.stateful_set),
+        let stateful_sets = Api::<StatefulSet>::namespaced(self.client.clone(), namespace_name);
+        let pods = Api::<Pod>::namespaced(self.client.clone(), namespace_name);
+        let (stateful_set, pod) = tokio::join!(
+            apply::observe_runtime_stage(
+                workspace,
+                "observe_statefulset_read",
+                Box::pin(stateful_sets.get_opt(&names.resources.stateful_set)),
             ),
-        )
-        .await?
-        else {
+            async {
+                if expected != 1 {
+                    return Ok(None);
+                }
+                apply::observe_runtime_stage(
+                    workspace,
+                    "observe_ready_pod_read",
+                    Box::pin(pods.get_opt(&names.resources.pod_ordinal_zero())),
+                )
+                .await
+            }
+        );
+        let Some(stateful_set) = stateful_set? else {
             return Ok(false);
         };
         self.builder
@@ -150,16 +161,7 @@ impl KubernetesCoordinator {
         if expected != 1 {
             return Ok(false);
         }
-        let Some(pod) = apply::observe_runtime_stage(
-            workspace,
-            "observe_ready_pod_read",
-            Box::pin(
-                Api::<Pod>::namespaced(self.client.clone(), namespace_name)
-                    .get_opt(&names.resources.pod_ordinal_zero()),
-            ),
-        )
-        .await?
-        else {
+        let Some(pod) = pod? else {
             return Ok(false);
         };
         self.builder
