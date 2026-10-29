@@ -1820,6 +1820,42 @@ fn temporary_storage_uses_one_workspace_owned_claim_and_isolated_subpaths() {
 }
 
 #[test]
+fn buildkit_image_declared_volume_uses_the_existing_scratch_cache() {
+    let mut workspace = workspace(WorkspaceState::Ready);
+    workspace.template.buildkit = true;
+    let pod = builder()
+        .build(&workspace)
+        .unwrap()
+        .stateful_set
+        .spec
+        .unwrap()
+        .template
+        .spec
+        .unwrap();
+
+    for name in ["buildkit-bootstrap", "buildkitd"] {
+        let container = pod
+            .containers
+            .iter()
+            .chain(pod.init_containers.iter().flatten())
+            .find(|container| container.name == name)
+            .unwrap();
+        let mounts = container.volume_mounts.as_ref().unwrap();
+        for path in ["/var/lib/mwc-buildkit", "/home/user/.local/share/buildkit"] {
+            let matching = mounts
+                .iter()
+                .filter(|mount| mount.mount_path == path)
+                .collect::<Vec<_>>();
+            assert_eq!(matching.len(), 1, "{name}: {path}");
+            let mount = matching[0];
+            assert_eq!(mount.name, "workspace-scratch");
+            assert_eq!(mount.sub_path.as_deref(), Some("build-cache"));
+            assert_eq!(mount.read_only, Some(false));
+        }
+    }
+}
+
+#[test]
 fn buildkit_disabled_omits_build_cache_initialization_mounts_and_containers() {
     let mut workspace = workspace(WorkspaceState::Ready);
     workspace.template.buildkit = false;
