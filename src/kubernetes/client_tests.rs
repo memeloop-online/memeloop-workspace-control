@@ -319,6 +319,52 @@ mod coordinator_tests {
     }
 
     #[tokio::test]
+    async fn direct_readiness_reads_pod_before_stateful_set_response_arrives() {
+        let (workspace, stateful_set, pod) = ready_pod_fixture();
+        let builder =
+            workspace_coordinator(Arc::new(WorkspaceDeleteMock::new("public-a", workspace.id)))
+                .builder;
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let both_requested = Arc::new(tokio::sync::Notify::new());
+        let service = service_fn({
+            let requests = requests.clone();
+            let both_requested = both_requested.clone();
+            move |request: Request<kube::client::Body>| {
+                assert_eq!(request.method(), Method::GET);
+                let path = request.uri().path().to_owned();
+                let stateful_set = stateful_set.clone();
+                let pod = pod.clone();
+                let both_requested = both_requested.clone();
+                let is_stateful_set = path.contains("/statefulsets/");
+                if !is_stateful_set {
+                    assert!(path.contains("/pods/"));
+                }
+                requests.lock().unwrap().push(path);
+                async move {
+                    if is_stateful_set {
+                        both_requested.notified().await;
+                        Ok::<_, Infallible>(json_response(StatusCode::OK, stateful_set))
+                    } else {
+                        both_requested.notify_one();
+                        Ok(json_response(StatusCode::OK, pod))
+                    }
+                }
+            }
+        });
+        let coordinator =
+            KubernetesCoordinator::new(kube::Client::new(service, "default"), builder);
+        let ready = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            coordinator.has_observed_replicas(&workspace, 1),
+        )
+        .await
+        .expect("Pod GET must start before the StatefulSet response is released")
+        .unwrap();
+        assert!(ready);
+        assert_eq!(requests.lock().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
     async fn stale_ready_aggregate_cannot_hide_a_missing_or_pending_current_pod() {
         let (workspace, mut stateful_set, mut pod) = ready_pod_fixture();
         stateful_set["status"]["readyReplicas"] = serde_json::json!(1);
@@ -487,7 +533,7 @@ mod coordinator_tests {
             let (result, requests) =
                 observe_ready_fixture(&next, stateful_set.clone(), None, expected).await;
             assert!(!result.unwrap());
-            assert_eq!(requests.len(), 1);
+            assert_eq!(requests.len(), if expected == 0 { 1 } else { 2 });
 
             for (pointer, value) in [
                 ("/spec/replicas", serde_json::json!(1 - expected)),
