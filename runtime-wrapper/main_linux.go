@@ -18,6 +18,8 @@ import (
 
 const configPath = "/etc/mwc-runtime-wrapper.json"
 
+var diagnosticPath string
+
 var uuidRE = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 var idRE = regexp.MustCompile(`^[0-9a-f]{64}$`)
 var lvmRE = regexp.MustCompile(`^[A-Za-z0-9]{32}$`)
@@ -90,12 +92,24 @@ type invocation struct {
 	Bundle  string
 }
 
-func fail(err error) { fmt.Fprintln(os.Stderr, "mwc runtime prototype:", err); os.Exit(125) }
+func fail(err error) {
+	fmt.Fprintln(os.Stderr, "mwc runtime prototype:", err)
+	if diagnosticPath != "" {
+		fd, openErr := syscall.Open(diagnosticPath, syscall.O_WRONLY|syscall.O_APPEND|syscall.O_CREAT|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0600)
+		if openErr == nil {
+			f := os.NewFile(uintptr(fd), diagnosticPath)
+			fmt.Fprintln(f, err)
+			f.Close()
+		}
+	}
+	os.Exit(125)
+}
 func main() {
 	c, err := loadConfig()
 	if err != nil {
 		fail(err)
 	}
+	diagnosticPath = filepath.Join(c.StateRoot, "errors.log")
 	in, err := parseArgs(os.Args[1:])
 	if err != nil {
 		fail(err)
@@ -921,7 +935,7 @@ func deleteContainer(c config, in invocation) (int, error) {
 	// is passed through; it cannot create an unbounded task.
 	p := filepath.Join(c.StateRoot, in.ID+".json")
 	f, err := openTrusted(p, false)
-	if os.IsNotExist(err) {
+	if errors.Is(err, os.ErrNotExist) {
 		return runReal(c.RealRuntime, os.Args[1:])
 	}
 	if err != nil {

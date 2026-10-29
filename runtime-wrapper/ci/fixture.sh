@@ -29,6 +29,8 @@ cleanup() {
  for id in "${containers[@]}"; do cri stop "$id"; cri rm "$id"; done
  if [ -n "$sandbox" ]; then cri stopp "$sandbox"; cri rmp "$sandbox"; fi
  cat /proc/self/mountinfo > "$artifacts/final-mountinfo.txt"
+ if [ -d "$base/state" ]; then cp -a "$base/state" "$artifacts/failure-or-final-state"; fi
+ if [ -f "$base/state/errors.log" ]; then cat "$base/state/errors.log"; fi
  if [ -n "$containerd_pid" ]; then kill "$containerd_pid"; wait "$containerd_pid"; fi
  # Normal unmounts only. EBUSY is evidence/failure, never hidden by lazy/force.
  umount "$scratch"; umount "$home"
