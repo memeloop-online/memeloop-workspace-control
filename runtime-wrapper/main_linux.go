@@ -860,6 +860,8 @@ func save(c config, r record) error {
 	return d.Sync()
 }
 func switchRoot(c config, r *record) error {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 	if err := revalidate(c, r.Scratch); err != nil {
 		return err
 	}

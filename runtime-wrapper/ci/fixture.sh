@@ -112,6 +112,22 @@ state = "$base/containerd-state"
         BinaryName = '$base/mwc-runtime-wrapper'
         SystemdCgroup = false
 TOML
+# Fault injection belongs to the disposable harness, never to wrapper options.
+for fault in mount unmount; do
+ if [ "$fault" = mount ]; then injection='mount:error=EIO:when=1'; else injection='umount2:error=EBUSY:when=1'; fi
+ cat > "$base/fail-$fault-runtime" <<SCRIPT
+#!/bin/sh
+exec /usr/bin/strace -f -qq -o '$artifacts/fault-$fault-syscalls.txt' -e trace=mount,umount2 -e inject=$injection '$base/mwc-runtime-wrapper' "\$@"
+SCRIPT
+ chmod 0755 "$base/fail-$fault-runtime"
+ cat >> "$base/containerd.toml" <<TOML
+    [plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.'mwc-ci-fail-$fault']
+      runtime_type = 'io.containerd.runc.v2'
+      [plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.'mwc-ci-fail-$fault'.options]
+        BinaryName = '$base/fail-$fault-runtime'
+        SystemdCgroup = false
+TOML
+done
 containerd --config "$base/containerd.toml" > "$artifacts/containerd.log" 2>&1 &
 containerd_pid=$!
 for n in $(seq 1 60); do if cri info > "$artifacts/cri-info.json"; then break; fi; sleep 1; done
@@ -241,6 +257,31 @@ cri rm "$bad_id"
 cri stopp "$sandbox";cri rmp "$sandbox"
 test "$(jq -r .phase "$base/state/$sandbox.json")" = deleted
 ! find "$scratch/runtime-private" -mindepth 1 -print -quit | grep .
+# Inject failures at the actual switch syscalls through a separate traced CRI
+# handler. The ordinary shim must remove even the restored original root mount.
+for fault in mount unmount; do
+ find "$base/state" -name '*.json' -printf '%f\n' | sort > "$base/states-before.txt"
+ jq --arg name "mwc-budget-ci-fault-$fault" '.metadata.name=$name' "$base/pod.json" > "$base/fault-$fault-pod.json"
+ if cri runp --runtime "mwc-ci-fail-$fault" "$base/fault-$fault-pod.json" > "$artifacts/fault-$fault-runp.txt" 2>&1; then echo "injected $fault failure unexpectedly started sandbox"; exit 1; fi
+ find "$base/state" -name '*.json' -printf '%f\n' | sort > "$base/states-after.txt"
+ comm -13 "$base/states-before.txt" "$base/states-after.txt" > "$base/new-state.txt"
+ test "$(wc -l < "$base/new-state.txt")" = 1
+ fault_record="$(cat "$base/new-state.txt")"
+ cp "$base/state/$fault_record" "$artifacts/fault-$fault-wrapper.json"
+ fault_id="$(jq -r .id "$base/state/$fault_record")"
+ ! grep -F "/$fault_id/rootfs " /proc/self/mountinfo
+ ! grep -F "upperdir=$scratch/runtime-private/$fault_id/upper" /proc/self/mountinfo
+ if [ "$fault" = mount ]; then
+  grep -F 'EIO (Input/output error) (INJECTED)' "$artifacts/fault-$fault-syscalls.txt"
+  grep -F 'original cleanup mount restore: <nil>' "$base/state/errors.log"
+ else
+  grep -F 'EBUSY (Device or resource busy) (INJECTED)' "$artifacts/fault-$fault-syscalls.txt"
+ fi
+ # Honest limitation: failed transaction directories are preserved, not blindly
+ # deleted. CI VM disposal owns them; production orphan recovery is still absent.
+ test -d "$scratch/runtime-private/$fault_id/upper"
+ jq -n --arg fault "$fault" --arg id "$fault_id" '{gate:$fault,container_id:$id,rejected:true,rootfs_mount_leak:false,preserved_orphan_upper:true,production_orphan_gc_implemented:false}' >> "$artifacts/fault-results.jsonl"
+done
 df -B1 "$scratch" "$home" > "$artifacts/after-container-delete-df.txt"
 cp -a "$base/state" "$artifacts/final-wrapper-state"
 printf '%s\n' 'native mechanism, shared capacity, Home/SSH, cleanup, identity/path/namespace negative gates, checkpoint rejection passed' > "$artifacts/acceptance.txt"

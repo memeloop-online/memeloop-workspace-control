@@ -29,7 +29,7 @@ jobs:
       - name: Prepare disposable privileged runtime fixture
         run: |
           sudo apt-get update
-          sudo apt-get install -y lvm2 thin-provisioning-tools xfsprogs jq openssh-client
+          sudo apt-get install -y lvm2 thin-provisioning-tools xfsprogs jq openssh-client strace
       - name: Actual pinned CRI and shim acceptance
         run: |
           status=0
