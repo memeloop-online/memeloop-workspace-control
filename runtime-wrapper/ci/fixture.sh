@@ -151,16 +151,20 @@ done
 cat /proc/self/mountinfo > "$artifacts/active-mountinfo.txt"
 ssh_ci() { ssh -i "$base/client" -p 2222 -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$base/known_hosts" -o ConnectTimeout=5 user@127.0.0.1 "$@"; }
 for n in $(seq 1 20); do if ssh_ci 'id'; then break; fi; sleep 1; done
-ssh_ci 'sudo -n id -u; test ! -e /scratch/runtime-private; test ! -e /runtime-private; touch /home/user/ssh-marker' | tee "$artifacts/ssh-before-full.txt"
+ssh_ci 'set -e; test "$(sudo -n id -u)" = 0; test ! -e /scratch/runtime-private; test ! -e /runtime-private; touch /home/user/ssh-marker; echo strict-ssh-home-sudo-ok' | tee "$artifacts/ssh-before-full.txt"
 # Copy-up from immutable image, multi UID, and sidecar allocation consume same FS.
-cri exec "$main_id" bash -c 'printf changed >> /seed-copy-up; sudo -u user touch /home/user/multi-uid; dd if=/dev/zero of=/scratch/data-initial bs=1M count=32 conv=fsync'
+lower_seed="$(jq -r '.lower | split(":")[0]' "$base/state/$main_id.json")/seed-copy-up"
+sha256sum "$lower_seed" > "$artifacts/lower-seed-before.sha256"
+cri exec "$main_id" bash -c 'set -e; printf changed >> /seed-copy-up; sudo -u user touch /home/user/multi-uid; dd if=/dev/zero of=/scratch/data-initial bs=1M count=32 conv=fsync'
 cri exec "$ttyd_id" bash -c 'dd if=/dev/zero of=/sidecar-allocation bs=1M count=16 conv=fsync'
+sha256sum "$lower_seed" > "$artifacts/lower-seed-after.sha256"
+cmp "$artifacts/lower-seed-before.sha256" "$artifacts/lower-seed-after.sha256"
 df -B1 "$scratch" "$home" > "$artifacts/before-full-df.txt"
 cri exec "$main_id" /usr/local/bin/mwc-budget-workload fill | tee "$artifacts/full-result.txt"
-ssh_ci 'test -f /home/user/home-still-writable && sudo -n sh -c "echo ssh-alive > /home/user/after-full"' > "$artifacts/ssh-after-full.txt"
+ssh_ci 'set -e; test -f /home/user/home-still-writable; sudo -n sh -c "echo ssh-alive > /home/user/after-full"; echo strict-ssh-after-full-home-writable' > "$artifacts/ssh-after-full.txt"
 cri inspect "$main_id" > "$artifacts/main-after-full.json"
 test "$(jq -r .status.state "$artifacts/main-after-full.json")" = CONTAINER_RUNNING
-cri exec "$main_id" bash -c 'rm /rootfs-fill /scratch/data-fill /scratch/data-initial; echo recovered > /rootfs-after-free; sync'
+cri exec "$main_id" bash -c 'set -e; rm /rootfs-fill /scratch/data-fill /scratch/data-initial; echo recovered > /rootfs-after-free; sync'
 df -B1 "$scratch" "$home" > "$artifacts/after-delete-df.txt"
 # Negative gates use real CRI starts and ordinary root-owned fixture config.
 # No test-only switch or fallback path is added to the production resolver.
@@ -237,6 +241,7 @@ cri rm "$bad_id"
 cri stopp "$sandbox";cri rmp "$sandbox"
 test "$(jq -r .phase "$base/state/$sandbox.json")" = deleted
 ! find "$scratch/runtime-private" -mindepth 1 -print -quit | grep .
+df -B1 "$scratch" "$home" > "$artifacts/after-container-delete-df.txt"
 cp -a "$base/state" "$artifacts/final-wrapper-state"
 printf '%s\n' 'native mechanism, shared capacity, Home/SSH, cleanup, identity/path/namespace negative gates, checkpoint rejection passed' > "$artifacts/acceptance.txt"
 # Deliberately NOT accepted: logs, arbitrary writable host binds, runsc, kubelet
