@@ -21,7 +21,7 @@ requirement; namespace annotations are not an independent authorization system.
 The wrapper accepts only the current native, writable, private overlay layout
 and current TopoLVM thin storage. Readonly/rootless/bind/idmapped root snapshots,
 checkpoint/restore/run, same-container-ID task reconstruction, unsupported mount
-options, and legacy storage are rejected, not silently passed to an unbounded
+options, and other storage backends are rejected, not silently passed to an unbounded
 rootfs. Ordinary runc features/state/start/exec/kill commands retain their real
 protocol, descriptors, stdin/stdout/stderr and exit status.
 
