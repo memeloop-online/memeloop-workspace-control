@@ -41,6 +41,24 @@ overlay, image copy, capability grant, security-context change or Home relocatio
 is performed. A failed replacement never launches against the original upper.
 The rootfs mount and trusted scratch identity are recorded before mutation.
 
+The same scratch filesystem also holds the three current managed file binds:
+`/etc/hosts`, `/etc/hostname`, and `/etc/resolv.conf`. The platform config supplies
+the trusted CRI root and workspace namespace. Sources must match that sandbox's
+exact CRI files or kubelet's exact Pod `etc-hosts` override; arbitrary host-file
+overrides are rejected. Only each selected OCI `source` is patched in the complete
+JSON document. Mount options and every other OCI field, including unknown fields
+and sandbox security settings, survive unchanged. The small files retain their
+initial contents, ownership, mode and xattrs; image layers are not copied.
+
+Copies are shared by containers using the same source in one sandbox, preserving
+cross-container writes. A replacement sandbox seeds fresh copies, including
+kubelet hosts after a Pod IP change. These files remain private to the runtime
+until the scratch volume is reclaimed: deleting one container must not unlink
+another container's bound file. The current product's Pod hostname, hostAliases
+and DNS settings are immutable; this does not implement a host-file update watcher
+or arbitrary dynamic DNS/hosts reconfiguration. Individual-container deletion is
+proven, while shared-file orphan GC remains outside this prototype.
+
 Create/delete supervision forwards signals and inherited descriptors. A failed
 create is cleaned only after real runc reports that no task exists. Normal delete
 waits for real runc success, unmounts the same rootfs target normally, checks visible
@@ -56,6 +74,9 @@ an independent Home VG/XFS, and trusted CSI metadata/publish roots. Evidence
 artifacts include actual OCI configs/writable mount inventory, wrapper records,
 mountinfo, pinned runtime versions, kernel/XFS details, capacity before/after,
 process ENOSPC/EDQUOT results, strict host-key SSH before/after full scratch,
+same-sandbox managed-file sharing, original-host hashes, initial file metadata,
+complete-OCI comparison against CRI's original runtimeSpec, DNS, fresh hosts in a
+replacement sandbox, managed-file append ENOSPC on the full shared scratch,
 copy-up/multiple-UID/sudo checks, normal delete, failed-executable cleanup, wrong-VG/metadata-symlink/ambiguous-
 publish/namespace-mismatch/whole-scratch-root rejection and checkpoint rejection.
 Two dedicated CI handlers use external strace syscall injection (mount EIO,
@@ -70,9 +91,13 @@ Only CI results prove a gate passed. Source code and workflow intent do not.
 
 ## Required remaining work before deployment
 
-- CRI logs and writable host binds (`/etc/hosts`, hostname, resolver, image-defined
-  volumes) remain inventoried **outside this prototype's capacity coverage**.
-  Neither their redirection nor log rotation/reopen/previous/GC is implemented.
+- CRI logs and other writable host binds, including image-defined volumes, remain
+  inventoried **outside this prototype's capacity coverage**. Log redirection and
+  rotation/reopen/previous/GC are not implemented. Actual current CRI has
+  `ignoreImageDefinedVolumes=false`: Rust Dev's `/home/user` VOLUME is overridden
+  by its Home PVC; ttyd has none; BuildKit rootless declares
+  `/home/user/.local/share/buildkit`. Its current anonymous CRI directory requires
+  an explicit product scratch mount, not a generic runtime volume-copy feature.
 - Full wrapper/shim/containerd crashes, hard-kill transaction recovery, reboot,
   orphan ownership/GC, overlapping sandboxes and real CSI unpublish need a real
   lifecycle owner and acceptance. Visible mountinfo alone does not prove absence

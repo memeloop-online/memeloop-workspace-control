@@ -18,10 +18,10 @@ PY
   python3 - <<'PY'
 import errno,json,os
 result={}
-for path in ['/rootfs-fill','/scratch/data-fill']:
+for path in ['/rootfs-fill','/scratch/data-fill','/etc/hosts','/etc/hostname','/etc/resolv.conf']:
  count=0
  try:
-  with open(path,'wb',buffering=0) as f:
+  with open(path,'ab' if path.startswith('/etc/') else 'wb',buffering=0) as f:
    while True:
     count+=f.write(b'x'*(1024*1024))
     os.fsync(f.fileno())

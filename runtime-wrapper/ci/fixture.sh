@@ -91,7 +91,7 @@ chmod 0700 "$base/state"
 vg_uuid="$(vgs --noheadings -o vg_uuid "$vg" | tr -d '[:space:]-')"
 pool_uuid="$(dmsetup info -c --noheadings -o uuid "${vg//-/--}-pool-tpool" | xargs)"
 real_runc="$(readlink -f "$(command -v runc)")"
-jq -n --arg runtime "$real_runc" --arg kubelet "$base/kubelet" --arg bundle "$base/containerd-state/io.containerd.runtime.v2.task/k8s.io" --arg snapshot "$base/containerd-root/io.containerd.snapshotter.v1.overlayfs/snapshots" --arg state "$base/state" --arg namespace "/proc/$$/ns/mnt" --arg vg "$vg_uuid" --arg pool "$pool_uuid" --arg dmsetup "$(readlink -f "$(command -v dmsetup)")" '{real_runtime:$runtime,kubelet_root:$kubelet,bundle_root:$bundle,snapshot_root:$snapshot,state_root:$state,mount_namespace:$namespace,scratch_vg_uuid:$vg,scratch_pool_dm_uuid:$pool,dmsetup:$dmsetup}' > /etc/mwc-runtime-wrapper.json
+jq -n --arg runtime "$real_runc" --arg criroot "$base/containerd-root/io.containerd.grpc.v1.cri" --arg kubelet "$base/kubelet" --arg bundle "$base/containerd-state/io.containerd.runtime.v2.task/k8s.io" --arg snapshot "$base/containerd-root/io.containerd.snapshotter.v1.overlayfs/snapshots" --arg state "$base/state" --arg namespace "/proc/$$/ns/mnt" --arg vg "$vg_uuid" --arg pool "$pool_uuid" --arg dmsetup "$(readlink -f "$(command -v dmsetup)")" '{real_runtime:$runtime,kubelet_root:$kubelet,cri_root:$criroot,workspace_namespace:"memeloop-workspace-control",bundle_root:$bundle,snapshot_root:$snapshot,state_root:$state,mount_namespace:$namespace,scratch_vg_uuid:$vg,scratch_pool_dm_uuid:$pool,dmsetup:$dmsetup}' > /etc/mwc-runtime-wrapper.json
 chmod 0600 /etc/mwc-runtime-wrapper.json
 cat > "$base/containerd.toml" <<TOML
 version = 3
@@ -134,14 +134,23 @@ for n in $(seq 1 60); do if cri info > "$artifacts/cri-info.json"; then break; f
 cri info > "$artifacts/cri-info.json"
 ctr_ci images import "$base/image.tar"
 cri pull registry.k8s.io/pause:3.10
-jq -n --arg uid "$uid" --arg log "$base/pod-logs" '{metadata:{name:"mwc-budget-ci",namespace:"mwc-workspaces",uid:$uid,attempt:0},log_directory:$log,linux:{security_context:{namespace_options:{network:2}}}}' > "$base/pod.json"
+jq -n --arg uid "$uid" --arg log "$base/pod-logs" '{metadata:{name:"mwc-budget-ci",namespace:"memeloop-workspace-control",uid:$uid,attempt:0},log_directory:$log,linux:{security_context:{namespace_options:{network:2}}}}' > "$base/pod.json"
 mkdir -p "$base/pod-logs"
 sandbox="$(cri runp --runtime mwc-ci "$base/pod.json")"
 containers+=("$sandbox")
 
+kubelet_hosts="$base/kubelet/pods/$uid/etc-hosts"
+printf '127.0.0.1 localhost mwc-budget.local\n::1 localhost\n' > "$kubelet_hosts"
+python3 - "$kubelet_hosts" <<'PYX'
+import os,sys
+os.setxattr(sys.argv[1],"user.mwc-fixture",b"preserve-xattr")
+PYX
+managed_host_root="$base/containerd-root/io.containerd.grpc.v1.cri/sandboxes/$sandbox"
+sha256sum "$kubelet_hosts" "$managed_host_root/hostname" "$managed_host_root/resolv.conf" > "$artifacts/managed-host-before.sha256"
+
 make_container() {
  local name="$1"; shift
- jq -n --arg name "$name" --arg home "$home" --arg data "$scratch/data" --args '{metadata:{name:$name,attempt:0},image:{image:"docker.io/library/mwc-runtime-fixture:ci"},command:["/usr/local/bin/mwc-budget-workload"],args:$ARGS.positional,log_path:($name+".log"),mounts:[{container_path:"/home/user",host_path:$home},{container_path:"/scratch",host_path:$data},{container_path:"/tmp",host_path:($data+"/tmp")},{container_path:"/var/tmp",host_path:($data+"/tmp")}],linux:{security_context:{capabilities:{drop_capabilities:["SYS_ADMIN"]},no_new_privs:false}}}' "$@" > "$base/$name.json"
+ jq -n --arg name "$name" --arg home "$home" --arg data "$scratch/data" --arg hosts "$kubelet_hosts" --args '{metadata:{name:$name,attempt:0},image:{image:"docker.io/library/mwc-runtime-fixture:ci"},command:["/usr/local/bin/mwc-budget-workload"],args:$ARGS.positional,log_path:($name+".log"),mounts:[{container_path:"/etc/hosts",host_path:$hosts},{container_path:"/home/user",host_path:$home},{container_path:"/scratch",host_path:$data},{container_path:"/tmp",host_path:($data+"/tmp")},{container_path:"/var/tmp",host_path:($data+"/tmp")}],linux:{security_context:{capabilities:{drop_capabilities:["SYS_ADMIN"]},no_new_privs:false}}}' "$@" > "$base/$name.json"
  local id
  id="$(cri create "$sandbox" "$base/$name.json" "$base/pod.json")"
  containers+=("$id"); last_id="$id"
@@ -164,6 +173,13 @@ for pair in "sandbox:$sandbox" "init:$init_id" "ttyd:$ttyd_id" "workspace:$main_
  cp "$base/state/$id.json" "$artifacts/$name-wrapper.json"
  if [ -f "$base/containerd-state/io.containerd.runtime.v2.task/k8s.io/$id/config.json" ]; then cp "$base/containerd-state/io.containerd.runtime.v2.task/k8s.io/$id/config.json" "$artifacts/$name-oci.json"; fi
 done
+cri inspect "$main_id" > "$artifacts/workspace-inspect.json"
+cri inspect "$ttyd_id" > "$artifacts/ttyd-inspect.json"
+python3 "$GITHUB_WORKSPACE/runtime-wrapper/ci/managed-files.py" "$artifacts"
+# Both containers see the same managed inodes; node-managed originals stay intact.
+cri exec "$main_id" bash -c 'set -e; for name in hosts hostname resolv.conf; do printf "\n# shared-%s\n" "$name" >> "/etc/$name"; done; sync'
+cri exec "$ttyd_id" bash -c 'set -e; for name in hosts hostname resolv.conf; do grep -F "# shared-$name" "/etc/$name"; done; getent hosts mwc-budget.local; getent ahostsv4 registry.k8s.io' > "$artifacts/managed-shared-dns.txt"
+sha256sum --check "$artifacts/managed-host-before.sha256" > "$artifacts/managed-host-after-append.txt"
 cat /proc/self/mountinfo > "$artifacts/active-mountinfo.txt"
 ssh_ci() { ssh -i "$base/client" -p 2222 -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$base/known_hosts" -o ConnectTimeout=5 user@127.0.0.1 "$@"; }
 for n in $(seq 1 20); do if ssh_ci 'id'; then break; fi; sleep 1; done
@@ -177,6 +193,13 @@ sha256sum "$lower_seed" > "$artifacts/lower-seed-after.sha256"
 cmp "$artifacts/lower-seed-before.sha256" "$artifacts/lower-seed-after.sha256"
 df -B1 "$scratch" "$home" > "$artifacts/before-full-df.txt"
 cri exec "$main_id" /usr/local/bin/mwc-budget-workload fill | tee "$artifacts/full-result.txt"
+python3 - "$artifacts/full-result.txt" <<'PYX'
+import errno,json,sys
+r=json.load(open(sys.argv[1]))
+for path in ['/etc/hosts','/etc/hostname','/etc/resolv.conf']:
+ assert r[path]['errno'] in (errno.ENOSPC,errno.EDQUOT),r
+PYX
+sha256sum --check "$artifacts/managed-host-before.sha256" > "$artifacts/managed-host-after-full.txt"
 ssh_ci 'set -e; test -f /home/user/home-still-writable; sudo -n sh -c "echo ssh-alive > /home/user/after-full"; echo strict-ssh-after-full-home-writable' > "$artifacts/ssh-after-full.txt"
 cri inspect "$main_id" > "$artifacts/main-after-full.json"
 test "$(jq -r .status.state "$artifacts/main-after-full.json")" = CONTAINER_RUNNING
@@ -232,8 +255,11 @@ cp "$base/trusted-config.json" /etc/mwc-runtime-wrapper.json
 kill "$other_namespace_pid"
 wait "$other_namespace_pid" || true
 # A container-root user must not receive the scratch volume root/private tree.
-jq --arg root "$scratch" '.mounts[0].host_path=$root' "$base/workspace.json" > "$base/exposes-root.json"
+jq --arg root "$scratch" '(.mounts[] | select(.container_path=="/home/user")).host_path=$root' "$base/workspace.json" > "$base/exposes-root.json"
 negative_start exposed-scratch-root 'scratch OCI mount exposes volume root/private area' "$base/exposes-root.json"
+# No arbitrary user-supplied /etc source may enter the host-copy path.
+jq --arg source "$base/trusted-config.json" '(.mounts[] | select(.container_path=="/etc/hosts")).host_path=$source' "$base/workspace.json" > "$base/untrusted-hosts.json"
+negative_start untrusted-hosts 'untrusted managed file source for /etc/hosts' "$base/untrusted-hosts.json"
 if "$base/mwc-runtime-wrapper" checkpoint "$main_id" > "$artifacts/checkpoint-stdout.txt" 2> "$artifacts/checkpoint-stderr.txt"; then echo 'checkpoint bypass unexpectedly accepted'; exit 1; else test "$?" = 125; fi
 test ! -s "$artifacts/checkpoint-stdout.txt"
 "$base/mwc-runtime-wrapper" features > "$artifacts/real-runc-features.json"
@@ -256,7 +282,24 @@ for id in "$main_id" "$ttyd_id" "$init_id"; do
 cri rm "$bad_id"
 cri stopp "$sandbox";cri rmp "$sandbox"
 test "$(jq -r .phase "$base/state/$sandbox.json")" = deleted
-! find "$scratch/runtime-private" -mindepth 1 -print -quit | grep .
+! find "$scratch/runtime-private" -mindepth 1 -maxdepth 1 ! -name managed-files -print -quit | grep .
+# A replacement sandbox with the same Pod UID must receive fresh kubelet hosts.
+# Reuse must be scoped to a sandbox, because its Pod IP may have changed.
+old_sandbox="$sandbox"
+printf '127.0.0.1 mwc-budget-new.local\n' >> "$kubelet_hosts"
+sandbox="$(cri runp --runtime mwc-ci "$base/pod.json")"
+containers+=("$sandbox")
+test "$sandbox" != "$old_sandbox"
+make_container replacement idle
+replacement_id="$last_id"
+cri exec "$replacement_id" getent hosts mwc-budget-new.local > "$artifacts/replacement-sandbox-hosts.txt"
+! grep -F mwc-budget-new.local "$scratch/runtime-private/managed-files/$old_sandbox/kubelet-hosts"
+grep -F mwc-budget-new.local "$scratch/runtime-private/managed-files/$sandbox/kubelet-hosts"
+cri stop "$replacement_id"; cri rm "$replacement_id"
+cri stopp "$sandbox"; cri rmp "$sandbox"
+test "$(jq -r .phase "$base/state/$replacement_id.json")" = deleted
+test "$(jq -r .phase "$base/state/$sandbox.json")" = deleted
+! grep -F "$scratch/runtime-private/managed-files/" /proc/self/mountinfo
 # Inject failures at the actual switch syscalls through a separate traced CRI
 # handler. The ordinary shim must remove even the restored original root mount.
 for fault in mount unmount; do
@@ -286,6 +329,6 @@ for fault in mount unmount; do
 done
 df -B1 "$scratch" "$home" > "$artifacts/after-container-delete-df.txt"
 cp -a "$base/state" "$artifacts/final-wrapper-state"
-printf '%s\n' 'native mechanism, shared capacity, Home/SSH, cleanup, identity/path/namespace negative gates, checkpoint rejection passed' > "$artifacts/acceptance.txt"
-# Deliberately NOT accepted: logs, arbitrary writable host binds, runsc, kubelet
+printf '%s\n' 'native mechanism, shared capacity including managed /etc, Home/SSH/DNS, cleanup, identity/path/namespace negative gates, checkpoint rejection passed' > "$artifacts/acceptance.txt"
+# Deliberately NOT accepted: logs, image-defined/arbitrary writable host binds, runsc, kubelet
 # eviction/statistics, crash/reboot/orphan lifecycle, or complete two-budget scope.

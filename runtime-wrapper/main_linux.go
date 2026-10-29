@@ -25,15 +25,17 @@ var idRE = regexp.MustCompile(`^[0-9a-f]{64}$`)
 var lvmRE = regexp.MustCompile(`^[A-Za-z0-9]{32}$`)
 
 type config struct {
-	RealRuntime    string `json:"real_runtime"`
-	KubeletRoot    string `json:"kubelet_root"`
-	BundleRoot     string `json:"bundle_root"`
-	SnapshotRoot   string `json:"snapshot_root"`
-	StateRoot      string `json:"state_root"`
-	MountNamespace string `json:"mount_namespace"`
-	ScratchVG      string `json:"scratch_vg_uuid"`
-	ScratchPool    string `json:"scratch_pool_dm_uuid"`
-	DMSetup        string `json:"dmsetup"`
+	RealRuntime        string `json:"real_runtime"`
+	KubeletRoot        string `json:"kubelet_root"`
+	CRIRoot            string `json:"cri_root"`
+	WorkspaceNamespace string `json:"workspace_namespace"`
+	BundleRoot         string `json:"bundle_root"`
+	SnapshotRoot       string `json:"snapshot_root"`
+	StateRoot          string `json:"state_root"`
+	MountNamespace     string `json:"mount_namespace"`
+	ScratchVG          string `json:"scratch_vg_uuid"`
+	ScratchPool        string `json:"scratch_pool_dm_uuid"`
+	DMSetup            string `json:"dmsetup"`
 }
 type ociMount struct {
 	Destination string   `json:"destination"`
@@ -73,18 +75,20 @@ type scratch struct {
 	Inode  uint64 `json:"inode"`
 }
 type record struct {
-	ID             string     `json:"id"`
-	PodUID         string     `json:"pod_uid"`
-	Bundle         string     `json:"bundle"`
-	Rootfs         string     `json:"rootfs"`
-	Scratch        scratch    `json:"scratch"`
-	Original       mount      `json:"original"`
-	Upper          string     `json:"upper"`
-	Work           string     `json:"work"`
-	Lower          string     `json:"lower"`
-	Data           string     `json:"mount_data"`
-	Phase          string     `json:"phase"`
-	MountInventory []ociMount `json:"oci_mount_inventory"`
+	ID                       string        `json:"id"`
+	PodUID                   string        `json:"pod_uid"`
+	Bundle                   string        `json:"bundle"`
+	Rootfs                   string        `json:"rootfs"`
+	Scratch                  scratch       `json:"scratch"`
+	Original                 mount         `json:"original"`
+	Upper                    string        `json:"upper"`
+	Work                     string        `json:"work"`
+	Lower                    string        `json:"lower"`
+	Data                     string        `json:"mount_data"`
+	Phase                    string        `json:"phase"`
+	MountInventory           []ociMount    `json:"oci_mount_inventory"`
+	RedirectedMountInventory []ociMount    `json:"redirected_oci_mount_inventory"`
+	ManagedFiles             []managedFile `json:"managed_files"`
 }
 type invocation struct {
 	Command string
@@ -244,15 +248,18 @@ func loadConfig() (config, error) {
 	if err = d.Decode(&c); err != nil {
 		return c, err
 	}
-	for _, p := range []string{c.RealRuntime, c.KubeletRoot, c.BundleRoot, c.SnapshotRoot, c.StateRoot, c.DMSetup} {
+	for _, p := range []string{c.RealRuntime, c.KubeletRoot, c.CRIRoot, c.BundleRoot, c.SnapshotRoot, c.StateRoot, c.DMSetup} {
 		if !filepath.IsAbs(p) || filepath.Clean(p) != p {
 			return c, fmt.Errorf("noncanonical configured path %q", p)
 		}
 	}
+	if len(c.WorkspaceNamespace) > 63 || !regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`).MatchString(c.WorkspaceNamespace) {
+		return c, errors.New("expected platform workspace namespace")
+	}
 	if !lvmRE.MatchString(c.ScratchVG) || !strings.HasPrefix(c.ScratchPool, "LVM-"+c.ScratchVG) || !strings.HasSuffix(c.ScratchPool, "-tpool") {
 		return c, errors.New("expected full trusted scratch VG and thin-pool identity")
 	}
-	for _, p := range []string{c.RealRuntime, c.DMSetup, c.KubeletRoot, c.BundleRoot, c.SnapshotRoot, c.StateRoot} {
+	for _, p := range []string{c.RealRuntime, c.DMSetup, c.KubeletRoot, c.CRIRoot, c.BundleRoot, c.SnapshotRoot, c.StateRoot} {
 		f, err := openTrusted(p, p != c.RealRuntime && p != c.DMSetup)
 		if err != nil {
 			return c, err
@@ -672,7 +679,7 @@ func prepare(c config, in invocation) (record, error) {
 		return r, err
 	}
 	pod := s.Annotations["io.kubernetes.cri.sandbox-uid"]
-	if !uuidRE.MatchString(pod) || s.Annotations["io.kubernetes.cri.sandbox-namespace"] != "mwc-workspaces" {
+	if !uuidRE.MatchString(pod) || s.Annotations["io.kubernetes.cri.sandbox-namespace"] != c.WorkspaceNamespace {
 		return r, errors.New("unsupported CRI workspace identity")
 	}
 	kind := s.Annotations["io.kubernetes.cri.container-type"]
@@ -681,6 +688,10 @@ func prepare(c config, in invocation) (record, error) {
 	}
 	if s.Root.Path != "rootfs" || (s.Root.Readonly && kind != "sandbox") || len(s.Linux.UIDMappings) > 0 || len(s.Linux.GIDMappings) > 0 {
 		return r, errors.New("requires writable native non-idmapped rootfs")
+	}
+	managed, err := managedFileSources(c, s)
+	if err != nil {
+		return r, err
 	}
 	all, err := mounts()
 	if err != nil {
@@ -766,6 +777,13 @@ func prepare(c config, in invocation) (record, error) {
 	if err = os.Mkdir(containerDir, 0700); err != nil {
 		return r, fmt.Errorf("container directory must be new: %w", err)
 	}
+	prepared := false
+	defer func() {
+		if !prepared {
+			// No overlay has been mounted here yet; only this new container owns it.
+			os.RemoveAll(containerDir)
+		}
+	}()
 	r = record{ID: in.ID, PodUID: pod, Bundle: in.Bundle, Rootfs: rootfs, Scratch: sc, Original: original, Upper: filepath.Join(containerDir, "upper"), Work: filepath.Join(containerDir, "work"), Lower: lower, Phase: "prepared", MountInventory: s.Mounts}
 	if err = os.Mkdir(r.Upper, 0755); err != nil {
 		return r, err
@@ -776,9 +794,21 @@ func prepare(c config, in invocation) (record, error) {
 	if err = copyMetadata(oldUpper, r.Upper); err != nil {
 		return r, err
 	}
+	if r.ManagedFiles, err = redirectManagedFiles(c, in.Bundle, sc, s, managed); err != nil {
+		return r, err
+	}
+	r.RedirectedMountInventory = append([]ociMount(nil), s.Mounts...)
+	for i := range r.RedirectedMountInventory {
+		for _, f := range r.ManagedFiles {
+			if r.RedirectedMountInventory[i].Destination == f.Destination {
+				r.RedirectedMountInventory[i].Source = f.Redirected
+			}
+		}
+	}
 	if err = save(c, r); err != nil {
 		return r, err
 	}
+	prepared = true
 	return r, nil
 }
 func copyMetadata(from, to string) error {
