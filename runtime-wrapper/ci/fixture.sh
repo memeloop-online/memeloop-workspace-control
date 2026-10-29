@@ -198,7 +198,7 @@ negative_start() {
  test ! -e "$scratch/runtime-private/$id"
  ! grep -F "/$id/rootfs " /proc/self/mountinfo
  cri rm "$id"
- jq -n --arg name "$name" --arg id "$id" '{gate:$name,container_id:$id,rejected:true,rootfs_mount_leak:false,private_upper_created:false}' >> "$artifacts/negative-results.jsonl"
+ jq -cn --arg name "$name" --arg id "$id" '{gate:$name,container_id:$id,rejected:true,rootfs_mount_leak:false,private_upper_created:false}' >> "$artifacts/negative-results.jsonl"
 }
 # A different protected VG cannot be accepted merely because it is XFS.
 jq '.scratch_vg_uuid="ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ" | .scratch_pool_dm_uuid="LVM-ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY-tpool"' "$base/trusted-config.json" > /etc/mwc-runtime-wrapper.json
@@ -282,7 +282,7 @@ for fault in mount unmount; do
  # arbitrary hard-kill/orphan recovery is not inferred from it.
  test "$(jq -r .phase "$base/state/$fault_id.json")" = deleted
  test ! -e "$scratch/runtime-private/$fault_id"
- jq -n --arg fault "$fault" --arg id "$fault_id" '{gate:$fault,container_id:$id,rejected:true,rootfs_mount_leak:false,normal_shim_failure_cleanup_deleted_upper:true,production_orphan_gc_implemented:false}' >> "$artifacts/fault-results.jsonl"
+ jq -cn --arg fault "$fault" --arg id "$fault_id" '{gate:$fault,container_id:$id,rejected:true,rootfs_mount_leak:false,normal_shim_failure_cleanup_deleted_upper:true,production_orphan_gc_implemented:false}' >> "$artifacts/fault-results.jsonl"
 done
 df -B1 "$scratch" "$home" > "$artifacts/after-container-delete-df.txt"
 cp -a "$base/state" "$artifacts/final-wrapper-state"
