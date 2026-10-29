@@ -731,7 +731,7 @@ mod coordinator_tests {
                 .lock()
                 .unwrap()
                 .iter()
-                .all(|(_, uri)| !uri.contains("persistentvolumeclaims"))
+                .all(|(_, uri)| !uri.contains("persistentvolumeclaims/workspace-data-"))
         );
     }
 

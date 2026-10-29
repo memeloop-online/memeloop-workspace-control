@@ -191,9 +191,7 @@ impl WorkspaceReconcileHandler {
                         "workspace StatefulSet has not scaled to zero yet".to_owned(),
                     ));
                 }
-                if !self
-                    .coordinator
-                    .delete_stopped_scratch(workspace)
+                if !Box::pin(self.coordinator.delete_stopped_scratch(workspace))
                     .await
                     .map_err(job_error)?
                 {
