@@ -98,8 +98,8 @@ for n in $(seq 1 10); do
 done
 cri stop "$work_id"
 for n in $(seq 1 90); do
- next_id="$(kube get pod -n memeloop-workspace-control mwc-log-ci -o json | jq -r '.status.containerStatuses[]|select(.name=="workspace").containerID // ""|sub("containerd://";"")')"
- if [ "$next_id" != "$work_id" ] && [ -n "$next_id" ]; then break; fi
+ next_id="$(kube get pod -n memeloop-workspace-control mwc-log-ci -o json | jq -r '([.status.containerStatuses[]|select(.name=="workspace" and .state.running!=null)|.containerID][0] // "")|sub("containerd://";"")')"
+ if [ "$next_id" != "$work_id" ] && [ "${#next_id}" = 64 ]; then break; fi
  sleep 1
 done
 kube wait -n memeloop-workspace-control --for=condition=Ready pod/mwc-log-ci --timeout=90s
