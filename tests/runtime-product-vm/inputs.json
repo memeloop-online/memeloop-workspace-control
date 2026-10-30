@@ -1,0 +1,28 @@
+{
+  "stage_image": "harbor.k3s.onetwo.website/docker-io/library/debian:bookworm-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3",
+  "debian_snapshot": "20261026T000000Z",
+  "guest_url": "https://cloud.debian.org/images/cloud/bookworm/20261026-2643/debian-12-genericcloud-amd64-20261026-2643.qcow2",
+  "guest_sha512": "0464b5d4ae3aa4f658468d88da83af7857b71548b30d46dcb6282770955a747fb95a983476db90d25afd0653af607224c7ebd05122ab71faa106fd712aaad652",
+  "guest_download_bytes": 349831168,
+  "rust_image": "harbor.k3s.onetwo.website/library/rust-dev@sha256:d50798f0f8345d7295c303ec0f04b1f1e064b7d6ac9b074d87065a488957360f",
+  "rust_manifest_sha256": "d50798f0f8345d7295c303ec0f04b1f1e064b7d6ac9b074d87065a488957360f",
+  "rust_config_sha256": "fc173cab292b6b7f9ac12db3912ca1c280070bfe9e3e7dcb518caefa2fa9fab4",
+  "rust_compressed_layer_bytes": 1702873683,
+  "rust_docker_unpacked_bytes": 4363563218,
+  "k3s_url": "https://github.com/k3s-io/k3s/releases/download/v1.36.2%2Bk3s1/k3s",
+  "k3s_sha256": "65a55ec56c24eab44383086166ec620a491952b7e23941a49ddca6e8a4c4b4de",
+  "smoke_guest_memory_mib": 2048,
+  "smoke_guest_cpus": 2,
+  "smoke_guest_root_virtual_gib": 8,
+  "smoke_timeout_seconds": 2700,
+  "smoke_import_unpacks_layers": false,
+  "smoke_budget_bytes": {
+    "stage_image_build_increment_allowance": 1073741824,
+    "guest_base": 349831168,
+    "readonly_iso_and_staging_peak": 3800000000,
+    "readonly_iso": 1900000000,
+    "guest_overlay_no_unpack_allowance": 2600000000,
+    "owned_logs_and_sources_allowance": 134217728,
+    "shared_runner_headroom": 1073741824
+  }
+}
