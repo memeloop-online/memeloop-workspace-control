@@ -688,8 +688,8 @@ func prepare(c config, in invocation) (record, error) {
 	if kind != "sandbox" && kind != "container" {
 		return r, errors.New("missing CRI container type")
 	}
-	if s.Root.Path != "rootfs" || (s.Root.Readonly && kind != "sandbox") || len(s.Linux.UIDMappings) > 0 || len(s.Linux.GIDMappings) > 0 {
-		return r, errors.New("requires writable native non-idmapped rootfs")
+	if s.Root.Path != "rootfs" || len(s.Linux.UIDMappings) > 0 || len(s.Linux.GIDMappings) > 0 {
+		return r, errors.New("requires native non-idmapped rootfs")
 	}
 	managed, err := managedFileSources(c, s)
 	if err != nil {

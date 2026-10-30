@@ -33,7 +33,7 @@ handler: mwc-ci
 YAML
 # schedulingGates keeps kubelet away until the API-assigned UID has a trusted
 # fixture publish root. This is CI plumbing, not a production resolver bypass.
-jq -n --arg home "$home" --arg data "$scratch/data" '{apiVersion:"v1",kind:"Pod",metadata:{name:"mwc-log-ci",namespace:"memeloop-workspace-control"},spec:{serviceAccountName:"mwc-ci",automountServiceAccountToken:false,runtimeClassName:"mwc-ci",hostNetwork:true,dnsPolicy:"Default",schedulingGates:[{name:"mwc-ci/publish-ready"}],containers:[{name:"workspace",image:"docker.io/library/mwc-runtime-fixture:ci",imagePullPolicy:"Never",command:["/usr/local/bin/mwc-budget-workload","serve"],volumeMounts:[{name:"home",mountPath:"/home/user"},{name:"scratch",mountPath:"/scratch"}]},{name:"terminal",image:"docker.io/library/mwc-runtime-fixture:ci",imagePullPolicy:"Never",tty:true,command:["/bin/bash","-c","echo tty-stdout-start; echo tty-stderr-start >&2; exec sleep infinity"]}],volumes:[{name:"home",hostPath:{path:$home,type:"Directory"}},{name:"scratch",hostPath:{path:$data,type:"Directory"}}]}}' > "$base/kubelet-pod.json"
+jq -n --arg home "$home" --arg data "$scratch/data" '{apiVersion:"v1",kind:"Pod",metadata:{name:"mwc-log-ci",namespace:"memeloop-workspace-control"},spec:{serviceAccountName:"mwc-ci",automountServiceAccountToken:false,runtimeClassName:"mwc-ci",hostNetwork:true,dnsPolicy:"Default",schedulingGates:[{name:"mwc-ci/publish-ready"}],containers:[{name:"workspace",image:"docker.io/library/mwc-runtime-fixture:ci",imagePullPolicy:"Never",command:["/usr/local/bin/mwc-budget-workload","serve"],volumeMounts:[{name:"home",mountPath:"/home/user"},{name:"scratch",mountPath:"/scratch"}]},{name:"terminal",image:"docker.io/library/mwc-runtime-fixture:ci",imagePullPolicy:"Never",tty:true,securityContext:{readOnlyRootFilesystem:true,allowPrivilegeEscalation:false,capabilities:{drop:["ALL"]}},volumeMounts:[{name:"home",mountPath:"/home/user"},{name:"scratch",mountPath:"/scratch"}],command:["/bin/bash","-c","echo tty-stdout-start; echo tty-stderr-start >&2; exec sleep infinity"]}],volumes:[{name:"home",hostPath:{path:$home,type:"Directory"}},{name:"scratch",hostPath:{path:$data,type:"Directory"}}]}}' > "$base/kubelet-pod.json"
 kube apply -f "$base/kubelet-pod.json"
 kube_uid="$(kube get pod -n memeloop-workspace-control mwc-log-ci -o jsonpath='{.metadata.uid}')"
 kubelet_publish="$live_kubelet_root/pods/$kube_uid/volumes/kubernetes.io~csi/$scratch_pv/mount"
@@ -46,6 +46,11 @@ kube_log="$base/pod-logs/memeloop-workspace-control_mwc-log-ci_$kube_uid"
 test -L "$kube_log"
 test "$(readlink "$kube_log")" = "$kubelet_publish/runtime-private/logs/$kube_uid"
 work_id="$(kube get pod -n memeloop-workspace-control mwc-log-ci -o json | jq -r '.status.containerStatuses[]|select(.name=="workspace").containerID|sub("containerd://";"")')"
+kube exec -n memeloop-workspace-control mwc-log-ci -c terminal -- /usr/local/bin/mwc-budget-workload readonly-check > "$artifacts/kubelet-readonly-sidecar-process.json"
+terminal_id="$(kube get pod -n memeloop-workspace-control mwc-log-ci -o json | jq -r '.status.containerStatuses[]|select(.name=="terminal").containerID|sub("containerd://";"")')"
+cri inspect "$terminal_id" > "$artifacts/kubelet-readonly-sidecar-inspect.json"
+cp "$base/containerd-state/io.containerd.runtime.v2.task/k8s.io/$terminal_id/config.json" "$artifacts/kubelet-readonly-sidecar-oci.json"
+jq -e '.root.readonly==true and .process.noNewPrivileges==true and (.process.capabilities.bounding|index("CAP_SYS_ADMIN")==null)' "$artifacts/kubelet-readonly-sidecar-oci.json"
 kube logs -n memeloop-workspace-control mwc-log-ci -c workspace > "$artifacts/kubectl-workspace-logs.txt"
 kube logs -n memeloop-workspace-control mwc-log-ci -c terminal > "$artifacts/kubectl-tty-logs.txt"
 grep -F workspace-stdout-start "$artifacts/kubectl-workspace-logs.txt"

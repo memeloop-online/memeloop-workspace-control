@@ -18,8 +18,10 @@ the GitHub kernel is **not** claimed identical to production.
 A platform-owned `/etc/mwc-runtime-wrapper.json` selects a dedicated native
 handler. Platform admission/RuntimeClass authorization remains a deployment
 requirement; namespace annotations are not an independent authorization system.
-The wrapper accepts only the current native, writable, private overlay layout
-and current TopoLVM thin storage. Readonly/rootless/bind/idmapped root snapshots,
+The wrapper accepts only the current native, private overlay layout and current TopoLVM
+thin storage. The original OCI `root.readonly` is preserved: developer roots stay
+writable, while sidecar roots can be readonly with writable volume binds.
+Rootless/bind/idmapped root snapshots,
 checkpoint/restore/run, same-container-ID task reconstruction, unsupported mount
 options, and other storage backends are rejected, not silently passed to an unbounded
 rootfs. Ordinary runc features/state/start/exec/kill commands retain their real
@@ -96,13 +98,28 @@ complete-OCI comparison against CRI's original runtimeSpec, DNS, fresh hosts in 
 replacement sandbox, managed-file append ENOSPC on the full shared scratch,
 copy-up/multiple-UID/sudo checks, normal delete, failed-executable cleanup, wrong-VG/metadata-symlink/ambiguous-
 publish/namespace-mismatch/whole-scratch-root rejection and checkpoint rejection.
-Two dedicated CI handlers use external strace syscall injection (mount EIO,
-unmount EBUSY) to test shim cleanup after the switch fails; no wrapper test flag
+Dedicated CI handlers use external strace syscall injection (mount EIO,
+unmount EBUSY, symlinkat EIO) to test shim cleanup after the switch fails; no wrapper test flag
 or production fallback exists. These normal failed-create paths also exercise the
 real shim's cleanup and runtime delete, which can safely remove the unused upper
 after unmount. Arbitrary hard-kill/orphan recovery remains unimplemented; it is not
 inferred from successful normal shim failure cleanup.
 Unit input tests supplement this runtime path; they do not substitute for it.
+
+The separate logs gate passed at `dc2dabf` in native CI run `40982775601`
+(and its push check). It proves actual CRI stdout/stderr file descriptors on
+scratch, overlapping sandboxes, rejected nonempty/wrong links, recoverable
+symlink-creation failure, real kubelet API logs/TTY/follow, rotation/reopen/gzip,
+active-Pod restart/previous logs, increased summary usage, shared log ENOSPC with
+strict SSH/Home alive, and normal Pod GC unlinking only the source link. The
+fixture owner normally unmounts its synthetic CSI publish after CRI tasks stop;
+it does not install a real CSI driver or prove production CSI lifecycle.
+
+The readonly sidecar gate uses the fixture image with real CRI readonly-root and
+no-new-privileges settings, then a real kubelet Pod with the same constraints.
+It checks root-file mutation/create EROFS, writable scratch/Home binds, absent
+SYS_ADMIN, preserved complete OCI configuration, a writable main root, and normal
+delete. This is not acceptance of the actual BuildKit/ttyd image composition.
 
 Only CI results prove a gate passed. Source code and workflow intent do not.
 
@@ -110,16 +127,11 @@ Only CI results prove a gate passed. Source code and workflow intent do not.
 
 - Other writable host binds, including image-defined volumes, remain
   inventoried **outside this prototype's capacity coverage**. Actual current CRI has
-  `ignoreImageDefinedVolumes=false`: Rust Dev's `/home/user` VOLUME is overridden
-  by its Home PVC; ttyd has none; BuildKit rootless declares
-  `/home/user/.local/share/buildkit`. Its current anonymous CRI directory requires
-  an explicit product scratch mount, not a generic runtime volume-copy feature.
-- Log symlink code requires the separate actual-CRI and real-kubelet gates to
-  pass before it is accepted. The workflow starts the exact pinned k3s kubelet
-  against its existing isolated containerd for API logs/follow, rotation/reopen,
-  previous logs, summary usage and normal Pod GC. It uses fixture CSI-shaped
-  publish paths, not a deployed CSI driver's lifecycle; successful ordinary
-  unmount does not prove all production CSI crash/unpublish semantics.
+  `ignoreImageDefinedVolumes=false`: actual current templates have no uncovered
+  image VOLUME; Rust Dev's `/home/user` is overridden by Home. BuildKit rootless
+  declares `/home/user/.local/share/buildkit`; the separate product PR88 adds an
+  explicit existing-cache mount. Its full product runtime composition remains
+  to be verified; no generic runtime volume-copy feature is introduced.
 - Full wrapper/shim/containerd crashes, hard-kill transaction recovery, reboot,
   orphan ownership/GC, overlapping sandboxes and real CSI unpublish need a real
   lifecycle owner and acceptance. Visible mountinfo alone does not prove absence

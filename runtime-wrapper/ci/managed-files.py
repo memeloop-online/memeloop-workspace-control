@@ -33,6 +33,11 @@ for destination, f in managed.items():
 for name in ("workspace", "ttyd"):
     original = json.loads((artifacts / (name + "-inspect.json")).read_text())["info"]["runtimeSpec"]
     actual = json.loads((artifacts / (name + "-oci.json")).read_text())
+    assert original["root"].get("readonly", False) == (name == "ttyd"), name
+    assert actual["root"].get("readonly", False) == (name == "ttyd"), name
+    if name == "ttyd":
+        assert actual["process"]["noNewPrivileges"] is True
+        assert "CAP_SYS_ADMIN" not in actual["process"]["capabilities"]["bounding"]
     for m in original["mounts"]:
         if m["destination"] in managed:
             assert m["source"] == managed[m["destination"]]["original"]

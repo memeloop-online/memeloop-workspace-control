@@ -163,7 +163,7 @@ sha256sum "$kubelet_hosts" "$managed_host_root/hostname" "$managed_host_root/res
 
 make_container() {
  local name="$1"; shift
- jq -n --arg name "$name" --arg home "$home" --arg data "$scratch/data" --arg hosts "$kubelet_hosts" --args '{metadata:{name:$name,attempt:0},image:{image:"docker.io/library/mwc-runtime-fixture:ci"},command:["/usr/local/bin/mwc-budget-workload"],args:$ARGS.positional,log_path:($name+"/0.log"),mounts:[{container_path:"/etc/hosts",host_path:$hosts},{container_path:"/home/user",host_path:$home},{container_path:"/scratch",host_path:$data},{container_path:"/tmp",host_path:($data+"/tmp")},{container_path:"/var/tmp",host_path:($data+"/tmp")}],linux:{security_context:{capabilities:{drop_capabilities:["SYS_ADMIN"]},no_new_privs:false}}}' "$@" > "$base/$name.json"
+ jq -n --arg name "$name" --arg home "$home" --arg data "$scratch/data" --arg hosts "$kubelet_hosts" --args '{metadata:{name:$name,attempt:0},image:{image:"docker.io/library/mwc-runtime-fixture:ci"},command:["/usr/local/bin/mwc-budget-workload"],args:$ARGS.positional,log_path:($name+"/0.log"),mounts:[{container_path:"/etc/hosts",host_path:$hosts},{container_path:"/home/user",host_path:$home},{container_path:"/scratch",host_path:$data},{container_path:"/tmp",host_path:($data+"/tmp")},{container_path:"/var/tmp",host_path:($data+"/tmp")}],linux:{security_context:{capabilities:{drop_capabilities:["SYS_ADMIN"]},no_new_privs:($name=="ttyd"),readonly_rootfs:($name=="ttyd")}}}' "$@" > "$base/$name.json"
  local id
  id="$(cri create "$sandbox" "$base/$name.json" "$base/pod.json")"
  containers+=("$id"); last_id="$id"
@@ -198,6 +198,8 @@ done
 cri inspect "$main_id" > "$artifacts/workspace-inspect.json"
 cri inspect "$ttyd_id" > "$artifacts/ttyd-inspect.json"
 python3 "$GITHUB_WORKSPACE/runtime-wrapper/ci/managed-files.py" "$artifacts"
+cri exec "$ttyd_id" /usr/local/bin/mwc-budget-workload readonly-check > "$artifacts/readonly-sidecar-process.json"
+cri exec "$main_id" cat /scratch/readonly-marker /home/user/readonly-marker > "$artifacts/readonly-sidecar-shared-markers.txt"
 for pair in "init:$init_id" "workspace:$main_id" "sidecar:$ttyd_id"; do
  name="${pair%%:*}"; id="${pair#*:}"
  cri logs "$id" > "$artifacts/log-$name.txt" 2>&1
@@ -231,7 +233,7 @@ ssh_ci 'set -e; test "$(sudo -n id -u)" = 0; test ! -e /scratch/runtime-private;
 lower_seed="$(jq -r '.lower | split(":")[0]' "$base/state/$main_id.json")/seed-copy-up"
 sha256sum "$lower_seed" > "$artifacts/lower-seed-before.sha256"
 cri exec "$main_id" bash -c 'set -e; printf changed >> /seed-copy-up; sudo -u user touch /home/user/multi-uid; dd if=/dev/zero of=/scratch/data-initial bs=1M count=32 conv=fsync'
-cri exec "$ttyd_id" bash -c 'dd if=/dev/zero of=/sidecar-allocation bs=1M count=16 conv=fsync'
+cri exec "$ttyd_id" bash -c 'dd if=/dev/zero of=/scratch/sidecar-allocation bs=1M count=16 conv=fsync'
 sha256sum "$lower_seed" > "$artifacts/lower-seed-after.sha256"
 cmp "$artifacts/lower-seed-before.sha256" "$artifacts/lower-seed-after.sha256"
 df -B1 "$scratch" "$home" > "$artifacts/before-full-df.txt"

@@ -18,6 +18,28 @@ with open('/init-allocation','wb') as f:
  import os; os.fsync(f.fileno())
 PY
   ;;
+ readonly-check)
+  python3 - <<'PYRO'
+import errno,json,os
+result={}
+for path in ['/seed-copy-up','/readonly-root-create']:
+ try:
+  with open(path,'ab') as f:f.write(b'root must remain readonly')
+ except OSError as e:
+  assert e.errno==errno.EROFS,(path,e)
+  result[path]={'errno':e.errno}
+ else:raise AssertionError('readonly rootfs accepted a write: '+path)
+for path in ['/scratch/readonly-marker','/home/user/readonly-marker']:
+ with open(path,'w') as f:f.write('readonly-sidecar-volume-writable\n');f.flush();os.fsync(f.fileno())
+ result[path]={'writable':True}
+status=dict(line.split(':',1) for line in open('/proc/self/status') if ':' in line)
+assert not int(status['CapEff'].strip(),16)&(1<<21),'SYS_ADMIN was granted'
+assert status['NoNewPrivs'].strip()=='1',status['NoNewPrivs']
+result['SYS_ADMIN_present']=False
+result['NoNewPrivs']=True
+print(json.dumps(result))
+PYRO
+  ;;
  fill)
   python3 - <<'PY'
 import errno,json,os
