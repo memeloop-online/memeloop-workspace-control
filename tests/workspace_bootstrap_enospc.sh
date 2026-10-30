@@ -6,6 +6,8 @@ install -d /etc/ssh/platform /etc/workspace-platform /workspace/.mwc
 install -d -m 0750 -o workspace -g workspace /workspace/.codex /workspace/.codex/sessions /workspace/.codex/logs
 install -d -m 0750 -o root -g root /workspace/.codex/.tmp
 install -d -m 0750 -o root -g root /workspace/.codex/tmp/arg0/stale-root-owned
+install -d -m 0755 -o root -g root /workspace/.codex/skills/user-skill
+printf '%s\n' keep > /workspace/.codex/skills/user-skill/SKILL.md
 printf '%s\n' stale > /workspace/.codex/.tmp/stale
 printf '%s\n' stale > /workspace/.codex/tmp/arg0/stale-root-owned/lock
 printf '%s\n' keep > /workspace/.codex/sessions/keep
@@ -68,6 +70,10 @@ test -s /workspace/.codex/logs_2.sqlite-wal
 test -s /workspace/.codex/session_index.jsonl
 test -s /workspace/.codex/config.toml
 test -s /workspace/.codex/auth.json
+test "$(stat -c %U:%G /workspace/.codex/skills)" = workspace:workspace
+su -s /bin/sh workspace -c 'mkdir /workspace/.codex/skills/.system; printf installed > /workspace/.codex/skills/.system/marker'
+test "$(cat /workspace/.codex/skills/user-skill/SKILL.md)" = keep
+test "$(stat -c %U:%G /workspace/.codex/skills/user-skill/SKILL.md)" = root:root
 
 # A failed injection must keep SSH keys available and recover on the next complete sync,
 # without requiring a workspace restart. All data below belongs to this isolated fixture.
