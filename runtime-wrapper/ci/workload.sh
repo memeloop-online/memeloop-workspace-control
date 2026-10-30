@@ -1,9 +1,20 @@
 #!/bin/bash
 set -euo pipefail
 case "${1:-serve}" in
- serve)
+ serve|runsc-serve)
   echo "workspace-stdout-start"
   echo "workspace-stderr-start" >&2
+  if [ "$1" = runsc-serve ]; then
+   # Write the inherited CRI stdout directly. Reopening /proc/1/fd/1 is not
+   # supported by gVisor; this workload needs no additional capabilities.
+   python3 - <<'PYLOG' &
+import os,pathlib,time
+trigger=pathlib.Path('/home/user/log-burst-trigger')
+while not trigger.exists():time.sleep(0.1)
+for _ in range(80000):os.write(1,b'L'*8191+b'\n')
+pathlib.Path('/home/user/log-burst-done').write_text('inherited stdout complete\n')
+PYLOG
+  fi
   mkdir -p /run/sshd
   # CI has independent Home; host keys/auth were provisioned there before create.
   exec /usr/sbin/sshd -D -e -p 2222 -o HostKey=/home/user/host_ed25519 -o AuthorizedKeysFile=/home/user/authorized_keys -o PasswordAuthentication=no -o UsePAM=no -o PidFile=/home/user/sshd.pid

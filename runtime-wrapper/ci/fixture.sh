@@ -38,16 +38,17 @@ cleanup() {
   # Exact state names contain ':'. Archive regular files so artifact upload
   # preserves them without trying to copy namespace handles or control sockets.
   find "$base/runsc-state" -printf '%y %p\n' > "$artifacts/failure-runsc-state-files.txt"
-  (cd "$base/runsc-state" && find . -type f \( -name '*.state' -o -name '*.lock' \) -print0 | tar --null -T - -cf "$artifacts/failure-runsc-state.tar")
+  (cd "$base/runsc-state" && find . -type f \( -name '*.state' -o -name '*.lock' \) -print0 | /usr/bin/tar --null -T - -cf "$artifacts/failure-runsc-state.tar")
   for bundle in "$base/containerd-state/io.containerd.runtime.v2.task/k8s.io/"*; do
    [ -d "$bundle" ] || continue
    dest="$artifacts/failure-runsc-bundles/$(basename "$bundle")"; mkdir -p "$dest"
    for name in log.json config.json init.pid; do [ ! -f "$bundle/$name" ] || cp "$bundle/$name" "$dest/"; done
   done
   ps -eo pid,ppid,args > "$artifacts/failure-runsc-processes.txt"
-  for id in $(cri ps -a --label "io.kubernetes.pod.uid=$uid" -q); do
-   cri inspect "$id" > "$artifacts/failure-runsc-$id-inspect.json"
-   cri logs "$id" > "$artifacts/failure-runsc-$id-log.txt" 2>&1
+  for id in "${containers[@]}"; do
+   if cri inspect "$id" > "$artifacts/failure-runsc-$id-inspect.json" 2>/dev/null; then
+    cri logs "$id" > "$artifacts/failure-runsc-$id-log.txt" 2>&1
+   fi
   done
   for id in $(cri ps -a --label "io.kubernetes.pod.uid=$uid" -q); do cri stop "$id"; cri rm "$id"; done
   for id in $(cri pods --label "io.kubernetes.pod.uid=$uid" -q); do cri stopp "$id"; cri rmp "$id"; done

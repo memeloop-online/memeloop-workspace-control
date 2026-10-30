@@ -29,7 +29,7 @@ for n in $(seq 1 30); do if [ "$(cri inspect "$init_id" | jq -r .status.state)" 
 test "$(cri inspect "$init_id" | jq -r .status.exitCode)" = 0
 runsc_make ttyd idle
 ttyd_id="$last_id"
-runsc_make workspace serve
+runsc_make workspace runsc-serve
 main_id="$last_id"
 for pair in "sandbox:$sandbox" "init:$init_id" "ttyd:$ttyd_id" "workspace:$main_id"; do
  name="${pair%%:*}"; id="${pair#*:}"
@@ -125,7 +125,10 @@ test "$(jq -r .phase "$base/state/$bad_id.json")" = deleted
 kill -0 "$sentry_pid"
 # Actual CRI stdout logs share the already verified filesystem. Fill this path,
 # then retain Sentry/SSH/Home health; no kubelet rotation claim is inferred.
-cri exec "$main_id" python3 -c 'f=open("/proc/1/fd/1","wb",buffering=0);[f.write(b"L"*8191+b"\n") for _ in range(80000)]' > "$artifacts/log-burst-exec.txt" 2>&1
+cri exec "$main_id" touch /home/user/log-burst-trigger
+for n in $(seq 1 30); do if [ -f "$home/log-burst-done" ]; then break; fi; sleep 1; done
+test -f "$home/log-burst-done"
+cp "$home/log-burst-done" "$artifacts/log-burst-done.txt"
 python3 - "$pod_log/workspace/0.log" "$scratch" "$artifacts" <<'PYX'
 import errno,json,pathlib,sys
 p,scratch,out=map(pathlib.Path,sys.argv[1:]);assert p.stat().st_dev==scratch.stat().st_dev
