@@ -49,7 +49,7 @@ jobs:
           (cd product/web && npm ci && npm run build)
           (cd product && MWC_PRODUCT_STORAGE_FIXTURES="$RUNNER_TEMP/product-storage-fixtures" cargo test --locked --test runtime_product_storage -- --nocapture)
           (cd wrapper/runtime-wrapper && CGO_ENABLED=0 go build -trimpath -o "$RUNNER_TEMP/product-storage-bin/mwc-runtime-wrapper" .)
-          gcc -O2 -Wall -Wextra -Werror tests/runtime_product_storage_probe.c -o "$RUNNER_TEMP/product-storage-bin/mwc-budget-probe"
+          gcc -static -O2 -Wall -Wextra -Werror tests/runtime_product_storage_probe.c -o "$RUNNER_TEMP/product-storage-bin/mwc-budget-probe"
           cp "$RUNNER_TEMP/product-storage-fixtures/"*.json artifacts/
       - name: Prepare disposable real CSI node
         run: |

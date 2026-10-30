@@ -215,6 +215,20 @@ for enabled in false true; do
   # Actual rootless daemon security context, worker and layer generation.
   ssh_product 'mkdir -p /home/user/storage-ci-build; printf "FROM scratch\nCOPY marker /marker\n" > /home/user/storage-ci-build/Dockerfile; printf layer-proof > /home/user/storage-ci-build/marker; buildctl build --frontend dockerfile.v0 --local context=/home/user/storage-ci-build --local dockerfile=/home/user/storage-ci-build --output type=oci,dest=/home/user/storage-ci-layer.tar' > "$case_out/actual-buildkit-build.txt" 2>&1
  fi
+ # A normal sidecar stop/delete must not remove another container's upper.
+ main_id="$(jq -r '.status.containerStatuses[]|select(.name=="workspace")|.containerID|sub("containerd://";"")' "$case_out/pod-initial.json")"
+ tty_id="$(jq -r '.status.containerStatuses[]|select(.name=="ttyd")|.containerID|sub("containerd://";"")' "$case_out/pod-initial.json")"
+ cri stop "$tty_id"
+ cri rm "$tty_id"
+ for n in $(seq 1 90); do
+  replacement_tty="$(kube get pod -n "$namespace" "$pod" -o json | jq -r '.status.containerStatuses[]|select(.name=="ttyd" and .ready)|.containerID|sub("containerd://";"")')"
+  if [ -n "$replacement_tty" ] && [ "$replacement_tty" != "$tty_id" ]; then break; fi
+  sleep 1
+ done
+ test -n "$replacement_tty"; test "$replacement_tty" != "$tty_id"
+ test "$(kube get pod -n "$namespace" "$pod" -o json | jq -r '.status.containerStatuses[]|select(.name=="workspace")|.containerID|sub("containerd://";"")')" = "$main_id"
+ ssh_product 'test "$(cat /home/user/storage-ci-home-marker)" = home-survives; printf main-survives-sidecar-delete' > "$case_out/strict-ssh-sidecar-replacement.txt"
+ jq -s --arg uid "$uid" --arg publish "$publish" '[.[]|select(.pod_uid==$uid)] | select(length>=3) | if all(.[];.scratch.path==$publish and (.upper|startswith($publish+"/runtime-private/"))) then . else error("incorrect upper budget") end' "$base/state/"*.json > "$case_out/actual-wrapper-records.json"
  kube exec -i -n "$namespace" "$pod" -c workspace -- sh -ec 'cat > /usr/local/bin/storage-ci-probe; chmod 0755 /usr/local/bin/storage-ci-probe' < "$RUNNER_TEMP/product-storage-bin/mwc-budget-probe"
  kube exec -n "$namespace" "$pod" -c workspace -- /usr/local/bin/storage-ci-probe fill /storage-ci-root-fill > "$case_out/root-enospc.json"
  kube exec -n "$namespace" "$pod" -c workspace -- /usr/local/bin/storage-ci-probe pwrite /tmp/storage-ci-temp-fill > "$case_out/tmp-enospc.json"
@@ -222,6 +236,7 @@ for enabled in false true; do
  kube exec -n "$namespace" "$pod" -c workspace -- /usr/local/bin/storage-ci-probe pwrite /etc/hosts > "$case_out/hosts-enospc.json"
  # stdout's CRI logger is asynchronous; its fd writes are not claimed to return
  # ENOSPC to the process. Logs share the verified filesystem and remain bounded.
+ test "$(stat -Lc %d "/var/log/pods/${namespace}_${pod}_${uid}")" = "$(stat -Lc %d "$publish")"
  findmnt -J -T "/var/log/pods/${namespace}_${pod}_${uid}" > "$case_out/logs-shared-mount.json"
  kube exec -n "$namespace" "$pod" -c workspace -- sh -ec 'printf home-after-full > /home/user/storage-ci-after-full; test "$(cat /home/user/storage-ci-home-marker)" = home-survives'
  ssh_product 'test "$(cat /home/user/storage-ci-after-full)" = home-after-full; printf strict-ssh-full-ok' > "$case_out/strict-ssh-full.txt"
