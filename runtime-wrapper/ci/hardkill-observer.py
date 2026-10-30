@@ -75,11 +75,11 @@ while time.monotonic() < deadline and trace.poll() is None:
             ready = new["phase"] == expected and matching_mount(new, text)
         if ready:
             observed = {"stage": stage, "container_id": cid, "wrapper_pid": wrapper_pid,
-                        "committed": committed, "pending_fsynced_record": new,
+                        "committed": committed, "pending_record": new,
                         "observed_unix_ns": time.time_ns()}
             observed["rootfs_device"] = os.stat(new["rootfs"]).st_dev
-            # Kill immediately while the traced rename is held, before scanning
-            # references. The real shim is still waiting for this observer.
+            # The pending content establishes the source-code edge, not fsync
+            # durability. Kill before scanning while the shim is still waiting.
             os.kill(wrapper_pid, signal.SIGKILL)
             (out / "before-kill-mountinfo.txt").write_text(text)
             break
