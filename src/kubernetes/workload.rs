@@ -364,7 +364,7 @@ fn workspace_claim(
         spec: Some(PersistentVolumeClaimSpec {
             access_modes: Some(vec!["ReadWriteOnce".to_owned()]),
             storage_class_name: if workspace.template.storage_policy.use_longhorn {
-                Some("mwc-home-longhorn-replicated".to_owned())
+                Some("longhorn".to_owned())
             } else {
                 builder.storage_class_name.clone()
             },

@@ -133,7 +133,7 @@ fn longhorn_opt_in_changes_only_the_unbound_home_storage_class() {
             .unwrap()
             .storage_class_name
             .as_deref(),
-        Some("mwc-home-longhorn-replicated")
+        Some("longhorn")
     );
     // Every other resource, including the local scratch claim, is identical.
     replicated_claim.spec.as_mut().unwrap().storage_class_name = Some("managed-delete".to_owned());
