@@ -1,5 +1,6 @@
 #!/bin/bash
 # Sourced only in the runsc matrix's disposable mount namespace.
+cri() { crictl --timeout 60s --runtime-endpoint "unix://$base/containerd.sock" --image-endpoint "unix://$base/containerd.sock" "$@"; }
 mkdir -p "$base/gvisor" "$base/runsc-state"
 curl --fail --location --retry 3 'https://github.com/google/gvisor/releases/download/release-20260831.0/gvisor-x86_64.tar.bz2' -o "$base/gvisor.tar.bz2"
 echo "014b3871a5c698c802fd7a03758e0dbf4c1683f9e3f8c743979ea66bbf6553a4  $base/gvisor.tar.bz2" | sha256sum --check

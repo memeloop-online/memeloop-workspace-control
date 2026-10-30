@@ -31,6 +31,18 @@ containers=()
 loops=()
 cleanup() {
  set +e
+ if [ "$mode" = runsc ] && [ -d "$base/runsc-state" ]; then
+  mkdir -p "$artifacts/failure-runsc-state" "$artifacts/failure-runsc-bundles"
+  cp -a "$base/runsc-state/." "$artifacts/failure-runsc-state/"
+  for bundle in "$base/containerd-state/io.containerd.runtime.v2.task/k8s.io/"*; do
+   [ -d "$bundle" ] || continue
+   dest="$artifacts/failure-runsc-bundles/$(basename "$bundle")"; mkdir -p "$dest"
+   for name in log.json config.json init.pid; do [ ! -f "$bundle/$name" ] || cp "$bundle/$name" "$dest/"; done
+  done
+  ps -eo pid,ppid,args > "$artifacts/failure-runsc-processes.txt"
+  for id in $(cri ps -a --label "io.kubernetes.pod.uid=$uid" -q); do cri stop "$id"; cri rm "$id"; done
+  for id in $(cri pods --label "io.kubernetes.pod.uid=$uid" -q); do cri stopp "$id"; cri rmp "$id"; done
+ fi
  if [ -n "$k3s_pid" ] && declare -F kube >/dev/null; then
   kube get pod -n memeloop-workspace-control mwc-log-ci -o json | jq '{metadata:{uid:.metadata.uid,deletionTimestamp:.metadata.deletionTimestamp},status}' > "$artifacts/kubelet-final-pod-status.json"
   kube get events -n memeloop-workspace-control -o json | jq '[.items[]|{reason,message,type}]' > "$artifacts/kubelet-final-events.json"
