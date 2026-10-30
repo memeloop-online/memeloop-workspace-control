@@ -1,6 +1,13 @@
 #!/bin/bash
 # Sourced only in the runsc matrix's disposable mount namespace.
-cri() { crictl --timeout 60s --runtime-endpoint "unix://$base/containerd.sock" --image-endpoint "unix://$base/containerd.sock" "$@"; }
+cri() {
+ local started ended status
+ started="$(date +%s%N)"
+ if crictl --timeout 60s --runtime-endpoint "unix://$base/containerd.sock" --image-endpoint "unix://$base/containerd.sock" "$@"; then status=0; else status=$?; fi
+ ended="$(date +%s%N)"
+ printf '%s\t%s\t%s\t%s\n' "$1" "$started" "$((ended-started))" "$status" >> "$artifacts/runsc-cri-rpc-nanoseconds.tsv"
+ return "$status"
+}
 mkdir -p "$base/gvisor" "$base/runsc-state"
 curl --fail --location --retry 3 'https://github.com/google/gvisor/releases/download/release-20260831.0/gvisor-x86_64.tar.bz2' -o "$base/gvisor.tar.bz2"
 echo "014b3871a5c698c802fd7a03758e0dbf4c1683f9e3f8c743979ea66bbf6553a4  $base/gvisor.tar.bz2" | sha256sum --check
@@ -13,6 +20,20 @@ find "$base/gvisor" -maxdepth 2 -type f -printf '%P\n' > "$artifacts/gvisor-payl
 test -d "$base/gvisor/gvisor-bin"
 jq --arg runtime "$base/gvisor/runsc" '.real_runtime=$runtime' /etc/mwc-runtime-wrapper.json > /etc/mwc-runsc-wrapper.json
 chmod 0600 /etc/mwc-runsc-wrapper.json
+# Real CRI Pod networking uses the pinned k3s CNI plugins and a disposable
+# isolated bridge. Host networking leaves runsc's fresh netns without an up lo.
+mkdir -p "$base/cni-conf"
+test -x "$base/k3s/data/current/bin/bridge"
+test -x "$base/k3s/data/current/bin/host-local"
+test -x "$base/k3s/data/current/bin/loopback"
+cat > "$base/cni-conf/10-mwc.conflist" <<'JSON'
+{"cniVersion":"1.0.0","name":"mwc-ci","plugins":[{"type":"bridge","bridge":"mwc-ci0","isGateway":true,"ipMasq":false,"ipam":{"type":"host-local","subnet":"10.253.246.0/24"}}]}
+JSON
+cat >> "$base/containerd.toml" <<TOML
+  [plugins.'io.containerd.cri.v1.runtime'.cni]
+    bin_dirs = ['$base/k3s/data/current/bin']
+    conf_dir = '$base/cni-conf'
+TOML
 # External CI observation, not a wrapper test flag. Check the child overlay is
 # still mounted between real runsc create and start, before its Gofer exists.
 cat > "$base/observe-runsc" <<'SCRIPT'

@@ -1,7 +1,7 @@
 #!/bin/bash
 # Actual runsc handler, grouped Sentry and per-container Gofers. No native fallback.
 pod_log="$base/pod-logs/memeloop-workspace-control_mwc-budget-ci_$uid"
-jq -n --arg uid "$uid" --arg log "$pod_log" '{metadata:{name:"mwc-budget-ci",namespace:"memeloop-workspace-control",uid:$uid,attempt:0},log_directory:$log,linux:{security_context:{namespace_options:{network:2}}}}' > "$base/pod.json"
+jq -n --arg uid "$uid" --arg log "$pod_log" '{metadata:{name:"mwc-budget-ci",namespace:"memeloop-workspace-control",uid:$uid,attempt:0},log_directory:$log,linux:{security_context:{namespace_options:{network:0}}}}' > "$base/pod.json"
 mkdir -p "$pod_log"
 sandbox="$(cri runp --runtime mwc-runsc "$base/pod.json")"
 containers+=("$sandbox")

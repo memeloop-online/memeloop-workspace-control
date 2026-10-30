@@ -1,6 +1,6 @@
 #!/bin/bash
 # Disposable privileged GitHub VM only. Never invoke against a cluster/node.
-set -euo pipefail
+set -Eeuo pipefail
 umask 022
 : "${GITHUB_ACTIONS:?This fixture only runs on a disposable GitHub Actions VM}"
 : "${RUNNER_TEMP:?}"
@@ -31,15 +31,24 @@ containers=()
 loops=()
 cleanup() {
  set +e
+ trap - ERR
+ if [ -f "$base/k3s-control.log" ]; then cp "$base/k3s-control.log" "$artifacts/k3s-control.log"; fi
  if [ "$mode" = runsc ] && [ -d "$base/runsc-state" ]; then
-  mkdir -p "$artifacts/failure-runsc-state" "$artifacts/failure-runsc-bundles"
-  cp -a "$base/runsc-state/." "$artifacts/failure-runsc-state/"
+  mkdir -p "$artifacts/failure-runsc-bundles"
+  # Exact state names contain ':'. Archive regular files so artifact upload
+  # preserves them without trying to copy namespace handles or control sockets.
+  find "$base/runsc-state" -printf '%y %p\n' > "$artifacts/failure-runsc-state-files.txt"
+  (cd "$base/runsc-state" && find . -type f \( -name '*.state' -o -name '*.lock' \) -print0 | tar --null -T - -cf "$artifacts/failure-runsc-state.tar")
   for bundle in "$base/containerd-state/io.containerd.runtime.v2.task/k8s.io/"*; do
    [ -d "$bundle" ] || continue
    dest="$artifacts/failure-runsc-bundles/$(basename "$bundle")"; mkdir -p "$dest"
    for name in log.json config.json init.pid; do [ ! -f "$bundle/$name" ] || cp "$bundle/$name" "$dest/"; done
   done
   ps -eo pid,ppid,args > "$artifacts/failure-runsc-processes.txt"
+  for id in $(cri ps -a --label "io.kubernetes.pod.uid=$uid" -q); do
+   cri inspect "$id" > "$artifacts/failure-runsc-$id-inspect.json"
+   cri logs "$id" > "$artifacts/failure-runsc-$id-log.txt" 2>&1
+  done
   for id in $(cri ps -a --label "io.kubernetes.pod.uid=$uid" -q); do cri stop "$id"; cri rm "$id"; done
   for id in $(cri pods --label "io.kubernetes.pod.uid=$uid" -q); do cri stopp "$id"; cri rmp "$id"; done
  fi
@@ -66,6 +75,7 @@ cleanup() {
  for loop in "${loops[@]}"; do losetup -d "$loop"; done
 }
 trap cleanup EXIT
+trap 'status=$?; printf "status=%s source=%s line=%s command=%s\n" "$status" "${BASH_SOURCE[0]}" "$LINENO" "$BASH_COMMAND" >> "$artifacts/failed-command.txt"' ERR
 cri() { crictl --runtime-endpoint "unix://$base/containerd.sock" --image-endpoint "unix://$base/containerd.sock" "$@"; }
 ctr_ci() { ctr --address "$base/containerd.sock" --namespace k8s.io "$@"; }
 

@@ -150,7 +150,14 @@ test "$(cri pods --state Ready --label "io.kubernetes.pod.uid=$kube_uid" -o json
 ! grep -F "upperdir=$kubelet_publish/runtime-private/" /proc/self/mountinfo
 # This fixture, not an installed CSI driver, owns this synthetic publish. Follow
 # CSI ordering: stop tasks, ordinary Unpublish, then allow kubelet's normal GC.
-umount "$kubelet_publish"
+for n in $(seq 1 30); do
+ if umount "$kubelet_publish" 2>> "$artifacts/log-publish-unmount-attempts.txt"; then kubelet_publish_detached=1; break; fi
+ # Task state changes precede final logger/shim reference release. Preserve
+ # busy evidence and retry only the ordinary unmount; never force or detach.
+ cat /proc/self/mountinfo > "$artifacts/log-publish-busy-mountinfo.txt"
+ sleep 1
+done
+test "${kubelet_publish_detached:-0}" = 1
 publish_parent="$(dirname "$kubelet_publish")"
 rmdir "$kubelet_publish"
 rm "$publish_parent/vol_data.json"
