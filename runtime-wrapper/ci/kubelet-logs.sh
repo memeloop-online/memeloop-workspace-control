@@ -134,18 +134,33 @@ test -f "$home/log-burst-done"
 # Ended-Pod logs may end with scratch, per product semantics. The real kubelet
 # must unlink its top-level symlink during normal Pod GC, not recurse into the
 # target; the fixture then owns clearing its temporary filesystem.
-kube delete pod -n memeloop-workspace-control mwc-log-ci --wait=true --timeout=90s
+printf '%s\n' 'owned-log-target-marker' > "$scratch/runtime-private/logs/$kube_uid/ci-gc-marker"
+kube delete pod -n memeloop-workspace-control mwc-log-ci --wait=false
+for n in $(seq 1 90); do
+ if [ "$(cri ps --label "io.kubernetes.pod.uid=$kube_uid" -o json | jq '.containers|length')" = 0 ] && [ "$(cri pods --state Ready --label "io.kubernetes.pod.uid=$kube_uid" -o json | jq '.items|length')" = 0 ] && ! grep -F "upperdir=$kubelet_publish/runtime-private/" /proc/self/mountinfo; then break; fi
+ sleep 1
+done
+test "$(cri ps --label "io.kubernetes.pod.uid=$kube_uid" -o json | jq '.containers|length')" = 0
+test "$(cri pods --state Ready --label "io.kubernetes.pod.uid=$kube_uid" -o json | jq '.items|length')" = 0
+! grep -F "upperdir=$kubelet_publish/runtime-private/" /proc/self/mountinfo
+# This fixture, not an installed CSI driver, owns this synthetic publish. Follow
+# CSI ordering: stop tasks, ordinary Unpublish, then allow kubelet's normal GC.
+umount "$kubelet_publish"
+publish_parent="$(dirname "$kubelet_publish")"
+rmdir "$kubelet_publish"
+rm "$publish_parent/vol_data.json"
+rmdir "$publish_parent"
+kubelet_publish=''
+printf '%s\n' 'normal CSI-like publish unmount after stopped CRI tasks passed; no log bind mount' > "$artifacts/log-publish-unmount.txt"
+kube wait -n memeloop-workspace-control --for=delete pod/mwc-log-ci --timeout=90s
 for n in $(seq 1 150); do
  if [ ! -e "$kube_log" ] && [ ! -L "$kube_log" ]; then break; fi
  sleep 1
 done
 test ! -L "$kube_log"
 test ! -e "$kube_log"
-test -d "$kubelet_publish/runtime-private/logs/$kube_uid"
+test "$(cat "$scratch/runtime-private/logs/$kube_uid/ci-gc-marker")" = owned-log-target-marker
 printf '%s\n' 'real kubelet Pod GC unlinked only the Pod log symlink; scratch target retained for owning lifecycle' > "$artifacts/real-kubelet-log-gc.txt"
 ! grep -F " $kube_log " /proc/self/mountinfo
-umount "$kubelet_publish"
-kubelet_publish=''
-printf '%s\n' 'normal CSI-like publish unmount passed with no log bind mount' > "$artifacts/log-publish-unmount.txt"
 kill "$k3s_pid"; wait "$k3s_pid" || true
 k3s_pid=''

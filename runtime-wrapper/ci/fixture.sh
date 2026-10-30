@@ -28,6 +28,10 @@ containers=()
 loops=()
 cleanup() {
  set +e
+ if [ -n "$k3s_pid" ] && declare -F kube >/dev/null; then
+  kube get pod -n memeloop-workspace-control mwc-log-ci -o json | jq '{metadata:{uid:.metadata.uid,deletionTimestamp:.metadata.deletionTimestamp},status}' > "$artifacts/kubelet-final-pod-status.json"
+  kube get events -n memeloop-workspace-control -o json | jq '[.items[]|{reason,message,type}]' > "$artifacts/kubelet-final-events.json"
+ fi
  for id in "${containers[@]}"; do cri stop "$id"; cri rm "$id"; done
  if [ -n "$sandbox" ]; then cri stopp "$sandbox"; cri rmp "$sandbox"; fi
  cat /proc/self/mountinfo > "$artifacts/final-mountinfo.txt"
