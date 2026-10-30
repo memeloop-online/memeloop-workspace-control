@@ -104,7 +104,7 @@ fn cache_mount(path: &str, sub_path: &str) -> VolumeMount {
     VolumeMount {
         name: SCRATCH_VOLUME.to_owned(),
         mount_path: path.to_owned(),
-        sub_path: Some(sub_path.to_owned()),
+        sub_path: Some(format!("data/{sub_path}")),
         read_only: Some(false),
         ..VolumeMount::default()
     }

@@ -115,7 +115,7 @@ fn scratch_init_prepares_only_enabled_top_level_subpaths() {
     let mount = &container.volume_mounts.as_ref().unwrap()[0];
     assert_eq!(mount.name, "workspace-scratch");
     assert_eq!(mount.mount_path, "/var/lib/mwc/workspace-scratch");
-    assert!(mount.sub_path.is_none());
+    assert_eq!(mount.sub_path.as_deref(), Some("data"));
     let environment = container.env.as_ref().unwrap();
     assert!(environment.iter().any(|variable| {
         variable.name == "MWC_BUILDKIT_ENABLED" && variable.value.as_deref() == Some("false")
@@ -144,19 +144,19 @@ fn buildkit_disabled_omits_its_scratch_mount() {
     assert!(mounts.iter().any(|mount| {
         mount.name == "workspace-scratch"
             && mount.mount_path == "/var/lib/mwc/build-scratch"
-            && mount.sub_path.as_deref() == Some("workspace-cache")
+            && mount.sub_path.as_deref() == Some("data/workspace-cache")
     }));
     assert!(mounts.iter().any(|mount| {
         mount.name == "workspace-scratch"
             && mount.mount_path == "/var/lib/mwc/codex-scratch"
-            && mount.sub_path.as_deref() == Some("codex-session-scratch")
+            && mount.sub_path.as_deref() == Some("data/codex-session-scratch")
     }));
     assert!(!mounts.iter().any(|mount| {
         mount.mount_path == "/run/mwc-buildkit"
             || mount
                 .sub_path
                 .as_deref()
-                .is_some_and(|path| path.starts_with("build-cache"))
+                .is_some_and(|path| path.starts_with("data/build-cache"))
     }));
 }
 
