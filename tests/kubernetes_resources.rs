@@ -492,7 +492,7 @@ fn workspace_pod_uses_the_template_runtime_class_without_a_fallback() {
             assert!(mounts.iter().any(|mount| {
                 mount.mount_path == path
                     && mount.name == "workspace-scratch"
-                    && mount.sub_path.as_deref() == Some("tmp")
+                    && mount.sub_path.as_deref() == Some("data/tmp")
             }));
         }
     }
@@ -1408,6 +1408,24 @@ fn workspace_main_prepares_cold_layout_without_bootstrap_init() {
                 .collect::<Vec<_>>(),
             expected
         );
+        for container in pod
+            .containers
+            .iter()
+            .chain(pod.init_containers.iter().flatten())
+        {
+            for mount in container.volume_mounts.iter().flatten() {
+                if mount.name == "workspace-scratch" {
+                    assert!(
+                        mount
+                            .sub_path
+                            .as_deref()
+                            .is_some_and(|path| { path == "data" || path.starts_with("data/") }),
+                        "{} exposes scratch outside data: {mount:?}",
+                        container.name
+                    );
+                }
+            }
+        }
         if let Some(directory) = std::env::var_os("MWC_COLD_START_FIXTURE_DIR") {
             let directory = std::path::Path::new(&directory);
             std::fs::create_dir_all(directory).unwrap();
@@ -1714,7 +1732,7 @@ fn temporary_storage_uses_one_workspace_owned_claim_and_isolated_subpaths() {
         scratch_init_mount.mount_path,
         "/var/lib/mwc/workspace-scratch"
     );
-    assert!(scratch_init_mount.sub_path.is_none());
+    assert_eq!(scratch_init_mount.sub_path.as_deref(), Some("data"));
     assert!(scratch_init.args.as_ref().unwrap()[0].contains("unsafe workspace scratch path"));
     assert!(!scratch_init.args.as_ref().unwrap()[0].contains("chown -R"));
 
@@ -1725,11 +1743,11 @@ fn temporary_storage_uses_one_workspace_owned_claim_and_isolated_subpaths() {
         .unwrap();
     let mounts = workspace_container.volume_mounts.as_ref().unwrap();
     for (path, sub_path) in [
-        ("/tmp", "tmp"),
-        ("/var/tmp", "tmp"),
-        ("/var/lib/mwc/build-scratch", "workspace-cache"),
-        ("/var/lib/mwc/codex-scratch", "codex-session-scratch"),
-        ("/run/mwc-buildkit", "build-cache"),
+        ("/tmp", "data/tmp"),
+        ("/var/tmp", "data/tmp"),
+        ("/var/lib/mwc/build-scratch", "data/workspace-cache"),
+        ("/var/lib/mwc/codex-scratch", "data/codex-session-scratch"),
+        ("/run/mwc-buildkit", "data/build-cache"),
     ] {
         assert!(mounts.iter().any(|mount| {
             mount.name == "workspace-scratch"
@@ -1784,12 +1802,12 @@ fn temporary_storage_uses_one_workspace_owned_claim_and_isolated_subpaths() {
     assert!(buildkit_mounts.iter().any(|mount| {
         mount.name == "workspace-scratch"
             && mount.mount_path == "/var/lib/mwc-buildkit"
-            && mount.sub_path.as_deref() == Some("build-cache")
+            && mount.sub_path.as_deref() == Some("data/build-cache")
     }));
     assert!(buildkit_mounts.iter().any(|mount| {
         mount.name == "workspace-scratch"
             && mount.mount_path == "/tmp"
-            && mount.sub_path.as_deref() == Some("build-cache/tmp")
+            && mount.sub_path.as_deref() == Some("data/build-cache/tmp")
     }));
     assert_eq!(
         buildkit
@@ -1849,7 +1867,7 @@ fn buildkit_image_declared_volume_uses_the_existing_scratch_cache() {
             assert_eq!(matching.len(), 1, "{name}: {path}");
             let mount = matching[0];
             assert_eq!(mount.name, "workspace-scratch");
-            assert_eq!(mount.sub_path.as_deref(), Some("build-cache"));
+            assert_eq!(mount.sub_path.as_deref(), Some("data/build-cache"));
             assert_eq!(mount.read_only, Some(false));
         }
     }
@@ -1887,7 +1905,7 @@ fn buildkit_disabled_omits_build_cache_initialization_mounts_and_containers() {
                         || mount
                             .sub_path
                             .as_deref()
-                            .is_some_and(|path| path.starts_with("build-cache"))
+                            .is_some_and(|path| path.starts_with("data/build-cache"))
                 })
         );
     }
