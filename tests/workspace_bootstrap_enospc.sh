@@ -203,6 +203,7 @@ done < /tmp/expected-metadata-setenv
 test "$(grep -c '^SetEnv ' /run/mwc-ssh/sshd_config)" = 1
 test -z "$(find /run/mwc-ssh -maxdepth 1 -name '.environment-metadata.*' -print -quit)"
 cp "$injection_config/workspace-environment.json" /tmp/good-environment-manifest
+cp /run/mwc-ssh/sshd_config /tmp/good-runtime-sshd-config
 for failure in malformed non_array missing_value invalid_object; do
     case "$failure" in
         malformed) printf '{' > "$injection_config/workspace-environment.json" ;;
@@ -215,6 +216,7 @@ for failure in malformed non_array missing_value invalid_object; do
         echo "invalid environment metadata unexpectedly succeeded: $failure" >&2
         exit 1
     fi
+    cmp /tmp/good-runtime-sshd-config /run/mwc-ssh/sshd_config
     test -z "$(find /run/mwc-ssh -maxdepth 1 -name '.environment-metadata.*' -print -quit)"
     cp /tmp/good-environment-manifest "$injection_config/workspace-environment.json"
     prepare_recovery_fixture
@@ -314,3 +316,60 @@ test -s /workspace/.codex/logs_2.sqlite-wal
 test -s /workspace/.codex/session_index.jsonl
 test -s /workspace/.codex/config.toml
 test -s /workspace/.codex/auth.json
+
+# Exercise the real serve monitor and listener: unchanged polls preserve the configuration
+# inode and never HUP, environment changes reach new sessions, and key updates are hot-read.
+printf '%s' before-reload > "$injection_config/reload-value"
+cat > "$injection_config/workspace-environment.json" <<'EOF'
+{"environment":[{"name":"MWC_RELOAD_VALUE","object":"config_map","data_key":"reload-value"}]}
+EOF
+MWC_WORKSPACE_USER=workspace MWC_WORKSPACE_HOME=/workspace MWC_HOME_RESERVE_MIB=1 \
+    /usr/local/bin/mwc-workspace-bootstrap serve > /tmp/sshd-reload.log 2>&1 &
+serve_pid=$!
+trap 'kill "$serve_pid" 2>/dev/null || true' EXIT
+
+reload_ssh() {
+    ssh -i "$1" -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=2 \
+        -o StrictHostKeyChecking=yes -o HostKeyAlias=localhost \
+        -o UserKnownHostsFile=/run/mwc-ssh/known_hosts \
+        -p 2222 workspace@localhost 'printf "%s" "$MWC_RELOAD_VALUE"'
+}
+wait_for_reload_value() {
+    for attempt in $(seq 1 25); do
+        if [ "$(reload_ssh "$1" 2>/dev/null)" = "$2" ]; then return; fi
+        sleep 1
+    done
+    cat /tmp/sshd-reload.log >&2
+    return 1
+}
+wait_for_reload_value /run/mwc-ssh/ttyd_client_key before-reload
+config_inode=$(stat -c %i /run/mwc-ssh/sshd_config)
+sleep 16
+test "$(stat -c %i /run/mwc-ssh/sshd_config)" = "$config_inode"
+! grep -q 'Received SIGHUP' /tmp/sshd-reload.log
+
+printf '%s' after-reload > "$injection_config/reload-value"
+wait_for_reload_value /run/mwc-ssh/ttyd_client_key after-reload
+test "$(grep -c 'Received SIGHUP' /tmp/sshd-reload.log)" = 1
+config_inode=$(stat -c %i /run/mwc-ssh/sshd_config)
+ssh-keygen -q -t ed25519 -N '' -f /tmp/reload-client
+cp /tmp/reload-client.pub "$injection_config/recovery-key"
+wait_for_reload_value /tmp/reload-client after-reload
+test "$(stat -c %i /run/mwc-ssh/sshd_config)" = "$config_inode"
+test "$(grep -c 'Received SIGHUP' /tmp/sshd-reload.log)" = 1
+
+# Failed file refreshes retain both the previous keys and warning until a successful retry.
+cp /run/mwc-ssh/authorized_keys /tmp/reload-authorized-keys
+printf '{' > "$injection_config/workspace-files.json"
+sleep 16
+test -e /run/mwc-ssh/injection-failed
+cmp /tmp/reload-authorized-keys /run/mwc-ssh/authorized_keys
+wait_for_reload_value /tmp/reload-client after-reload
+cp /tmp/good-injection-manifest "$injection_config/workspace-files.json"
+for attempt in $(seq 1 25); do
+    if [ ! -e /run/mwc-ssh/injection-failed ]; then break; fi
+    sleep 1
+done
+test ! -e /run/mwc-ssh/injection-failed
+test "$(stat -c %i /run/mwc-ssh/sshd_config)" = "$config_inode"
+test "$(grep -c 'Received SIGHUP' /tmp/sshd-reload.log)" = 1
