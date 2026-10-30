@@ -1,0 +1,80 @@
+name: product-runtime-storage
+on:
+  push:
+    branches: ['test/runtime-product-csi-20261030']
+    paths: ['tests/runtime_product_storage*', '.github/workflows/runtime-product-storage.yml']
+  pull_request:
+    paths: ['tests/runtime_product_storage*', '.github/workflows/runtime-product-storage.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+  packages: read
+jobs:
+  rust-topolvm:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      PRODUCT_RENDERER_SHA: 7a0d43abaa4d95ad2ecff55ebba1abc70b754564
+      WRAPPER_SHA: eb6d8de9b2747f6de8a9b27a71a79258c6285402
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ env.PRODUCT_RENDERER_SHA }}
+          path: product
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ env.WRAPPER_SHA }}
+          path: wrapper
+      - name: Verify exact production registry inputs before compiling
+        run: |
+          mkdir -p artifacts
+          sudo --preserve-env=GITHUB_ACTIONS,GITHUB_WORKSPACE,RUNNER_TEMP bash tests/runtime_product_storage.sh --prerequisites
+      - uses: dtolnay/rust-toolchain@1.98.0
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        with:
+          workspaces: product
+          key: runtime-product-storage
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5
+        with:
+          go-version: '1.26.4'
+          cache: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24
+      - name: Build exact renderer fixtures and independent runtime (CI only)
+        run: |
+          mkdir -p artifacts "$RUNNER_TEMP/product-storage-fixtures" "$RUNNER_TEMP/product-storage-bin"
+          cp tests/runtime_product_storage.rs product/tests/
+          (cd product/web && npm ci && npm run build)
+          (cd product && MWC_PRODUCT_STORAGE_FIXTURES="$RUNNER_TEMP/product-storage-fixtures" cargo test --locked --test runtime_product_storage -- --nocapture)
+          (cd wrapper/runtime-wrapper && CGO_ENABLED=0 go build -trimpath -o "$RUNNER_TEMP/product-storage-bin/mwc-runtime-wrapper" .)
+          gcc -O2 -Wall -Wextra -Werror tests/runtime_product_storage_probe.c -o "$RUNNER_TEMP/product-storage-bin/mwc-budget-probe"
+          cp "$RUNNER_TEMP/product-storage-fixtures/"*.json artifacts/
+      - name: Prepare disposable real CSI node
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y lvm2 thin-provisioning-tools xfsprogs jq openssh-client
+          # The runner contains several SDKs unused by this isolated VM experiment.
+          sudo rm -rf /usr/local/lib/android /opt/ghc /usr/share/dotnet
+          df -B1 / | tee artifacts/runner-capacity-before.txt
+          free -b | tee artifacts/runner-memory-before.txt
+          test "$(df -B1 --output=avail / | tail -n1)" -ge 30000000000
+          test "$(awk '/MemTotal:/ {print $2}' /proc/meminfo)" -ge 6000000
+      - name: Actual Rust product and TopoLVM lifecycle
+        env:
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          status=0
+          sudo --preserve-env=GITHUB_ACTIONS,GITHUB_WORKSPACE,RUNNER_TEMP,PRODUCT_RENDERER_SHA,WRAPPER_SHA,GHCR_USER,GHCR_TOKEN \
+            bash tests/runtime_product_storage.sh || status=$?
+          sudo chown -R "$(id -u):$(id -g)" artifacts
+          exit "$status"
+      - name: Preserve actual evidence, including failed prerequisites
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: rust-product-topolvm-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/
+          if-no-files-found: error
