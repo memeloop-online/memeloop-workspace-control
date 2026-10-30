@@ -60,6 +60,9 @@ prepare_layout() {
     fi
     codex_scratch_link_best_effort "$workspace_root/.codex/tmp" "$codex_scratch/tmp"
     codex_scratch_link_best_effort "$workspace_root/.codex/.tmp" "$codex_scratch/dot-tmp"
+    # File injection creates intermediate directories as root. Codex installs its own
+    # system skills beside injected skills, so this parent must belong to its user.
+    durable_dir_best_effort "$workspace_root/.codex/skills"
     if [ "${MWC_BUILDKIT_ENABLED:-false}" = true ]; then
         regenerable_link_best_effort \
             "$workspace_root/.local/bin/buildctl" "/run/mwc-buildkit/bin/buildctl"
