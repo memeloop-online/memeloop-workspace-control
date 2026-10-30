@@ -47,18 +47,18 @@ finish() {
 # Verify exact product registry inputs before allocating any disks/cluster.
 # Anonymous Harbor libraries should be pullable; a denied/missing digest is fatal.
 registry_manifest() {
- local registry="$1" repo="$2" digest="$3" prefix="$4" token_url="$5" token
- token="$(curl -fsSL "$token_url" | jq -er '.token // .access_token')"
+ local registry="$1" repo="$2" digest="$3" prefix="$4" token_url="$5" service="$6" token
+ token="$(curl -fsSL --get --data-urlencode "service=$service" --data-urlencode "scope=repository:$repo:pull" "$token_url" | jq -er '.token // .access_token')"
  curl -fsSL -H "Authorization: Bearer $token" -H 'Accept: application/vnd.oci.image.index.v1+json,application/vnd.oci.image.manifest.v1+json,application/vnd.docker.distribution.manifest.v2+json' \
   "https://$registry/v2/$repo/manifests/$digest" -o "$out/$prefix-index.json"
  echo "${digest#sha256:}  $out/$prefix-index.json" | sha256sum -c -
 }
 registry_manifest harbor.k3s.onetwo.website library/rust-dev \
  sha256:d50798f0f8345d7295c303ec0f04b1f1e064b7d6ac9b074d87065a488957360f rust \
- 'https://harbor.k3s.onetwo.website/service/token?service=harbor-registry&scope=repository:library/rust-dev:pull'
+ https://harbor.k3s.onetwo.website/service/token harbor-registry
 registry_manifest ghcr.io memeloop-online/memeloop-workspace-control-ttyd \
  sha256:cc408d2cb9c3fe457b206cffae4a15264ae15f037eac0b1f4dde86058d499012 ttyd \
- 'https://ghcr.io/token?service=ghcr.io&scope=repository:memeloop-online/memeloop-workspace-control-ttyd:pull'
+ https://ghcr.io/token ghcr.io
 if [ "${1:-}" = --prerequisites ]; then exit 0; fi
 trap finish EXIT
 

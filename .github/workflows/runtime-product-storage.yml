@@ -62,12 +62,9 @@ jobs:
           test "$(df -B1 --output=avail / | tail -n1)" -ge 30000000000
           test "$(awk '/MemTotal:/ {print $2}' /proc/meminfo)" -ge 6000000
       - name: Actual Rust product and TopoLVM lifecycle
-        env:
-          GHCR_USER: ${{ github.actor }}
-          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           status=0
-          sudo --preserve-env=GITHUB_ACTIONS,GITHUB_WORKSPACE,RUNNER_TEMP,PRODUCT_RENDERER_SHA,WRAPPER_SHA,GHCR_USER,GHCR_TOKEN \
+          sudo --preserve-env=GITHUB_ACTIONS,GITHUB_WORKSPACE,RUNNER_TEMP,PRODUCT_RENDERER_SHA,WRAPPER_SHA \
             bash tests/runtime_product_storage.sh || status=$?
           sudo chown -R "$(id -u):$(id -g)" artifacts
           exit "$status"
