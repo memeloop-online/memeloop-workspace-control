@@ -151,7 +151,7 @@ test "$(cri pods --state Ready --label "io.kubernetes.pod.uid=$kube_uid" -o json
 # This fixture, not an installed CSI driver, owns this synthetic publish. Follow
 # CSI ordering: stop tasks, ordinary Unpublish, then allow kubelet's normal GC.
 for n in $(seq 1 30); do
- printf 'attempt=%s time=%s\n' "$n" "$(date --iso-8601=ns)" >> "$artifacts/log-publish-unmount-attempts.txt"
+ printf 'attempt=%s time=%s\n' "$n" "$(date +%s%N)" >> "$artifacts/log-publish-unmount-attempts.txt"
  if umount "$kubelet_publish" 2>> "$artifacts/log-publish-unmount-attempts.txt"; then kubelet_publish_detached=1; break; fi
  # Task state changes precede final logger/shim reference release. Preserve
  # busy evidence and retry only the ordinary unmount; never force or detach.
