@@ -41,6 +41,11 @@ finish() {
  for loop in "${loops[@]}"; do
   if ! losetup -d "$loop" >> "$out/cleanup.log" 2>&1; then status=1; fi
  done
+ jq -n --argjson exit_status "$status" '{exit_status:$exit_status,normal_cleanup:($exit_status==0)}' > "$out/cleanup-receipt.json"
+ if [ "$status" != 0 ] && [ -f "$out/acceptance.json" ]; then
+  jq '.accepted=false | .cleanup_failed=true' "$out/acceptance.json" > "$out/acceptance-updated.json"
+  mv "$out/acceptance-updated.json" "$out/acceptance.json"
+ fi
  exit "$status"
 }
 
@@ -228,7 +233,7 @@ for enabled in false true; do
  test -n "$replacement_tty"; test "$replacement_tty" != "$tty_id"
  test "$(kube get pod -n "$namespace" "$pod" -o json | jq -r '.status.containerStatuses[]|select(.name=="workspace")|.containerID|sub("containerd://";"")')" = "$main_id"
  ssh_product 'test "$(cat /home/user/storage-ci-home-marker)" = home-survives; printf main-survives-sidecar-delete' > "$case_out/strict-ssh-sidecar-replacement.txt"
- jq -s --arg uid "$uid" --arg publish "$publish" '[.[]|select(.pod_uid==$uid)] | select(length>=3) | if all(.[];.scratch.path==$publish and (.upper|startswith($publish+"/runtime-private/"))) then . else error("incorrect upper budget") end' "$base/state/"*.json > "$case_out/actual-wrapper-records.json"
+ jq -es --arg uid "$uid" --arg publish "$publish" '[.[]|select(.pod_uid==$uid)] | select(length>=3) | if all(.[];.scratch.path==$publish and (.upper|startswith($publish+"/runtime-private/"))) then . else error("incorrect upper budget") end' "$base/state/"*.json > "$case_out/actual-wrapper-records.json"
  kube exec -i -n "$namespace" "$pod" -c workspace -- sh -ec 'cat > /usr/local/bin/storage-ci-probe; chmod 0755 /usr/local/bin/storage-ci-probe' < "$RUNNER_TEMP/product-storage-bin/mwc-budget-probe"
  kube exec -n "$namespace" "$pod" -c workspace -- /usr/local/bin/storage-ci-probe fill /storage-ci-root-fill > "$case_out/root-enospc.json"
  kube exec -n "$namespace" "$pod" -c workspace -- /usr/local/bin/storage-ci-probe pwrite /tmp/storage-ci-temp-fill > "$case_out/tmp-enospc.json"
