@@ -6,6 +6,8 @@ umask 022
 : "${RUNNER_TEMP:?}"
 mode="${1:-native}"
 case "$mode" in native|runsc) ;; *) echo "unsupported fixture runtime: $mode"; exit 1;; esac
+scenario="${2:-functional}"
+case "$scenario" in functional|hardkill) ;; *) echo "unsupported fixture scenario: $scenario"; exit 1;; esac
 base="/var/lib/mwc-runtime-prototype"
 artifacts="$GITHUB_WORKSPACE/runtime-wrapper/artifacts"
 mkdir -p "$base" "$artifacts"
@@ -170,12 +172,14 @@ done
 if [ "$mode" = runsc ]; then
  source "$GITHUB_WORKSPACE/runtime-wrapper/ci/runsc-setup.sh"
 fi
+if [ "$scenario" = hardkill ]; then source "$GITHUB_WORKSPACE/runtime-wrapper/ci/hardkill-setup.sh"; fi
 containerd --config "$base/containerd.toml" > "$artifacts/containerd.log" 2>&1 &
 containerd_pid=$!
 for n in $(seq 1 60); do if cri info > "$artifacts/cri-info.json"; then break; fi; sleep 1; done
 cri info > "$artifacts/cri-info.json"
 ctr_ci images import "$base/image.tar"
 cri pull registry.k8s.io/pause:3.10
+if [ "$scenario" = hardkill ]; then source "$GITHUB_WORKSPACE/runtime-wrapper/ci/hardkill-fixture.sh"; exit 0; fi
 if [ "$mode" = runsc ]; then
  source "$GITHUB_WORKSPACE/runtime-wrapper/ci/runsc-fixture.sh"
  df -B1 "$scratch" "$home" > "$artifacts/after-container-delete-df.txt"

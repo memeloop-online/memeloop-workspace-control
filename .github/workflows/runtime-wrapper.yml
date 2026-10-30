@@ -10,11 +10,12 @@ permissions:
   contents: read
 jobs:
   native-prototype:
-    name: ${{ matrix.runtime }}-prototype
+    name: ${{ matrix.runtime }}-${{ matrix.scenario }}-prototype
     strategy:
       fail-fast: false
       matrix:
         runtime: [native, runsc]
+        scenario: [functional, hardkill]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -42,13 +43,13 @@ jobs:
       - name: Actual pinned CRI and shim acceptance
         run: |
           status=0
-          sudo --preserve-env=GITHUB_ACTIONS,RUNNER_TEMP,GITHUB_WORKSPACE unshare --mount --propagation private ./runtime-wrapper/ci/fixture.sh "${{ matrix.runtime }}" || status=$?
+          sudo --preserve-env=GITHUB_ACTIONS,RUNNER_TEMP,GITHUB_WORKSPACE unshare --mount --propagation private ./runtime-wrapper/ci/fixture.sh "${{ matrix.runtime }}" "${{ matrix.scenario }}" || status=$?
           sudo chown -R "$(id -u):$(id -g)" runtime-wrapper/artifacts
           exit "$status"
       - name: Preserve all evidence, including failures
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: ${{ matrix.runtime }}-runtime-prototype-${{ github.run_id }}-${{ github.run_attempt }}
+          name: ${{ matrix.runtime }}-${{ matrix.scenario }}-runtime-prototype-${{ github.run_id }}-${{ github.run_attempt }}
           path: runtime-wrapper/artifacts/
           if-no-files-found: warn
