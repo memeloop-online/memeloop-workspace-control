@@ -133,7 +133,9 @@ select a runtime by filename or fall back to native. The real runsc
 uses grouping, `overlay2=none`, `file-access=shared` and shared mounts. Systrap is
 explicit, OCI seccomp stays enabled, and OCI root readonly/capability fields
 remain unchanged. No ignore-cgroups, allow-suid or privileged Pod workaround is
-introduced. Four gVisor override annotation families and conflicting storage
+introduced. The exact shim's four built-in shared-memory hints are allowed only on pause,
+with fixed values and the unique `/dev/shm` tmpfs source matching its trusted CRI
+state path. Other gVisor override annotations and conflicting storage
 flags are rejected; restore/checkpoint/run are unsupported.
 
 A failed runsc create retains its record and overlay until that ID's real delete

@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 )
 
@@ -136,8 +137,45 @@ func parseRunscArgs(args []string) (invocation, error) {
 	return in, nil
 }
 
-func validateRunscSpec(s spec) error {
+func validateRunscSpec(c config, s spec) error {
+	// The exact shim synthesizes these four hints for existing shared-memory
+	// semantics. They authorize only its one /dev/shm tmpfs, never a disk hint.
+	const shmPrefix = "dev.gvisor.spec.mount.gvisorinternaldevshm."
+	shm := map[string]string{shmPrefix + "source": "", shmPrefix + "type": "tmpfs", shmPrefix + "share": "pod", shmPrefix + "options": "rw"}
+	shmFields := 0
 	for key := range s.Annotations {
+		if strings.HasPrefix(key, shmPrefix) {
+			shmFields++
+		}
+	}
+	if shmFields != 0 {
+		id := s.Annotations["io.kubernetes.cri.sandbox-id"]
+		if s.Annotations["io.kubernetes.cri.container-type"] != "sandbox" || !idRE.MatchString(id) || shmFields != len(shm) {
+			return errors.New("unsupported runsc shared-memory hints")
+		}
+		shm[shmPrefix+"source"] = filepath.Join(c.CRIStateRoot, "sandboxes", id, "shm")
+		for key, expected := range shm {
+			if s.Annotations[key] != expected {
+				return fmt.Errorf("unsupported runsc shared-memory hint %s", key)
+			}
+		}
+		count := 0
+		for _, m := range s.Mounts {
+			if m.Destination == "/dev/shm" {
+				count++
+				if m.Type != "tmpfs" || m.Source != shm[shmPrefix+"source"] {
+					return errors.New("runsc shared-memory hints differ from tmpfs mount")
+				}
+			}
+		}
+		if count != 1 {
+			return errors.New("runsc requires exactly one shared-memory tmpfs")
+		}
+	}
+	for key := range s.Annotations {
+		if _, builtin := shm[key]; builtin && shmFields != 0 {
+			continue
+		}
 		for _, prefix := range []string{"dev.gvisor.spec.rootfs.", "dev.gvisor.spec.mount.", "dev.gvisor.flag.", "dev.gvisor.bundle."} {
 			if strings.HasPrefix(key, prefix) {
 				return fmt.Errorf("unsupported runsc override annotation %s", key)

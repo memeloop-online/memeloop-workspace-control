@@ -29,8 +29,31 @@ func TestRunscShimArguments(t *testing.T) {
 		}
 	}
 	for _, prefix := range []string{"dev.gvisor.spec.rootfs.", "dev.gvisor.spec.mount.", "dev.gvisor.flag.", "dev.gvisor.bundle."} {
-		if err := validateRunscSpec(spec{Annotations: map[string]string{prefix + "override": "x"}}); err == nil {
+		if err := validateRunscSpec(config{}, spec{Annotations: map[string]string{prefix + "override": "x"}}); err == nil {
 			t.Fatal("accepted override", prefix)
+		}
+	}
+}
+
+func TestRunscBuiltinSharedMemory(t *testing.T) {
+	id := strings.Repeat("a", 64)
+	c := config{CRIStateRoot: "/cri-state"}
+	const prefix = "dev.gvisor.spec.mount.gvisorinternaldevshm."
+	source := "/cri-state/sandboxes/" + id + "/shm"
+	s := spec{Annotations: map[string]string{"io.kubernetes.cri.container-type": "sandbox", "io.kubernetes.cri.sandbox-id": id, prefix + "source": source, prefix + "type": "tmpfs", prefix + "share": "pod", prefix + "options": "rw"}, Mounts: []ociMount{{Destination: "/dev/shm", Type: "tmpfs", Source: source}}}
+	if err := validateRunscSpec(c, s); err != nil {
+		t.Fatal(err)
+	}
+	for key, value := range map[string]string{prefix + "share": "container", prefix + "type": "bind", prefix + "source": "/arbitrary", prefix + "unknown": "x", "io.kubernetes.cri.container-type": "container"} {
+		before, existed := s.Annotations[key]
+		s.Annotations[key] = value
+		if err := validateRunscSpec(c, s); err == nil {
+			t.Fatal("accepted altered built-in hint", key)
+		}
+		if existed {
+			s.Annotations[key] = before
+		} else {
+			delete(s.Annotations, key)
 		}
 	}
 }

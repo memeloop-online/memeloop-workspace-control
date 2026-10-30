@@ -15,7 +15,7 @@ const configPath = "/etc/mwc-runtime-wrapper.json"
 func parseArgs(args []string) (invocation, error) {
 	return parseRuncArgs(args)
 }
-func validateRuntimeSpec(s spec) error {
+func validateRuntimeSpec(c config, s spec) error {
 	return nil
 }
 func failedCreate(c config, r *record, args []string) error {

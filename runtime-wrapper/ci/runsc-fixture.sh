@@ -34,6 +34,7 @@ main_id="$last_id"
 for pair in "sandbox:$sandbox" "init:$init_id" "ttyd:$ttyd_id" "workspace:$main_id"; do
  name="${pair%%:*}"; id="${pair#*:}"
  cp "$base/state/$id.json" "$artifacts/$name-wrapper.json"
+ cp "$base/pre-wrapper-$id-oci.json" "$artifacts/$name-pre-wrapper-oci.json"
  if [ -f "$base/containerd-state/io.containerd.runtime.v2.task/k8s.io/$id/config.json" ]; then cp "$base/containerd-state/io.containerd.runtime.v2.task/k8s.io/$id/config.json" "$artifacts/$name-oci.json"; fi
  if [ -f "$base/start-$id-record.json" ]; then cp "$base/start-$id-record.json" "$artifacts/$name-before-start-wrapper.json"; cp "$base/start-$id-mount.txt" "$artifacts/$name-before-start-mount.txt"; fi
 done

@@ -32,6 +32,12 @@ for destination, f in managed.items():
 # runc consumes. Compare every field, allowing precisely the selected sources.
 for name in ("workspace", "ttyd"):
     original = json.loads((artifacts / (name + "-inspect.json")).read_text())["info"]["runtimeSpec"]
+    shim_input = artifacts / (name + "-pre-wrapper-oci.json")
+    if shim_input.exists():
+        # The real runsc shim has already converted /dev/shm and added its
+        # fixed built-in hints. Retain CRI's original separately; compare the
+        # wrapper against its actual complete input, not the earlier CRI spec.
+        original = json.loads(shim_input.read_text())
     actual = json.loads((artifacts / (name + "-oci.json")).read_text())
     assert original["root"].get("readonly", False) == (name == "ttyd"), name
     assert actual["root"].get("readonly", False) == (name == "ttyd"), name

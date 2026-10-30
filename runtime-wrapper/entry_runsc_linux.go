@@ -7,8 +7,8 @@ const configPath = "/etc/mwc-runsc-wrapper.json"
 func parseArgs(args []string) (invocation, error) {
 	return parseRunscArgs(args)
 }
-func validateRuntimeSpec(s spec) error {
-	return validateRunscSpec(s)
+func validateRuntimeSpec(c config, s spec) error {
+	return validateRunscSpec(c, s)
 }
 func failedCreate(c config, r *record, args []string) error {
 	// A failed create is not proof of task absence. Keep this ID's mount/upper

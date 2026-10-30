@@ -26,6 +26,7 @@ type config struct {
 	RealRuntime        string `json:"real_runtime"`
 	KubeletRoot        string `json:"kubelet_root"`
 	CRIRoot            string `json:"cri_root"`
+	CRIStateRoot       string `json:"cri_state_root"`
 	WorkspaceNamespace string `json:"workspace_namespace"`
 	PodLogRoot         string `json:"pod_log_root"`
 	BundleRoot         string `json:"bundle_root"`
@@ -243,7 +244,7 @@ func loadConfig() (config, error) {
 	if err = d.Decode(&c); err != nil {
 		return c, err
 	}
-	for _, p := range []string{c.RealRuntime, c.KubeletRoot, c.CRIRoot, c.PodLogRoot, c.BundleRoot, c.SnapshotRoot, c.StateRoot, c.DMSetup} {
+	for _, p := range []string{c.RealRuntime, c.KubeletRoot, c.CRIRoot, c.CRIStateRoot, c.PodLogRoot, c.BundleRoot, c.SnapshotRoot, c.StateRoot, c.DMSetup} {
 		if !filepath.IsAbs(p) || filepath.Clean(p) != p {
 			return c, fmt.Errorf("noncanonical configured path %q", p)
 		}
@@ -254,7 +255,7 @@ func loadConfig() (config, error) {
 	if !lvmRE.MatchString(c.ScratchVG) || !strings.HasPrefix(c.ScratchPool, "LVM-"+c.ScratchVG) || !strings.HasSuffix(c.ScratchPool, "-tpool") {
 		return c, errors.New("expected full trusted scratch VG and thin-pool identity")
 	}
-	for _, p := range []string{c.RealRuntime, c.DMSetup, c.KubeletRoot, c.CRIRoot, c.PodLogRoot, c.BundleRoot, c.SnapshotRoot, c.StateRoot} {
+	for _, p := range []string{c.RealRuntime, c.DMSetup, c.KubeletRoot, c.CRIRoot, c.CRIStateRoot, c.PodLogRoot, c.BundleRoot, c.SnapshotRoot, c.StateRoot} {
 		f, err := openTrusted(p, p != c.RealRuntime && p != c.DMSetup)
 		if err != nil {
 			return c, err
@@ -673,7 +674,7 @@ func prepare(c config, in invocation) (record, error) {
 	if err != nil {
 		return r, err
 	}
-	if err = validateRuntimeSpec(s); err != nil {
+	if err = validateRuntimeSpec(c, s); err != nil {
 		return r, err
 	}
 	pod := s.Annotations["io.kubernetes.cri.sandbox-uid"]

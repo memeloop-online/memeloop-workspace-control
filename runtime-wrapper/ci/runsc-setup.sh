@@ -18,7 +18,10 @@ cat > "$base/observe-runsc" <<'SCRIPT'
 #!/bin/bash
 set -euo pipefail
 base=/var/lib/mwc-runtime-prototype
+bundle_next=0
 for arg in "$@"; do
+ if [ "$bundle_next" = 1 ]; then cp "$arg/config.json" "$base/pre-wrapper-${@: -1}-oci.json"; bundle_next=0; fi
+ if [ "$arg" = --bundle ]; then bundle_next=1; fi
  if [ "$arg" = start ]; then
   id="${@: -1}"
   test "$(jq -r .phase "$base/state/$id.json")" = created
