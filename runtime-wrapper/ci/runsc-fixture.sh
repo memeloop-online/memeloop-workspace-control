@@ -102,7 +102,7 @@ ssh_ci 'echo strict-key-gvisor-ssh-after-child-delete' > "$artifacts/ssh-after-c
 # projection and must fail before any private upper/rootfs redirect is created.
 for prefix in dev.gvisor.spec.rootfs. dev.gvisor.spec.mount. dev.gvisor.flag. dev.gvisor.bundle.; do
  name="$(echo "$prefix" | tr . -)"
- jq --arg name "$name" --arg key "${prefix}override" '.metadata.name=$name|.annotations={($key):"test-override"}' "$base/workspace.json" > "$base/reject-hint.json"
+ jq --arg name "$name" --arg key "${prefix}override" '.metadata.name=$name|.log_path=($name+"/0.log")|.annotations={($key):"test-override"}' "$base/workspace.json" > "$base/reject-hint.json"
  id="$(cri create "$sandbox" "$base/reject-hint.json" "$base/pod.json")"; containers+=("$id")
  if cri start "$id" > "$artifacts/reject-$name.txt" 2>&1; then echo 'runsc hint bypass unexpectedly started'; exit 1; fi
  grep -F "unsupported runsc override annotation" "$base/state/errors.log"
@@ -117,7 +117,7 @@ mkdir "$conflict_log"
 if cri runp --runtime mwc-runsc-conflict "$base/conflict-pod.json" > "$artifacts/reject-conflict.txt" 2>&1; then echo 'runsc conflict unexpectedly accepted'; exit 1; fi
 grep -F 'runsc overlay2 must be none' "$base/state/errors.log"
 # Invalid child executable tests real start failure and shim's normal delete.
-jq '.metadata.name="bad-executable"|.command=["/not-an-executable"]|.args=[]' "$base/workspace.json" > "$base/bad.json"
+jq '.metadata.name="bad-executable"|.log_path="bad-executable/0.log"|.command=["/not-an-executable"]|.args=[]' "$base/workspace.json" > "$base/bad.json"
 bad_id="$(cri create "$sandbox" "$base/bad.json" "$base/pod.json")";containers+=("$bad_id")
 if cri start "$bad_id" > "$artifacts/bad-start.txt" 2>&1; then echo 'invalid executable unexpectedly started'; exit 1; fi
 cri rm "$bad_id"
