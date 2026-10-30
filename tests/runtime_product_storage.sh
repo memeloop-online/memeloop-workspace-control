@@ -49,12 +49,24 @@ finish() {
  exit "$status"
 }
 
+# Record the actual runner route before pulling; these unauthenticated bounded
+# probes distinguish private DNS or address-family reachability from auth errors.
+getent ahostsv4 harbor.k3s.onetwo.website > "$out/harbor-dns-v4.txt" || true
+getent ahostsv6 harbor.k3s.onetwo.website > "$out/harbor-dns-v6.txt" || true
+for family in 4 6; do
+ status=0
+ curl -"$family" --silent --show-error --connect-timeout 10 --max-time 20 \
+  --output /dev/null --write-out '%{json}\n' https://harbor.k3s.onetwo.website/v2/ \
+  > "$out/harbor-connect-v$family.json" 2> "$out/harbor-connect-v$family.stderr" || status=$?
+ printf '%s\n' "$status" > "$out/harbor-connect-v$family.exit"
+done
+
 # Verify exact product registry inputs before allocating any disks/cluster.
 # Anonymous Harbor libraries should be pullable; a denied/missing digest is fatal.
 registry_manifest() {
  local registry="$1" repo="$2" digest="$3" prefix="$4" token_url="$5" service="$6" token
- token="$(curl -fsSL --get --data-urlencode "service=$service" --data-urlencode "scope=repository:$repo:pull" "$token_url" | jq -er '.token // .access_token')"
- curl -fsSL -H "Authorization: Bearer $token" -H 'Accept: application/vnd.oci.image.index.v1+json,application/vnd.oci.image.manifest.v1+json,application/vnd.docker.distribution.manifest.v2+json' \
+ token="$(curl -fsSL --connect-timeout 15 --max-time 30 --get --data-urlencode "service=$service" --data-urlencode "scope=repository:$repo:pull" "$token_url" | jq -er '.token // .access_token')"
+ curl -fsSL --connect-timeout 15 --max-time 30 -H "Authorization: Bearer $token" -H 'Accept: application/vnd.oci.image.index.v1+json,application/vnd.oci.image.manifest.v1+json,application/vnd.docker.distribution.manifest.v2+json' \
   "https://$registry/v2/$repo/manifests/$digest" -o "$out/$prefix-index.json"
  echo "${digest#sha256:}  $out/$prefix-index.json" | sha256sum -c -
 }
