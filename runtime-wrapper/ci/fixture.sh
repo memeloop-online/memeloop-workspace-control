@@ -32,12 +32,16 @@ cleanup() {
   kube get pod -n memeloop-workspace-control mwc-log-ci -o json | jq '{metadata:{uid:.metadata.uid,deletionTimestamp:.metadata.deletionTimestamp},status}' > "$artifacts/kubelet-final-pod-status.json"
   kube get events -n memeloop-workspace-control -o json | jq '[.items[]|{reason,message,type}]' > "$artifacts/kubelet-final-events.json"
  fi
+ if [ -n "$k3s_pid" ]; then kill "$k3s_pid"; wait "$k3s_pid"; k3s_pid=''; fi
+ if [ -n "${kube_uid:-}" ]; then
+  for id in $(cri ps -a --label "io.kubernetes.pod.uid=$kube_uid" -q); do cri stop "$id"; cri rm "$id"; done
+  for id in $(cri pods --label "io.kubernetes.pod.uid=$kube_uid" -q); do cri stopp "$id"; cri rmp "$id"; done
+ fi
  for id in "${containers[@]}"; do cri stop "$id"; cri rm "$id"; done
  if [ -n "$sandbox" ]; then cri stopp "$sandbox"; cri rmp "$sandbox"; fi
  cat /proc/self/mountinfo > "$artifacts/final-mountinfo.txt"
  if [ -d "$base/state" ]; then cp -a "$base/state" "$artifacts/failure-or-final-state"; fi
  if [ -f "$base/state/errors.log" ]; then cat "$base/state/errors.log"; fi
- if [ -n "$k3s_pid" ]; then kill "$k3s_pid"; wait "$k3s_pid"; fi
  if [ -n "$kubelet_publish" ]; then umount "$kubelet_publish"; fi
  if [ -n "$containerd_pid" ]; then kill "$containerd_pid"; wait "$containerd_pid"; fi
  # Normal unmounts only. EBUSY is evidence/failure, never hidden by lazy/force.

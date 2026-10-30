@@ -107,6 +107,7 @@ kube logs --previous -n memeloop-workspace-control mwc-log-ci -c workspace > "$a
 grep -F previous-container-marker "$artifacts/kubectl-previous-logs.txt"
 test -L "$kube_log"
 work_id="$next_id"
+printf '%s\n' 'owned-log-target-marker' > "$scratch/runtime-private/logs/$kube_uid/ci-gc-marker"
 # Fill via the actual container stdout/CRI logger within one monitor interval.
 # Rotation later can free capacity; no node-disk fallback is allowed meanwhile.
 cri exec "$work_id" python3 -c 'import os;f=open("/proc/1/fd/1","wb",buffering=0);[f.write(b"L"*8191+b"\n") for _ in range(80000)];open("/home/user/log-burst-done","w").write("done")' > "$artifacts/log-burst-exec.txt" 2>&1 &
@@ -134,7 +135,6 @@ test -f "$home/log-burst-done"
 # Ended-Pod logs may end with scratch, per product semantics. The real kubelet
 # must unlink its top-level symlink during normal Pod GC, not recurse into the
 # target; the fixture then owns clearing its temporary filesystem.
-printf '%s\n' 'owned-log-target-marker' > "$scratch/runtime-private/logs/$kube_uid/ci-gc-marker"
 kube delete pod -n memeloop-workspace-control mwc-log-ci --wait=false
 for n in $(seq 1 90); do
  if [ "$(cri ps --label "io.kubernetes.pod.uid=$kube_uid" -o json | jq '.containers|length')" = 0 ] && [ "$(cri pods --state Ready --label "io.kubernetes.pod.uid=$kube_uid" -o json | jq '.items|length')" = 0 ] && ! grep -F "upperdir=$kubelet_publish/runtime-private/" /proc/self/mountinfo; then break; fi
