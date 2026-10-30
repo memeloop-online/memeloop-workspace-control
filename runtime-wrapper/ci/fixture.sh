@@ -4,10 +4,13 @@ set -euo pipefail
 umask 022
 : "${GITHUB_ACTIONS:?This fixture only runs on a disposable GitHub Actions VM}"
 : "${RUNNER_TEMP:?}"
+mode="${1:-native}"
+case "$mode" in native|runsc) ;; *) echo "unsupported fixture runtime: $mode"; exit 1;; esac
 base="/var/lib/mwc-runtime-prototype"
 artifacts="$GITHUB_WORKSPACE/runtime-wrapper/artifacts"
 mkdir -p "$base" "$artifacts"
 install -m 0755 "$RUNNER_TEMP/mwc-runtime-prototype/mwc-runtime-wrapper" "$base/mwc-runtime-wrapper"
+if [ "$mode" = runsc ]; then install -m 0755 "$RUNNER_TEMP/mwc-runtime-prototype/mwc-runsc-wrapper" "$base/mwc-runsc-wrapper"; fi
 exec > >(tee "$artifacts/fixture.log") 2>&1
 export PATH="$base/k3s/data/current/bin:$PATH"
 uid=11111111-2222-4333-8444-555555555555
@@ -45,7 +48,8 @@ cleanup() {
  if [ -n "$kubelet_publish" ]; then umount "$kubelet_publish"; fi
  if [ -n "$containerd_pid" ]; then kill "$containerd_pid"; wait "$containerd_pid"; fi
  # Normal unmounts only. EBUSY is evidence/failure, never hidden by lazy/force.
- umount "$scratch"; umount "$home"
+ if [ "${scratch_detached:-0}" = 0 ]; then umount "$scratch"; fi
+ if [ "${home_detached:-0}" = 0 ]; then umount "$home"; fi
  vgremove -fy "$vg"; vgremove -fy "$home_vg"
  for loop in "${loops[@]}"; do losetup -d "$loop"; done
 }
@@ -140,12 +144,21 @@ SCRIPT
         SystemdCgroup = false
 TOML
 done
+if [ "$mode" = runsc ]; then
+ source "$GITHUB_WORKSPACE/runtime-wrapper/ci/runsc-setup.sh"
+fi
 containerd --config "$base/containerd.toml" > "$artifacts/containerd.log" 2>&1 &
 containerd_pid=$!
 for n in $(seq 1 60); do if cri info > "$artifacts/cri-info.json"; then break; fi; sleep 1; done
 cri info > "$artifacts/cri-info.json"
 ctr_ci images import "$base/image.tar"
 cri pull registry.k8s.io/pause:3.10
+if [ "$mode" = runsc ]; then
+ source "$GITHUB_WORKSPACE/runtime-wrapper/ci/runsc-fixture.sh"
+ df -B1 "$scratch" "$home" > "$artifacts/after-container-delete-df.txt"
+ cp -a "$base/state" "$artifacts/final-wrapper-state"
+ exit 0
+fi
 pod_log="$base/pod-logs/memeloop-workspace-control_mwc-budget-ci_$uid"
 jq -n --arg uid "$uid" --arg log "$pod_log" '{metadata:{name:"mwc-budget-ci",namespace:"memeloop-workspace-control",uid:$uid,attempt:0},log_directory:$log,linux:{security_context:{namespace_options:{network:2}}}}' > "$base/pod.json"
 mkdir -p "$pod_log"
@@ -407,5 +420,6 @@ source "$GITHUB_WORKSPACE/runtime-wrapper/ci/kubelet-logs.sh"
 df -B1 "$scratch" "$home" > "$artifacts/after-container-delete-df.txt"
 cp -a "$base/state" "$artifacts/final-wrapper-state"
 printf '%s\n' 'native mechanism, shared capacity including managed /etc, Home/SSH/DNS, cleanup, identity/path/namespace negative gates, checkpoint rejection passed' > "$artifacts/acceptance.txt"
-# Deliberately NOT accepted: logs, image-defined/arbitrary writable host binds, runsc, kubelet
-# eviction/statistics, crash/reboot/orphan lifecycle, or complete two-budget scope.
+# Deliberately NOT accepted: image-defined/arbitrary writable host binds, runsc,
+# changed kubelet accounting/eviction, production CSI crash/reboot/orphan lifecycle,
+# or complete two-budget scope. Runsc has a separate isolated job and receipt.

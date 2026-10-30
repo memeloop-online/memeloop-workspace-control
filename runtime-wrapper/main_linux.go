@@ -1,4 +1,4 @@
-// MWC native runtime prototype. This binary is deliberately not a production runtime.
+// MWC isolated runtime prototype. This binary is deliberately not a production runtime.
 package main
 
 import (
@@ -15,8 +15,6 @@ import (
 	"strings"
 	"syscall"
 )
-
-const configPath = "/etc/mwc-runtime-wrapper.json"
 
 var diagnosticPath string
 
@@ -159,13 +157,8 @@ func main() {
 		fail(err)
 	}
 	if code != 0 {
-		if err := noTask(c.RealRuntime, os.Args[1:], in.ID); err != nil {
+		if err := failedCreate(c, &rec, os.Args[1:]); err != nil {
 			fail(err)
-		}
-		// The shim still owns its normal failure cleanup. Remove only our unreferenced
-		// mount, never restore the unbounded original and then launch the process.
-		if err := cleanup(c, &rec); err != nil {
-			fmt.Fprintln(os.Stderr, "mwc runtime prototype failed-create cleanup:", err)
 		}
 	} else {
 		rec.Phase = "created"
@@ -178,7 +171,7 @@ func main() {
 
 // Only runc 1.4.2's used global options are parsed. Arguments are forwarded byte
 // for byte, including the caller's --root/log/console socket/process FDs.
-func parseArgs(args []string) (invocation, error) {
+func parseRuncArgs(args []string) (invocation, error) {
 	var in invocation
 	globalValue := map[string]bool{"--root": true, "--log": true, "--log-format": true, "--rootless": true, "--criu": true}
 	globalBool := map[string]bool{"--debug": true, "--systemd-cgroup": true, "--help": true, "--version": true, "-v": true, "-h": true}
@@ -680,6 +673,9 @@ func prepare(c config, in invocation) (record, error) {
 	if err != nil {
 		return r, err
 	}
+	if err = validateRuntimeSpec(s); err != nil {
+		return r, err
+	}
 	pod := s.Annotations["io.kubernetes.cri.sandbox-uid"]
 	if !uuidRE.MatchString(pod) || s.Annotations["io.kubernetes.cri.sandbox-namespace"] != c.WorkspaceNamespace {
 		return r, errors.New("unsupported CRI workspace identity")
@@ -689,7 +685,7 @@ func prepare(c config, in invocation) (record, error) {
 		return r, errors.New("missing CRI container type")
 	}
 	if s.Root.Path != "rootfs" || len(s.Linux.UIDMappings) > 0 || len(s.Linux.GIDMappings) > 0 {
-		return r, errors.New("requires native non-idmapped rootfs")
+		return r, errors.New("requires non-idmapped overlay rootfs")
 	}
 	managed, err := managedFileSources(c, s)
 	if err != nil {
@@ -930,7 +926,7 @@ func switchRoot(c config, r *record) error {
 	}
 	if err = syscall.Mount("overlay", r.Rootfs, "overlay", flags, r.Data); err != nil {
 		// Restore only to permit normal shim cleanup. This invocation always fails;
-		// real runc is never called with the original, unbounded writable layer.
+		// The real runtime is never called with the original, unbounded writable layer.
 		_, _, _, oldFlags, _, _ := overlay(c, r.Original)
 		restore := syscall.Mount(r.Original.Source, r.Rootfs, "overlay", oldFlags, strings.TrimPrefix(r.Original.Options, "rw,"))
 		return fmt.Errorf("redirect mount failed: %v; original cleanup mount restore: %v", err, restore)
@@ -1057,23 +1053,4 @@ func runReal(path string, args []string) (int, error) {
 		return 128 + int(ws.Signal()), nil
 	}
 	return state.ExitCode(), nil
-}
-
-// A nonzero create status is not by itself permission to remove an active upper.
-func noTask(path string, args []string, id string) error {
-	var globals []string
-	for i := 0; i < len(args); i++ {
-		if args[i] == "create" {
-			globals = append(globals, args[:i]...)
-			break
-		}
-	}
-	out, err := exec.Command(path, append(globals, "state", id)...).CombinedOutput()
-	if err == nil {
-		return errors.New("failed create left a live runtime state; preserve upper")
-	}
-	if !strings.Contains(string(out), "container does not exist") {
-		return fmt.Errorf("cannot prove failed task is absent: %s", strings.TrimSpace(string(out)))
-	}
-	return nil
 }

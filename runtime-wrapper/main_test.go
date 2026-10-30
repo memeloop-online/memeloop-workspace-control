@@ -9,12 +9,12 @@ import (
 
 func TestShimArguments(t *testing.T) {
 	args := []string{"--root", "/run/runc/k8s.io", "--log", "/tmp/log", "--log-format", "json", "create", "--bundle", "/run/tasks/" + strings.Repeat("a", 64), "--pid-file", "/tmp/pid", "--console-socket", "/tmp/socket", "--preserve-fds", "3", strings.Repeat("a", 64)}
-	got, err := parseArgs(args)
+	got, err := parseRuncArgs(args)
 	if err != nil || got.Command != "create" || got.ID != strings.Repeat("a", 64) || got.Bundle != "/run/tasks/"+got.ID {
 		t.Fatalf("%+v %v", got, err)
 	}
 	for _, bad := range [][]string{{"--unsafe", "create"}, {"create", "--bundle"}, {"create", "a", "b"}, {"create", "--bundle=x", "--bundle=y", "a"}, {"create", "--restore", "a"}} {
-		if _, err := parseArgs(bad); err == nil {
+		if _, err := parseRuncArgs(bad); err == nil {
 			t.Fatalf("accepted %v", bad)
 		}
 	}

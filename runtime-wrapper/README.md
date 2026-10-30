@@ -1,4 +1,4 @@
-# Native scratch/rootfs CI prototype
+# Scratch/rootfs runtime CI prototype
 
 **Not a production runtime.** This isolated experiment leaves the controller,
 RuntimeClasses, existing capacity eviction settings, node configuration, and all
@@ -6,7 +6,7 @@ user volumes unchanged. Build and acceptance run exclusively in
 `.github/workflows/runtime-wrapper.yml` on a disposable privileged GitHub VM.
 Do not run its fixture against a workstation or cluster node.
 
-The pinned k3s `v1.36.2+k3s1` payload (SHA-256 checked) supplies the actual deployed
+Native CI uses the pinned k3s `v1.36.2+k3s1` payload (SHA-256 checked) supplies the actual deployed
 containerd `2.3.2-k3s2`, its `io.containerd.runc.v2` shim, and runc `1.4.2`. CRI
 creates the sandbox, init, workspace and sidecar; this is not a direct-runc or
 Docker substitute. Docker only constructs the fixture image, which is imported
@@ -123,6 +123,34 @@ delete. This is not acceptance of the actual BuildKit/ttyd image composition.
 
 Only CI results prove a gate passed. Source code and workflow intent do not.
 
+## Independent runsc experiment
+
+The `mwc_runsc` build selects a separate fixed config and strict runsc shim
+parser; the default build remains runc. Shared trusted storage functions do not
+select a runtime by filename or fall back to native. The real runsc
+`release-20260831.0` full archive is SHA-256 pinned, including its adjacent
+`gvisor-bin` sidecars and real `io.containerd.runsc.v1` shim. The isolated handler
+uses grouping, `overlay2=none`, `file-access=shared` and shared mounts. Systrap is
+explicit, OCI seccomp stays enabled, and OCI root readonly/capability fields
+remain unchanged. No ignore-cgroups, allow-suid or privileged Pod workaround is
+introduced. Four gVisor override annotation families and conflicting storage
+flags are rejected; restore/checkpoint/run are unsupported.
+
+A failed runsc create retains its record and overlay until that ID's real delete
+succeeds. Runc's English absence error and a runsc list that skips unreadable
+state are not used as cleanup authorization. Child create overlays remain
+mounted through start, when the real child Gofer is created. Child delete only
+removes that child's upper/work.
+
+A separate CI matrix entry drives actual grouped pause/init/readonly sidecar and
+writable main with independent Home. Its gates observe pre-start overlays,
+Sentry/Gofer PIDs and seccomp, no-overlay Gofer configs and no filestore FDs,
+ordinary/small writes, pwrite, fsync outcomes, mmap process failure with Sentry
+alive, shared ENOSPC, Home/strict-key SSH, log capacity, child-only cleanup and
+normal final unmount. SSH is between processes in the actual gVisor network
+stack; external CNI ingress is not covered. Runsc results require their own
+successful CI and independent receipt; native results prove none of them.
+
 ## Required remaining work before deployment
 
 - Other writable host binds, including image-defined volumes, remain
@@ -140,8 +168,9 @@ Only CI results prove a gate passed. Source code and workflow intent do not.
 - The overlay snapshotter still tracks its old empty upper. Snapshot usage,
   commit/export, real kubelet statistics/eviction and thin-pool exhaustion are not
   repaired or proven. No existing ephemeral-storage threshold is removed.
-- gVisor/runsc is a separate required implementation/acceptance, preserving its
-  sandbox. This native-only job says nothing about runsc or all product images.
+- gVisor/runsc needs its independent matrix acceptance, preserving its sandbox;
+  source implementation and native results do not prove those gates. Actual
+  product images and complete real kubelet/CSI lifecycle remain separate work.
 - BuildKit, complete product init/sidecar composition, apt package mutation,
   malicious identity/path replacement races and all fault boundaries need
   expanded real integration coverage. The initial fixture is a mechanism gate.

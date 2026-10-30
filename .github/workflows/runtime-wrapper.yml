@@ -10,6 +10,11 @@ permissions:
   contents: read
 jobs:
   native-prototype:
+    name: ${{ matrix.runtime }}-prototype
+    strategy:
+      fail-fast: false
+      matrix:
+        runtime: [native, runsc]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -22,10 +27,14 @@ jobs:
         working-directory: runtime-wrapper
         run: |
           mkdir -p artifacts
-          test -z "$(gofmt -l *.go)"
+          gofmt -d *.go | tee artifacts/gofmt.diff
+          test ! -s artifacts/gofmt.diff
           go vet ./...
           go test ./...
+          go vet -tags=mwc_runsc ./...
+          go test -tags=mwc_runsc ./...
           CGO_ENABLED=0 go build -trimpath -o "$RUNNER_TEMP/mwc-runtime-prototype/mwc-runtime-wrapper" .
+          CGO_ENABLED=0 go build -tags=mwc_runsc -trimpath -o "$RUNNER_TEMP/mwc-runtime-prototype/mwc-runsc-wrapper" .
       - name: Prepare disposable privileged runtime fixture
         run: |
           sudo apt-get update
@@ -33,13 +42,13 @@ jobs:
       - name: Actual pinned CRI and shim acceptance
         run: |
           status=0
-          sudo --preserve-env=GITHUB_ACTIONS,RUNNER_TEMP,GITHUB_WORKSPACE unshare --mount --propagation private ./runtime-wrapper/ci/fixture.sh || status=$?
+          sudo --preserve-env=GITHUB_ACTIONS,RUNNER_TEMP,GITHUB_WORKSPACE unshare --mount --propagation private ./runtime-wrapper/ci/fixture.sh "${{ matrix.runtime }}" || status=$?
           sudo chown -R "$(id -u):$(id -g)" runtime-wrapper/artifacts
           exit "$status"
       - name: Preserve all evidence, including failures
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: native-runtime-prototype-${{ github.run_id }}-${{ github.run_attempt }}
+          name: ${{ matrix.runtime }}-runtime-prototype-${{ github.run_id }}-${{ github.run_attempt }}
           path: runtime-wrapper/artifacts/
           if-no-files-found: warn
