@@ -15,7 +15,7 @@ jobs:
     timeout-minutes: 60
     env:
       PRODUCT_RENDERER_SHA: 7a0d43abaa4d95ad2ecff55ebba1abc70b754564
-      WRAPPER_SHA: eb6d8de9b2747f6de8a9b27a71a79258c6285402
+      WRAPPER_SHA: d0e626d8b13fbe9a63ea1ed1bfda2d465af4364c
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1

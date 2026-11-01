@@ -59,12 +59,13 @@ timeout --signal=TERM --kill-after=20s 2700s qemu-system-x86_64 \
  -drive file=/work/inputs.iso,format=raw,media=cdrom,readonly=on \
  -drive file=/work/seed.iso,format=raw,media=cdrom,readonly=on \
  -device virtio-net-pci,netdev=net0 -netdev user,id=net0,restrict=on \
- 2> output/qemu.stderr | head -c 33554432 > output/serial.log
+ 2>&1 | head -c 33554432 > output/serial.log
 result="${PIPESTATUS[0]}"
 set -e
 printf '%s\n' "$result" > output/qemu.exit
 qemu-img info --output=json guest-overlay.qcow2 > output/guest-overlay-after.json
 du -sk guest-base.qcow2 inputs.iso guest-overlay.qcow2 > output/actual-disk-kib.txt
+# Serial and QEMU stderr share the capped log above, including boot failures.
 # Preserve only finite logs/manifests, never multi-GB guest disks as artifacts.
 tr -d '\r' < output/serial.log | sed -n 's/^MWC_VM_SMOKE_RECEIPT //p' | tail -n1 > output/guest-receipt.json
 test "$result" = 0
