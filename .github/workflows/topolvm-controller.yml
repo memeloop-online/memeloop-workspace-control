@@ -53,7 +53,7 @@ jobs:
             golang:1.25.7-bookworm \
             sh -ec '
               go test -race -count=1 ./internal/driver/internal/k8s
-              CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath \
+              CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -buildvcs=false -trimpath \
                 -ldflags "-w -s -X github.com/topolvm/topolvm.Version=0.41.1-mwc250ms" \
                 -o /out/topolvm-controller ./cmd/topolvm-controller
             '
