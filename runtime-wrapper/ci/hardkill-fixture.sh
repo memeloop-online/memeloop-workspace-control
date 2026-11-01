@@ -19,12 +19,21 @@ control_alive() {
 }
 control_alive
 blocked=0
-for stage in prepared redirected runtime-created; do
+for stage in prepared original-unmounted redirected runtime-created delete-unmounted; do
  out="$artifacts/hardkill-$stage"
  log="$base/pod-logs/memeloop-workspace-control_mwc-kill-$stage"_"$uid"
  mkdir -p "$out" "$log"
  jq --arg stage "$stage" --arg log "$log" '.metadata.name=("mwc-kill-"+$stage)|.log_directory=$log' "$base/control-pod.json" > "$base/kill-pod.json"
- if cri runp --runtime "mwc-kill-$stage" "$base/kill-pod.json" > "$out/create-rpc.txt" 2>&1; then echo "hardkill unexpectedly returned success: $stage"; exit 1; fi
+ if [ "$stage" = delete-unmounted ]; then
+  id="$(cri runp --runtime "mwc-kill-$stage" "$base/kill-pod.json" 2> "$out/create-rpc.txt")"
+  containers+=("$id")
+  # The real shim calls wrapper delete after stopping this healthy sandbox.
+  # An RPC success may already include its own normal retry; retain either result.
+  if cri stopp "$id" > "$out/interrupted-stop-rpc.txt" 2>&1; then stop_status=0; else stop_status=$?; fi
+  printf '%s\n' "$stop_status" > "$out/interrupted-stop-status.txt"
+ else
+  if cri runp --runtime "mwc-kill-$stage" "$base/kill-pod.json" > "$out/create-rpc.txt" 2>&1; then echo "hardkill unexpectedly returned success: $stage"; exit 1; fi
+ fi
  test -f "$out/observed.json"
  id="$(cat "$out/id.txt")"
  cri pods -o json > "$out/after-rpc-cri-sandboxes.json"
@@ -67,4 +76,4 @@ if umount "$scratch" > "$artifacts/hardkill-normal-scratch-unmount.txt" 2>&1; th
 if umount "$home" > "$artifacts/hardkill-normal-home-unmount.txt" 2>&1; then home_detached=1; else blocked=1; fi
 cp -a "$base/state" "$artifacts/hardkill-final-wrapper-state"
 test "$blocked" = 0
-printf '%s\n' 'three externally observed wrapper SIGKILL edges, live control preserved, real normal ID delete and ordinary CSI-shaped scratch/Home unmount passed; no real CSI/reboot/crash GC acceptance' > "$artifacts/hardkill-acceptance.txt"
+printf '%s\n' 'five externally observed wrapper SIGKILL edges including original-unmounted and delete-unmounted, live control preserved, real normal ID delete and ordinary CSI-shaped scratch/Home unmount passed; no real CSI/reboot/crash GC acceptance' > "$artifacts/hardkill-acceptance.txt"

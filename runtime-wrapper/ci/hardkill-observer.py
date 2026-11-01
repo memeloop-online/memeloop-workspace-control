@@ -10,14 +10,18 @@ import sys
 import time
 
 stage, wrapper, *args = sys.argv[1:]
-if "create" not in args:
+command = "delete" if stage == "delete-unmounted" else "create"
+if command not in args:
     os.execv(wrapper, [wrapper, *args])
 cid = args[-1]
-if stage not in ("prepared", "redirected", "runtime-created") or not re.fullmatch("[a-f0-9]{64}", cid):
+if stage not in ("prepared", "original-unmounted", "redirected", "runtime-created", "delete-unmounted") or not re.fullmatch("[a-f0-9]{64}", cid):
     raise SystemExit("unsupported CI hardkill invocation")
 base = pathlib.Path("/var/lib/mwc-runtime-prototype")
 out = pathlib.Path(os.environ["GITHUB_WORKSPACE"], "runtime-wrapper/artifacts", "hardkill-" + stage)
 out.mkdir(exist_ok=True)
+if (out / "observed.json").exists():
+    # Only the first delete is interrupted; real shim/CRI retries stay normal.
+    os.execv(wrapper, [wrapper, *args])
 (out / "id.txt").write_text(cid + "\n")
 record = base / "state" / (cid + ".json")
 pending = record.with_suffix(".json.new")
@@ -44,10 +48,11 @@ def matching_mount(rec, text, original=False):
 # Follow Go threads, then detach on exec of dmsetup/the actual runtime. Exact
 # strace skips the initial wrapper exec, so Sentry/Gofer/init remain untraced.
 # The delay only opens an observation window; it never forges syscall success.
+injection = "umount2:delay_exit=250ms" if stage == "delete-unmounted" else "rename,renameat,renameat2:delay_enter=250ms"
 trace = subprocess.Popen([
     "/usr/bin/strace", "-ff", "-b", "execve", "-qq", "-o", str(out / "syscalls"),
     "-e", "trace=rename,renameat,renameat2,mount,umount2,execve,wait4,waitid",
-    "-e", "inject=rename,renameat,renameat2:delay_enter=250ms", wrapper, *args,
+    "-e", "inject=" + injection, wrapper, *args,
 ], close_fds=False)
 wrapper_pid = None
 observed = None
@@ -67,8 +72,13 @@ while time.monotonic() < deadline and trace.poll() is None:
             pass
     committed, new = read_record(record), read_record(pending)
     text = pathlib.Path("/proc/self/mountinfo").read_text()
-    if wrapper_pid and committed and new:
-        if stage == "prepared":
+    if wrapper_pid and committed and (new or stage == "delete-unmounted"):
+        rootfs_mounted = any(line.split(" - ")[0].split()[4] == committed["rootfs"] for line in text.splitlines())
+        if stage == "delete-unmounted":
+            ready = committed["phase"] == "created" and not rootfs_mounted and pathlib.Path(committed["upper"]).is_dir()
+        elif stage == "original-unmounted":
+            ready = new["phase"] == "original-unmounted" and committed["phase"] == "prepared" and not rootfs_mounted
+        elif stage == "prepared":
             ready = committed["phase"] == new["phase"] == "prepared" and bool(new["mount_data"]) and matching_mount(new, text, original=True)
         else:
             expected = "redirected" if stage == "redirected" else "created"
@@ -77,7 +87,12 @@ while time.monotonic() < deadline and trace.poll() is None:
             observed = {"stage": stage, "container_id": cid, "wrapper_pid": wrapper_pid,
                         "committed": committed, "pending_record": new,
                         "observed_unix_ns": time.time_ns()}
-            observed["rootfs_device"] = os.stat(new["rootfs"]).st_dev
+            # The original overlay's device remains useful for FD evidence even
+            # when rootfs is now an ordinary directory on the host filesystem.
+            observed["rootfs_device"] = (os.stat(committed["rootfs"]).st_dev if rootfs_mounted else
+                                        os.makedev(*map(int, committed["original"]["device"].split(":"))))
+            observed["rootfs_mounted_at_kill"] = rootfs_mounted
+            observed["upper_exists_at_kill"] = pathlib.Path(committed["upper"]).is_dir()
             # The pending content establishes the source-code edge, not fsync
             # durability. Kill before scanning while the shim is still waiting.
             os.kill(wrapper_pid, signal.SIGKILL)
@@ -99,7 +114,7 @@ for name, path in (("record", record), ("pending", pending), ("oci", pathlib.Pat
         (out / ("after-kill-" + name + ".json")).write_bytes(path.read_bytes())
 cfg = json.loads(pathlib.Path("/etc/mwc-runsc-wrapper.json" if "runsc" in wrapper else "/etc/mwc-runtime-wrapper.json").read_text())
 root = None
-for i, arg in enumerate(args[:args.index("create")]):
+for i, arg in enumerate(args[:args.index(command)]):
     if arg.startswith("--root="):
         root = arg.split("=", 1)[1]
     elif arg == "--root":

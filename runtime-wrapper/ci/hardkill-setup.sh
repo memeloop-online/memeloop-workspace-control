@@ -1,7 +1,7 @@
 #!/bin/bash
 # CI-only runtime entries. No production wrapper options or code hooks.
 cri() { crictl --timeout 60s --runtime-endpoint "unix://$base/containerd.sock" --image-endpoint "unix://$base/containerd.sock" "$@"; }
-for stage in prepared redirected runtime-created; do
+for stage in prepared original-unmounted redirected runtime-created delete-unmounted; do
  entry="$base/hardkill-$stage"
  if [ "$mode" = runsc ]; then binary="$base/mwc-runsc-wrapper"; else binary="$base/mwc-runtime-wrapper"; fi
  cat > "$entry" <<SCRIPT
