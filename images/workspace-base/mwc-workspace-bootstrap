@@ -403,26 +403,24 @@ injection_sync_monitor() {
         sleep 15
         sync_injected_files
         # Environment injection cannot alter an existing process environment, but reloading sshd
-        # applies its SetEnv values to subsequent SSH sessions without dropping active ones.
+        # applies changed SetEnv values to subsequent SSH sessions.
         prepare_runtime_sshd_config
-        if [ -s "$runtime_dir/sshd.pid" ]; then
-            kill -HUP "$(cat "$runtime_dir/sshd.pid")" 2>/dev/null || true
-        fi
     done
 }
 
 prepare_runtime_sshd_config() (
-    install -m 0600 -o root -g root /etc/workspace-platform/sshd_config "$runtime_sshd_config"
+    metadata=$(mktemp "$runtime_dir/.environment-metadata.XXXXXX")
+    temporary_config="$metadata.sshd_config"
+    trap 'rm -f "$metadata" "$temporary_config"' EXIT
+    install -m 0600 -o root -g root /etc/workspace-platform/sshd_config "$temporary_config"
     # OpenSSH only consumes the first SetEnv directive. Merge runtime values into the
     # controller-generated platform assignments so every SSH session receives them.
-    assignments=$(sed -n 's/^SetEnv //p' "$runtime_sshd_config")
-    sed -i '/^SetEnv /d' "$runtime_sshd_config"
+    assignments=$(sed -n 's/^SetEnv //p' "$temporary_config")
+    sed -i '/^SetEnv /d' "$temporary_config"
     if [ -n "${RUSTUP_HOME:-}" ]; then
         escaped=$(printf 'RUSTUP_HOME=%s' "$RUSTUP_HOME" | sed 's/\\/\\\\/g; s/"/\\"/g')
         assignments="$assignments \"$escaped\""
     fi
-    metadata=$(mktemp "$runtime_dir/.environment-metadata.XXXXXX")
-    trap 'rm -f "$metadata"' EXIT
     if [ -r "$environment_manifest" ]; then
         # These three nonempty metadata fields are generated identifiers, never values.
         # Parse the complete list before consuming it so jq failures cannot be hidden.
@@ -452,7 +450,13 @@ prepare_runtime_sshd_config() (
         assignments="$assignments \"$escaped\""
     done < "$metadata"
     if [ -n "$assignments" ]; then
-        printf 'SetEnv %s\n' "${assignments# }" >> "$runtime_sshd_config"
+        printf 'SetEnv %s\n' "${assignments# }" >> "$temporary_config"
+    fi
+    if ! cmp -s "$temporary_config" "$runtime_sshd_config"; then
+        mv -f "$temporary_config" "$runtime_sshd_config"
+        if [ -s "$runtime_dir/sshd.pid" ]; then
+            kill -HUP "$(cat "$runtime_dir/sshd.pid")" 2>/dev/null || true
+        fi
     fi
 )
 
