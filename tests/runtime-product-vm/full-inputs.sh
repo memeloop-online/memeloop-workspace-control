@@ -61,8 +61,8 @@ for image in "${images[@]}"; do
 sort -u output/layer-digests.txt -o output/layer-digests.txt
 : > output/layer-unpack-bound.tsv
 while read -r digest; do
- bytes="$(ctr_stage content get "$digest" | gzip -dc | tar -tvf - | awk '
-  $1 ~ /^-/ { bytes += int(($3+4095)/4096)*4096+1024 }
+ bytes="$(ctr_stage content get "$digest" | gzip -dc | tar --numeric-owner -tvf - | awk '
+  $1 ~ /^-/ { bytes += int(($4+4095)/4096)*4096+1024 }
   $1 ~ /^d/ { bytes += 5120 }
   END { printf "%.0f\n", bytes }')"
  printf '%s\t%s\n' "$digest" "$bytes" >> output/layer-unpack-bound.tsv
