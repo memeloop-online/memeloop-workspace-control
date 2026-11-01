@@ -1,0 +1,111 @@
+diff --git a/internal/driver/internal/k8s/logicalvolume_service.go b/internal/driver/internal/k8s/logicalvolume_service.go
+index 06af4d34486ac19c9dd8e503baf265a8cd8d903b..683449712722eabe6d51ed1c381105f11d7bcf86 100644
+--- a/internal/driver/internal/k8s/logicalvolume_service.go
++++ b/internal/driver/internal/k8s/logicalvolume_service.go
+@@ -379,11 +379,11 @@ func (s *LogicalVolumeService) create(ctx context.Context, lv *topolvmv1.Logical
+ func (s *LogicalVolumeService) waitForVolumeProvisioning(ctx context.Context, lvName string) (*topolvmv1.LogicalVolume, error) {
+ 	var newLV topolvmv1.LogicalVolume
+ 	return &newLV, wait.Backoff{
+-		Duration: 1 * time.Second,
+-		Factor:   2,
++		Duration: 250 * time.Millisecond,
++		Factor:   1,
+ 		Jitter:   0.1,
+ 		Steps:    math.MaxInt,
+-		Cap:      10 * time.Second,
++		Cap:      250 * time.Millisecond,
+ 	}.DelayFunc().Until(ctx, true, false, func(ctx context.Context) (bool, error) {
+ 		if err := s.getter.Get(ctx, client.ObjectKey{Name: lvName}, &newLV); err != nil {
+ 			logger.Error(err, "failed to get LogicalVolume", "name", lvName)
+diff --git a/internal/driver/internal/k8s/logicalvolume_service_test.go b/internal/driver/internal/k8s/logicalvolume_service_test.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..62e6595766c2e7cb0f4892ccf6ac968d83f3ef4c
+--- /dev/null
++++ b/internal/driver/internal/k8s/logicalvolume_service_test.go
+@@ -0,0 +1,86 @@
++package k8s
++
++import (
++	"context"
++	"sync/atomic"
++	"testing"
++	"time"
++
++	. "github.com/onsi/ginkgo/v2"
++	. "github.com/onsi/gomega"
++	topolvmv1 "github.com/topolvm/topolvm/api/v1"
++	"sigs.k8s.io/controller-runtime/pkg/client"
++)
++
++type provisioningGetter func(context.Context, client.ObjectKey, client.Object) error
++
++func (get provisioningGetter) Get(ctx context.Context, key client.ObjectKey, obj client.Object) error {
++	return get(ctx, key, obj)
++}
++
++func TestLogicalVolumeProvisioning(t *testing.T) {
++	RegisterFailHandler(Fail)
++	RunSpecs(t, "LogicalVolume provisioning")
++}
++
++var _ = Describe("Provisioning status observation", func() {
++	type result struct {
++		volume *topolvmv1.LogicalVolume
++		err    error
++	}
++
++	var current *atomic.Pointer[topolvmv1.LogicalVolume]
++	var read chan struct{}
++	var completed chan result
++	var cancel context.CancelFunc
++
++	BeforeEach(func() {
++		status := new(atomic.Pointer[topolvmv1.LogicalVolume])
++		status.Store(&topolvmv1.LogicalVolume{})
++		notifications := make(chan struct{}, 1)
++		finished := make(chan result, 1)
++		current, read, completed = status, notifications, finished
++		ctx, stop := context.WithTimeout(context.Background(), 5*time.Second)
++		cancel = stop
++		DeferCleanup(cancel)
++		service := &LogicalVolumeService{
++			getter: provisioningGetter(func(_ context.Context, _ client.ObjectKey, obj client.Object) error {
++				status.Load().DeepCopyInto(obj.(*topolvmv1.LogicalVolume))
++				select {
++				case notifications <- struct{}{}:
++				default:
++				}
++				return nil
++			}),
++		}
++		go func() {
++			volume, err := service.waitForVolumeProvisioning(ctx, "workspace")
++			finished <- result{volume: volume, err: err}
++		}()
++		Eventually(read, time.Second).Should(Receive())
++	})
++
++	It("observes a cached status change without waiting for the old one-second backoff", func() {
++		ready := current.Load().DeepCopy()
++		ready.Status.VolumeID = "workspace-volume"
++		updatedAt := time.Now()
++		current.Store(ready)
++
++		var got result
++		Eventually(completed, 750*time.Millisecond).Should(Receive(&got))
++		AddReportEntry("cached status observation latency", time.Since(updatedAt))
++		Expect(got.err).NotTo(HaveOccurred())
++		Expect(got.volume.Status.VolumeID).To(Equal("workspace-volume"))
++	})
++
++	It("returns cancellation while provisioning is still pending", func() {
++		cancelledAt := time.Now()
++		cancel()
++
++		var got result
++		Eventually(completed, 750*time.Millisecond).Should(Receive(&got))
++		AddReportEntry("pending request cancellation latency", time.Since(cancelledAt))
++		Expect(got.err).To(MatchError(context.Canceled))
++		Expect(got.volume.Status.VolumeID).To(BeEmpty())
++	})
++})
