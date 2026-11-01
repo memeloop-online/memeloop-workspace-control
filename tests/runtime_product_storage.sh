@@ -1,7 +1,13 @@
 #!/bin/bash
-# Only an expendable GitHub-hosted VM. No synthetic CSI publication is permitted.
+# Only an expendable CI VM. No synthetic CSI publication is permitted.
 set -euo pipefail
-: "${GITHUB_ACTIONS:?Disposable GitHub Actions VM only}"
+: "${GITHUB_ACTIONS:?Disposable CI VM only}"
+inputs="${MWC_PRODUCT_STORAGE_INPUTS:-}"
+fetch_input() {
+ local name="$1" url="$2" digest="$3" destination="$4"
+ if [ -n "$inputs" ]; then cp "$inputs/$name" "$destination"; else curl -fsSL --connect-timeout 15 --max-time 600 "$url" -o "$destination"; fi
+ printf '%s  %s\n' "$digest" "$destination" | sha256sum -c -
+}
 : "${RUNNER_TEMP:?}"
 : "${GITHUB_WORKSPACE:?}"
 base=/var/lib/mwc-product-storage-ci
@@ -49,6 +55,7 @@ finish() {
  exit "$status"
 }
 
+if [ -z "$inputs" ]; then
 # Record the actual runner route before pulling; these unauthenticated bounded
 # probes distinguish private DNS or address-family reachability from auth errors.
 getent ahostsv4 harbor.k3s.onetwo.website > "$out/harbor-dns-v4.txt" || true
@@ -76,11 +83,17 @@ registry_manifest harbor.k3s.onetwo.website library/rust-dev \
 registry_manifest ghcr.io memeloop-online/memeloop-workspace-control-ttyd \
  sha256:cc408d2cb9c3fe457b206cffae4a15264ae15f037eac0b1f4dde86058d499012 ttyd \
  https://ghcr.io/token ghcr.io
+else
+ # Guest inputs contain the actual digest-checked registry metadata and OCI
+ # content staged in the private-network CI job, never replacement images.
+ (cd "$inputs" && sha256sum -c SHA256SUMS)
+ cp "$inputs/registry/"*.json "$out/"
+fi
 if [ "${1:-}" = --prerequisites ]; then exit 0; fi
 trap finish EXIT
 
-curl -fsSL --retry 3 'https://github.com/k3s-io/k3s/releases/download/v1.36.2%2Bk3s1/k3s' -o "$base/k3s-bin"
-echo "65a55ec56c24eab44383086166ec620a491952b7e23941a49ddca6e8a4c4b4de  $base/k3s-bin" | sha256sum -c -
+fetch_input k3s 'https://github.com/k3s-io/k3s/releases/download/v1.36.2%2Bk3s1/k3s' \
+ 65a55ec56c24eab44383086166ec620a491952b7e23941a49ddca6e8a4c4b4de "$base/k3s-bin"
 chmod 0755 "$base/k3s-bin"
 K3S_DATA_DIR="$base/k3s" "$base/k3s-bin" ctr version --help >/dev/null
 export PATH="$base/k3s/data/current/bin:$PATH"
@@ -131,9 +144,19 @@ TOML
 containerd --config "$base/containerd.toml" > "$out/containerd.log" 2>&1 & containerd_pid=$!
 for n in $(seq 1 60); do if cri info > "$out/cri-info.json" 2>/dev/null; then break; fi; sleep 1; done
 cri info > "$out/cri-info.json"
+if [ -n "$inputs" ]; then
+ # Imports and kubelet use one real containerd content store. Stage archives
+ # contain exact original references, so the disconnected guest never pulls.
+ ctr_ci images import --no-unpack --digests "$inputs/images.tar"
+ # The guest owns this input disk. Release the now-duplicated archive before
+ # image unpack and the real one-GiB ENOSPC case; discard reaches the job file.
+ rm "$inputs/images.tar"
+ sync
+ fstrim -v "$inputs" > "$out/input-disk-trim.txt"
+fi
 # Keep actual production limits and security contexts. Ubuntu's VM policy must
 # permit the existing unprivileged RootlessKit user namespace, as main CI does.
-sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then sysctl -w kernel.apparmor_restrict_unprivileged_userns=0; fi
 K3S_DATA_DIR="$base/k3s" "$base/k3s-bin" server --data-dir "$base/k3s" --write-kubeconfig "$base/kubeconfig" \
  --node-name mwc-product-ci --container-runtime-endpoint "unix://$base/containerd.sock" \
  --disable traefik,servicelb,local-storage,metrics-server --disable-helm-controller \
@@ -150,11 +173,11 @@ kind: RuntimeClass
 metadata: {name: mwc-storage-ci}
 handler: mwc-storage-ci
 YAML
-curl -fsSL https://get.helm.sh/helm-v4.2.4-linux-amd64.tar.gz -o "$base/helm.tgz"
-echo "c306b46f719b0a4da32d0f78ee21bf90ce8d602f15b22ab753f0674d1670a7f3  $base/helm.tgz" | sha256sum -c -
+fetch_input helm.tgz https://get.helm.sh/helm-v4.2.4-linux-amd64.tar.gz \
+ c306b46f719b0a4da32d0f78ee21bf90ce8d602f15b22ab753f0674d1670a7f3 "$base/helm.tgz"
 tar -xzf "$base/helm.tgz" -C "$base"
-curl -fsSL https://github.com/topolvm/topolvm/releases/download/topolvm-chart-v17.2.0/topolvm-17.2.0.tgz -o "$base/topolvm.tgz"
-echo "4b6c070da0b38f098c9ef6b6a38ef4e2dfff52adecedc280ad92bfab408f90ee  $base/topolvm.tgz" | sha256sum -c -
+fetch_input topolvm.tgz https://github.com/topolvm/topolvm/releases/download/topolvm-chart-v17.2.0/topolvm-17.2.0.tgz \
+ 4b6c070da0b38f098c9ef6b6a38ef4e2dfff52adecedc280ad92bfab408f90ee "$base/topolvm.tgz"
 cat > "$base/topolvm-values.yaml" <<'YAML'
 cert-manager: {enabled: false}
 webhook:
