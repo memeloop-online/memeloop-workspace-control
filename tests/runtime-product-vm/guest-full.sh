@@ -33,7 +33,7 @@ exit 101
 POLICY
 cp -a "$inputs/apt-lists/." /var/lib/apt/lists/
 rm -f /etc/apt/sources.list /etc/apt/sources.list.d/*.sources
-printf '%s\n' 'deb [check-valid-until=no] http://snapshot.debian.org/archive/debian/20261026T000000Z bookworm main' > /etc/apt/sources.list
+printf '%s\n' 'deb [check-valid-until=no] https://snapshot-cloudflare.debian.org/archive/debian/20261026T000000Z bookworm main' > /etc/apt/sources.list
 cp "$inputs/debs/"*.deb /var/cache/apt/archives/
 apt-get --assume-yes --no-download --no-install-recommends install \
  lvm2 thin-provisioning-tools xfsprogs jq openssh-client iproute2 iptables \

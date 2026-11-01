@@ -1,6 +1,7 @@
 {
   "stage_image": "harbor.k3s.onetwo.website/docker-io/library/debian:bookworm-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3",
   "debian_snapshot": "20261026T000000Z",
+  "debian_snapshot_url": "https://snapshot-cloudflare.debian.org/archive/debian/20261026T000000Z",
   "guest_url": "https://cloud.debian.org/images/cloud/bookworm/20261026-2643/debian-12-genericcloud-amd64-20261026-2643.qcow2",
   "guest_sha512": "0464b5d4ae3aa4f658468d88da83af7857b71548b30d46dcb6282770955a747fb95a983476db90d25afd0653af607224c7ebd05122ab71faa106fd712aaad652",
   "guest_download_bytes": 349831168,
