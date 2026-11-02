@@ -349,11 +349,12 @@ export class ApiClient {
     return this.request(`/api/v1/workspaces?${queryString({ organization_id: organizationId, ...options })}`);
   }
 
-  createWorkspace(command: CreateWorkspace): Promise<WorkspaceResponse> {
+  createWorkspace(command: CreateWorkspace, idempotencyKey?: string): Promise<WorkspaceResponse> {
     return this.request("/api/v1/workspaces", {
       method: "POST",
       body: JSON.stringify(command),
       idempotent: true,
+      idempotencyKey,
     });
   }
 
@@ -447,12 +448,12 @@ export class ApiClient {
 
   private async request<T>(
     path: string,
-    init: RequestInit & { idempotent?: boolean } = {},
+    init: RequestInit & { idempotent?: boolean; idempotencyKey?: string } = {},
   ): Promise<T> {
     const headers = new Headers(init.headers);
     headers.set("Authorization", `Bearer ${this.token}`);
     if (init.body) headers.set("Content-Type", "application/json");
-    if (init.idempotent) headers.set("Idempotency-Key", crypto.randomUUID());
+    if (init.idempotent) headers.set("Idempotency-Key", init.idempotencyKey ?? crypto.randomUUID());
     const response = await fetch(path, { ...init, headers });
     if (!response.ok) {
       if (response.status === 401) this.onUnauthorized?.();

@@ -69,9 +69,13 @@ pub(super) async fn fetch_workspace_runtime_details(
         .await
         .map_err(ApiError::Kubernetes)?
         .items;
+    let bound_home = workspace
+        .home_volume_binding
+        .as_ref()
+        .map(|binding| listed_bound_home_identity(&storage_pvcs, binding));
     let mut storage_pvcs = storage_pvc_identities(storage_pvcs, workspace.id, installation_id);
-    if let Some(binding) = &workspace.home_volume_binding {
-        storage_pvcs.persistent = bound_home_identity(client, binding).await?;
+    if let Some(identity) = bound_home {
+        storage_pvcs.persistent = identity;
     }
 
     let metric_result = pod_metrics(client.clone(), namespace, selector).await;
@@ -103,17 +107,16 @@ pub(super) async fn fetch_workspace_runtime_details(
     })
 }
 
-pub(super) async fn bound_home_identity(
-    client: &Client,
+pub(super) fn listed_bound_home_identity(
+    claims: &[PersistentVolumeClaim],
     binding: &crate::workspaces::WorkspaceHomeVolumeBinding,
-) -> Result<Option<StorageIdentity>, ApiError> {
-    let claim = Api::<PersistentVolumeClaim>::namespaced(client.clone(), &binding.namespace)
-        .get_opt(&binding.claim_name)
-        .await
-        .map_err(ApiError::Kubernetes)?;
-    Ok(claim
-        .filter(|claim| {
-            claim.metadata.uid.as_deref() == Some(binding.claim_uid.as_str())
+) -> Option<StorageIdentity> {
+    claims
+        .iter()
+        .find(|claim| {
+            claim.metadata.namespace.as_deref() == Some(binding.namespace.as_str())
+                && claim.metadata.name.as_deref() == Some(binding.claim_name.as_str())
+                && claim.metadata.uid.as_deref() == Some(binding.claim_uid.as_str())
                 && claim.metadata.deletion_timestamp.is_none()
                 && claim
                     .status
@@ -121,7 +124,7 @@ pub(super) async fn bound_home_identity(
                     .and_then(|status| status.phase.as_deref())
                     == Some("Bound")
         })
-        .map(|_| (binding.namespace.clone(), binding.claim_name.clone())))
+        .map(|_| (binding.namespace.clone(), binding.claim_name.clone()))
 }
 
 fn storage_pvc_identities(
@@ -197,6 +200,47 @@ pub(super) fn scratch_backing_from_pods(pods: &[Pod]) -> StorageBacking {
 mod tests {
     use super::*;
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
+
+    #[test]
+    fn listed_home_uses_exact_bound_claim_instead_of_retained_pre_migration_home() {
+        let binding = crate::workspaces::WorkspaceHomeVolumeBinding {
+            namespace: "workspaces".into(),
+            claim_name: "home-thin".into(),
+            claim_uid: "original-home-uid".into(),
+            capacity_gib: 20,
+        };
+        let claim = PersistentVolumeClaim {
+            metadata: ObjectMeta {
+                namespace: Some(binding.namespace.clone()),
+                name: Some(binding.claim_name.clone()),
+                uid: Some(binding.claim_uid.clone()),
+                ..ObjectMeta::default()
+            },
+            status: Some(k8s_openapi::api::core::v1::PersistentVolumeClaimStatus {
+                phase: Some("Bound".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let mut retained = claim.clone();
+        retained.metadata.name = Some("old-home".into());
+        assert_eq!(
+            listed_bound_home_identity(&[retained, claim.clone()], &binding),
+            Some((binding.namespace.clone(), binding.claim_name.clone()))
+        );
+        let mut replaced = claim.clone();
+        replaced.metadata.uid = Some("replacement-uid".into());
+        assert_eq!(listed_bound_home_identity(&[replaced], &binding), None);
+        let mut pending = claim.clone();
+        pending.status.as_mut().unwrap().phase = Some("Pending".into());
+        assert_eq!(listed_bound_home_identity(&[pending], &binding), None);
+        let mut terminating = claim;
+        terminating.metadata.deletion_timestamp =
+            Some(k8s_openapi::apimachinery::pkg::apis::meta::v1::Time(
+                "2026-11-02T00:00:00Z".parse().unwrap(),
+            ));
+        assert_eq!(listed_bound_home_identity(&[terminating], &binding), None);
+    }
 
     #[test]
     fn details_only_forward_warning_events_for_persistence() {
