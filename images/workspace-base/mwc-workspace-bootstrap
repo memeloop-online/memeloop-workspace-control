@@ -188,6 +188,13 @@ sync_injected_file() {
     numeric_mode=$3
     owner=$4
     group=$5
+    # Polling an unchanged injection must not trigger Codex config/skill watchers.
+    # Match metadata too: a permission or ownership change still needs repair.
+    if [ "$(find "$target" -maxdepth 0 -type f -perm "$numeric_mode" \
+        -user "$owner" -group "$group" -printf yes 2>/dev/null)" = yes ] \
+        && cmp -s "$source" "$target"; then
+        return 0
+    fi
     target_dir=$(dirname "$target")
     if ! install -d -m 0750 -o "$owner" -g "$group" "$target_dir"; then
         : > "$injection_attempt_failed"
@@ -502,6 +509,7 @@ start_browser_desktop() {
 case "${1:-serve}" in
     prepare-layout) prepare_layout ;;
     prepare) prepare ;;
+    monitor-injections) injection_sync_monitor ;;
     serve)
         verify_runtime_dependencies
         prepare
@@ -510,5 +518,5 @@ case "${1:-serve}" in
         start_browser_desktop
         exec /usr/sbin/sshd -D -e -f "$runtime_sshd_config"
         ;;
-    *) echo "usage: mwc-workspace-bootstrap prepare-layout|prepare|serve" >&2; exit 64 ;;
+    *) echo "usage: mwc-workspace-bootstrap prepare-layout|prepare|monitor-injections|serve" >&2; exit 64 ;;
 esac

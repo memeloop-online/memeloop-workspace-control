@@ -102,6 +102,23 @@ test "$(stat -c %a /workspace/recovery-file)" = 640
 test "$(stat -c %U:%G /workspace/recovery-file)" = workspace:workspace
 cp /run/mwc-ssh/authorized_keys /tmp/expected-authorized-keys
 
+# Unchanged injected files keep their inode/mtime, avoiding repeated skill reloads.
+injected_identity=$(stat -c '%i:%y' /workspace/recovery-file)
+prepare_recovery_fixture
+test "$(stat -c '%i:%y' /workspace/recovery-file)" = "$injected_identity"
+chmod 0600 /workspace/recovery-file
+prepare_recovery_fixture
+test "$(stat -c %a /workspace/recovery-file)" = 640
+chown root:root /workspace/recovery-file
+prepare_recovery_fixture
+test "$(stat -c %U:%G /workspace/recovery-file)" = workspace:workspace
+# A same-content symlink must still be replaced by an independent regular file.
+rm /workspace/recovery-file
+ln -s "$injection_config/recovery-file" /workspace/recovery-file
+prepare_recovery_fixture
+test ! -L /workspace/recovery-file
+test "$(stat -c %a /workspace/recovery-file)" = 640
+
 # A regular file in place of a parent directory forces a persistent injection failure.
 printf '%s\n' keep > /workspace/blocked-parent
 printf '%s\n' new > "$injection_config/recovery-file"
@@ -344,8 +361,10 @@ wait_for_reload_value() {
 }
 wait_for_reload_value /run/mwc-ssh/ttyd_client_key before-reload
 config_inode=$(stat -c %i /run/mwc-ssh/sshd_config)
+injected_identity=$(stat -c '%i:%y' /workspace/recovery-file)
 sleep 16
 test "$(stat -c %i /run/mwc-ssh/sshd_config)" = "$config_inode"
+test "$(stat -c '%i:%y' /workspace/recovery-file)" = "$injected_identity"
 ! grep -q 'Received SIGHUP' /tmp/sshd-reload.log
 
 printf '%s' after-reload > "$injection_config/reload-value"
