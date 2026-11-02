@@ -161,7 +161,7 @@ export function WorkspacePanel(props: Props) {
     let active = true;
     const nextGeneration = ++runtimeGeneration.current;
     const refresh = async () => {
-      if (document.visibilityState !== "visible" || !scopeIsCurrent || workspaces.length === 0) return;
+      if (!active || document.visibilityState !== "visible" || !scopeIsCurrent || workspaces.length === 0) return;
       // A slow runtime request must never overlap the next poll tick.
       if (runtimeRequestActive.current) return;
       runtimeRequestActive.current = true;

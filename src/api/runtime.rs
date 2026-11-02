@@ -145,7 +145,7 @@ pub(super) async fn list(
         .ok_or(ApiError::KubernetesUnavailable)?;
     let selector = runtime_selector(&state.config.installation_id, &workspaces);
     let kubernetes_runtime =
-        fetch_kubernetes_runtime(state.as_ref(), client, &selector, &workspaces).await?;
+        fetch_kubernetes_runtime(&state.observability, client, &selector, &workspaces).await?;
     let storage_identities = kubernetes_runtime
         .storage_pvcs
         .values()
@@ -187,14 +187,12 @@ fn runtime_selector(installation_id: &InstallationId, workspaces: &[Workspace]) 
 }
 
 async fn fetch_kubernetes_runtime(
-    state: &AppState,
+    observability: &crate::observability::Observability,
     client: Client,
     selector: &str,
     workspaces: &[Workspace],
 ) -> Result<KubernetesRuntimeBatch, ApiError> {
-    let request = state
-        .observability
-        .begin_upstream(crate::observability::UpstreamKind::Kubernetes);
+    let request = observability.begin_upstream(crate::observability::UpstreamKind::Kubernetes);
     let pods = Api::<Pod>::all(client.clone());
     let pvcs = Api::<PersistentVolumeClaim>::all(client.clone());
     let params = ListParams::default().labels(selector);
