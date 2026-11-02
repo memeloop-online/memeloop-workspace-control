@@ -69,7 +69,7 @@ export function WorkspacePanel(props: Props) {
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(false);
   const [loadedScope, setLoadedScope] = useState<string | null>(null);
-  const [runtimeFailed, setRuntimeFailed] = useState(false);
+  const [runtimeError, setRuntimeError] = useState<string | null>(null);
   const [runtimeRetry, setRuntimeRetry] = useState(0);
   const [pendingAction, setPendingAction] = useState<PendingAction>(null);
   const [activeAction, setActiveAction] = useState<ActiveAction>(null);
@@ -85,17 +85,23 @@ export function WorkspacePanel(props: Props) {
   const activeIdsRef = useRef<string[]>([]);
   const listAnchorRef = useRef<HTMLDivElement>(null);
   const runtimeGeneration = useRef(0);
+  const runtimeRequestActive = useRef(false);
+  const runtimeRefreshRef = useRef<(() => Promise<void>) | null>(null);
   const usageGeneration = useRef(0);
   const usageRequestActive = useRef(false);
   const actionBusyRef = useRef(false);
+  const createIdempotencyRef = useRef<{ fingerprint: string; key: string } | null>(null);
   const scope = `${props.organizationId}\u0000${debouncedSearch.trim()}\u0000${sort}`;
   const scopeRef = useRef(scope);
   scopeRef.current = scope;
+  const organizationRef = useRef(props.organizationId);
+  organizationRef.current = props.organizationId;
   const scopeIsCurrent = loadedScope === scope;
   const workspaces = scopeIsCurrent ? items : EMPTY_WORKSPACES;
   const shrinkItem = shrinkTargetId ? workspaces.find((item) => item.workspace.id === shrinkTargetId) ?? null : null;
   const runtimeKey = workspaces.map(({ workspace }) => `${workspace.id}:${workspace.state}`).join(",");
   activeIdsRef.current = workspaces.map(({ workspace }) => workspace.id);
+  const runtimeHasData = Object.keys(runtime).length > 0;
   const selectedTemplate = templates.find((template) => template.id === templateId);
   const canCreate = hasApiKeyScope(props.principal, "create_workspace");
   const canConnect = hasApiKeyScope(props.principal, "connect_workspace");
@@ -112,7 +118,7 @@ export function WorkspacePanel(props: Props) {
     const nextGeneration = ++generation.current;
     requestActive.current = true;
     cursorRef.current = null; nextCursorRef.current = null;
-    setLoading(true); setItems([]); setSummary(null); setRuntime({}); setNextCursor(null); setHistory([null]); setPage(1); setLoadedScope(null); setRuntimeFailed(false);
+    setLoading(true); setItems([]); setSummary(null); setRuntime({}); setNextCursor(null); setHistory([null]); setPage(1); setLoadedScope(null); setRuntimeError(null);
     void fetchPage(null, scope, nextGeneration).finally(() => finishRequest(nextGeneration, scope));
   }, [props.api, props.organizationId, debouncedSearch, sort]);
 
@@ -156,14 +162,26 @@ export function WorkspacePanel(props: Props) {
     const nextGeneration = ++runtimeGeneration.current;
     const refresh = async () => {
       if (document.visibilityState !== "visible" || !scopeIsCurrent || workspaces.length === 0) return;
+      // A slow runtime request must never overlap the next poll tick.
+      if (runtimeRequestActive.current) return;
+      runtimeRequestActive.current = true;
       try {
         const batches = workspaceIdBatches(workspaces.map(({ workspace }) => workspace.id));
         const responses = await Promise.all(batches.map((workspaceIds) => props.api.workspaceRuntimes(props.organizationId, workspaceIds)));
         if (!active || runtimeGeneration.current !== nextGeneration) return;
         setRuntime((current) => Object.fromEntries(responses.flat().map((entry) => [entry.workspace_id, { ...entry.runtime, events: current[entry.workspace_id]?.events ?? [] }])));
-        setRuntimeFailed(false);
-      } catch { if (active && runtimeGeneration.current === nextGeneration) setRuntimeFailed(true); }
+        setRuntimeError(null);
+      } catch (error) {
+        // Keep the last runtime observation visible; it is marked stale, never reset to zero.
+        if (active && runtimeGeneration.current === nextGeneration) setRuntimeError(errorMessage(error, t("operationFailed")));
+      } finally {
+        runtimeRequestActive.current = false;
+        // A scope change while this request was in flight made the new scope's
+        // immediate refresh defer; run it now instead of waiting a full tick.
+        if (runtimeGeneration.current !== nextGeneration) void runtimeRefreshRef.current?.();
+      }
     };
+    runtimeRefreshRef.current = refresh;
     void refresh();
     const timer = window.setInterval(() => void refresh(), 30_000);
     return () => { active = false; window.clearInterval(timer); };
@@ -271,13 +289,43 @@ export function WorkspacePanel(props: Props) {
   async function submitCreate(command: CreateWorkspace) {
     setSubmitting(true);
     try {
-      await props.api.createWorkspace(command);
+      const created = await props.api.createWorkspace(command, createIdempotencyKey(command));
+      createIdempotencyRef.current = null;
+      // The user may have switched organization while the POST was in flight;
+      // the form and list then belong to the new organization, so leave them alone.
+      if (organizationRef.current !== command.organization_id) return;
       setName(""); setTemplateId(""); setNodePool(""); setResourceDraft(null); setTemporaryStorageGiB(""); setUseLonghorn(false); setShowCreate(false); setPendingCreate(null);
-      await props.onRefresh();
-      // A new workspace only appears on the first page in newest-first order; keep the user's search filter untouched.
-      if (sort === "newest") await resetPage(); else setSort("newest");
+      // The confirmed POST already settles the submission; the page-one reload
+      // runs detached so a slow list fetch never holds submitting open.
+      void showCreated(created);
     } catch (error) { props.onError(errorMessage(error, t("operationFailed"))); }
     finally { setSubmitting(false); }
+  }
+
+  // Retries of the identical submission reuse one idempotency key so the
+  // backend can deduplicate an ambiguous (possibly accepted) earlier attempt.
+  function createIdempotencyKey(command: CreateWorkspace): string {
+    const fingerprint = JSON.stringify(command);
+    if (createIdempotencyRef.current?.fingerprint !== fingerprint) createIdempotencyRef.current = { fingerprint, key: crypto.randomUUID() };
+    return createIdempotencyRef.current.key;
+  }
+
+  // Surface the accepted workspace without a global refresh: insert it at the
+  // top of the newest first page when that page is already on screen, otherwise
+  // reload page one within the untouched search/sort scope.
+  async function showCreated(created: WorkspaceResponse) {
+    // A scope changed during the flight is left untouched: its own loading flow
+    // already reflects whatever the user is looking at now.
+    if (scopeRef.current !== scope) return;
+    // Live refs keep this check valid even if the user paged while the create
+    // request was in flight.
+    if (sort === "newest" && debouncedSearch.trim() === "" && page === 1 && scopeIsCurrent && cursorRef.current === null) {
+      // Supersede any in-flight page poll so it cannot overwrite the insertion.
+      ++generation.current; requestActive.current = false; setLoading(false);
+      setItems((current) => [created, ...current.filter((item) => item.workspace.id !== created.workspace.id)]);
+      return;
+    }
+    if (sort === "newest") await resetPage(); else setSort("newest");
   }
 
   function chooseTemplate(id: string) {
@@ -356,8 +404,8 @@ export function WorkspacePanel(props: Props) {
     try {
       const observation = await props.api.workspaceRuntime(workspaceId);
       if (scopeRef.current !== scope || !activeIdsRef.current.includes(workspaceId)) return;
-      setRuntime((current) => ({ ...current, [workspaceId]: observation })); setRuntimeFailed(false);
-    } catch (error) { if (scopeRef.current === scope) { setRuntimeFailed(true); props.onError(errorMessage(error, t("operationFailed"))); } }
+      setRuntime((current) => ({ ...current, [workspaceId]: observation })); setRuntimeError(null);
+    } catch (error) { if (scopeRef.current === scope) { setRuntimeError(errorMessage(error, t("operationFailed"))); props.onError(errorMessage(error, t("operationFailed"))); } }
   }
 
   async function resetPage() {
@@ -392,7 +440,7 @@ export function WorkspacePanel(props: Props) {
     <WorkspaceStats summary={usageSummaryOrganization === props.organizationId ? usageSummary : null} quota={quota} stale={usageSummaryStale} />
     {canCreate && showCreate && <WorkspaceCreationForm name={name} templateId={templateId} templates={templates} nodePools={nodePools} nodePoolsStatus={nodePoolsStatus} nodePool={nodePool} resourceDraft={resourceDraft} temporaryStorageGiB={temporaryStorageGiB} useLonghorn={useLonghorn} explicitInjectionRefs={explicitInjectionRefs} organizationInjections={organizationInjections} userInjections={userInjections} organizationRefs={organizationRefs} userRefs={userRefs} submitting={submitting} onNameChange={setName} onTemplateChange={chooseTemplate} onNodePoolChange={setNodePool} onNodePoolsRetry={() => setNodePoolsRetry((value) => value + 1)} onResourceChange={updateResource} onTemporaryStorageChange={setTemporaryStorageGiB} onUseLonghornChange={setUseLonghorn} onReferenceModeChange={setReferenceMode} onOrganizationRefsChange={setOrganizationRefs} onUserRefsChange={setUserRefs} onSubmit={create} />}
     <div className={styles.filters}><Field className={styles.searchField} label={t("searchWorkspaces")}><Input type="search" contentBefore={<SearchRegular aria-hidden="true" />} contentAfter={search ? <Button appearance="transparent" size="small" icon={<DismissRegular aria-hidden="true" />} aria-label={t("clearSearch")} onClick={() => setSearch("")} /> : undefined} value={search} onChange={(_, data) => setSearch(data.value)} placeholder={t("searchWorkspacesHint")} /></Field><Field className={styles.sortField} label={t("sortWorkspaces")}><Dropdown value={sort === "newest" ? t("sortNewestFirst") : t("sortOldestFirst")} selectedOptions={[sort]} onOptionSelect={(_, data) => { if (data.optionValue === "newest" || data.optionValue === "oldest") setSort(data.optionValue); }}><Option value="newest" text={t("sortNewestFirst")}>{t("sortNewestFirst")}</Option><Option value="oldest" text={t("sortOldestFirst")}>{t("sortOldestFirst")}</Option></Dropdown></Field><div className={styles.pagination} role="group" aria-label={t("workspacePagination")}><Button icon={<ChevronLeftRegular />} aria-label={t("previousPage")} disabled={page <= 1 || loading} onClick={() => void previousPage()}>{t("previousPage")}</Button><Text className={styles.paginationStatus} role="status">{t("workspacePageStatus")} {page}</Text><Button icon={<ChevronRightRegular />} iconPosition="after" aria-label={t("nextPage")} disabled={!nextCursor || loading} onClick={() => void nextPage()}>{t("nextPage")}</Button></div></div>
-    {runtimeFailed && workspaces.length > 0 && <MessageBar intent="warning"><MessageBarBody>{t("runtimeDataUnavailable")}</MessageBarBody><Button appearance="subtle" onClick={() => setRuntimeRetry((value) => value + 1)}>{t("retryRuntime")}</Button></MessageBar>}
+    {runtimeError && workspaces.length > 0 && <MessageBar intent="warning"><MessageBarBody>{runtimeHasData ? t("runtimeDataStale", { message: runtimeError }) : t("runtimeDataUnavailable", { message: runtimeError })}</MessageBarBody><Button appearance="subtle" onClick={() => setRuntimeRetry((value) => value + 1)}>{t("retryRuntime")}</Button></MessageBar>}
     <div ref={listAnchorRef} className={styles.list} aria-busy={props.busy || loading}>
       {workspaces.length === 0 && loading && <div className={styles.empty} role="status"><Spinner label={t("loadingWorkspaces")} /></div>}
       {workspaces.length === 0 && !loading && scopeIsCurrent && <div className={styles.empty}>{debouncedSearch.trim() ? t("noMatchingWorkspaces") : t("noWorkspaces")}</div>}

@@ -249,12 +249,12 @@ pub(super) async fn list(
             query.sort.unwrap_or_default(),
         )
         .await?;
-    let mut responses = Vec::with_capacity(workspaces.items.len());
-    for workspace in workspaces.items {
+    let responses = futures::future::try_join_all(workspaces.items.into_iter().map(|workspace| {
         let expose_connection =
             actor.allows(Permission::ConnectWorkspace, workspace.organization_id);
-        responses.push(workspace_response(&state, workspace, expose_connection).await?);
-    }
+        workspace_response(&state, workspace, expose_connection)
+    }))
+    .await?;
     Ok(Json(WorkspaceResponsePage {
         items: responses,
         next_cursor: workspaces.next_cursor,
