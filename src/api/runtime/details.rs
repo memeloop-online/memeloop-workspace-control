@@ -235,7 +235,10 @@ mod tests {
         pending.status.as_mut().unwrap().phase = Some("Pending".into());
         assert_eq!(listed_bound_home_identity(&[pending], &binding), None);
         let mut terminating = claim;
-        terminating.metadata.deletion_timestamp = Some(Default::default());
+        terminating.metadata.deletion_timestamp =
+            Some(k8s_openapi::apimachinery::pkg::apis::meta::v1::Time(
+                "2026-11-02T00:00:00Z".parse().unwrap(),
+            ));
         assert_eq!(listed_bound_home_identity(&[terminating], &binding), None);
     }
 
