@@ -201,7 +201,7 @@ async fn fetch_kubernetes_runtime(
         pvcs.list(&params),
         tokio::time::timeout(
             std::time::Duration::from_secs(3),
-            pod_metrics_all(client, selector)
+            pod_metrics_all(client.clone(), selector)
         ),
     );
     let pod_list = pod_list.map_err(ApiError::Kubernetes)?;
@@ -209,17 +209,20 @@ async fn fetch_kubernetes_runtime(
     let metric_result = metric_result
         .map_err(|error| error.to_string())
         .and_then(|result| result.map_err(|error| error.to_string()));
-    let bound_homes = workspaces
-        .iter()
-        .filter_map(|workspace| {
-            workspace.home_volume_binding.as_ref().map(|binding| {
-                (
+    let bound_homes = futures::future::try_join_all(workspaces.iter().filter_map(|workspace| {
+        let client = &client;
+        let claims = &pvc_list.items;
+        workspace
+            .home_volume_binding
+            .as_ref()
+            .map(|binding| async move {
+                Ok::<_, ApiError>((
                     workspace.id,
-                    details::listed_bound_home_identity(&pvc_list.items, binding),
-                )
+                    details::bound_home_identity(client, claims, binding).await?,
+                ))
             })
-        })
-        .collect::<Vec<_>>();
+    }))
+    .await?;
     let mut storage_pvcs = index_storage_pvcs(pvc_list.items);
     for (id, identity) in bound_homes {
         storage_pvcs.entry(id).or_default().persistent = identity;

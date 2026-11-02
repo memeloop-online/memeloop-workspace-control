@@ -69,10 +69,10 @@ pub(super) async fn fetch_workspace_runtime_details(
         .await
         .map_err(ApiError::Kubernetes)?
         .items;
-    let bound_home = workspace
-        .home_volume_binding
-        .as_ref()
-        .map(|binding| listed_bound_home_identity(&storage_pvcs, binding));
+    let bound_home = match workspace.home_volume_binding.as_ref() {
+        Some(binding) => Some(bound_home_identity(client, &storage_pvcs, binding).await?),
+        None => None,
+    };
     let mut storage_pvcs = storage_pvc_identities(storage_pvcs, workspace.id, installation_id);
     if let Some(identity) = bound_home {
         storage_pvcs.persistent = identity;
@@ -105,6 +105,29 @@ pub(super) async fn fetch_workspace_runtime_details(
         metrics,
         events,
     })
+}
+
+pub(super) async fn bound_home_identity(
+    client: &Client,
+    claims: &[PersistentVolumeClaim],
+    binding: &crate::workspaces::WorkspaceHomeVolumeBinding,
+) -> Result<Option<StorageIdentity>, ApiError> {
+    if let Some(claim) = claims.iter().find(|claim| {
+        claim.metadata.namespace.as_deref() == Some(binding.namespace.as_str())
+            && claim.metadata.name.as_deref() == Some(binding.claim_name.as_str())
+    }) {
+        return Ok(listed_bound_home_identity(
+            std::slice::from_ref(claim),
+            binding,
+        ));
+    }
+    let claim = Api::<PersistentVolumeClaim>::namespaced(client.clone(), &binding.namespace)
+        .get_opt(&binding.claim_name)
+        .await
+        .map_err(ApiError::Kubernetes)?;
+    Ok(claim
+        .as_ref()
+        .and_then(|claim| listed_bound_home_identity(std::slice::from_ref(claim), binding)))
 }
 
 pub(super) fn listed_bound_home_identity(
@@ -240,6 +263,67 @@ mod tests {
                 "2026-11-02T00:00:00Z".parse().unwrap(),
             ));
         assert_eq!(listed_bound_home_identity(&[terminating], &binding), None);
+    }
+
+    #[tokio::test]
+    async fn bound_home_only_fetches_claims_absent_from_the_labeled_list() {
+        let binding = crate::workspaces::WorkspaceHomeVolumeBinding {
+            namespace: "workspaces".into(),
+            claim_name: "adopted-home".into(),
+            claim_uid: "original-home-uid".into(),
+            capacity_gib: 20,
+        };
+        let claim: PersistentVolumeClaim = serde_json::from_value(serde_json::json!({
+            "apiVersion": "v1", "kind": "PersistentVolumeClaim",
+            "metadata": {
+                "namespace": binding.namespace, "name": binding.claim_name,
+                "uid": binding.claim_uid,
+            },
+            "status": {"phase": "Bound"},
+        }))
+        .unwrap();
+        let requests = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let service = tower::service_fn({
+            let requests = requests.clone();
+            let body = serde_json::to_string(&claim).unwrap();
+            move |request: axum::http::Request<kube::client::Body>| {
+                assert_eq!(request.method(), axum::http::Method::GET);
+                assert_eq!(
+                    request.uri().path(),
+                    "/api/v1/namespaces/workspaces/persistentvolumeclaims/adopted-home"
+                );
+                requests.lock().unwrap().push(request.uri().to_string());
+                let body = body.clone();
+                async move {
+                    Ok::<_, std::convert::Infallible>(axum::http::Response::new(
+                        axum::body::Body::from(body),
+                    ))
+                }
+            }
+        });
+        let client = Client::new(service, "default");
+        let expected = Some((binding.namespace.clone(), binding.claim_name.clone()));
+        assert_eq!(
+            bound_home_identity(&client, &[], &binding).await.unwrap(),
+            expected
+        );
+        assert_eq!(requests.lock().unwrap().len(), 1);
+        assert_eq!(
+            bound_home_identity(&client, std::slice::from_ref(&claim), &binding)
+                .await
+                .unwrap(),
+            expected
+        );
+        assert_eq!(requests.lock().unwrap().len(), 1);
+        let mut replaced = claim;
+        replaced.metadata.uid = Some("replacement-uid".into());
+        assert_eq!(
+            bound_home_identity(&client, &[replaced], &binding)
+                .await
+                .unwrap(),
+            None
+        );
+        assert_eq!(requests.lock().unwrap().len(), 1);
     }
 
     #[test]
