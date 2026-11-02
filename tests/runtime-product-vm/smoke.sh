@@ -13,7 +13,12 @@ jq '.smoke_budget_bytes' /app/vm/inputs.json > output/budget.json
 # VM boot. Disk headroom is measured by the launcher on the actual graph volume.
 guest_url="$(jq -r .guest_url /app/vm/inputs.json)"
 guest_hash="$(jq -r .guest_sha512 /app/vm/inputs.json)"
-curl -fSL --connect-timeout 15 --max-time 600 "$guest_url" -o guest-base.qcow2
+for attempt in 1 2 3; do
+ curl -fSL --continue-at - --connect-timeout 15 --max-time 600 "$guest_url" -o guest-base.qcow2 && break
+ download_status=$?
+ [ "$attempt" -lt 3 ] || exit "$download_status"
+ sleep 2
+done
 printf '%s  %s\n' "$guest_hash" guest-base.qcow2 | sha512sum -c -
 k3s_url="$(jq -r .k3s_url /app/vm/inputs.json)"
 k3s_hash="$(jq -r .k3s_sha256 /app/vm/inputs.json)"

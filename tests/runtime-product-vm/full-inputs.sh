@@ -13,7 +13,12 @@ jq -e '.renderer_sha=="7a0d43abaa4d95ad2ecff55ebba1abc70b754564" and .wrapper_sh
 cp /app/runtime_product_storage.sh input/
 cp /app/vm/guest-full.sh input/
 cp /app/vm/inputs.json output/input-pins.json
-curl -fSL --connect-timeout 15 --max-time 600 "$(jq -r .guest_url /app/vm/inputs.json)" -o guest-base.qcow2
+for attempt in 1 2 3; do
+ curl -fSL --continue-at - --connect-timeout 15 --max-time 600 "$(jq -r .guest_url /app/vm/inputs.json)" -o guest-base.qcow2 && break
+ download_status=$?
+ [ "$attempt" -lt 3 ] || exit "$download_status"
+ sleep 2
+done
 printf '%s  %s\n' "$(jq -r .guest_sha512 /app/vm/inputs.json)" guest-base.qcow2 | sha512sum -c -
 fetch() { curl -fSL --connect-timeout 15 --max-time 600 "$2" -o "input/$1"; printf '%s  %s\n' "$3" "input/$1" | sha256sum -c -; }
 fetch k3s 'https://github.com/k3s-io/k3s/releases/download/v1.36.2%2Bk3s1/k3s' 65a55ec56c24eab44383086166ec620a491952b7e23941a49ddca6e8a4c4b4de
