@@ -114,7 +114,7 @@ done
 vg_uuid="$(vgs --noheadings -o vg_uuid mwc-ci-scratch | tr -d '[:space:]-')"
 pool_uuid="$(dmsetup info -c --noheadings -o uuid mwc--ci--scratch-pool-tpool | xargs)"
 jq -n --arg runtime "$(readlink -f "$(command -v runc)")" --arg vg "$vg_uuid" --arg pool "$pool_uuid" --arg dmsetup "$(readlink -f "$(command -v dmsetup)")" --arg base "$base" \
- '{real_runtime:$runtime,kubelet_root:"/var/lib/kubelet",cri_root:($base+"/containerd-root/io.containerd.grpc.v1.cri"),workspace_namespace:"memeloop-workspace-control",pod_log_root:"/var/log/pods",bundle_root:($base+"/containerd-state/io.containerd.runtime.v2.task/k8s.io"),snapshot_root:($base+"/containerd-root/io.containerd.snapshotter.v1.overlayfs/snapshots"),state_root:($base+"/state"),mount_namespace:"/proc/1/ns/mnt",scratch_vg_uuid:$vg,scratch_pool_dm_uuid:$pool,dmsetup:$dmsetup}' > /etc/mwc-runtime-wrapper.json
+ '{real_runtime:$runtime,kubelet_root:"/var/lib/kubelet",cri_root:($base+"/containerd-root/io.containerd.grpc.v1.cri"),cri_state_root:($base+"/containerd-state/io.containerd.grpc.v1.cri"),workspace_namespace:"memeloop-workspace-control",pod_log_root:"/var/log/pods",bundle_root:($base+"/containerd-state/io.containerd.runtime.v2.task/k8s.io"),snapshot_root:($base+"/containerd-root/io.containerd.snapshotter.v1.overlayfs/snapshots"),state_root:($base+"/state"),mount_namespace:"/proc/1/ns/mnt",scratch_vg_uuid:$vg,scratch_pool_dm_uuid:$pool,dmsetup:$dmsetup}' > /etc/mwc-runtime-wrapper.json
 chmod 0600 /etc/mwc-runtime-wrapper.json
 cat > "$base/containerd.toml" <<TOML
 version = 3
