@@ -50,7 +50,45 @@ pub(super) async fn workspace_response(
     )
     .map_err(|_| ApiError::BadRequest("workspace runtime identity is invalid"))?;
     let connectable = expose_connection && workspace.state == WorkspaceState::Ready;
-    let internal_endpoint = ssh_endpoint(state, &workspace, &namespace, connectable).await?;
+    let desktop = async {
+        Ok::<_, ApiError>(
+            if let Some(endpoint) = workspace.template.desktop.as_ref() {
+                let mappings = state.database.list_port_mappings(workspace.id).await?;
+                if let Some(mapping) = mappings
+                    .iter()
+                    .find(|mapping| mapping.internal_port == endpoint.internal_port)
+                {
+                    let status = if workspace_desktop_is_connectable(workspace.state) {
+                        super::port_mappings::mapping_status(state, &workspace, mapping).await
+                    } else {
+                        workspace.state.as_str()
+                    };
+                    Some(WorkspaceDesktopConnection {
+                        mapping_id: mapping.id,
+                        display_name: mapping
+                            .display_name
+                            .clone()
+                            .unwrap_or_else(|| "Browser desktop".to_owned()),
+                        status,
+                        https_url: if desktop_mapping_is_connectable(connectable, status) {
+                            Some(super::port_mappings::mapping_https_url(state, mapping)?)
+                        } else {
+                            None
+                        },
+                    })
+                } else {
+                    None
+                }
+            } else {
+                None
+            },
+        )
+    };
+    let (internal_endpoint, desktop) = tokio::join!(
+        ssh_endpoint(state, &workspace, &namespace, connectable),
+        desktop,
+    );
+    let internal_endpoint = internal_endpoint?;
     let (ssh_command, ssh_config) = ssh_commands(
         &workspace,
         internal_endpoint.as_ref(),
@@ -91,36 +129,7 @@ pub(super) async fn workspace_response(
             .as_ref()
             .map(|key| format!("{} {}", connection.host_key_alias, key.public_key));
     }
-    let desktop = if let Some(endpoint) = workspace.template.desktop.as_ref() {
-        let mappings = state.database.list_port_mappings(workspace.id).await?;
-        if let Some(mapping) = mappings
-            .iter()
-            .find(|mapping| mapping.internal_port == endpoint.internal_port)
-        {
-            let status = if workspace_desktop_is_connectable(workspace.state) {
-                super::port_mappings::mapping_status(state, &workspace, mapping).await
-            } else {
-                workspace.state.as_str()
-            };
-            Some(WorkspaceDesktopConnection {
-                mapping_id: mapping.id,
-                display_name: mapping
-                    .display_name
-                    .clone()
-                    .unwrap_or_else(|| "Browser desktop".to_owned()),
-                status,
-                https_url: if desktop_mapping_is_connectable(connectable, status) {
-                    Some(super::port_mappings::mapping_https_url(state, mapping)?)
-                } else {
-                    None
-                },
-            })
-        } else {
-            None
-        }
-    } else {
-        None
-    };
+    let desktop = desktop?;
     Ok(WorkspaceResponse {
         workspace,
         namespace,
