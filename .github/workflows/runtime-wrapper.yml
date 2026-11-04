@@ -36,6 +36,24 @@ jobs:
           go test -tags=mwc_runsc ./...
           CGO_ENABLED=0 go build -trimpath -o "$RUNNER_TEMP/mwc-runtime-prototype/mwc-runtime-wrapper" .
           CGO_ENABLED=0 go build -tags=mwc_runsc -trimpath -o "$RUNNER_TEMP/mwc-runtime-prototype/mwc-runsc-wrapper" .
+      - name: Identify both runtime binaries
+        if: matrix.runtime == 'native' && matrix.scenario == 'functional'
+        run: |
+          runtime_bin="$RUNNER_TEMP/mwc-runtime-prototype"
+          (cd "$runtime_bin" && sha256sum mwc-runtime-wrapper mwc-runsc-wrapper > SHA256SUMS)
+          printf '{"source_sha":"%s","run_id":"%s","run_attempt":"%s","platform":"linux/amd64","variants":["native","runsc"]}\n' \
+            "$(git rev-parse HEAD)" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" > "$runtime_bin/artifact-identity.json"
+      - name: Publish both runtime binaries
+        if: matrix.runtime == 'native' && matrix.scenario == 'functional'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: runtime-wrapper-binaries-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/mwc-runtime-prototype/mwc-runtime-wrapper
+            ${{ runner.temp }}/mwc-runtime-prototype/mwc-runsc-wrapper
+            ${{ runner.temp }}/mwc-runtime-prototype/SHA256SUMS
+            ${{ runner.temp }}/mwc-runtime-prototype/artifact-identity.json
+          if-no-files-found: error
       - name: Prepare disposable privileged runtime fixture
         run: |
           sudo apt-get update
