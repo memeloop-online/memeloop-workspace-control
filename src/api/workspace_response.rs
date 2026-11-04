@@ -132,11 +132,11 @@ async fn desktop_connection(
         return Ok(None);
     };
     let status = if workspace_desktop_is_connectable(workspace.state) {
-        super::port_mappings::mapping_status(state, &workspace, mapping).await
+        super::port_mappings::mapping_status(state, workspace, mapping).await
     } else {
         workspace.state.as_str()
     };
-    Ok::<_, ApiError>(Some(WorkspaceDesktopConnection {
+    Ok(Some(WorkspaceDesktopConnection {
         mapping_id: mapping.id,
         display_name: mapping
             .display_name
