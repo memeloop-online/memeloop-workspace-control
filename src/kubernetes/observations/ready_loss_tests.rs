@@ -24,7 +24,7 @@ use tower::service_fn;
 
 const INSTALLATION: &str = "ready-loss-test";
 
-async fn seed(database: &Database) -> Workspace {
+async fn seed(database: &Database, buildkit: bool) -> Workspace {
     let now = unix_now();
     database.migrate().await.unwrap();
     database
@@ -53,7 +53,7 @@ async fn seed(database: &Database) -> Workspace {
         )
         .await
         .unwrap();
-    let spec = WorkspaceTemplateSpec::standard(
+    let mut spec = WorkspaceTemplateSpec::standard(
         "example/workspace:1",
         AccessMode::Internal,
         Resources {
@@ -63,6 +63,7 @@ async fn seed(database: &Database) -> Workspace {
             disk_gib: 20,
         },
     );
+    spec.buildkit = buildkit;
     let template = database
         .create_workspace_template(
             CreateWorkspaceTemplate {
@@ -273,7 +274,7 @@ async fn ready_workspace_automatically_replaces_inactive_scratch_consumer_and_re
     let database = Database::connect("sqlite::memory:", INSTALLATION.parse().unwrap())
         .await
         .unwrap();
-    let workspace = seed(&database).await;
+    let workspace = seed(&database, true).await;
     let mut runtime = Runtime::new(&workspace, &builder());
     let names = builder().runtime_names(&workspace).unwrap().resources;
     let home_name = names.data_pvc_ordinal_zero();
@@ -294,13 +295,13 @@ async fn ready_workspace_automatically_replaces_inactive_scratch_consumer_and_re
             "name":"workspace-scratch","ephemeral":{"volumeClaimTemplate":{"spec":{
                 "accessModes":["ReadWriteOnce"],"storageClassName":"local-scratch"}}}});
         volumes.push(json!({"name":names.data_claim_template,"persistentVolumeClaim":{"claimName":home_name}}));
-        let statuses = |containers: &Value| {
+        let statuses = |containers: &Value, exit_code: i32| {
             containers.as_array().into_iter().flatten().map(|container| json!({
             "name":container["name"],"image":"example/workspace:1","imageID":"image-id","ready":false,
-            "restartCount":0,"state":{"terminated":{"exitCode":255,"reason":"Unknown"}}})).collect::<Vec<_>>()
+            "restartCount":0,"state":{"terminated":{"exitCode":exit_code,"reason":if exit_code == 0 {"Completed"} else {"Unknown"}}}})).collect::<Vec<_>>()
         };
         pod["status"] = json!({"phase":"Running","conditions":[{"type":"Ready","status":"False"}],
-            "containerStatuses":statuses(&pod["spec"]["containers"]),"initContainerStatuses":statuses(&pod["spec"]["initContainers"])});
+            "containerStatuses":statuses(&pod["spec"]["containers"],255),"initContainerStatuses":statuses(&pod["spec"]["initContainers"],0)});
     }
     let mut scratch_labels = labels.clone();
     scratch_labels["workspace.memeloop.dev/storage-role"] = json!("temporary");
@@ -369,7 +370,7 @@ async fn ready_workspace_automatically_replaces_inactive_scratch_consumer_and_re
 }
 
 async fn exercise(database: Database) {
-    let workspace = seed(&database).await;
+    let workspace = seed(&database, false).await;
     let runtime = Arc::new(Runtime::new(&workspace, &builder()));
     let observer = WorkspaceObservations::new(database.clone(), INSTALLATION.parse().unwrap());
     {
@@ -543,7 +544,7 @@ async fn loss_during_an_earlier_ready_job_is_rechecked_after_that_job_completes(
         let database = Database::connect("sqlite::memory:", INSTALLATION.parse().unwrap())
             .await
             .unwrap();
-        let workspace = seed(&database).await;
+        let workspace = seed(&database, false).await;
         let runtime = Arc::new(Runtime::new(&workspace, &builder()));
         let observer = WorkspaceObservations::new(database.clone(), INSTALLATION.parse().unwrap());
         assert!(
@@ -624,7 +625,7 @@ async fn complete_relist_finds_ready_rows_with_no_cached_pod_or_statefulset() {
     let database = Database::connect("sqlite::memory:", INSTALLATION.parse().unwrap())
         .await
         .unwrap();
-    let workspace = seed(&database).await;
+    let workspace = seed(&database, false).await;
     let observer = WorkspaceObservations::new(database.clone(), INSTALLATION.parse().unwrap());
     {
         let mut state = observer.state.lock().unwrap();
@@ -654,7 +655,7 @@ async fn events_deliver_only_the_current_workspace_hint_and_repair_handles_the_r
     let database = Database::connect("sqlite::memory:", INSTALLATION.parse().unwrap())
         .await
         .unwrap();
-    let workspace = seed(&database).await;
+    let workspace = seed(&database, false).await;
     let runtime = Runtime::new(&workspace, &builder());
     let observer = WorkspaceObservations::new(database.clone(), INSTALLATION.parse().unwrap());
     let unrelated = Uuid::now_v7();
@@ -715,7 +716,7 @@ async fn newer_hint_ticket_survives_an_older_delivery_result() {
     let database = Database::connect("sqlite::memory:", INSTALLATION.parse().unwrap())
         .await
         .unwrap();
-    let workspace = seed(&database).await;
+    let workspace = seed(&database, false).await;
     let observer = WorkspaceObservations::new(database.clone(), INSTALLATION.parse().unwrap());
     let (old, new) = {
         let mut state = observer.state.lock().unwrap();

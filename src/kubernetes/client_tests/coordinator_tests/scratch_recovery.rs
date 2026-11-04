@@ -13,6 +13,23 @@ fn stalled_scratch(
 ) {
     let (_, builder, mock, coordinator) = setup();
     let (mut workspace, mut set, mut pod) = ready_pod_fixture();
+    workspace.template.buildkit = true;
+    let desired = serde_json::to_value(builder.build(&workspace).unwrap().stateful_set).unwrap();
+    set["spec"]["template"] = desired["spec"]["template"].clone();
+    assert_eq!(
+        set["spec"]["template"]["spec"]["containers"]
+            .as_array()
+            .unwrap()
+            .len(),
+        3
+    );
+    assert_eq!(
+        set["spec"]["template"]["spec"]["initContainers"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
     let names = builder.runtime_names(&workspace).unwrap().resources;
     let home_name = names.data_pvc_ordinal_zero();
     if persisted_home {
@@ -51,7 +68,7 @@ fn stalled_scratch(
         containers.as_array().into_iter().flatten().map(|container| json!({
             "name":container["name"], "image":"example/workspace:1", "imageID":"example/image-id",
             "ready":false, "restartCount":0,
-            "state":{"terminated":{"exitCode":exit_code,"reason":"Unknown"}}
+            "state":{"terminated":{"exitCode":exit_code,"reason":if exit_code == 0 { "Completed" } else { "Unknown" }}}
         })).collect::<Vec<_>>()
     };
     pod["status"] = json!({"phase":"Running","conditions":[{"type":"Ready","status":"False"}],
