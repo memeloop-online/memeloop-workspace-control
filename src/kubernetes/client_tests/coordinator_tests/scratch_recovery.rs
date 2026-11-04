@@ -112,7 +112,7 @@ async fn recreated_pending_scratch_replaces_only_inactive_scheduled_pod_and_pres
                 .recover_scratch_scheduling(&workspace)
                 .await
                 .unwrap();
-            assert_eq!(mock.deletes(), [pod.clone()]);
+            assert_eq!(mock.deletes(), std::slice::from_ref(&pod));
             let mut expected = before.clone();
             expected.remove(&pod);
             assert_eq!(
