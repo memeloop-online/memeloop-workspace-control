@@ -13,6 +13,7 @@ use axum::{
     body::Body,
     http::{Method, Request, Response, StatusCode},
 };
+use http_body_util::BodyExt;
 use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
@@ -146,6 +147,8 @@ struct Runtime {
     set: Value,
     pod: Mutex<Option<Value>>,
     fail: AtomicBool,
+    storage: BTreeMap<String, Value>,
+    deletes: Mutex<Vec<Value>>,
 }
 
 impl Runtime {
@@ -169,6 +172,8 @@ impl Runtime {
                 json!({"apiVersion":"v1","kind":"Pod","metadata":metadata,"status":{"phase":"Pending"}}),
             )),
             fail: AtomicBool::new(false),
+            storage: BTreeMap::new(),
+            deletes: Mutex::new(Vec::new()),
         }
     }
 
@@ -178,6 +183,37 @@ impl Runtime {
             service_fn(move |request: Request<kube::client::Body>| {
                 let runtime = runtime.clone();
                 async move {
+                    if request.method() == Method::DELETE {
+                        assert!(
+                            !runtime.storage.is_empty(),
+                            "ordinary readiness checks stay read-only"
+                        );
+                        assert!(request.uri().path().contains("/pods/"));
+                        let options: Value = serde_json::from_slice(
+                            &request.into_body().collect().await.unwrap().to_bytes(),
+                        )
+                        .unwrap();
+                        let mut pod = runtime.pod.lock().unwrap();
+                        let current = pod.as_ref().unwrap();
+                        assert_eq!(options["preconditions"]["uid"], current["metadata"]["uid"]);
+                        assert_eq!(
+                            options["preconditions"]["resourceVersion"],
+                            current["metadata"]["resourceVersion"]
+                        );
+                        assert!(options.get("gracePeriodSeconds").is_none());
+                        runtime.deletes.lock().unwrap().push(options);
+                        *pod = None;
+                        return Ok::<_, Infallible>(
+                            Response::builder()
+                                .status(StatusCode::OK)
+                                .header("content-type", "application/json")
+                                .body(Body::from(
+                                    json!({"apiVersion":"v1","kind":"Status","status":"Success"})
+                                        .to_string(),
+                                ))
+                                .unwrap(),
+                        );
+                    }
                     assert_eq!(
                         request.method(),
                         Method::GET,
@@ -190,6 +226,8 @@ impl Runtime {
                         )
                     } else if request.uri().path().contains("/statefulsets/") {
                         (StatusCode::OK, runtime.set.clone())
+                    } else if let Some(object) = runtime.storage.get(request.uri().path()) {
+                        (StatusCode::OK, object.clone())
                     } else {
                         assert!(request.uri().path().contains("/pods/"));
                         runtime.pod.lock().unwrap().clone().map(|pod| (StatusCode::OK, pod)).unwrap_or_else(||
@@ -228,6 +266,106 @@ fn worker(
         Arc::new(handler),
         "ready-loss-worker".into(),
     )
+}
+
+#[tokio::test]
+async fn ready_workspace_automatically_replaces_inactive_scratch_consumer_and_recovers() {
+    let database = Database::connect("sqlite::memory:", INSTALLATION.parse().unwrap())
+        .await
+        .unwrap();
+    let workspace = seed(&database).await;
+    let mut runtime = Runtime::new(&workspace, &builder());
+    let names = builder().runtime_names(&workspace).unwrap().resources;
+    let home_name = names.data_pvc_ordinal_zero();
+    let scratch_name = format!("{}-workspace-scratch", names.pod_ordinal_zero());
+    let labels = runtime.set["metadata"]["labels"].clone();
+    {
+        let mut current = runtime.pod.lock().unwrap();
+        let pod = current.as_mut().unwrap();
+        pod["metadata"]["creationTimestamp"] = json!("2026-11-04T06:01:46Z");
+        pod["metadata"]["resourceVersion"] = json!("stalled-pod-rv");
+        pod["spec"] = runtime.set["spec"]["template"]["spec"].clone();
+        pod["spec"]["nodeName"] = json!("worker-1");
+        let volumes = pod["spec"]["volumes"].as_array_mut().unwrap();
+        *volumes
+            .iter_mut()
+            .find(|volume| volume["name"] == "workspace-scratch")
+            .unwrap() = json!({
+            "name":"workspace-scratch","ephemeral":{"volumeClaimTemplate":{"spec":{
+                "accessModes":["ReadWriteOnce"],"storageClassName":"local-scratch"}}}});
+        volumes.push(json!({"name":names.data_claim_template,"persistentVolumeClaim":{"claimName":home_name}}));
+        let statuses = |containers: &Value| {
+            containers.as_array().into_iter().flatten().map(|container| json!({
+            "name":container["name"],"image":"example/workspace:1","imageID":"image-id","ready":false,
+            "restartCount":0,"state":{"terminated":{"exitCode":255,"reason":"Unknown"}}})).collect::<Vec<_>>()
+        };
+        pod["status"] = json!({"phase":"Running","conditions":[{"type":"Ready","status":"False"}],
+            "containerStatuses":statuses(&pod["spec"]["containers"]),"initContainerStatuses":statuses(&pod["spec"]["initContainers"])});
+    }
+    let mut scratch_labels = labels.clone();
+    scratch_labels["workspace.memeloop.dev/storage-role"] = json!("temporary");
+    runtime.storage.extend([
+        (format!("/api/v1/namespaces/{WORKSPACE_NAMESPACE}/persistentvolumeclaims/{scratch_name}"),json!({
+            "apiVersion":"v1","kind":"PersistentVolumeClaim","metadata":{"name":scratch_name,"namespace":WORKSPACE_NAMESPACE,
+                "uid":"new-empty-scratch","creationTimestamp":"2026-11-04T06:04:08Z","labels":scratch_labels,
+                "ownerReferences":[{"apiVersion":"v1","kind":"Pod","name":names.pod_ordinal_zero(),"uid":"replacement-pod","controller":true}]},
+            "spec":{"storageClassName":"local-scratch"},"status":{"phase":"Pending"}})),
+        (format!("/api/v1/namespaces/{WORKSPACE_NAMESPACE}/persistentvolumeclaims/{home_name}"),json!({
+            "apiVersion":"v1","kind":"PersistentVolumeClaim","metadata":{"name":home_name,"namespace":WORKSPACE_NAMESPACE,
+                "uid":"original-home","creationTimestamp":"2026-11-04T06:00:00Z","labels":labels},
+            "spec":{"volumeName":"original-home-pv"},"status":{"phase":"Bound","capacity":{"storage":"20Gi"}}})),
+        ("/api/v1/persistentvolumes/original-home-pv".into(),json!({"apiVersion":"v1","kind":"PersistentVolume",
+            "metadata":{"name":"original-home-pv","uid":"original-home-pv-uid"},"spec":{"claimRef":{
+                "name":home_name,"namespace":WORKSPACE_NAMESPACE,"uid":"original-home"}},"status":{"phase":"Bound"}})),
+        ("/apis/storage.k8s.io/v1/storageclasses/local-scratch".into(),json!({"apiVersion":"storage.k8s.io/v1","kind":"StorageClass",
+            "metadata":{"name":"local-scratch"},"provisioner":"topolvm.io","volumeBindingMode":"WaitForFirstConsumer"})),
+    ]);
+    let runtime = Arc::new(runtime);
+    let observer = WorkspaceObservations::new(database.clone(), INSTALLATION.parse().unwrap());
+    let replacement = runtime.pod.lock().unwrap().clone().unwrap();
+    observer
+        .apply_event(
+            WatchEvent::Modified(
+                serde_json::from_value::<StatefulSet>(runtime.set.clone()).unwrap(),
+            ),
+            &mut None,
+        )
+        .await;
+    observer
+        .apply_event(
+            WatchEvent::Modified(serde_json::from_value::<Pod>(replacement.clone()).unwrap()),
+            &mut None,
+        )
+        .await;
+    let worker = worker(&database, &observer, &runtime);
+    assert!(worker.run_once(unix_now()).await.unwrap());
+    assert_eq!(
+        database.get_workspace(workspace.id).await.unwrap().state,
+        WorkspaceState::Starting
+    );
+    assert!(runtime.pod.lock().unwrap().is_none());
+    assert_eq!(runtime.deletes.lock().unwrap().len(), 1);
+    let mut ready = replacement;
+    ready["metadata"]["uid"] = json!("recovered-pod");
+    ready["status"] = json!({"phase":"Running","conditions":[{"type":"Ready","status":"True"}]});
+    *runtime.pod.lock().unwrap() = Some(ready.clone());
+    observer
+        .apply_event(
+            WatchEvent::Modified(serde_json::from_value::<Pod>(ready).unwrap()),
+            &mut None,
+        )
+        .await;
+    assert!(worker.run_once(unix_now()).await.unwrap());
+    let recovered = database.get_workspace(workspace.id).await.unwrap();
+    assert_eq!(recovered.state, WorkspaceState::Ready);
+    assert_eq!(recovered.generation, workspace.generation);
+    assert_eq!(database.job_counts().await.unwrap().pending, 0);
+    assert_eq!(
+        runtime.storage[&format!(
+            "/api/v1/namespaces/{WORKSPACE_NAMESPACE}/persistentvolumeclaims/{home_name}"
+        )]["metadata"]["uid"],
+        json!("original-home")
+    );
 }
 
 async fn exercise(database: Database) {

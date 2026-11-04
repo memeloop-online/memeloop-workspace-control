@@ -1,6 +1,6 @@
 //! Shared, advisory runtime observations. The worker's finite GET and database
 //! generation fence remain authoritative. Watches wake parked jobs and request
-//! read-only checks when a Ready workspace loses its current Pod.
+//! runtime checks when a Ready workspace loses its current Pod.
 use std::{
     collections::{HashMap, HashSet},
     fmt::Debug,
