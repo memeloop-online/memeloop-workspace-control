@@ -31,10 +31,41 @@ pub(super) async fn fetch_workspace_runtime_details(
     show_runtime: bool,
     installation_id: &str,
 ) -> Result<WorkspaceRuntimeDetails, ApiError> {
-    let pod_list = Api::<Pod>::namespaced(client.clone(), namespace)
-        .list(&ListParams::default().labels(selector))
-        .await
-        .map_err(ApiError::Kubernetes)?;
+    let pods_api = Api::<Pod>::namespaced(client.clone(), namespace);
+    let events_api = Api::<Event>::namespaced(client.clone(), namespace);
+    let params = ListParams::default().labels(selector);
+    let event_params = ListParams::default().fields(&format!(
+        "involvedObject.kind=Pod,involvedObject.name={},type=Warning",
+        names.resources.pod_ordinal_zero(),
+    ));
+    let storage = async {
+        let claims = Api::<PersistentVolumeClaim>::namespaced(client.clone(), namespace)
+            .list(&params)
+            .await
+            .map_err(ApiError::Kubernetes)?
+            .items;
+        let bound_home = match workspace.home_volume_binding.as_ref() {
+            Some(binding) => Some(bound_home_identity(client, &claims, binding).await?),
+            None => None,
+        };
+        let mut identities = storage_pvc_identities(claims, workspace.id, installation_id);
+        if let Some(identity) = bound_home {
+            identities.persistent = identity;
+        }
+        Ok::<_, ApiError>(identities)
+    };
+    let (pod_list, event_list, storage_pvcs, metric_result) = tokio::join!(
+        pods_api.list(&params),
+        events_api.list(&event_params),
+        storage,
+        tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            pod_metrics(client.clone(), namespace, selector),
+        ),
+    );
+    let pod_list = pod_list.map_err(ApiError::Kubernetes)?;
+    let event_list = event_list.map_err(ApiError::Kubernetes)?;
+    let storage_pvcs = storage_pvcs?;
     let active_pod_names = active_pod_names(&pod_list.items);
     let pods = if show_runtime {
         pod_list
@@ -47,13 +78,6 @@ pub(super) async fn fetch_workspace_runtime_details(
         Vec::new()
     };
 
-    let event_list = Api::<Event>::namespaced(client.clone(), namespace)
-        .list(&ListParams::default().fields(&format!(
-            "involvedObject.kind=Pod,involvedObject.name={},type=Warning",
-            names.resources.pod_ordinal_zero(),
-        )))
-        .await
-        .map_err(ApiError::Kubernetes)?;
     let mut events = warning_events(event_list.items);
     if show_runtime {
         for event in pod_list.items.iter().filter_map(pod_scheduling_event) {
@@ -64,21 +88,9 @@ pub(super) async fn fetch_workspace_runtime_details(
         newest_events(&mut events, 50);
     }
 
-    let storage_pvcs = Api::<PersistentVolumeClaim>::namespaced(client.clone(), namespace)
-        .list(&ListParams::default().labels(selector))
-        .await
-        .map_err(ApiError::Kubernetes)?
-        .items;
-    let bound_home = match workspace.home_volume_binding.as_ref() {
-        Some(binding) => Some(bound_home_identity(client, &storage_pvcs, binding).await?),
-        None => None,
-    };
-    let mut storage_pvcs = storage_pvc_identities(storage_pvcs, workspace.id, installation_id);
-    if let Some(identity) = bound_home {
-        storage_pvcs.persistent = identity;
-    }
-
-    let metric_result = pod_metrics(client.clone(), namespace, selector).await;
+    let metric_result = metric_result
+        .map_err(|error| error.to_string())
+        .and_then(|result| result.map_err(|error| error.to_string()));
     let (metrics_available, metrics) = match metric_result {
         Ok(metrics) => (
             true,
@@ -223,6 +235,112 @@ pub(super) fn scratch_backing_from_pods(pods: &[Pod]) -> StorageBacking {
 mod tests {
     use super::*;
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
+
+    #[tokio::test]
+    async fn runtime_details_read_independently_and_resolve_an_adopted_home() {
+        let id = Uuid::now_v7();
+        let workspace = Workspace {
+            id,
+            short_id: crate::workspace_runtime::workspace_short_id_for(id),
+            organization_id: Uuid::now_v7(),
+            owner_id: Uuid::now_v7(),
+            name: "runtime concurrency".into(),
+            template_id: None,
+            node_pool: "default".into(),
+            runtime: crate::workspace_runtime::WorkspaceRuntimeIdentity,
+            home_volume_binding: Some(crate::workspaces::WorkspaceHomeVolumeBinding {
+                namespace: "workspaces".into(),
+                claim_name: "adopted-home".into(),
+                claim_uid: "home-uid".into(),
+                capacity_gib: 20,
+            }),
+            scratch_volume_binding: None,
+            template: crate::templates::WorkspaceTemplateSpec::standard(
+                "registry.example/dev:latest",
+                crate::workspaces::AccessMode::Internal,
+                crate::quota::Resources {
+                    cpu_millis: 1_000,
+                    memory_mib: 1_024,
+                    gpu_count: 0,
+                    disk_gib: 20,
+                },
+            ),
+            state: crate::workspaces::WorkspaceState::Ready,
+            generation: 1,
+            created_at: 1,
+            updated_at: 1,
+        };
+        let barrier = Arc::new(tokio::sync::Barrier::new(4));
+        let paths = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let service = tower::service_fn({
+            let paths = paths.clone();
+            move |request: axum::http::Request<kube::client::Body>| {
+                let barrier = barrier.clone();
+                let paths = paths.clone();
+                async move {
+                    let path = request.uri().path().to_owned();
+                    paths.lock().unwrap().push(path.clone());
+                    let (version, kind) = match path.as_str() {
+                        "/api/v1/namespaces/workspaces/pods" => ("v1", "PodList"),
+                        "/api/v1/namespaces/workspaces/events" => ("v1", "EventList"),
+                        "/api/v1/namespaces/workspaces/persistentvolumeclaims" => {
+                            ("v1", "PersistentVolumeClaimList")
+                        }
+                        "/apis/metrics.k8s.io/v1beta1/namespaces/workspaces/pods" => {
+                            ("metrics.k8s.io/v1beta1", "PodMetricsList")
+                        }
+                        "/api/v1/namespaces/workspaces/persistentvolumeclaims/adopted-home" => {
+                            ("v1", "PersistentVolumeClaim")
+                        }
+                        other => panic!("unexpected runtime request: {other}"),
+                    };
+                    let body = if kind == "PersistentVolumeClaim" {
+                        assert_eq!(paths.lock().unwrap().len(), 5);
+                        serde_json::json!({
+                            "apiVersion": version, "kind": kind,
+                            "metadata": {"namespace":"workspaces", "name":"adopted-home", "uid":"home-uid"},
+                            "status": {"phase":"Bound"},
+                        })
+                    } else {
+                        barrier.wait().await;
+                        serde_json::json!({"apiVersion":version,"kind":kind,"metadata":{},"items":[]})
+                    };
+                    Ok::<_, std::convert::Infallible>(axum::http::Response::new(
+                        axum::body::Body::from(body.to_string()),
+                    ))
+                }
+            }
+        });
+        let installation = "test".parse().unwrap();
+        let names = crate::workspace_runtime::WorkspaceRuntimeNames::for_workspace(
+            &installation,
+            &workspace.runtime,
+            &workspace.short_id,
+        )
+        .unwrap();
+        let details = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            fetch_workspace_runtime_details(
+                &Client::new(service, "default"),
+                "workspaces",
+                &names,
+                "workspace.memeloop.dev/owner-installation=test",
+                &workspace,
+                true,
+                "test",
+            ),
+        )
+        .await
+        .expect("independent runtime reads must start together")
+        .unwrap();
+        assert!(details.metrics_available);
+        assert_eq!(
+            details.storage_pvcs.persistent,
+            Some(("workspaces".into(), "adopted-home".into()))
+        );
+        assert!(details.storage_pvcs.temporary.is_none());
+        assert_eq!(paths.lock().unwrap().len(), 5);
+    }
 
     #[test]
     fn listed_home_uses_exact_bound_claim_instead_of_retained_pre_migration_home() {

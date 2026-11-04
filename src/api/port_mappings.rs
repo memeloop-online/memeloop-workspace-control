@@ -370,7 +370,7 @@ pub(super) async fn mapping_status(
     let Some(client) = state.kubernetes_client.clone() else {
         return "provisioning";
     };
-    if is_desktop_mapping(workspace, mapping) {
+    let desktop_runtime = if is_desktop_mapping(workspace, mapping) {
         let Ok(runtime) = crate::workspace_runtime::WorkspaceRuntimeNames::for_workspace(
             &state.config.installation_id,
             &workspace.runtime,
@@ -378,30 +378,39 @@ pub(super) async fn mapping_status(
         ) else {
             return "failed";
         };
-        let stateful_sets = kube::Api::<k8s_openapi::api::apps::v1::StatefulSet>::namespaced(
-            client.clone(),
-            workspace.runtime.namespace(),
-        );
-        let desktop_ready = stateful_sets
-            .get_opt(&runtime.resources.stateful_set)
-            .await
-            .ok()
-            .flatten()
-            .and_then(|stateful_set| stateful_set.status)
-            .and_then(|status| status.ready_replicas)
-            == Some(1);
-        if !desktop_ready {
-            return "provisioning";
+        Some(runtime)
+    } else {
+        None
+    };
+    let stateful_sets = kube::Api::<k8s_openapi::api::apps::v1::StatefulSet>::namespaced(
+        client.clone(),
+        workspace.runtime.namespace(),
+    );
+    let desktop_ready = async {
+        match desktop_runtime {
+            Some(runtime) => {
+                stateful_sets
+                    .get_opt(&runtime.resources.stateful_set)
+                    .await
+                    .ok()
+                    .flatten()
+                    .and_then(|stateful_set| stateful_set.status)
+                    .and_then(|status| status.ready_replicas)
+                    == Some(1)
+            }
+            None => true,
         }
-    }
+    };
     let ingresses = kube::Api::<k8s_openapi::api::networking::v1::Ingress>::namespaced(
         client,
         workspace.runtime.namespace(),
     );
-    match ingresses
-        .get_opt(&format!("port-{}", mapping.id.simple()))
-        .await
-    {
+    let ingress_name = format!("port-{}", mapping.id.simple());
+    let (desktop_ready, ingress) = tokio::join!(desktop_ready, ingresses.get_opt(&ingress_name));
+    if !desktop_ready {
+        return "provisioning";
+    }
+    match ingress {
         Ok(Some(ingress))
             if ingress.metadata.labels.as_ref().is_some_and(|labels| {
                 labels.get("workspace.memeloop.dev/port-mapping-id")
