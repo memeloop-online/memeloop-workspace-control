@@ -50,39 +50,9 @@ pub(super) async fn workspace_response(
     )
     .map_err(|_| ApiError::BadRequest("workspace runtime identity is invalid"))?;
     let connectable = expose_connection && workspace.state == WorkspaceState::Ready;
-    let desktop = async {
-        let Some(endpoint) = workspace.template.desktop.as_ref() else {
-            return Ok(None);
-        };
-        let mappings = state.database.list_port_mappings(workspace.id).await?;
-        let Some(mapping) = mappings
-            .iter()
-            .find(|mapping| mapping.internal_port == endpoint.internal_port)
-        else {
-            return Ok(None);
-        };
-        let status = if workspace_desktop_is_connectable(workspace.state) {
-            super::port_mappings::mapping_status(state, &workspace, mapping).await
-        } else {
-            workspace.state.as_str()
-        };
-        Ok::<_, ApiError>(Some(WorkspaceDesktopConnection {
-            mapping_id: mapping.id,
-            display_name: mapping
-                .display_name
-                .clone()
-                .unwrap_or_else(|| "Browser desktop".to_owned()),
-            status,
-            https_url: if desktop_mapping_is_connectable(connectable, status) {
-                Some(super::port_mappings::mapping_https_url(state, mapping)?)
-            } else {
-                None
-            },
-        }))
-    };
     let (internal_endpoint, desktop) = tokio::join!(
         ssh_endpoint(state, &workspace, &namespace, connectable),
-        desktop,
+        desktop_connection(state, &workspace, connectable),
     );
     let internal_endpoint = internal_endpoint?;
     let (ssh_command, ssh_config) = ssh_commands(
@@ -144,6 +114,41 @@ pub(super) async fn workspace_response(
         jump_host_key,
         desktop,
     })
+}
+
+async fn desktop_connection(
+    state: &AppState,
+    workspace: &Workspace,
+    connectable: bool,
+) -> Result<Option<WorkspaceDesktopConnection>, ApiError> {
+    let Some(endpoint) = workspace.template.desktop.as_ref() else {
+        return Ok(None);
+    };
+    let mappings = state.database.list_port_mappings(workspace.id).await?;
+    let Some(mapping) = mappings
+        .iter()
+        .find(|mapping| mapping.internal_port == endpoint.internal_port)
+    else {
+        return Ok(None);
+    };
+    let status = if workspace_desktop_is_connectable(workspace.state) {
+        super::port_mappings::mapping_status(state, &workspace, mapping).await
+    } else {
+        workspace.state.as_str()
+    };
+    Ok::<_, ApiError>(Some(WorkspaceDesktopConnection {
+        mapping_id: mapping.id,
+        display_name: mapping
+            .display_name
+            .clone()
+            .unwrap_or_else(|| "Browser desktop".to_owned()),
+        status,
+        https_url: if desktop_mapping_is_connectable(connectable, status) {
+            Some(super::port_mappings::mapping_https_url(state, mapping)?)
+        } else {
+            None
+        },
+    }))
 }
 
 fn normalize_host_key(
