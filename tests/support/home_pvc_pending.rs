@@ -51,12 +51,18 @@ async fn guarded_pending_job_adopts_current_home_and_reloads_binding_without_fal
         )
         .await
         .unwrap();
-    for attempt in 0..12 {
-        assert!(worker.run_once(fixture.now + attempt * 5).await.unwrap());
-    }
     let Database::Sqlite { pool, .. } = &fixture.database else {
         unreachable!()
     };
+    let mut next_run = fixture.now;
+    for _ in 0..12 {
+        assert!(worker.run_once(next_run).await.unwrap());
+        next_run = sqlx::query_scalar("SELECT available_at FROM jobs WHERE id = ?1")
+            .bind(job_id.to_string())
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    }
     let (status, attempts): (String, i64) =
         sqlx::query_as("SELECT status, attempts FROM jobs WHERE id = ?1")
             .bind(job_id.to_string())
@@ -91,7 +97,7 @@ async fn guarded_pending_job_adopts_current_home_and_reloads_binding_without_fal
     assert_eq!(stored.state, WorkspaceState::Ready);
     assert_eq!(stored.generation, fixture.workspace.generation + 1);
     assert_eq!(stored.home_volume_binding, Some(fixture.binding()));
-    assert!(worker.run_once(fixture.now + 60).await.unwrap());
+    assert!(worker.run_once(next_run).await.unwrap());
     let (status, attempts, payload): (String, i64, String) =
         sqlx::query_as("SELECT status, attempts, payload_json FROM jobs WHERE id = ?1")
             .bind(job_id.to_string())
