@@ -91,7 +91,7 @@ pub(super) async fn fetch_workspace_runtime_details(
     let metric_result = metric_result
         .map_err(|error| error.to_string())
         .and_then(|result| result.map_err(|error| error.to_string()));
-    let (metrics_available, metrics) = match metric_result {
+    let (metrics_available, mut metrics) = match metric_result {
         Ok(metrics) => (
             true,
             if show_runtime {
@@ -105,6 +105,8 @@ pub(super) async fn fetch_workspace_runtime_details(
             (false, Vec::new())
         }
     };
+
+    super::memory_metrics::annotate(&mut metrics, &pod_list.items, unix_timestamp());
 
     Ok(WorkspaceRuntimeDetails {
         storage_pvcs,
