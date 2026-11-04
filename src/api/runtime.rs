@@ -28,6 +28,7 @@ use crate::{
 use super::{ApiError, AppState, auth::principal};
 
 mod details;
+mod memory_metrics;
 pub(super) mod organization_metrics;
 mod pod_views;
 mod startup;
@@ -90,6 +91,12 @@ pub(super) struct PodMetric {
     container: String,
     cpu: Option<String>,
     memory: Option<String>,
+    /// Actual live container limit, which may differ from the workspace template.
+    memory_limit: Option<String>,
+    /// Metrics-server working-set usage relative to the effective limit.
+    /// Missing or stale usage is unknown; a low value does not rule out PSI stalls.
+    memory_used_percent: Option<f64>,
+    observed_at: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
@@ -211,10 +218,13 @@ async fn fetch_kubernetes_runtime(
         .map_err(ApiError::Kubernetes)?;
     let metric_result = pod_metrics_all(client, selector).await;
     let metrics_available = metric_result.is_ok();
-    let metrics = metric_result.unwrap_or_else(|error| {
+    let mut metrics = metric_result.unwrap_or_else(|error| {
         tracing::debug!(%error, "metrics.k8s.io is unavailable");
         BTreeMap::new()
     });
+    for values in metrics.values_mut() {
+        memory_metrics::annotate(values, &pod_list.items, unix_timestamp());
+    }
     request.success();
     let (pods, active_pods, node_names, scratch_backings) = index_pods(&pod_list.items);
     Ok(KubernetesRuntimeBatch {
