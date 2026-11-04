@@ -1,0 +1,21 @@
+# CI-only stage; actual k3s/LVM/CSI run solely inside the TCG guest.
+FROM harbor.k3s.onetwo.website/docker-io/library/debian:bookworm-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3
+COPY tests/runtime-product-vm/bootstrap-ca.pem /etc/ssl/certs/ca-certificates.crt
+RUN rm -f /etc/apt/sources.list /etc/apt/sources.list.d/*.sources \
+    && printf '%s\n' 'deb [check-valid-until=no] https://snapshot-cloudflare.debian.org/archive/debian/20261026T000000Z bookworm main' > /etc/apt/sources.list \
+    && apt-get -o Acquire::https::Timeout=60 update --error-on=any \
+    && DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends \
+       ca-certificates curl jq qemu-system-x86 qemu-utils genisoimage coreutils e2fsprogs \
+    && mkdir /app /app/debs /app/apt-lists /work /compiled \
+    && apt-get --yes --download-only --no-install-recommends -o Dir::State::status=/dev/null install \
+       lvm2 thin-provisioning-tools xfsprogs jq openssh-client iproute2 iptables \
+       conntrack socat ethtool ebtables kmod ca-certificates curl \
+    && cp /var/cache/apt/archives/*.deb /app/debs/ \
+    && cp -a /var/lib/apt/lists/. /app/apt-lists/ \
+    && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*.deb \
+    && chown 65532:65532 /work
+COPY tests/runtime-product-vm /app/vm
+COPY tests/runtime_product_storage.sh /app/runtime_product_storage.sh
+USER 65532:65532
+WORKDIR /work
+ENTRYPOINT ["/bin/bash", "/app/vm/full-inputs.sh"]
