@@ -92,12 +92,38 @@ impl<'a> WorkspacePod<'a> {
         quantities(
             format!("{}m", self.template.resources.cpu_millis),
             format!("{}Mi", self.template.resources.memory_mib),
-            Some("2048Mi".to_owned()),
+            (!self.quota_runtime()).then(|| "2048Mi".to_owned()),
         )
     }
 
+    fn quota_runtime(&self) -> bool {
+        matches!(
+            self.template.runtime_class_name.as_deref(),
+            Some("mwc-native" | "mwc-runsc")
+        )
+    }
+
+    fn scratch_runtime_container(&self, mut container: Container) -> Container {
+        if self.quota_runtime() {
+            // These two opt-in handlers place writable layers and CRI logs on
+            // the scratch PVC. Their fail-closed wrapper reserves runtime-private/.
+            if let Some(limits) = container.resources.as_mut().and_then(|r| r.limits.as_mut()) {
+                limits.remove("ephemeral-storage");
+            }
+            for mount in container.volume_mounts.iter_mut().flatten() {
+                if mount.name == buildkit::SCRATCH_VOLUME {
+                    mount.sub_path = Some(match mount.sub_path.as_deref() {
+                        Some(path) => format!("data/{path}"),
+                        None => "data".to_owned(),
+                    });
+                }
+            }
+        }
+        container
+    }
+
     pub fn workspace_scratch_init_container(&self, image: &str) -> Container {
-        Container {
+        self.scratch_runtime_container(Container {
             name: "workspace-scratch-init".to_owned(),
             image: Some(image.to_owned()),
             command: Some(vec!["sh".to_owned(), "-c".to_owned()]),
@@ -125,7 +151,7 @@ impl<'a> WorkspacePod<'a> {
             }),
             security_context: Some(root_security_context(true)),
             ..Container::default()
-        }
+        })
     }
 
     pub fn workspace_container(
@@ -149,7 +175,7 @@ impl<'a> WorkspacePod<'a> {
                 ..ContainerPort::default()
             });
         }
-        Container {
+        self.scratch_runtime_container(Container {
             name: "workspace".to_owned(),
             image: Some(image.to_owned()),
             command: Some(vec![BOOTSTRAP.to_owned()]),
@@ -176,15 +202,17 @@ impl<'a> WorkspacePod<'a> {
             volume_mounts: Some(self.development_mounts(names)),
             security_context: Some(root_security_context(false)),
             ..Container::default()
-        }
+        })
     }
 
     pub fn buildkit_container(&self, image: &str) -> Option<Container> {
         buildkit::container(self.has_buildkit(), image, self.cpu_request_millis(250))
+            .map(|container| self.scratch_runtime_container(container))
     }
 
     pub fn buildkit_bootstrap_container(&self, image: &str) -> Option<Container> {
         buildkit::bootstrap_container(self.has_buildkit(), image, self.cpu_request_millis(10))
+            .map(|container| self.scratch_runtime_container(container))
     }
 
     pub fn pod_security_context(&self) -> Option<k8s_openapi::api::core::v1::PodSecurityContext> {

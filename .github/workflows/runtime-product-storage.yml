@@ -1,0 +1,75 @@
+name: product-runtime-storage-inputs
+on:
+  push:
+    branches: ['test/quota-runtime-product-csi-20261105']
+    paths: ['tests/runtime_product_storage*', 'tests/runtime-product-vm/guest-full.sh', 'src/kubernetes/workspace_pod*', 'src/kubernetes/workspace_pod/**', '.github/workflows/runtime-product-storage.yml']
+  pull_request:
+    paths: ['tests/runtime_product_storage*', 'tests/runtime-product-vm/guest-full.sh', 'src/kubernetes/workspace_pod*', 'src/kubernetes/workspace_pod/**', '.github/workflows/runtime-product-storage.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+  packages: read
+env:
+  WRAPPER_SHA: 18b9e8ad3c461554d84746fccea4240597114107
+jobs:
+  # Real four-case CSI execution belongs to the offline Harbor consumer workflow.
+  build-inputs:
+    name: Compile and verify CSI inputs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Identify the actual renderer and harness checkout
+        run: echo "PRODUCT_RENDERER_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+      - name: Check offline guest harness syntax
+        run: bash -n tests/runtime_product_storage.sh tests/runtime-product-vm/guest-full.sh
+      - uses: dtolnay/rust-toolchain@1.98.0
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        with:
+          key: runtime-product-storage
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24
+      - name: Verify the previously accepted dual runtime release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          release="$RUNNER_TEMP/wrapper-release"
+          mkdir -p "$release" "$RUNNER_TEMP/product-storage-bin"
+          gh api repos/memeloop-online/memeloop-workspace-control/actions/artifacts/13294234740/zip > "$RUNNER_TEMP/wrapper-release.zip"
+          echo "067ee972868e0e95a33574271636694b1d2939c71e9bd62c7aae91f52d67ee8d  $RUNNER_TEMP/wrapper-release.zip" | sha256sum -c -
+          test "$(stat -c %s "$RUNNER_TEMP/wrapper-release.zip")" = 4735882
+          unzip -q "$RUNNER_TEMP/wrapper-release.zip" -d "$release"
+          test "$(find "$release" -type f | wc -l)" = 4
+          (cd "$release" && sha256sum -c SHA256SUMS)
+          echo "79f8b2f0ba17f6b2df647908af438fe939602fce5bd86cd1a44f1927ed32e852  $release/mwc-runtime-wrapper" | sha256sum -c -
+          echo "bc1daf24021f6533513fbc2dfd0c691739fde2b286abcf432cf9c545bdd5d131  $release/mwc-runsc-wrapper" | sha256sum -c -
+          jq -e --arg sha "$WRAPPER_SHA" '.source_sha==$sha and .run_id=="41770885611" and .run_attempt=="1" and .platform=="linux/amd64" and .variants==["native","runsc"]' "$release/artifact-identity.json"
+          cp "$release/mwc-runtime-wrapper" "$release/mwc-runsc-wrapper" "$RUNNER_TEMP/product-storage-bin/"
+      - name: Build exact renderer fixtures and probe (CI only)
+        run: |
+          mkdir -p artifacts "$RUNNER_TEMP/product-storage-fixtures" "$RUNNER_TEMP/product-storage-bin"
+          (cd web && npm ci && npm run build)
+          cargo test --locked --lib kubernetes::workspace_pod::tests
+          MWC_PRODUCT_STORAGE_FIXTURES="$RUNNER_TEMP/product-storage-fixtures" cargo test --locked --test runtime_product_storage -- --nocapture
+          test "$(find "$RUNNER_TEMP/product-storage-fixtures" -name '*.json' | wc -l)" = 4
+          gcc -static -O2 -Wall -Wextra -Werror tests/runtime_product_storage_probe.c -o "$RUNNER_TEMP/product-storage-bin/mwc-budget-probe"
+          cp "$RUNNER_TEMP/product-storage-fixtures/"*.json artifacts/
+      - name: Export exact compiled inputs without private registry access
+        run: |
+          mkdir -p input-bundle/bin input-bundle/fixtures input-bundle/wrapper-release
+          cp "$RUNNER_TEMP/product-storage-bin/"* input-bundle/bin/
+          cp "$RUNNER_TEMP/product-storage-fixtures/"*.json input-bundle/fixtures/
+          cp "$RUNNER_TEMP/wrapper-release/"{SHA256SUMS,artifact-identity.json} input-bundle/wrapper-release/
+          jq -n --arg renderer "$PRODUCT_RENDERER_SHA" --arg wrapper "$WRAPPER_SHA" \
+            --arg harness "$(git rev-parse HEAD)" --arg run "$GITHUB_RUN_ID" --arg attempt "$GITHUB_RUN_ATTEMPT" \
+            '{renderer_sha:$renderer,wrapper_sha:$wrapper,harness_sha:$harness,run_id:$run,run_attempt:$attempt,wrapper_artifact:{run_id:"41770885611",run_attempt:"1",artifact_id:13294234740,artifact_zip_sha256:"067ee972868e0e95a33574271636694b1d2939c71e9bd62c7aae91f52d67ee8d"}}' > input-bundle/source-shas.json
+          (cd input-bundle && sha256sum bin/* fixtures/* wrapper-release/* source-shas.json > SHA256SUMS)
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: product-storage-inputs-${{ github.run_id }}-${{ github.run_attempt }}
+          path: input-bundle/
+          if-no-files-found: error
