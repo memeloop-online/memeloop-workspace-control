@@ -2,10 +2,10 @@
 # Only an expendable CI VM. No synthetic CSI publication is permitted.
 set -euo pipefail
 : "${GITHUB_ACTIONS:?Disposable CI VM only}"
-inputs="${MWC_PRODUCT_STORAGE_INPUTS:-}"
-fetch_input() {
- local name="$1" url="$2" digest="$3" destination="$4"
- if [ -n "$inputs" ]; then cp "$inputs/$name" "$destination"; else curl -fsSL --connect-timeout 15 --max-time 600 "$url" -o "$destination"; fi
+inputs="${MWC_PRODUCT_STORAGE_INPUTS:?Verified offline CSI inputs required}"
+copy_input() {
+ local name="$1" digest="$2" destination="$3"
+ cp "$inputs/$name" "$destination"
  printf '%s  %s\n' "$digest" "$destination" | sha256sum -c -
 }
 : "${RUNNER_TEMP:?}"
@@ -36,8 +36,8 @@ finish() {
  status=$?
  trap - EXIT
  snapshot
- if [ -n "$k3s_pid" ]; then kill "$k3s_pid"; wait "$k3s_pid" || true; fi
- if [ -n "$containerd_pid" ]; then kill "$containerd_pid"; wait "$containerd_pid" || true; fi
+ if [ -n "$k3s_pid" ]; then kill "$k3s_pid" 2>/dev/null || true; wait "$k3s_pid" || true; fi
+ if [ -n "$containerd_pid" ]; then kill "$containerd_pid" 2>/dev/null || true; wait "$containerd_pid" || true; fi
  # Never detach a mounted or busy LV to turn cleanup failure into a pass.
  for vg in mwc-ci-home mwc-ci-scratch; do
   if vgs "$vg" >/dev/null 2>&1; then
@@ -55,44 +55,13 @@ finish() {
  exit "$status"
 }
 
-if [ -z "$inputs" ]; then
-# Record the actual runner route before pulling; these unauthenticated bounded
-# probes distinguish private DNS or address-family reachability from auth errors.
-getent ahostsv4 harbor.k3s.onetwo.website > "$out/harbor-dns-v4.txt" || true
-getent ahostsv6 harbor.k3s.onetwo.website > "$out/harbor-dns-v6.txt" || true
-for family in 4 6; do
- status=0
- curl -"$family" --silent --show-error --connect-timeout 10 --max-time 20 \
-  --output /dev/null --write-out '%{json}\n' https://harbor.k3s.onetwo.website/v2/ \
-  > "$out/harbor-connect-v$family.json" 2> "$out/harbor-connect-v$family.stderr" || status=$?
- printf '%s\n' "$status" > "$out/harbor-connect-v$family.exit"
-done
-
-# Verify exact product registry inputs before allocating any disks/cluster.
-# Anonymous Harbor libraries should be pullable; a denied/missing digest is fatal.
-registry_manifest() {
- local registry="$1" repo="$2" digest="$3" prefix="$4" token_url="$5" service="$6" token
- token="$(curl -fsSL --connect-timeout 15 --max-time 30 --get --data-urlencode "service=$service" --data-urlencode "scope=repository:$repo:pull" "$token_url" | jq -er '.token // .access_token')"
- curl -fsSL --connect-timeout 15 --max-time 30 -H "Authorization: Bearer $token" -H 'Accept: application/vnd.oci.image.index.v1+json,application/vnd.oci.image.manifest.v1+json,application/vnd.docker.distribution.manifest.v2+json' \
-  "https://$registry/v2/$repo/manifests/$digest" -o "$out/$prefix-index.json"
- echo "${digest#sha256:}  $out/$prefix-index.json" | sha256sum -c -
-}
-registry_manifest harbor.k3s.onetwo.website library/rust-dev \
- sha256:d50798f0f8345d7295c303ec0f04b1f1e064b7d6ac9b074d87065a488957360f rust \
- https://harbor.k3s.onetwo.website/service/token harbor-registry
-registry_manifest ghcr.io memeloop-online/memeloop-workspace-control-ttyd \
- sha256:cc408d2cb9c3fe457b206cffae4a15264ae15f037eac0b1f4dde86058d499012 ttyd \
- https://ghcr.io/token ghcr.io
-else
- # Guest inputs contain the actual digest-checked registry metadata and OCI
- # content staged in the private-network CI job, never replacement images.
- (cd "$inputs" && sha256sum -c SHA256SUMS)
- cp "$inputs/registry/"*.json "$out/"
-fi
-if [ "${1:-}" = --prerequisites ]; then exit 0; fi
+# The offline Harbor consumer supplies the actual digest-checked metadata and
+# OCI content. No external registry/download execution entrypoint is supported.
+(cd "$inputs" && sha256sum -c SHA256SUMS)
+cp "$inputs/registry/"*.json "$out/"
 trap finish EXIT
 
-fetch_input k3s 'https://github.com/k3s-io/k3s/releases/download/v1.36.2%2Bk3s1/k3s' \
+copy_input k3s \
  65a55ec56c24eab44383086166ec620a491952b7e23941a49ddca6e8a4c4b4de "$base/k3s-bin"
 chmod 0755 "$base/k3s-bin"
 K3S_DATA_DIR="$base/k3s" "$base/k3s-bin" ctr version --help >/dev/null
@@ -105,7 +74,7 @@ uname -a > "$out/kernel.txt"
 install -m 0755 "$RUNNER_TEMP/product-storage-bin/mwc-runtime-wrapper" "$base/mwc-runtime-wrapper"
 install -m 0755 "$RUNNER_TEMP/product-storage-bin/mwc-runsc-wrapper" "$base/mwc-runsc-wrapper"
 mkdir -p "$base/gvisor" "$base/runsc-state"
-fetch_input gvisor.tar.bz2 https://github.com/google/gvisor/releases/download/release-20260831.0/gvisor-x86_64.tar.bz2 \
+copy_input gvisor.tar.bz2 \
  014b3871a5c698c802fd7a03758e0dbf4c1683f9e3f8c743979ea66bbf6553a4 "$base/gvisor.tar.bz2"
 tar -xjf "$base/gvisor.tar.bz2" -C "$base/gvisor"
 export PATH="$base/gvisor:$PATH"
@@ -175,16 +144,14 @@ TOML
 containerd --config "$base/containerd.toml" > "$out/containerd.log" 2>&1 & containerd_pid=$!
 for n in $(seq 1 60); do if cri info > "$out/cri-info.json" 2>/dev/null; then break; fi; sleep 1; done
 cri info > "$out/cri-info.json"
-if [ -n "$inputs" ]; then
- # Imports and kubelet use one real containerd content store. Stage archives
- # contain exact original references, so the disconnected guest never pulls.
- ctr_ci images import --no-unpack --digests "$inputs/images.tar"
- # The guest owns this input disk. Release the now-duplicated archive before
- # image unpack and the real four-GiB ENOSPC case; discard reaches the job file.
- rm "$inputs/images.tar"
- sync
- fstrim -v "$inputs" > "$out/input-disk-trim.txt"
-fi
+# Imports and kubelet use one real containerd content store. Stage archives
+# contain exact original references, so the disconnected guest never pulls.
+ctr_ci images import --no-unpack --digests "$inputs/images.tar"
+# The guest owns this input disk. Release the now-duplicated archive before
+# image unpack and the real four-GiB ENOSPC case; discard reaches the job file.
+rm "$inputs/images.tar"
+sync
+fstrim -v "$inputs" > "$out/input-disk-trim.txt"
 # Keep actual production limits and security contexts. Ubuntu's VM policy must
 # permit the existing unprivileged RootlessKit user namespace, as main CI does.
 if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then sysctl -w kernel.apparmor_restrict_unprivileged_userns=0; fi
@@ -209,10 +176,10 @@ kind: RuntimeClass
 metadata: {name: mwc-runsc}
 handler: mwc-runsc
 YAML
-fetch_input helm.tgz https://get.helm.sh/helm-v4.2.4-linux-amd64.tar.gz \
+copy_input helm.tgz \
  c306b46f719b0a4da32d0f78ee21bf90ce8d602f15b22ab753f0674d1670a7f3 "$base/helm.tgz"
 tar -xzf "$base/helm.tgz" -C "$base"
-fetch_input topolvm.tgz https://github.com/topolvm/topolvm/releases/download/topolvm-chart-v17.2.0/topolvm-17.2.0.tgz \
+copy_input topolvm.tgz \
  4b6c070da0b38f098c9ef6b6a38ef4e2dfff52adecedc280ad92bfab408f90ee "$base/topolvm.tgz"
 cat > "$base/topolvm-values.yaml" <<'YAML'
 cert-manager: {enabled: false}

@@ -1,4 +1,4 @@
-name: product-runtime-storage
+name: product-runtime-storage-inputs
 on:
   push:
     branches: ['test/quota-runtime-product-csi-20261105']
@@ -13,7 +13,9 @@ permissions:
 env:
   WRAPPER_SHA: 18b9e8ad3c461554d84746fccea4240597114107
 jobs:
+  # Real four-case CSI execution belongs to the offline Harbor consumer workflow.
   build-inputs:
+    name: Compile and verify CSI inputs
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
@@ -22,7 +24,7 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - name: Identify the actual renderer and harness checkout
         run: echo "PRODUCT_RENDERER_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
-      - name: Check guest and host harness syntax
+      - name: Check offline guest harness syntax
         run: bash -n tests/runtime_product_storage.sh tests/runtime-product-vm/guest-full.sh
       - uses: dtolnay/rust-toolchain@1.98.0
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
@@ -70,56 +72,4 @@ jobs:
         with:
           name: product-storage-inputs-${{ github.run_id }}-${{ github.run_attempt }}
           path: input-bundle/
-          if-no-files-found: error
-  rust-topolvm:
-    needs: build-inputs
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - name: Identify the actual renderer and harness checkout
-        run: echo "PRODUCT_RENDERER_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
-        with:
-          name: product-storage-inputs-${{ github.run_id }}-${{ github.run_attempt }}
-          path: input-bundle/
-      - name: Verify immutable compiled inputs
-        run: |
-          (cd input-bundle && sha256sum -c SHA256SUMS)
-          jq -e --arg renderer "$PRODUCT_RENDERER_SHA" --arg wrapper "$WRAPPER_SHA" \
-            '.renderer_sha==$renderer and .wrapper_sha==$wrapper' input-bundle/source-shas.json
-          mkdir -p artifacts "$RUNNER_TEMP/product-storage-fixtures" "$RUNNER_TEMP/product-storage-bin"
-          cp input-bundle/bin/* "$RUNNER_TEMP/product-storage-bin/"
-          chmod 0755 "$RUNNER_TEMP/product-storage-bin/"*
-          cp input-bundle/fixtures/* "$RUNNER_TEMP/product-storage-fixtures/"
-          cp -a input-bundle/wrapper-release artifacts/
-          cp input-bundle/source-shas.json artifacts/compiled-source-shas.json
-      - name: Verify exact production registry inputs before allocating a cluster
-        run: |
-          sudo --preserve-env=GITHUB_ACTIONS,GITHUB_WORKSPACE,RUNNER_TEMP bash tests/runtime_product_storage.sh --prerequisites
-      - name: Prepare disposable real CSI node
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y lvm2 thin-provisioning-tools xfsprogs jq openssh-client bzip2
-          # The runner contains several SDKs unused by this isolated VM experiment.
-          sudo rm -rf /usr/local/lib/android /opt/ghc /usr/share/dotnet
-          df -B1 / | tee artifacts/runner-capacity-before.txt
-          free -b | tee artifacts/runner-memory-before.txt
-          test "$(df -B1 --output=avail / | tail -n1)" -ge 30000000000
-          test "$(awk '/MemTotal:/ {print $2}' /proc/meminfo)" -ge 6000000
-      - name: Actual Rust product and TopoLVM lifecycle
-        run: |
-          status=0
-          sudo --preserve-env=GITHUB_ACTIONS,GITHUB_WORKSPACE,RUNNER_TEMP,PRODUCT_RENDERER_SHA,WRAPPER_SHA \
-            bash tests/runtime_product_storage.sh || status=$?
-          sudo chown -R "$(id -u):$(id -g)" artifacts
-          exit "$status"
-      - name: Preserve actual evidence, including failed prerequisites
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: rust-product-topolvm-${{ github.run_id }}-${{ github.run_attempt }}
-          path: artifacts/
           if-no-files-found: error
