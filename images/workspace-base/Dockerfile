@@ -1,4 +1,4 @@
-FROM debian:bookworm-slim
+FROM harbor.k3s.onetwo.website/docker-io/library/debian:bookworm-slim
 
 RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \

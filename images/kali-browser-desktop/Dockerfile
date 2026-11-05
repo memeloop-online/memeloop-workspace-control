@@ -1,4 +1,4 @@
-FROM kalilinux/kali-rolling@sha256:49d174981a2a211e76acdde22a2e4978ea19bc0433487292cd9ad865da24ee42
+FROM harbor.k3s.onetwo.website/docker-io/kalilinux/kali-rolling@sha256:49d174981a2a211e76acdde22a2e4978ea19bc0433487292cd9ad865da24ee42
 
 ARG KALI_APT_MIRROR=http://mirrors.ustc.edu.cn/kali
 LABEL org.opencontainers.image.title="MWC Kali browser desktop" \

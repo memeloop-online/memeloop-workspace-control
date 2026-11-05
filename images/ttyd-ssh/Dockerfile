@@ -1,5 +1,5 @@
-# syntax=docker/dockerfile:1
-FROM debian:bookworm-slim AS build
+# syntax=harbor.k3s.onetwo.website/docker-io/docker/dockerfile:1
+FROM harbor.k3s.onetwo.website/docker-io/library/debian:bookworm-slim AS build
 
 ARG TTYD_COMMIT=40e79c706be14029b391f369bee6613c31667abb
 ARG TTYD_TARBALL_SHA256=1f6f53a5021a2cee4af9b975f3dc7a3185bd261c23a84f7b680285f6c1a50341
@@ -45,7 +45,7 @@ RUN curl --fail --location --silent --show-error --retry 3 \
     && cmake --build ttyd-build --parallel \
     && ldd ttyd-build/ttyd | grep --quiet 'libssl.so'
 
-FROM debian:bookworm-slim
+FROM harbor.k3s.onetwo.website/docker-io/library/debian:bookworm-slim
 
 ARG TTYD_COMMIT=40e79c706be14029b391f369bee6613c31667abb
 LABEL org.opencontainers.image.source="https://github.com/tsl0922/ttyd" \

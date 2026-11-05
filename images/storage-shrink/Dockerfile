@@ -1,4 +1,4 @@
-ARG BASE_IMAGE=debian@sha256:a4672c0cb26fbdde88e38fa2dfb6c681942306680e41e4378b28770b6e79ee91
+ARG BASE_IMAGE=harbor.k3s.onetwo.website/docker-io/library/debian@sha256:a4672c0cb26fbdde88e38fa2dfb6c681942306680e41e4378b28770b6e79ee91
 FROM ${BASE_IMAGE}
 
 USER root
