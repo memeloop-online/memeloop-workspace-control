@@ -26,6 +26,8 @@ mod apply;
 mod delete;
 #[path = "client_home_volume.rs"]
 mod home_volume;
+#[path = "client_scratch_recovery.rs"]
+mod scratch_recovery;
 #[path = "client_storage_shrink.rs"]
 mod storage_shrink;
 pub use home_volume::home_volume_capacity_bytes;
@@ -127,64 +129,27 @@ impl KubernetesCoordinator {
         };
         self.builder
             .verify_delete_ownership(&stateful_set.metadata, workspace.id)?;
-        let Some(spec) = stateful_set.spec.as_ref() else {
-            return Ok(false);
-        };
-        let Some(status) = stateful_set.status.as_ref() else {
-            return Ok(false);
-        };
-        if spec.replicas != Some(expected)
-            || stateful_set.metadata.deletion_timestamp.is_some()
-            || stateful_set.metadata.generation.is_none()
-            || status.observed_generation.is_none()
-            || status.observed_generation < stateful_set.metadata.generation
-            || spec.template.metadata.as_ref().is_none_or(|metadata| {
-                metadata.annotations.as_ref().is_none_or(|annotations| {
-                    annotations.get("workspace.memeloop.dev/generation")
-                        != Some(&workspace.generation.to_string())
-                })
-            })
-        {
+        if !observed_workspace_replicas(&stateful_set, workspace, expected) {
             return Ok(false);
         }
         if expected == 0 {
-            return Ok(status.replicas == 0);
-        }
-        // StatefulSet aggregates may still describe a deleted Pod. The current
-        // Pod is authoritative in both directions, including Pending and absent.
-        let Some(revision) = status.update_revision.as_deref() else {
-            return Ok(false);
-        };
-        let Some(uid) = stateful_set.metadata.uid.as_deref() else {
-            return Ok(false);
-        };
-        if expected != 1 {
-            return Ok(false);
+            return Ok(stateful_set
+                .status
+                .as_ref()
+                .is_some_and(|status| status.replicas == 0));
         }
         let Some(pod) = pod? else {
             return Ok(false);
         };
         self.builder
             .verify_delete_ownership(&pod.metadata, workspace.id)?;
-        Ok(pod.metadata.uid.is_some()
-            && pod.metadata.deletion_timestamp.is_none()
-            && !restart_generation_is_stale(&pod, workspace.generation)
-            && pod
-                .metadata
-                .owner_references
-                .as_ref()
-                .is_some_and(|owners| {
-                    owners.iter().any(|owner| {
-                        owner.controller == Some(true)
-                            && owner.api_version == "apps/v1"
-                            && owner.kind == "StatefulSet"
-                            && owner.name == names.resources.stateful_set
-                            && owner.uid == uid
-                    })
-                })
-            && pod.metadata.labels.as_ref().is_some_and(|labels| {
-                labels.get("controller-revision-hash").map(String::as_str) == Some(revision)
-            })
+        Ok(expected == 1
+            && current_workspace_pod(
+                &stateful_set,
+                &pod,
+                workspace,
+                &names.resources.stateful_set,
+            )
             && pod.status.as_ref().is_some_and(|status| {
                 status.phase.as_deref() == Some("Running")
                     && status.conditions.as_ref().is_some_and(|conditions| {
@@ -194,6 +159,58 @@ impl KubernetesCoordinator {
                     })
             }))
     }
+}
+
+fn observed_workspace_replicas(set: &StatefulSet, workspace: &Workspace, expected: i32) -> bool {
+    let (Some(spec), Some(status)) = (set.spec.as_ref(), set.status.as_ref()) else {
+        return false;
+    };
+    spec.replicas == Some(expected)
+        && set.metadata.deletion_timestamp.is_none()
+        && set.metadata.generation.is_some()
+        && status.observed_generation.is_some()
+        && status.observed_generation >= set.metadata.generation
+        && spec.template.metadata.as_ref().is_some_and(|metadata| {
+            metadata.annotations.as_ref().is_some_and(|annotations| {
+                annotations.get("workspace.memeloop.dev/generation")
+                    == Some(&workspace.generation.to_string())
+            })
+        })
+}
+
+fn current_workspace_pod(
+    set: &StatefulSet,
+    pod: &Pod,
+    workspace: &Workspace,
+    set_name: &str,
+) -> bool {
+    let (Some(uid), Some(revision)) = (
+        set.metadata.uid.as_deref(),
+        set.status
+            .as_ref()
+            .and_then(|status| status.update_revision.as_deref()),
+    ) else {
+        return false;
+    };
+    pod.metadata.uid.is_some()
+        && pod.metadata.deletion_timestamp.is_none()
+        && !restart_generation_is_stale(pod, workspace.generation)
+        && pod
+            .metadata
+            .owner_references
+            .as_ref()
+            .is_some_and(|owners| {
+                owners.iter().any(|owner| {
+                    owner.controller == Some(true)
+                        && owner.api_version == "apps/v1"
+                        && owner.kind == "StatefulSet"
+                        && owner.name == set_name
+                        && owner.uid == uid
+                })
+            })
+        && pod.metadata.labels.as_ref().is_some_and(|labels| {
+            labels.get("controller-revision-hash").map(String::as_str) == Some(revision)
+        })
 }
 
 /// Returns the apiserver-assigned SSH NodePort for an internal workspace.

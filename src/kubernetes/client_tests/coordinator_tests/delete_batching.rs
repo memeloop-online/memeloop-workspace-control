@@ -10,6 +10,7 @@ struct DeleteMock {
     objects: Mutex<BTreeMap<String, Value>>,
     requests: Mutex<Vec<(Method, String, Value)>>,
     replace_before_delete: Mutex<Option<String>>,
+    update_before_delete: Mutex<Option<String>>,
 }
 
 impl DeleteMock {
@@ -81,10 +82,18 @@ impl DeleteMock {
             if self.replace_before_delete.lock().unwrap().take().as_ref() == Some(&path) {
                 objects.get_mut(&path).unwrap()["metadata"]["uid"] = json!("replacement-uid");
             }
+            if self.update_before_delete.lock().unwrap().take().as_ref() == Some(&path) {
+                objects.get_mut(&path).unwrap()["metadata"]["resourceVersion"] =
+                    json!("new-version");
+            }
             let Some(existing) = objects.get(&path) else {
                 return not_found();
             };
-            if body["preconditions"]["uid"] != existing["metadata"]["uid"] {
+            if body["preconditions"]["uid"] != existing["metadata"]["uid"]
+                || body["preconditions"]
+                    .get("resourceVersion")
+                    .is_some_and(|version| version != &existing["metadata"]["resourceVersion"])
+            {
                 return json_response(
                     StatusCode::CONFLICT,
                     json!({
@@ -135,6 +144,9 @@ impl DeleteMock {
         not_found()
     }
 }
+
+#[path = "scratch_recovery.rs"]
+mod scratch_recovery;
 
 fn setup() -> (
     Workspace,

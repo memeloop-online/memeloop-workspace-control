@@ -58,7 +58,8 @@ impl WorkspaceReconcileHandler {
             .and_then(serde_json::Value::as_bool)
             == Some(true)
         {
-            // Watch hints never authorize resource writes or replay an old intent.
+            // Watch hints never replay an old intent. Any Pod recovery below is
+            // guarded by the current running intent and finite resource reads.
             if job
                 .payload
                 .get("generation")
@@ -159,6 +160,10 @@ impl WorkspaceReconcileHandler {
                     .await
                     .map_err(job_error)?
                 {
+                    self.coordinator
+                        .recover_scratch_scheduling(workspace)
+                        .await
+                        .map_err(|error| JobHandlerError::Pending(error.to_string()))?;
                     return Err(JobHandlerError::Pending(
                         "workspace StatefulSet is not ready yet".to_owned(),
                     ));
@@ -175,6 +180,10 @@ impl WorkspaceReconcileHandler {
                 {
                     self.record_observation(workspace, WorkspaceObservation::NotReady)
                         .await?;
+                    self.coordinator
+                        .recover_scratch_scheduling(workspace)
+                        .await
+                        .map_err(|error| JobHandlerError::Pending(error.to_string()))?;
                     return Err(JobHandlerError::Pending(
                         "workspace Pod is recovering readiness".to_owned(),
                     ));
