@@ -24,7 +24,7 @@ jobs:
       packages: write
     env:
       UPSTREAM_COMMIT: 2d0c5174afb93856d9fc5105e7c04ed50b65628f
-      BASE_IMAGE: ghcr.io/topolvm/topolvm-with-sidecar@sha256:70548dbe0c6addcccf79a557f29e95db2e6dc2cba2102988c91f30086004d0fc
+      BASE_IMAGE: harbor.k3s.onetwo.website/ghcr-io/topolvm/topolvm-with-sidecar@sha256:70548dbe0c6addcccf79a557f29e95db2e6dc2cba2102988c91f30086004d0fc
       IMAGE_NAME: ghcr.io/memeloop-online/memeloop-workspace-control-topolvm-controller
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -50,7 +50,7 @@ jobs:
             --volume "$RUNNER_TEMP/topolvm:/src" \
             --volume "$RUNNER_TEMP/topolvm-controller:/out" \
             --workdir /src \
-            golang:1.25.7-bookworm \
+            harbor.k3s.onetwo.website/docker-io/library/golang:1.25.7-bookworm \
             sh -ec '
               go test -race -count=1 ./internal/driver/internal/k8s
               CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -buildvcs=false -trimpath \
@@ -59,6 +59,8 @@ jobs:
             '
 
       - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+        with:
+          driver-opts: image=harbor.k3s.onetwo.website/docker-io/moby/buildkit@sha256:0f63d66f8d2de0bd16438284831a3e9ee6ca7cd57b6eb3ed6e38a7a456590fa7
 
       - name: Build and validate the controller-only overlay
         env:

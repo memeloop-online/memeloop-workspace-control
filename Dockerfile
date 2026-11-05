@@ -1,11 +1,11 @@
-FROM node:24-bookworm-slim AS web-builder
+FROM harbor.k3s.onetwo.website/docker-io/library/node:24-bookworm-slim AS web-builder
 WORKDIR /build/web
 COPY web/package.json web/package-lock.json ./
 RUN npm ci
 COPY web ./
 RUN npm run build
 
-FROM rust:1.98-bookworm AS builder
+FROM harbor.k3s.onetwo.website/docker-io/library/rust:1.98-bookworm AS builder
 WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
@@ -14,7 +14,7 @@ COPY --from=web-builder /build/web/dist ./web/dist
 COPY images/workspace-base/mwc-workspace-bootstrap ./images/workspace-base/mwc-workspace-bootstrap
 RUN cargo build --locked --release
 
-FROM debian:bookworm-slim
+FROM harbor.k3s.onetwo.website/docker-io/library/debian:bookworm-slim
 RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates \
     && groupadd --gid 19000 mwc \
