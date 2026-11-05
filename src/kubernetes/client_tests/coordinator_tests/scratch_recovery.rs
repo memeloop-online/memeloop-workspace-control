@@ -11,7 +11,8 @@ fn stalled_scratch(
     String,
     String,
 ) {
-    let (_, builder, mock, coordinator) = setup();
+    let (_, mut builder, mock, coordinator) = setup();
+    builder.higress_pod_labels = BTreeMap::from([("app".into(), "higress-gateway".into())]);
     let (mut workspace, mut set, mut pod) = ready_pod_fixture();
     workspace.template.buildkit = true;
     let desired = serde_json::to_value(builder.build(&workspace).unwrap().stateful_set).unwrap();
