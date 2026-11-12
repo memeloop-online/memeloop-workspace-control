@@ -113,7 +113,10 @@ impl<'a> WorkspacePod<'a> {
                     },
                 ),
             ]),
-            volume_mounts: Some(vec![mount(buildkit::SCRATCH_VOLUME, SCRATCH_ROOT, false)]),
+            volume_mounts: Some(vec![VolumeMount {
+                sub_path: Some("data".to_owned()),
+                ..mount(buildkit::SCRATCH_VOLUME, SCRATCH_ROOT, false)
+            }]),
             resources: Some(ResourceRequirements {
                 requests: Some(quantities(
                     format!("{}m", self.cpu_request_millis(10)),
@@ -325,7 +328,7 @@ fn scratch_sub_path_mount(path: &str, sub_path: &str) -> VolumeMount {
     VolumeMount {
         name: buildkit::SCRATCH_VOLUME.to_owned(),
         mount_path: path.to_owned(),
-        sub_path: Some(sub_path.to_owned()),
+        sub_path: Some(format!("data/{sub_path}")),
         read_only: Some(false),
         ..VolumeMount::default()
     }

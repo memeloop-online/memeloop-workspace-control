@@ -31,6 +31,8 @@ for enabled in false true; do
     "$root/injections/config" "$root/injections/secret"
   sudo mount -t tmpfs -o size=128m,mode=0755 tmpfs "$root/scratch"
   scratch_mounts+=("$root/scratch")
+  # Kubelet creates the data subPath without exposing the scratch volume root.
+  sudo mkdir -p "$root/scratch/data"
   jq -er '.config["mwc-workspace-bootstrap"]' "$fixture" > "$root/config/mwc-workspace-bootstrap"
   jq -er '.config.sshd_config' "$fixture" > "$root/config/sshd_config"
   chmod 0555 "$root/config/mwc-workspace-bootstrap"
@@ -47,13 +49,13 @@ EOF
     scratch_script=$(jq -er '.pod.initContainers[] | select(.name == "workspace-scratch-init") | .args[0]' "$fixture")
     docker run --rm --network none --entrypoint sh \
       "${scratch_env[@]}" \
-      -v "$root/scratch:/var/lib/mwc/workspace-scratch" \
+      -v "$root/scratch/data:/var/lib/mwc/workspace-scratch" \
       "$image" -c "$scratch_script"
   else
     # Kubelet creates missing subPath directories before starting the root workspace container.
     # Leave them empty and root-owned; serve must prepare ownership and children itself.
     docker run --rm --network none --entrypoint sh \
-      -v "$root/scratch:/var/lib/mwc/workspace-scratch" \
+      -v "$root/scratch/data:/var/lib/mwc/workspace-scratch" \
       "$image" -ec '
         install -d -m 0755 -o root -g root \
           /var/lib/mwc/workspace-scratch/workspace-cache \
@@ -61,7 +63,7 @@ EOF
       '
   fi
   # Kubelet creates a missing subPath before launching the main container.
-  sudo mkdir -p "$root/scratch/tmp"
+  sudo mkdir -p "$root/scratch/data/tmp"
 
   # Seed durable data, not layout. Both cases enter serve without prepare-layout or prepare.
   docker run --rm --network none --entrypoint sh \
@@ -88,21 +90,24 @@ EOF
     # Only scratch-init has run: the UID1000 bootstrap must create every child itself.
     docker run --rm --network none --read-only --user 1000:1000 --cap-drop ALL \
       --security-opt no-new-privileges --entrypoint sh \
-      -v "$root/scratch/build-cache:/var/lib/mwc-buildkit" \
+      -v "$root/scratch/data/build-cache:/var/lib/mwc-buildkit" \
+      -v "$root/scratch/data/build-cache:/home/user/.local/share/buildkit" \
       "$buildkit_image" -ec 'test -z "$(find /var/lib/mwc-buildkit -mindepth 1 -print -quit)"'
     docker run --rm --network none --read-only --user 1000:1000 --cap-drop ALL \
       --security-opt no-new-privileges --entrypoint sh \
-      -v "$root/scratch/build-cache:/var/lib/mwc-buildkit" \
+      -v "$root/scratch/data/build-cache:/var/lib/mwc-buildkit" \
+      -v "$root/scratch/data/build-cache:/home/user/.local/share/buildkit" \
       "$buildkit_image" -c "$setup"
     containers+=("$buildkit_container")
     docker run --detach --name "$buildkit_container" --network none --privileged \
       -e TMPDIR=/var/lib/mwc-buildkit/tmp -e XDG_RUNTIME_DIR=/var/lib/mwc-buildkit/runtime \
       -e BUILDKIT_HOST=tcp://127.0.0.1:1234 \
-      -v "$root/scratch/build-cache:/var/lib/mwc-buildkit" \
-      -v "$root/scratch/build-cache/tmp:/tmp" \
+      -v "$root/scratch/data/build-cache:/var/lib/mwc-buildkit" \
+      -v "$root/scratch/data/build-cache:/home/user/.local/share/buildkit" \
+      -v "$root/scratch/data/build-cache/tmp:/tmp" \
       "$buildkit_image" --config /var/lib/mwc-buildkit/config/buildkitd.toml >/dev/null
     network=(--network "container:$buildkit_container")
-    buildkit_mount=(-v "$root/scratch/build-cache:/run/mwc-buildkit")
+    buildkit_mount=(-v "$root/scratch/data/build-cache:/run/mwc-buildkit")
   fi
 
   mapfile -t workspace_env < <(jq -r '.pod.containers[] | select(.name == "workspace") | .env[] | select(has("value")) | "-e", (.name + "=" + .value)' "$fixture")
@@ -113,13 +118,13 @@ EOF
   docker run --detach --name "$workspace_container" "${network[@]}" \
     "${workspace_env[@]}" -e MWC_HOME_RESERVE_MIB=0 -e RUSTUP_HOME="$rustup_home" \
     --tmpfs /run/mwc-ssh:mode=0700 \
-    -v "$root/scratch/tmp:/tmp" -v "$root/scratch/tmp:/var/tmp" \
+    -v "$root/scratch/data/tmp:/tmp" -v "$root/scratch/data/tmp:/var/tmp" \
     -v "$root/home:/workspace" -v "$root/config:/etc/workspace-platform:ro" \
     -v "$root/identity:/etc/ssh/platform:ro" \
     -v "$root/injections/config:/var/run/workspace-injections/config:ro" \
     -v "$root/injections/secret:/var/run/workspace-injections/secret:ro" \
-    -v "$root/scratch/workspace-cache:/var/lib/mwc/build-scratch" \
-    -v "$root/scratch/codex-session-scratch:/var/lib/mwc/codex-scratch" \
+    -v "$root/scratch/data/workspace-cache:/var/lib/mwc/build-scratch" \
+    -v "$root/scratch/data/codex-session-scratch:/var/lib/mwc/codex-scratch" \
     "${buildkit_mount[@]}" --entrypoint /etc/workspace-platform/mwc-workspace-bootstrap \
     "$image" serve >/dev/null
 
