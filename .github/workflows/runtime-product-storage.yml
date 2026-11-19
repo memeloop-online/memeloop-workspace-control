@@ -1,10 +1,10 @@
-name: product-runtime-storage-inputs
+name: product-runtime-storage
 on:
   push:
     branches: ['test/quota-runtime-product-csi-20261105']
-    paths: ['tests/runtime_product_storage*', 'tests/runtime-product-vm/guest-full.sh', 'src/kubernetes/workspace_pod*', 'src/kubernetes/workspace_pod/**', '.github/workflows/runtime-product-storage.yml']
+    paths: ['tests/runtime_product_storage*', 'tests/runtime-product-vm/**', 'src/kubernetes/workspace_pod*', 'src/kubernetes/workspace_pod/**', '.github/workflows/runtime-product-storage.yml']
   pull_request:
-    paths: ['tests/runtime_product_storage*', 'tests/runtime-product-vm/guest-full.sh', 'src/kubernetes/workspace_pod*', 'src/kubernetes/workspace_pod/**', '.github/workflows/runtime-product-storage.yml']
+    paths: ['tests/runtime_product_storage*', 'tests/runtime-product-vm/**', 'src/kubernetes/workspace_pod*', 'src/kubernetes/workspace_pod/**', '.github/workflows/runtime-product-storage.yml']
   workflow_dispatch:
 permissions:
   contents: read
@@ -13,7 +13,6 @@ permissions:
 env:
   WRAPPER_SHA: 18b9e8ad3c461554d84746fccea4240597114107
 jobs:
-  # Real four-case CSI execution belongs to the offline Harbor consumer workflow.
   build-inputs:
     name: Compile and verify CSI inputs
     runs-on: ubuntu-24.04
@@ -23,9 +22,11 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - name: Identify the actual renderer and harness checkout
-        run: echo "PRODUCT_RENDERER_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
-      - name: Check offline guest harness syntax
-        run: bash -n tests/runtime_product_storage.sh tests/runtime-product-vm/guest-full.sh
+        run: |
+          echo "PRODUCT_RENDERER_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+          echo "MWC_PRODUCT_STORAGE_WORKSPACE_IMAGE=localhost/mwc-product-storage-workspace:$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+      - name: Check CSI harness syntax
+        run: bash -n tests/runtime_product_storage.sh tests/runtime-product-vm/prepare-public-inputs.sh
       - uses: dtolnay/rust-toolchain@1.98.0
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
         with:
@@ -72,4 +73,61 @@ jobs:
         with:
           name: product-storage-inputs-${{ github.run_id }}-${{ github.run_attempt }}
           path: input-bundle/
+          if-no-files-found: error
+  rust-topolvm:
+    needs: build-inputs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Identify the actual renderer and harness checkout
+        run: |
+          echo "PRODUCT_RENDERER_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+          echo "MWC_PRODUCT_STORAGE_WORKSPACE_IMAGE=localhost/mwc-product-storage-workspace:$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: product-storage-inputs-${{ github.run_id }}-${{ github.run_attempt }}
+          path: input-bundle/
+      - name: Verify immutable compiled inputs
+        run: |
+          (cd input-bundle && sha256sum -c SHA256SUMS)
+          jq -e --arg renderer "$PRODUCT_RENDERER_SHA" --arg wrapper "$WRAPPER_SHA" \
+            --arg run "$GITHUB_RUN_ID" --arg attempt "$GITHUB_RUN_ATTEMPT" \
+            '.renderer_sha==$renderer and .harness_sha==$renderer and .wrapper_sha==$wrapper and .run_id==$run and .run_attempt==$attempt' input-bundle/source-shas.json
+          mkdir -p artifacts "$RUNNER_TEMP/product-storage-fixtures" "$RUNNER_TEMP/product-storage-bin"
+          cp input-bundle/bin/* "$RUNNER_TEMP/product-storage-bin/"
+          chmod 0755 "$RUNNER_TEMP/product-storage-bin/"*
+          cp input-bundle/fixtures/* "$RUNNER_TEMP/product-storage-fixtures/"
+          cp -a input-bundle/wrapper-release artifacts/
+          cp input-bundle/source-shas.json artifacts/compiled-source-shas.json
+      - name: Prepare disposable real CSI node
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y lvm2 thin-provisioning-tools xfsprogs jq openssh-client bzip2 curl conntrack socat ethtool ebtables iptables kmod
+          # The runner contains several SDKs unused by this isolated VM experiment.
+          sudo rm -rf /usr/local/lib/android /opt/ghc /usr/share/dotnet
+          df -B1 / | tee artifacts/runner-capacity-before.txt
+          free -b | tee artifacts/runner-memory-before.txt
+          test "$(df -B1 --output=avail / | tail -n1)" -ge 30000000000
+          test "$(awk '/MemTotal:/ {print $2}' /proc/meminfo)" -ge 6000000
+      - name: Prepare public inputs on this GitHub runner
+        run: |
+          bash tests/runtime-product-vm/prepare-public-inputs.sh "$RUNNER_TEMP/product-storage-inputs"
+          echo "MWC_PRODUCT_STORAGE_INPUTS=$RUNNER_TEMP/product-storage-inputs" >> "$GITHUB_ENV"
+      - name: Actual Rust product and TopoLVM lifecycle
+        run: |
+          status=0
+          sudo --preserve-env=GITHUB_ACTIONS,GITHUB_WORKSPACE,RUNNER_TEMP,PRODUCT_RENDERER_SHA,WRAPPER_SHA,MWC_PRODUCT_STORAGE_INPUTS \
+            bash tests/runtime_product_storage.sh || status=$?
+          sudo chown -R "$(id -u):$(id -g)" artifacts
+          exit "$status"
+      - name: Preserve actual evidence, including failed prerequisites
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: rust-product-topolvm-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/
+          retention-days: 14
           if-no-files-found: error

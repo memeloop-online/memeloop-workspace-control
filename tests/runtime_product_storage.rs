@@ -17,6 +17,10 @@ fn export_actual_rust_storage_cases() {
     let Some(directory) = std::env::var_os("MWC_PRODUCT_STORAGE_FIXTURES") else {
         return;
     };
+    // CI builds this image from public Rust inputs at this checkout. Its actual
+    // config digest is recorded with the runtime evidence, never called d507.
+    let workspace_image = std::env::var("MWC_PRODUCT_STORAGE_WORKSPACE_IMAGE")
+        .expect("public CSI fixture image must be supplied by the workflow");
     let directory = Path::new(&directory);
     std::fs::create_dir_all(directory).unwrap();
     let builder = ResourceBuilder {
@@ -45,7 +49,7 @@ fn export_actual_rust_storage_cases() {
             );
             let short_id = format!("{:016x}", id.as_u128() as u64);
             let mut template = WorkspaceTemplateSpec::standard(
-                "harbor.k3s.onetwo.website/library/rust-dev:20261027-74d5ef8@sha256:d50798f0f8345d7295c303ec0f04b1f1e064b7d6ac9b074d87065a488957360f",
+                &workspace_image,
                 AccessMode::Internal,
                 Resources {
                     cpu_millis: 2000,

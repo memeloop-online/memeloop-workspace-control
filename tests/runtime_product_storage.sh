@@ -2,7 +2,7 @@
 # Only an expendable CI VM. No synthetic CSI publication is permitted.
 set -euo pipefail
 : "${GITHUB_ACTIONS:?Disposable CI VM only}"
-inputs="${MWC_PRODUCT_STORAGE_INPUTS:?Verified offline CSI inputs required}"
+inputs="${MWC_PRODUCT_STORAGE_INPUTS:?Verified public CSI inputs required}"
 copy_input() {
  local name="$1" digest="$2" destination="$3"
  cp "$inputs/$name" "$destination"
@@ -55,8 +55,7 @@ finish() {
  exit "$status"
 }
 
-# The offline Harbor consumer supplies the actual digest-checked metadata and
-# OCI content. No external registry/download execution entrypoint is supported.
+# GitHub prepares public, checksum-verified inputs on this disposable VM.
 (cd "$inputs" && sha256sum -c SHA256SUMS)
 cp "$inputs/registry/"*.json "$out/"
 trap finish EXIT
@@ -144,14 +143,37 @@ TOML
 containerd --config "$base/containerd.toml" > "$out/containerd.log" 2>&1 & containerd_pid=$!
 for n in $(seq 1 60); do if cri info > "$out/cri-info.json" 2>/dev/null; then break; fi; sleep 1; done
 cri info > "$out/cri-info.json"
-# Imports and kubelet use one real containerd content store. Stage archives
-# contain exact original references, so the disconnected guest never pulls.
-ctr_ci images import --no-unpack --digests "$inputs/images.tar"
-# The guest owns this input disk. Release the now-duplicated archive before
-# image unpack and the real four-GiB ENOSPC case; discard reaches the job file.
-rm "$inputs/images.tar"
-sync
-fstrim -v "$inputs" > "$out/input-disk-trim.txt"
+# Imports and kubelet use one real containerd content store.
+identity="$inputs/registry/public-input-identity.json"
+jq -e --arg sha "$PRODUCT_RENDERER_SHA" '.mode=="github-public" and .source_sha==$sha and .harbor_required==false and .production_rust_d507_tested==false' "$identity"
+workspace_image="$(jq -er .workspace_image "$identity")"
+test "$(jq -r '.pod.spec.containers[]|select(.name=="workspace")|.image' "$fixtures/mwc-native-buildkit-false.json")" = "$workspace_image"
+# Unpack the local workspace image before measuring the remaining capacity too.
+ctr_ci images import "$inputs/workspace-image.tar"
+for n in $(seq 1 30); do
+ if cri inspecti "$workspace_image" > "$out/public-workspace-image.json" 2>/dev/null; then break; fi
+ sleep 1
+done
+jq -e --arg config "$(jq -er .workspace_config_digest "$identity")" '.status.id==$config' "$out/public-workspace-image.json"
+rm "$inputs/workspace-image.tar"
+for image in \
+ ghcr.io/memeloop-online/memeloop-workspace-control-ttyd@sha256:cc408d2cb9c3fe457b206cffae4a15264ae15f037eac0b1f4dde86058d499012 \
+ docker.io/moby/buildkit:v0.33.0-rootless@sha256:80b15f0735e87bab7bf59ec4d695dfb4a7cfb25521cf56dc75d6f256285b63ef \
+ ghcr.io/topolvm/topolvm-with-sidecar@sha256:70548dbe0c6addcccf79a557f29e95db2e6dc2cba2102988c91f30086004d0fc \
+ registry.k8s.io/pause:3.10@sha256:ee6521f290b2168b6e0935a181d4cff9be1ac3f505666ef0e3c98fae8199917a \
+ docker.io/rancher/mirrored-coredns-coredns:1.14.4@sha256:3e98f280fd601b37411c5fb7075fd9f337833c480f1644970b727ae0af067782; do
+ # containerd v2.3.2-k3s2 images pull always unpacks; it has no skip-unpack flag.
+ ctr_ci images pull --platform linux/amd64 "$image"
+ # k3s requests these two built-ins by their original tags.
+ case "$image" in
+  registry.k8s.io/pause:*|docker.io/rancher/mirrored-coredns-coredns:*) ctr_ci images tag "$image" "${image%@*}" ;;
+ esac
+done
+ctr_ci images ls > "$out/public-containerd-images.txt"
+# Do not start the real pressure cases after input staging has consumed the
+# reviewed disk reserve. The original 30 GB admission gate remains mandatory.
+df -B1 "$base" > "$out/capacity-after-inputs.txt"
+test "$(df -B1 --output=avail "$base" | tail -n1)" -ge 30000000000
 # Keep actual production limits and security contexts. Ubuntu's VM policy must
 # permit the existing unprivileged RootlessKit user namespace, as main CI does.
 if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then sysctl -w kernel.apparmor_restrict_unprivileged_userns=0; fi
@@ -238,8 +260,8 @@ for enabled in false true; do
   cri inspect "$id" > "$case_out/container-$id.json"
   cp "$base/containerd-state/io.containerd.runtime.v2.task/k8s.io/$id/config.json" "$case_out/oci-$id.json" 2>/dev/null || true
  done
- # Actual CRI imageID/repoDigest and OCI configs are preserved, not merely the
- # declared images. No product image is built or replaced in this workflow.
+ # Actual CRI imageID/repoDigest and OCI configs are preserved. The public
+ # workflow builds the workspace input; all four cases use that same image.
  for image in $(jq -r '[.pod.spec.containers[],.pod.spec.initContainers[]?]|.[].image' "$fixture" | sort -u); do
   cri inspecti "$image" > "$case_out/image-$(printf '%s' "$image" | sha256sum | cut -c1-12).json"
  done
@@ -423,9 +445,9 @@ for enabled in false true; do
 done
 done
 snapshot
-jq -es --arg renderer "$PRODUCT_RENDERER_SHA" --arg wrapper "$WRAPPER_SHA" '
+jq -es --arg renderer "$PRODUCT_RENDERER_SHA" --arg wrapper "$WRAPPER_SHA" --arg product "$(jq -r '.pod.spec.containers[]|select(.name=="workspace")|.image' "$fixtures/mwc-native-buildkit-false.json")" '
  sort_by(.runtime,.buildkit) as $cases |
  if ($cases|length)==4 and ([$cases[]|[.runtime,.buildkit]]==[["mwc-native",false],["mwc-native",true],["mwc-runsc",false],["mwc-runsc",true]]) and
  all($cases[]; .accepted and .root_written_bytes>2147483648 and .root_fsync and .scratch_enospc and .logs_rotation and .logs_follow_reopen and .logs_previous and .kubelet_logs_accounted and .kubelet_scratch_accounted and .logs_share_scratch and .ssh_survived and .pod_identity_preserved_under_pressure and .pvc_reused and .node_unpublish_observed and .pv_lv_deleted)
- then {accepted:true,renderer_sha:$renderer,wrapper_sha:$wrapper,product:"Rust d507",cases:$cases,real_csi:true,production_deployed:false,full_budget_goal_complete:true}
+ then {accepted:true,renderer_sha:$renderer,wrapper_sha:$wrapper,product:$product,cases:$cases,real_csi:true,production_deployed:false,runtime_matrix_complete:true}
  else error("incomplete real CSI quota runtime matrix") end' "$out/"mwc-*/acceptance.json > "$out/acceptance.json"
