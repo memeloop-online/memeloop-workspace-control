@@ -151,6 +151,9 @@ pub(super) fn storage_response(error: StorageError) -> ErrorResponse {
 }
 
 fn workspace_storage_response(error: &StorageError) -> Option<ErrorResponse> {
+    if let Some(response) = port_mapping_response(error) {
+        return Some(response);
+    }
     if let Some(response) = home_pvc_response(error) {
         return Some(response);
     }
@@ -166,30 +169,10 @@ fn workspace_storage_response(error: &StorageError) -> Option<ErrorResponse> {
             "workspace_not_found",
             "workspace was not found",
         ),
-        StorageError::PortMappingNotFound => response(
-            StatusCode::NOT_FOUND,
-            "port_mapping_not_found",
-            "workspace port mapping was not found",
-        ),
-        StorageError::InvalidPortMappingPort => response(
-            StatusCode::BAD_REQUEST,
-            "invalid_port_mapping_port",
-            "choose port 80, 443, or an application port from 1024 through 65535",
-        ),
         StorageError::WorkspaceSettingsUpdateConflict => response(
             StatusCode::CONFLICT,
             "workspace_settings_update_conflict",
             "Workspace settings changed; refresh and stop before changing compute resources.",
-        ),
-        StorageError::PortMappingPortConflict => response(
-            StatusCode::CONFLICT,
-            "port_mapping_port_conflict",
-            "a mapping already uses this internal port; edit the existing mapping or choose another port",
-        ),
-        StorageError::InvalidPortMappingDisplayName => response(
-            StatusCode::BAD_REQUEST,
-            "invalid_port_mapping_display_name",
-            "port mapping display name must be at most 80 characters",
         ),
         StorageError::InvalidWorkspace => response(
             StatusCode::BAD_REQUEST,
@@ -255,6 +238,32 @@ fn workspace_storage_response(error: &StorageError) -> Option<ErrorResponse> {
             StatusCode::FORBIDDEN,
             "privileged_template_forbidden",
             "cluster-access templates require a system administrator",
+        ),
+        _ => return None,
+    })
+}
+
+fn port_mapping_response(error: &StorageError) -> Option<ErrorResponse> {
+    Some(match error {
+        StorageError::PortMappingNotFound => response(
+            StatusCode::NOT_FOUND,
+            "port_mapping_not_found",
+            "workspace port mapping was not found",
+        ),
+        StorageError::InvalidPortMappingPort => response(
+            StatusCode::BAD_REQUEST,
+            "invalid_port_mapping_port",
+            "choose port 80, 443, or an application port from 1024 through 65535",
+        ),
+        StorageError::PortMappingPortConflict => response(
+            StatusCode::CONFLICT,
+            "port_mapping_port_conflict",
+            "a mapping already uses this internal port; edit the existing mapping or choose another port",
+        ),
+        StorageError::InvalidPortMappingDisplayName => response(
+            StatusCode::BAD_REQUEST,
+            "invalid_port_mapping_display_name",
+            "port mapping display name must be at most 80 characters",
         ),
         _ => return None,
     })

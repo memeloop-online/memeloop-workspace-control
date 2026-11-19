@@ -30,113 +30,123 @@ impl Database {
             Self::Sqlite {
                 pool,
                 installation_id,
-            } => {
-                let mut tx = pool.begin().await?;
-                let row = sqlx::query(&select_workspace_sql("?1", "?2"))
-                    .bind(installation_id.as_str())
-                    .bind(workspace_id.to_string())
-                    .fetch_optional(&mut *tx)
-                    .await?
-                    .ok_or(StorageError::WorkspaceNotFound)?;
-                let snapshot_yaml: String = row.try_get("template_snapshot_yaml")?;
-                let mut workspace = decode_sqlite(row, installation_id)?;
-                super::workspace_storage_shrink::guard_sqlite(
-                    &mut tx,
-                    installation_id.as_str(),
-                    workspace_id,
-                )
-                .await?;
-                let old_state = workspace.state.as_str().to_owned();
-                let (yaml, compute_changed) = apply(&mut workspace, &snapshot_yaml, &update)?;
-                if compute_changed {
-                    admit_sqlite(&mut tx, installation_id.as_str(), &workspace).await?;
-                }
-                let affected = sqlx::query("UPDATE workspaces SET name = ?1, cpu_millis = ?2, memory_mib = ?3, gpu_count = ?4, template_snapshot_yaml = ?5, generation = ?6, updated_at = ?7 WHERE installation_id = ?8 AND id = ?9 AND generation = ?10 AND state = ?11")
-                    .bind(&workspace.name).bind(as_i64(update.cpu_millis)?).bind(as_i64(update.memory_mib)?)
-                    .bind(i64::from(update.gpu_count)).bind(yaml).bind(as_i64(workspace.generation)?).bind(update.now)
-                    .bind(installation_id.as_str()).bind(workspace_id.to_string()).bind(as_i64(update.expected_generation)?)
-                    .bind(old_state).execute(&mut *tx).await?.rows_affected();
-                if affected != 1 {
-                    return Err(StorageError::WorkspaceSettingsUpdateConflict);
-                }
-                if compute_changed {
-                    sqlx::query("INSERT INTO jobs (id, installation_id, kind, workspace_id, payload_json, status, available_at, lease_owner, lease_expires_at, attempts, created_at, updated_at) VALUES (?1, ?2, 'reconcile_workspace', ?3, ?4, 'pending', ?5, NULL, NULL, 0, ?5, ?5)")
-                        .bind(Uuid::now_v7().to_string()).bind(installation_id.as_str()).bind(workspace_id.to_string())
-                        .bind(serde_json::json!({"generation":workspace.generation,"reason":"settings_updated"}).to_string())
-                        .bind(update.now).execute(&mut *tx).await?;
-                }
-                sqlx::query("INSERT INTO audit_log (id, installation_id, actor_user_id, organization_id, workspace_id, action, metadata_json, created_at) VALUES (?1, ?2, ?3, ?4, ?5, 'workspace.settings_updated', ?6, ?7)")
-                    .bind(Uuid::now_v7().to_string()).bind(installation_id.as_str()).bind(update.actor_user_id.to_string())
-                    .bind(workspace.organization_id.to_string()).bind(workspace_id.to_string())
-                    .bind(serde_json::json!({"name":workspace.name,"resources":workspace.template.resources,"generation":workspace.generation}).to_string())
-                    .bind(update.now).execute(&mut *tx).await?;
-                super::workspace_events::insert_sqlite(
-                    &mut tx,
-                    installation_id.as_str(),
-                    &workspace,
-                    Some("settings_updated"),
-                    update.now,
-                )
-                .await?;
-                tx.commit().await?;
-                Ok(workspace)
-            }
+            } => update_sqlite(pool, installation_id, workspace_id, update).await,
             Self::Postgres {
                 pool,
                 installation_id,
-            } => {
-                let mut tx = pool.begin().await?;
-                let row = sqlx::query(&format!("{} FOR UPDATE", select_workspace_sql("$1", "$2")))
-                    .bind(installation_id.as_str())
-                    .bind(workspace_id.to_string())
-                    .fetch_optional(&mut *tx)
-                    .await?
-                    .ok_or(StorageError::WorkspaceNotFound)?;
-                let snapshot_yaml: String = row.try_get("template_snapshot_yaml")?;
-                let mut workspace = decode_postgres(row, installation_id)?;
-                super::workspace_storage_shrink::guard_postgres(
-                    &mut tx,
-                    installation_id.as_str(),
-                    workspace_id,
-                )
-                .await?;
-                let old_state = workspace.state.as_str().to_owned();
-                let (yaml, compute_changed) = apply(&mut workspace, &snapshot_yaml, &update)?;
-                if compute_changed {
-                    admit_postgres(&mut tx, installation_id.as_str(), &workspace).await?;
-                }
-                let affected = sqlx::query("UPDATE workspaces SET name = $1, cpu_millis = $2, memory_mib = $3, gpu_count = $4, template_snapshot_yaml = $5, generation = $6, updated_at = $7 WHERE installation_id = $8 AND id = $9 AND generation = $10 AND state = $11")
-                    .bind(&workspace.name).bind(as_i64(update.cpu_millis)?).bind(as_i64(update.memory_mib)?)
-                    .bind(i64::from(update.gpu_count)).bind(yaml).bind(as_i64(workspace.generation)?).bind(update.now)
-                    .bind(installation_id.as_str()).bind(workspace_id.to_string()).bind(as_i64(update.expected_generation)?)
-                    .bind(old_state).execute(&mut *tx).await?.rows_affected();
-                if affected != 1 {
-                    return Err(StorageError::WorkspaceSettingsUpdateConflict);
-                }
-                if compute_changed {
-                    sqlx::query("INSERT INTO jobs (id, installation_id, kind, workspace_id, payload_json, status, available_at, lease_owner, lease_expires_at, attempts, created_at, updated_at) VALUES ($1, $2, 'reconcile_workspace', $3, $4, 'pending', $5, NULL, NULL, 0, $5, $5)")
-                        .bind(Uuid::now_v7().to_string()).bind(installation_id.as_str()).bind(workspace_id.to_string())
-                        .bind(serde_json::json!({"generation":workspace.generation,"reason":"settings_updated"}).to_string())
-                        .bind(update.now).execute(&mut *tx).await?;
-                }
-                sqlx::query("INSERT INTO audit_log (id, installation_id, actor_user_id, organization_id, workspace_id, action, metadata_json, created_at) VALUES ($1, $2, $3, $4, $5, 'workspace.settings_updated', $6, $7)")
-                    .bind(Uuid::now_v7().to_string()).bind(installation_id.as_str()).bind(update.actor_user_id.to_string())
-                    .bind(workspace.organization_id.to_string()).bind(workspace_id.to_string())
-                    .bind(serde_json::json!({"name":workspace.name,"resources":workspace.template.resources,"generation":workspace.generation}).to_string())
-                    .bind(update.now).execute(&mut *tx).await?;
-                super::workspace_events::insert_postgres(
-                    &mut tx,
-                    installation_id.as_str(),
-                    &workspace,
-                    Some("settings_updated"),
-                    update.now,
-                )
-                .await?;
-                tx.commit().await?;
-                Ok(workspace)
-            }
+            } => update_postgres(pool, installation_id, workspace_id, update).await,
         }
     }
+}
+
+async fn update_sqlite(
+    pool: &sqlx::SqlitePool,
+    installation_id: &crate::config::InstallationId,
+    workspace_id: Uuid,
+    update: WorkspaceSettingsUpdate,
+) -> Result<Workspace, StorageError> {
+    let mut tx = pool.begin().await?;
+    let row = sqlx::query(&select_workspace_sql("?1", "?2"))
+        .bind(installation_id.as_str())
+        .bind(workspace_id.to_string())
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or(StorageError::WorkspaceNotFound)?;
+    let snapshot_yaml: String = row.try_get("template_snapshot_yaml")?;
+    let mut workspace = decode_sqlite(row, installation_id)?;
+    super::workspace_storage_shrink::guard_sqlite(&mut tx, installation_id.as_str(), workspace_id)
+        .await?;
+    let old_state = workspace.state.as_str().to_owned();
+    let (yaml, compute_changed) = apply(&mut workspace, &snapshot_yaml, &update)?;
+    if compute_changed {
+        admit_sqlite(&mut tx, installation_id.as_str(), &workspace).await?;
+    }
+    let affected = sqlx::query("UPDATE workspaces SET name = ?1, cpu_millis = ?2, memory_mib = ?3, gpu_count = ?4, template_snapshot_yaml = ?5, generation = ?6, updated_at = ?7 WHERE installation_id = ?8 AND id = ?9 AND generation = ?10 AND state = ?11")
+        .bind(&workspace.name).bind(as_i64(update.cpu_millis)?).bind(as_i64(update.memory_mib)?)
+        .bind(i64::from(update.gpu_count)).bind(yaml).bind(as_i64(workspace.generation)?).bind(update.now)
+        .bind(installation_id.as_str()).bind(workspace_id.to_string()).bind(as_i64(update.expected_generation)?)
+        .bind(old_state).execute(&mut *tx).await?.rows_affected();
+    if affected != 1 {
+        return Err(StorageError::WorkspaceSettingsUpdateConflict);
+    }
+    if compute_changed {
+        sqlx::query("INSERT INTO jobs (id, installation_id, kind, workspace_id, payload_json, status, available_at, lease_owner, lease_expires_at, attempts, created_at, updated_at) VALUES (?1, ?2, 'reconcile_workspace', ?3, ?4, 'pending', ?5, NULL, NULL, 0, ?5, ?5)")
+            .bind(Uuid::now_v7().to_string()).bind(installation_id.as_str()).bind(workspace_id.to_string())
+            .bind(serde_json::json!({"generation":workspace.generation,"reason":"settings_updated"}).to_string())
+            .bind(update.now).execute(&mut *tx).await?;
+    }
+    sqlx::query("INSERT INTO audit_log (id, installation_id, actor_user_id, organization_id, workspace_id, action, metadata_json, created_at) VALUES (?1, ?2, ?3, ?4, ?5, 'workspace.settings_updated', ?6, ?7)")
+        .bind(Uuid::now_v7().to_string()).bind(installation_id.as_str()).bind(update.actor_user_id.to_string())
+        .bind(workspace.organization_id.to_string()).bind(workspace_id.to_string())
+        .bind(serde_json::json!({"name":workspace.name,"resources":workspace.template.resources,"generation":workspace.generation}).to_string())
+        .bind(update.now).execute(&mut *tx).await?;
+    super::workspace_events::insert_sqlite(
+        &mut tx,
+        installation_id.as_str(),
+        &workspace,
+        Some("settings_updated"),
+        update.now,
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(workspace)
+}
+
+async fn update_postgres(
+    pool: &sqlx::PgPool,
+    installation_id: &crate::config::InstallationId,
+    workspace_id: Uuid,
+    update: WorkspaceSettingsUpdate,
+) -> Result<Workspace, StorageError> {
+    let mut tx = pool.begin().await?;
+    let row = sqlx::query(&format!("{} FOR UPDATE", select_workspace_sql("$1", "$2")))
+        .bind(installation_id.as_str())
+        .bind(workspace_id.to_string())
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or(StorageError::WorkspaceNotFound)?;
+    let snapshot_yaml: String = row.try_get("template_snapshot_yaml")?;
+    let mut workspace = decode_postgres(row, installation_id)?;
+    super::workspace_storage_shrink::guard_postgres(
+        &mut tx,
+        installation_id.as_str(),
+        workspace_id,
+    )
+    .await?;
+    let old_state = workspace.state.as_str().to_owned();
+    let (yaml, compute_changed) = apply(&mut workspace, &snapshot_yaml, &update)?;
+    if compute_changed {
+        admit_postgres(&mut tx, installation_id.as_str(), &workspace).await?;
+    }
+    let affected = sqlx::query("UPDATE workspaces SET name = $1, cpu_millis = $2, memory_mib = $3, gpu_count = $4, template_snapshot_yaml = $5, generation = $6, updated_at = $7 WHERE installation_id = $8 AND id = $9 AND generation = $10 AND state = $11")
+        .bind(&workspace.name).bind(as_i64(update.cpu_millis)?).bind(as_i64(update.memory_mib)?)
+        .bind(i64::from(update.gpu_count)).bind(yaml).bind(as_i64(workspace.generation)?).bind(update.now)
+        .bind(installation_id.as_str()).bind(workspace_id.to_string()).bind(as_i64(update.expected_generation)?)
+        .bind(old_state).execute(&mut *tx).await?.rows_affected();
+    if affected != 1 {
+        return Err(StorageError::WorkspaceSettingsUpdateConflict);
+    }
+    if compute_changed {
+        sqlx::query("INSERT INTO jobs (id, installation_id, kind, workspace_id, payload_json, status, available_at, lease_owner, lease_expires_at, attempts, created_at, updated_at) VALUES ($1, $2, 'reconcile_workspace', $3, $4, 'pending', $5, NULL, NULL, 0, $5, $5)")
+            .bind(Uuid::now_v7().to_string()).bind(installation_id.as_str()).bind(workspace_id.to_string())
+            .bind(serde_json::json!({"generation":workspace.generation,"reason":"settings_updated"}).to_string())
+            .bind(update.now).execute(&mut *tx).await?;
+    }
+    sqlx::query("INSERT INTO audit_log (id, installation_id, actor_user_id, organization_id, workspace_id, action, metadata_json, created_at) VALUES ($1, $2, $3, $4, $5, 'workspace.settings_updated', $6, $7)")
+        .bind(Uuid::now_v7().to_string()).bind(installation_id.as_str()).bind(update.actor_user_id.to_string())
+        .bind(workspace.organization_id.to_string()).bind(workspace_id.to_string())
+        .bind(serde_json::json!({"name":workspace.name,"resources":workspace.template.resources,"generation":workspace.generation}).to_string())
+        .bind(update.now).execute(&mut *tx).await?;
+    super::workspace_events::insert_postgres(
+        &mut tx,
+        installation_id.as_str(),
+        &workspace,
+        Some("settings_updated"),
+        update.now,
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(workspace)
 }
 
 fn apply(
