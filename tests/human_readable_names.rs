@@ -119,8 +119,11 @@ async fn stored_display_names_accept_character_limits_and_reject_one_extra() {
         ));
         assert_eq!(
             database
-                .get_organization(organization.id)
+                .list_organizations_for(user.user_id, false)
                 .await
+                .unwrap()
+                .into_iter()
+                .find(|item| item.id == organization.id)
                 .unwrap()
                 .name,
             name
