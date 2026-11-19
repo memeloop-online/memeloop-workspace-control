@@ -177,7 +177,7 @@ export function RunLocationsCard({ api, onError }: Props) {
                   <Input value={draft.name} disabled={!draft.creating || dialogBusy} maxLength={63} placeholder="gpu-west" onChange={(_, data) => setDraft({ ...draft, name: data.value })} />
                 </Field>
                 <Field label={t("displayName")} required validationState={draftErrors.displayName ? "error" : undefined} validationMessage={draftErrors.displayName ? t(draftErrors.displayName) : undefined}>
-                  <Input value={draft.displayName} disabled={dialogBusy} maxLength={80} onChange={(_, data) => setDraft({ ...draft, displayName: data.value })} />
+                  <Input value={draft.displayName} disabled={dialogBusy} onChange={(_, data) => setDraft({ ...draft, displayName: data.value })} />
                 </Field>
                 <Field label={t("runLocationRequiredHosts")} hint={t("runLocationRequiredHostsHelp")} validationState={draftErrors.hosts ? "error" : undefined} validationMessage={draftErrors.hosts ? t(draftErrors.hosts) : undefined}>
                   <Textarea value={draft.requiredHosts} disabled={dialogBusy} rows={3} onChange={(_, data) => setDraft({ ...draft, requiredHosts: data.value })} />
@@ -259,8 +259,8 @@ const NAME_PATTERN = /^[a-z][a-z0-9-]{0,62}$/;
 const HOST_PATTERN = /^[A-Za-z0-9._-]{1,63}$/;
 const LABEL_KEY_PATTERN = /^[A-Za-z0-9/_\.-]{1,253}$/;
 const LABEL_VALUE_PATTERN = /^[A-Za-z0-9._-]{0,63}$/;
-// The backend caps display names at 80 UTF-8 bytes and rejects control characters.
-const DISPLAY_NAME_MAX_BYTES = 80;
+// The backend caps display names at 80 characters and rejects control characters.
+const DISPLAY_NAME_MAX_CHARACTERS = 80;
 const CONTROL_CHARACTER = /\p{Cc}/u;
 
 function validLocationName(value: string): boolean {
@@ -302,7 +302,7 @@ function parseDraft(draft: LocationDraft): { input: PutNodePoolInput } | { error
   const errors: Partial<Record<"name" | "displayName" | "hosts" | "selector", MessageKey>> = {};
   if (draft.creating && !validLocationName(draft.name)) errors.name = "runLocationNameInvalid";
   const displayName = draft.displayName;
-  if (!displayName.trim() || displayName !== displayName.trim() || new TextEncoder().encode(displayName).length > DISPLAY_NAME_MAX_BYTES || CONTROL_CHARACTER.test(displayName)) errors.displayName = "runLocationDisplayNameInvalid";
+  if (!displayName.trim() || displayName !== displayName.trim() || Array.from(displayName).length > DISPLAY_NAME_MAX_CHARACTERS || CONTROL_CHARACTER.test(displayName)) errors.displayName = "runLocationDisplayNameInvalid";
   const requiredHosts = parseHostLines(draft.requiredHosts);
   const preferredHosts = parseHostLines(draft.preferredHosts);
   if (requiredHosts === null || preferredHosts === null) errors.hosts = "runLocationHostsInvalid";

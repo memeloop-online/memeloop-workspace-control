@@ -19,7 +19,9 @@ impl Database {
         system_admin: Option<bool>,
         disabled: Option<bool>,
     ) -> Result<UserSummary, StorageError> {
-        if display_name.is_some_and(|value| value.trim().is_empty() || value.len() > 120) {
+        if display_name
+            .is_some_and(|value| value.trim().is_empty() || value.trim().chars().count() > 120)
+        {
             return Err(StorageError::InvalidUserProfile);
         }
         match self {

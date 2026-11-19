@@ -13,7 +13,7 @@ impl Database {
         name: &str,
     ) -> Result<Organization, StorageError> {
         let name = name.trim();
-        if name.is_empty() || name.len() > 120 {
+        if name.is_empty() || name.chars().count() > 120 {
             return Err(StorageError::InvalidWorkspace);
         }
         let updated = match self {

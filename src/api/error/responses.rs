@@ -176,6 +176,16 @@ fn workspace_storage_response(error: &StorageError) -> Option<ErrorResponse> {
             "invalid_port_mapping_port",
             "choose port 80, 443, or an application port from 1024 through 65535",
         ),
+        StorageError::WorkspaceSettingsUpdateConflict => response(
+            StatusCode::CONFLICT,
+            "workspace_settings_update_conflict",
+            "Workspace settings changed; refresh and stop before changing compute resources.",
+        ),
+        StorageError::PortMappingPortConflict => response(
+            StatusCode::CONFLICT,
+            "port_mapping_port_conflict",
+            "a mapping already uses this internal port; edit the existing mapping or choose another port",
+        ),
         StorageError::InvalidPortMappingDisplayName => response(
             StatusCode::BAD_REQUEST,
             "invalid_port_mapping_display_name",

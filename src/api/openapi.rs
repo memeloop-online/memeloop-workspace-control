@@ -7,7 +7,7 @@ use super::{
     ErrorBody, ErrorEnvelope, admin, auth, catalog, events, injections, node_pools,
     organization_usage, organizations, plugins, port_mappings, runtime, ssh, system, user_quota,
     web_shell, webhooks, workspace_cpu_overcommit, workspace_home_capacity, workspace_home_pvc,
-    workspace_image_update, workspace_placement, workspace_scratch_resize,
+    workspace_image_update, workspace_placement, workspace_scratch_resize, workspace_settings,
     workspace_storage_shrink, workspaces,
 };
 
@@ -74,6 +74,7 @@ use super::{
         organization_usage::get,
         workspaces::action,
         workspace_cpu_overcommit::update,
+        workspace_settings::update,
         workspace_image_update::update,
         workspace_home_pvc::update,
         workspace_home_capacity::update,
@@ -85,6 +86,7 @@ use super::{
         workspace_placement::update,
         port_mappings::list,
         port_mappings::create,
+        port_mappings::update,
         port_mappings::open,
         port_mappings::delete,
         web_shell::issue,
@@ -130,6 +132,7 @@ use super::{
         crate::storage::WorkspaceSort,
         workspaces::CreateWorkspaceRequest,
         workspace_cpu_overcommit::UpdateWorkspaceCpuOvercommitRequest,
+        workspace_settings::UpdateWorkspaceSettingsRequest,
         workspace_image_update::UpdateWorkspaceImageRequest,
         workspace_home_pvc::BindWorkspaceHomePvcRequest,
         workspace_home_capacity::CorrectWorkspaceHomeCapacityRequest,

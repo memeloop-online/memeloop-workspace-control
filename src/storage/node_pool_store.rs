@@ -408,7 +408,7 @@ fn validate_node_pool(name: &str, command: &PutNodePool) -> Result<(), StorageEr
     if !valid_node_pool_name(name)
         || command.display_name.trim().is_empty()
         || command.display_name != command.display_name.trim()
-        || command.display_name.len() > 80
+        || command.display_name.chars().count() > 80
         || command.display_name.chars().any(char::is_control)
         || command.placement.selector.len() > 32
         || command.placement.required_hosts.len() > 128

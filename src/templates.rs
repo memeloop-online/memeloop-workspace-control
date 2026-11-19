@@ -84,7 +84,7 @@ impl DesktopEndpoint {
             let trimmed = value.trim();
             trimmed.is_empty()
                 || trimmed != value
-                || trimmed.len() > 80
+                || trimmed.chars().count() > 80
                 || trimmed.chars().any(char::is_control)
         }) {
             return Err(TemplateError::Desktop);
@@ -214,7 +214,7 @@ impl WorkspaceTemplateDocument {
         }
         let name = self.metadata.name.trim();
         if name.is_empty()
-            || name.len() > 120
+            || name.chars().count() > 120
             || name != self.metadata.name
             || name.chars().any(char::is_control)
         {
