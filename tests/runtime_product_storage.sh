@@ -91,7 +91,27 @@ for kind in home scratch; do
  lvcreate -L "$pool" --poolmetadatasize 32M -T "mwc-ci-$kind/pool"
 done
 vg_uuid="$(vgs --noheadings -o vg_uuid mwc-ci-scratch | tr -d '[:space:]-')"
-pool_uuid="$(dmsetup info -c --noheadings -o uuid mwc--ci--scratch-pool-tpool | xargs)"
+# LVM versions do not all name an active thin pool with a -tpool suffix.
+# Resolve this exact scratch LV by LVM UUID and verify the actual DM target.
+pool_lv_uuid="$(lvs --noheadings -o lv_uuid mwc-ci-scratch/pool | tr -d '[:space:]-')"
+pool_prefix="LVM-${vg_uuid}${pool_lv_uuid}"
+dmsetup info -c --noheadings --separator : -o name,uuid > "$out/initial-dm-info.txt"
+dmsetup table --target thin-pool > "$out/initial-thin-pool-tables.txt"
+mapfile -t pool_uuids < <(
+ while IFS=: read -r name uuid; do
+  name="$(printf '%s' "$name" | xargs)"
+  uuid="$(printf '%s' "$uuid" | tr -d '[:space:]')"
+  case "$uuid" in
+   "$pool_prefix"|"$pool_prefix"-*)
+    if dmsetup table "$name" | awk '$3=="thin-pool" {found=1} END {exit !found}'; then
+     printf '%s\n' "$uuid"
+    fi
+    ;;
+  esac
+ done < "$out/initial-dm-info.txt"
+)
+test "${#pool_uuids[@]}" = 1
+pool_uuid="${pool_uuids[0]}"
 jq -n --arg runtime "$(readlink -f "$(command -v runc)")" --arg vg "$vg_uuid" --arg pool "$pool_uuid" --arg dmsetup "$(readlink -f "$(command -v dmsetup)")" --arg base "$base" \
  '{real_runtime:$runtime,kubelet_root:"/var/lib/kubelet",cri_root:($base+"/containerd-root/io.containerd.grpc.v1.cri"),cri_state_root:($base+"/containerd-state/io.containerd.grpc.v1.cri"),workspace_namespace:"memeloop-workspace-control",pod_log_root:"/var/log/pods",bundle_root:($base+"/containerd-state/io.containerd.runtime.v2.task/k8s.io"),snapshot_root:($base+"/containerd-root/io.containerd.snapshotter.v1.overlayfs/snapshots"),state_root:($base+"/state/mwc-native"),mount_namespace:"/proc/1/ns/mnt",scratch_vg_uuid:$vg,scratch_pool_dm_uuid:$pool,dmsetup:$dmsetup}' > /etc/mwc-runtime-wrapper.json
 chmod 0600 /etc/mwc-runtime-wrapper.json
