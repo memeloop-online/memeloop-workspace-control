@@ -154,7 +154,7 @@ export function WorkspaceSettingsDialog({ api, item, canChangeState, canManageTe
             {!canChangeState && <Text role="status">{t("workspaceSettingsPermissionRequired")}</Text>}
             <section className={styles.dialogSection} aria-label={t("workspaceGeneralSettings")}>
               <Field label={t("workspaceName")} required validationState={nameInvalid ? "error" : undefined} validationMessage={nameTooLong ? t("workspaceSettingsNameTooLong") : draft.name.trim() ? undefined : t("workspaceNameRequired")}>
-                <Input value={draft.name} disabled={!canChangeState || busy} onChange={(_, data) => setDraft((current) => ({ ...current, name: data.value }))} />
+                <Input aria-label={t("workspaceName")} value={draft.name} disabled={!canChangeState || busy} onChange={(_, data) => setDraft((current) => ({ ...current, name: data.value }))} />
               </Field>
               <Caption1 className={styles.summaryLabel} aria-live="polite">{t("workspaceSettingsNameCounter", { count: nameLength, max: WORKSPACE_NAME_MAX_CODE_POINTS })}</Caption1>
             </section>

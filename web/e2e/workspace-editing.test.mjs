@@ -95,7 +95,7 @@ test("workspace settings and mapping editing retain drafts, stable addresses and
     assert.equal(await dialog.getByLabel(messages.workspaceName, { exact: true }).inputValue(), "支付工作区");
     await dialog.getByRole("button", { name: messages.saveSettings, exact: true }).click();
     await page.getByRole("group", { name: "支付工作区", exact: true }).waitFor();
-    await dialog.getByRole("button", { name: messages.cancel, exact: true }).click();
+    await dialog.getByRole("button", { name: messages.cancel, exact: true }).last().click();
 
     await page.getByRole("group", { name: "stopped-workspace", exact: true }).getByRole("button", { name: messages.editParameters, exact: true }).click();
     dialog = page.getByRole("dialog");
@@ -106,7 +106,7 @@ test("workspace settings and mapping editing retain drafts, stable addresses and
     await dialog.getByText(messages.settingsStorageSaved, { exact: true }).waitFor();
     assert.equal(workspaces[1].workspace.state, "stopped");
     assert.equal(workspaces[1].workspace.resources.cpu_millis, 3000);
-    await dialog.getByRole("button", { name: messages.cancel, exact: true }).click();
+    await dialog.getByRole("button", { name: messages.cancel, exact: true }).last().click();
 
     await page.getByRole("group", { name: "stopped-workspace", exact: true }).getByRole("button", { name: messages.portMappings, exact: true }).click();
     dialog = page.getByRole("dialog");

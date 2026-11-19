@@ -162,7 +162,7 @@ export function WorkspacePortMappings({ api, workspaceId, workspaceState, onErro
           <DialogContent className={styles.dialogBody}>
             <Text>{t("portMappingIntro")}</Text>
             <form className={styles.formGrid} onSubmit={(event) => void save(event)}>
-              <Field label={t("internalPort")} required><Input disabled={(!editing && !workspaceReady) || busy} type="number" min={1} max={65535} step={1} required value={draft.port} onChange={(_, data) => setDraft((current) => ({ ...current, port: data.value }))} placeholder={t("portMappingPortPlaceholder")} /></Field>
+              <Field label={t("internalPort")} required><Input aria-label={t("internalPort")} disabled={(!editing && !workspaceReady) || busy} type="number" min={1} max={65535} step={1} required value={draft.port} onChange={(_, data) => setDraft((current) => ({ ...current, port: data.value }))} placeholder={t("portMappingPortPlaceholder")} /></Field>
               <Field label={t("displayNameOptional")} validationState={nameValidation.tooLong ? "error" : undefined} validationMessage={nameValidation.tooLong ? t("portMappingNameTooLong") : undefined}>
                 <Input disabled={(!editing && !workspaceReady) || busy} value={draft.displayName} onChange={(_, data) => setDraft((current) => ({ ...current, displayName: data.value }))} placeholder={t("portMappingNamePlaceholder")} />
               </Field>
