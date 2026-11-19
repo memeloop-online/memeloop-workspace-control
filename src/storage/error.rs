@@ -86,6 +86,10 @@ pub enum StorageError {
     InvalidPortMappingPort,
     #[error("workspace port mapping display name is invalid")]
     InvalidPortMappingDisplayName,
+    #[error("a mapping already uses this internal port")]
+    PortMappingPortConflict,
+    #[error("workspace settings changed; refresh and stop before changing compute resources")]
+    WorkspaceSettingsUpdateConflict,
     #[error("workspace port mapping was not found")]
     PortMappingNotFound,
     #[error("workspace name and image must not be empty")]

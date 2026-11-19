@@ -1,6 +1,6 @@
 import { Fragment, useMemo, useState } from "react";
 import { Badge, Button, Caption1, Divider, Spinner, Text, Title3, Tooltip } from "@fluentui/react-components";
-import { ArrowClockwiseRegular, ChevronDownRegular, ChevronUpRegular, DeleteRegular, DesktopRegular, LocationRegular, PlayRegular, SaveRegular, StopRegular, WindowConsoleRegular } from "@fluentui/react-icons";
+import { ArrowClockwiseRegular, ChevronDownRegular, ChevronUpRegular, DeleteRegular, DesktopRegular, EditRegular, LocationRegular, PlayRegular, SaveRegular, StopRegular, WindowConsoleRegular } from "@fluentui/react-icons";
 import { useI18n } from "./i18n";
 import type { Locale, MessageKey } from "./i18n";
 import type { AvailableNodePool, WorkspaceResponse, WorkspaceRuntime, WorkspaceRuntimeEvent, WorkspaceRuntimePod } from "./types";
@@ -31,6 +31,7 @@ interface Props {
   onRequestRuntime: (id: string) => Promise<void>;
   onChangePlacement: (item: WorkspaceResponse) => void;
   onShrinkStorage: (item: WorkspaceResponse) => void;
+  onEditSettings: (item: WorkspaceResponse) => void;
   onError: (message: string) => void;
   canConnect: boolean;
   canChangeState: boolean;
@@ -40,7 +41,7 @@ interface Props {
   templateName?: string;
 }
 
-export function WorkspaceCard({ api, item, runtime, nodePools, busyAction, onAction, onOpenShell, onRequestRuntime, onChangePlacement, onShrinkStorage, onError, canConnect, canChangeState, canDelete, canChangePlacement, canShrinkStorage, templateName }: Props) {
+export function WorkspaceCard({ api, item, runtime, nodePools, busyAction, onAction, onOpenShell, onRequestRuntime, onChangePlacement, onShrinkStorage, onEditSettings, onError, canConnect, canChangeState, canDelete, canChangePlacement, canShrinkStorage, templateName }: Props) {
   const { locale, t } = useI18n();
   const styles = useWorkspaceStyles();
   const [detailView, setDetailView] = useState<DetailView | null>(null);
@@ -92,10 +93,11 @@ export function WorkspaceCard({ api, item, runtime, nodePools, busyAction, onAct
           {canConnect && running && item.ssh_connection && <WorkspaceConnectionDialog connection={item.ssh_connection} shortId={workspace.short_id} hostKey={item.workspace_host_key} />}
           {canConnect && running && <Tooltip content={t("webShellClipboardHelp")} relationship="description"><Button appearance="primary" icon={<WindowConsoleRegular />} onClick={() => void onOpenShell(workspace.id)}>{t("webShell")}</Button></Tooltip>}
           {canConnect && running && item.desktop?.status === "ready" && item.desktop.https_url && <Button appearance="outline" icon={<DesktopRegular />} disabled={openingDesktop} onClick={() => void openDesktop(api, workspace.id, item.desktop!.mapping_id, setOpeningDesktop, onError, t)}>{openingDesktop ? t("desktopOpening") : t("openDesktop")}</Button>}
-          {canConnect && running && <WorkspacePortMappings api={api} workspaceId={workspace.id} workspaceReady onError={onError} />}
+          {canConnect && (running || stopped) && <WorkspacePortMappings api={api} workspaceId={workspace.id} workspaceState={workspace.state} onError={onError} />}
           {canChangeState && running && <Button appearance="subtle" icon={<StopRegular />} onClick={() => onAction(item, "stop")}>{t("stop")}</Button>}
           {canChangeState && running && <Button appearance="subtle" icon={<ArrowClockwiseRegular />} onClick={() => onAction(item, "restart")}>{t("restart")}</Button>}
           {canChangeState && (workspace.state === "stopped" || workspace.state === "failed") && <Button appearance="primary" icon={<PlayRegular />} onClick={() => onAction(item, "start")}>{t("start")}</Button>}
+          {canChangeState && (running || stopped) && <Button appearance="subtle" icon={<EditRegular />} onClick={() => onEditSettings(item)}>{t("editParameters")}</Button>}
           {canChangePlacement && stopped && <Button appearance="subtle" icon={<LocationRegular />} onClick={() => onChangePlacement(item)}>{t("changeLocation")}</Button>}
           {canShrinkStorage && (running || stopped) && <Button appearance="subtle" icon={<SaveRegular />} onClick={() => onShrinkStorage(item)}>{t("shrinkStorage")}</Button>}
         </>}

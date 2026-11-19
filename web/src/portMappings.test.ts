@@ -35,3 +35,13 @@ test("accepts only non-credentialed HTTPS bootstrap destinations", () => {
   assert.equal(safeBootstrapUrl("https://token@desktop.example.test/session"), null);
   assert.equal(safeBootstrapUrl("/relative-path"), null);
 });
+
+test("display names count trimmed Chinese and emoji characters rather than bytes or UTF-16 units", async () => {
+  const { validateDisplayName } = await import("./portMappings.ts");
+  for (const character of ["名", "😀"]) {
+    assert.deepEqual(validateDisplayName(`  ${character.repeat(80)}  `), { value: character.repeat(80), length: 80, tooLong: false });
+    assert.equal(validateDisplayName(character.repeat(81)).tooLong, true);
+  }
+  assert.deepEqual(validateDisplayName("   "), { value: "", length: 0, tooLong: false });
+  for (const port of ["22", "2222", "3389", "7681", "8080", "8081", "8443"]) assert.equal(parseInternalPort(port), null);
+});

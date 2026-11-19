@@ -64,7 +64,7 @@ fn workspace_request(workspace: &Workspace) -> QuotaResources {
     )
 }
 
-fn admit_rows<Q: Row, U: Row>(
+pub(super) fn admit_rows<Q: Row, U: Row>(
     quota: &Q,
     usage: &U,
     request: QuotaResources,

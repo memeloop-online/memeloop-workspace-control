@@ -10,7 +10,7 @@ use super::{
     openapi, organization_usage, organizations, plugins, port_mappings, ready, runtime, ssh,
     system_info, ui, user_quota, web_shell, webhooks, workspace_cpu_overcommit,
     workspace_home_capacity, workspace_home_pvc, workspace_image_update, workspace_placement,
-    workspace_scratch_resize, workspace_storage_shrink, workspaces,
+    workspace_scratch_resize, workspace_settings, workspace_storage_shrink, workspaces,
 };
 
 pub(super) fn router(state: Arc<AppState>) -> Router {
@@ -215,6 +215,10 @@ fn workspace_routes(router: ApiRouter) -> ApiRouter {
         .route("/api/v1/node-pools", get(node_pools::list_available))
         .route("/api/v1/workspaces/{workspace_id}", get(workspaces::get))
         .route(
+            "/api/v1/workspaces/{workspace_id}/settings",
+            axum::routing::put(workspace_settings::update),
+        )
+        .route(
             "/api/v1/workspaces/{workspace_id}/home-capacity",
             axum::routing::put(workspace_home_capacity::update),
         )
@@ -269,7 +273,7 @@ fn workspace_routes(router: ApiRouter) -> ApiRouter {
         )
         .route(
             "/api/v1/workspaces/{workspace_id}/port-mappings/{mapping_id}",
-            axum::routing::delete(port_mappings::delete),
+            axum::routing::delete(port_mappings::delete).put(port_mappings::update),
         )
         .route(
             "/api/v1/workspaces/{workspace_id}/port-mappings/{mapping_id}/open",
