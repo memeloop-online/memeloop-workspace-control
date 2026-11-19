@@ -197,14 +197,14 @@ async fn exercise(database: Database) {
         expected
     );
     let events = database
-        .list_events(organization.id, Some(updated.id), 20)
+        .list_events(organization.id, None, 20)
         .await
         .unwrap();
-    assert!(
-        events
-            .iter()
-            .any(|event| event.payload["action"] == "settings_updated")
-    );
+    assert!(events.iter().any(|event| {
+        event.workspace_id == Some(updated.id)
+            && event.payload["generation"] == updated.generation
+            && event.payload["action"] == "settings_updated"
+    }));
     assert!(matches!(
         database
             .update_workspace_settings(stopped.id, update(&stopped, 2_000))

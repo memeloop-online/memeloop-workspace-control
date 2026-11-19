@@ -34,7 +34,7 @@ async fn app(
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_secs() as i64;
-    let database = Database::connect("sqlite::memory:", "workspace-settings-api".parse().unwrap())
+    let database = Database::connect("sqlite::memory:", "settings-api".parse().unwrap())
         .await
         .unwrap();
     database.migrate().await.unwrap();
@@ -151,7 +151,7 @@ async fn app(
             .unwrap()
     };
     let config = AppConfig {
-        installation_id: "workspace-settings-api".parse().unwrap(),
+        installation_id: "settings-api".parse().unwrap(),
         listen_address: SocketAddr::from(([127, 0, 0, 1], 0)),
         database_url: "sqlite::memory:".to_owned(),
         replica_count: 1,
