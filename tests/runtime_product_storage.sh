@@ -11,10 +11,14 @@ copy_input() {
 : "${RUNNER_TEMP:?}"
 : "${GITHUB_WORKSPACE:?}"
 base=/var/lib/mwc-product-storage-ci
+pod_log_root="$base/pod-logs"
 out="$GITHUB_WORKSPACE/artifacts"
 fixtures="$RUNNER_TEMP/product-storage-fixtures"
 namespace=memeloop-workspace-control
 mkdir -p "$base" "$out" "$base/state/mwc-native" "$base/state/mwc-runsc"
+# The hosted VM's /var/log can be group-writable, which the runtime correctly
+# rejects. Keep kubelet and wrapper logs under the same trusted, dedicated root.
+install -d -o root -g root -m 0755 "$pod_log_root"
 chmod 0700 "$base/state" "$base/state/"*
 exec > >(tee "$out/product-csi.log") 2>&1
 k3s_pid=''; containerd_pid=''; loops=()
@@ -112,8 +116,8 @@ mapfile -t pool_uuids < <(
 )
 test "${#pool_uuids[@]}" = 1
 pool_uuid="${pool_uuids[0]}"
-jq -n --arg runtime "$(readlink -f "$(command -v runc)")" --arg vg "$vg_uuid" --arg pool "$pool_uuid" --arg dmsetup "$(readlink -f "$(command -v dmsetup)")" --arg base "$base" \
- '{real_runtime:$runtime,kubelet_root:"/var/lib/kubelet",cri_root:($base+"/containerd-root/io.containerd.grpc.v1.cri"),cri_state_root:($base+"/containerd-state/io.containerd.grpc.v1.cri"),workspace_namespace:"memeloop-workspace-control",pod_log_root:"/var/log/pods",bundle_root:($base+"/containerd-state/io.containerd.runtime.v2.task/k8s.io"),snapshot_root:($base+"/containerd-root/io.containerd.snapshotter.v1.overlayfs/snapshots"),state_root:($base+"/state/mwc-native"),mount_namespace:"/proc/1/ns/mnt",scratch_vg_uuid:$vg,scratch_pool_dm_uuid:$pool,dmsetup:$dmsetup}' > /etc/mwc-runtime-wrapper.json
+jq -n --arg runtime "$(readlink -f "$(command -v runc)")" --arg vg "$vg_uuid" --arg pool "$pool_uuid" --arg dmsetup "$(readlink -f "$(command -v dmsetup)")" --arg base "$base" --arg logs "$pod_log_root" \
+ '{real_runtime:$runtime,kubelet_root:"/var/lib/kubelet",cri_root:($base+"/containerd-root/io.containerd.grpc.v1.cri"),cri_state_root:($base+"/containerd-state/io.containerd.grpc.v1.cri"),workspace_namespace:"memeloop-workspace-control",pod_log_root:$logs,bundle_root:($base+"/containerd-state/io.containerd.runtime.v2.task/k8s.io"),snapshot_root:($base+"/containerd-root/io.containerd.snapshotter.v1.overlayfs/snapshots"),state_root:($base+"/state/mwc-native"),mount_namespace:"/proc/1/ns/mnt",scratch_vg_uuid:$vg,scratch_pool_dm_uuid:$pool,dmsetup:$dmsetup}' > /etc/mwc-runtime-wrapper.json
 chmod 0600 /etc/mwc-runtime-wrapper.json
 jq --arg runtime "$base/gvisor/runsc" --arg state "$base/state/mwc-runsc" '.real_runtime=$runtime | .state_root=$state' /etc/mwc-runtime-wrapper.json > /etc/mwc-runsc-wrapper.json
 chmod 0600 /etc/mwc-runsc-wrapper.json
@@ -197,8 +201,13 @@ test "$(df -B1 --output=avail "$base" | tail -n1)" -ge 30000000000
 # Keep actual production limits and security contexts. Ubuntu's VM policy must
 # permit the existing unprivileged RootlessKit user namespace, as main CI does.
 if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then sysctl -w kernel.apparmor_restrict_unprivileged_userns=0; fi
+# k3s merges this partial KubeletConfiguration with its own defaults. Only the
+# log location changes; pressure thresholds and log rotation retain defaults.
+jq -n --arg logs "$pod_log_root" '{apiVersion:"kubelet.config.k8s.io/v1beta1",kind:"KubeletConfiguration",podLogsDir:$logs}' > "$base/kubelet-log-config.json"
+stat -c '%U:%G %a %n' / /var /var/lib "$base" "$pod_log_root" > "$out/pod-log-root-permissions.txt"
 K3S_DATA_DIR="$base/k3s" "$base/k3s-bin" server --data-dir "$base/k3s" --write-kubeconfig "$base/kubeconfig" \
  --node-name mwc-product-ci --container-runtime-endpoint "unix://$base/containerd.sock" \
+ --kubelet-arg="config=$base/kubelet-log-config.json" \
  --disable traefik,servicelb,local-storage,metrics-server --disable-helm-controller \
  > "$out/k3s.log" 2>&1 & k3s_pid=$!
 for n in $(seq 1 150); do
@@ -207,6 +216,8 @@ for n in $(seq 1 150); do
  sleep 1
 done
 kube wait --for=condition=Ready node/mwc-product-ci --timeout=120s
+kube get --raw /api/v1/nodes/mwc-product-ci/proxy/configz | jq '.kubeletconfig | {podLogsDir,evictionHard,evictionMinimumReclaim,containerLogMaxSize,containerLogMaxFiles}' > "$out/actual-kubelet-log-config.json"
+jq -e --arg logs "$pod_log_root" '.podLogsDir==$logs' "$out/actual-kubelet-log-config.json"
 kube apply -f - <<'YAML'
 apiVersion: node.k8s.io/v1
 kind: RuntimeClass
@@ -324,7 +335,7 @@ for enabled in false true; do
   test "$(stat -Lc %d "$upper")" = "$(stat -Lc %d "$publish")"
  done
  kube exec -i -n "$namespace" "$pod" -c workspace -- sh -ec 'cat > /usr/local/bin/storage-ci-probe; chmod 0755 /usr/local/bin/storage-ci-probe' < "$RUNNER_TEMP/product-storage-bin/mwc-budget-probe"
- pod_logs="/var/log/pods/${namespace}_${pod}_${uid}"
+ pod_logs="$pod_log_root/${namespace}_${pod}_${uid}"
  test -L "$pod_logs"
  test "$(readlink "$pod_logs")" = "$publish/runtime-private/logs/$uid"
  test "$(stat -Lc %d "$pod_logs")" = "$(stat -Lc %d "$publish")"
