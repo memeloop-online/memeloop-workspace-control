@@ -106,7 +106,7 @@ for kind in scratch home; do
  mkfs.xfs -f "/dev/$this_vg/$handle"
  mkdir -p "$target"
  mount -t xfs "/dev/$this_vg/$handle" "$target"
- chmod 0755 "$target"
+ if [ "$kind" = scratch ]; then chmod 2777 "$target"; else chmod 0755 "$target"; fi
  xfs_info "$target" > "$artifacts/$kind-xfs-info.txt"
  handle_json="$(printf '%s' "$handle")"
  pv_json="$(basename "$(dirname "$target")")"
@@ -115,7 +115,7 @@ done
 mkdir -p "$scratch/data/tmp" "$scratch/data/build-cache" "$home/.ssh"
 chmod 1777 "$scratch/data/tmp"; chmod 0777 "$scratch/data" "$scratch/data/build-cache"
 chown -R 1000:1000 "$home"
-# Only scratch root is node-owned/protected; Home belongs to the user.
+# The wrapper protects TopoLVM's initial2777 scratch root; Home belongs to the user.
 ssh-keygen -q -t ed25519 -N '' -f "$base/client"
 ssh-keygen -q -t ed25519 -N '' -f "$home/host_ed25519"
 cp "$base/client.pub" "$home/authorized_keys"
@@ -191,6 +191,10 @@ jq -n --arg uid "$uid" --arg log "$pod_log" '{metadata:{name:"mwc-budget-ci",nam
 mkdir -p "$pod_log"
 sandbox="$(cri runp --runtime mwc-ci "$base/pod.json")"
 containers+=("$sandbox")
+test "$(stat -c %a "$scratch")" = 755
+# A subsequent CSI publication resets the filesystem root to2777. The next
+# child create must protect the same root while retaining existing private data.
+chmod 2777 "$scratch"
 
 kubelet_hosts="$base/kubelet/pods/$uid/etc-hosts"
 printf '127.0.0.1 localhost mwc-budget.local\n::1 localhost\n' > "$kubelet_hosts"
@@ -296,6 +300,7 @@ cp /etc/mwc-runtime-wrapper.json "$base/trusted-config.json"
 negative_start() {
  local name="$1" expected="$2" config_file="${3:-$base/workspace.json}"
  local id before
+ chmod 2777 "$scratch"
  before="$(wc -l < "$base/state/errors.log" 2>/dev/null || printf '0')"
  jq --arg name "$name" '.metadata.name=$name' "$config_file" > "$base/negative-$name.json"
  id="$(cri create "$sandbox" "$base/negative-$name.json" "$base/pod.json")"
@@ -303,9 +308,11 @@ negative_start() {
  if cri start "$id" > "$artifacts/negative-$name-start.txt" 2>&1; then echo "negative $name unexpectedly started"; exit 1; fi
  tail -n "+$((before+1))" "$base/state/errors.log" > "$artifacts/negative-$name-errors.txt"
  grep -F "$expected" "$artifacts/negative-$name-errors.txt"
+ test "$(stat -c %a "$scratch")" = 2777
  test ! -e "$scratch/runtime-private/$id"
  ! grep -F "/$id/rootfs " /proc/self/mountinfo
  cri rm "$id"
+ chmod 0755 "$scratch"
  jq -cn --arg name "$name" --arg id "$id" '{gate:$name,container_id:$id,rejected:true,rootfs_mount_leak:false,private_upper_created:false}' >> "$artifacts/negative-results.jsonl"
 }
 # A different protected VG cannot be accepted merely because it is XFS.

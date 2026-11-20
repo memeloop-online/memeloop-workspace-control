@@ -5,6 +5,8 @@ jq -n --arg uid "$uid" --arg log "$pod_log" '{metadata:{name:"mwc-budget-ci",nam
 mkdir -p "$pod_log"
 sandbox="$(cri runp --runtime mwc-runsc "$base/pod.json")"
 containers+=("$sandbox")
+test "$(stat -c %a "$scratch")" = 755
+chmod 2777 "$scratch"
 kubelet_hosts="$base/kubelet/pods/$uid/etc-hosts"
 printf '127.0.0.1 localhost mwc-budget.local\n::1 localhost\n' > "$kubelet_hosts"
 managed_host_root="$base/containerd-root/io.containerd.grpc.v1.cri/sandboxes/$sandbox"

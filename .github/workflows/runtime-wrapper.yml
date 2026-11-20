@@ -58,6 +58,20 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y lvm2 thin-provisioning-tools xfsprogs jq openssh-client strace
+      - name: Verify the canonical log mount against a same-namespace group writer
+        if: matrix.runtime == 'native' && matrix.scenario == 'functional'
+        working-directory: runtime-wrapper
+        env:
+          MWC_LOG_BOUNDARY_CI: '1'
+        run: |
+          go test -c -o "$RUNNER_TEMP/mwc-runtime-prototype/mwc-runtime-input-tests" .
+          sudo install -d -m 0755 /var/lib/mwc-log-boundary-ci
+          sudo install -m 0755 "$RUNNER_TEMP/mwc-runtime-prototype/mwc-runtime-input-tests" \
+            /var/lib/mwc-log-boundary-ci/input-tests
+          sudo --preserve-env=GITHUB_ACTIONS,MWC_LOG_BOUNDARY_CI \
+            unshare --mount --propagation private \
+            /var/lib/mwc-log-boundary-ci/input-tests \
+            -test.run '^TestMountedCanonicalLogRoot$' -test.v
       - name: Actual pinned CRI and shim acceptance
         run: |
           status=0

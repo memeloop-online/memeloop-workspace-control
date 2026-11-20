@@ -73,6 +73,8 @@ type scratch struct {
 	DMUUID string `json:"dm_uuid"`
 	Mount  mount  `json:"mount"`
 	Inode  uint64 `json:"inode"`
+
+	rootFD *os.File
 }
 type record struct {
 	ID                       string        `json:"id"`
@@ -255,13 +257,18 @@ func loadConfig() (config, error) {
 	if !lvmRE.MatchString(c.ScratchVG) || !strings.HasPrefix(c.ScratchPool, "LVM-"+c.ScratchVG) || !strings.HasSuffix(c.ScratchPool, "-tpool") {
 		return c, errors.New("expected full trusted scratch VG and thin-pool identity")
 	}
-	for _, p := range []string{c.RealRuntime, c.DMSetup, c.KubeletRoot, c.CRIRoot, c.CRIStateRoot, c.PodLogRoot, c.BundleRoot, c.SnapshotRoot, c.StateRoot} {
+	for _, p := range []string{c.RealRuntime, c.DMSetup, c.KubeletRoot, c.CRIRoot, c.CRIStateRoot, c.BundleRoot, c.SnapshotRoot, c.StateRoot} {
 		f, err := openTrusted(p, p != c.RealRuntime && p != c.DMSetup)
 		if err != nil {
 			return c, err
 		}
 		f.Close()
 	}
+	logs, err := openPodLogRoot(c.PodLogRoot)
+	if err != nil {
+		return c, err
+	}
+	logs.Close()
 	return c, nil
 }
 
@@ -492,6 +499,14 @@ func dmIdentity(c config, dev string) (string, error) {
 }
 func resolve(c config, pod string, all []mount) (scratch, error) {
 	var matches []scratch
+	accepted := false
+	defer func() {
+		if !accepted {
+			for _, s := range matches {
+				s.rootFD.Close()
+			}
+		}
+	}()
 	base := filepath.Join(c.KubeletRoot, "pods", pod, "volumes", "kubernetes.io~csi")
 	f, err := openTrusted(base, true)
 	if err != nil {
@@ -541,22 +556,71 @@ func resolve(c config, pod string, all []mount) (scratch, error) {
 		if err != nil || !strings.HasSuffix(strings.TrimSpace(string(name)), "-"+strings.ReplaceAll(v.Handle, "-", "--")) {
 			return scratch{}, errors.New("CSI handle and DM LV name differ")
 		}
-		sf, err := openTrusted(p, true)
+		parent, err := openTrusted(filepath.Dir(p), true)
 		if err != nil {
 			return scratch{}, err
 		}
+		fd, err := syscall.Openat(int(parent.Fd()), "mount", syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
+		parent.Close()
+		if err != nil {
+			return scratch{}, err
+		}
+		sf := os.NewFile(uintptr(fd), p)
 		var st syscall.Stat_t
 		err = syscall.Fstat(int(sf.Fd()), &st)
-		sf.Close()
-		if err != nil || device(st.Dev) != m.Device {
+		if err != nil || device(st.Dev) != m.Device || st.Uid != 0 || (st.Mode&0022 != 0 && st.Mode&07777 != 02777) {
+			sf.Close()
 			return scratch{}, errors.New("scratch FD identity mismatch")
 		}
-		matches = append(matches, scratch{Path: p, Volume: entry.Name(), Handle: v.Handle, DMUUID: id, Mount: m, Inode: st.Ino})
+		matches = append(matches, scratch{Path: p, Volume: entry.Name(), Handle: v.Handle, DMUUID: id, Mount: m, Inode: st.Ino, rootFD: sf})
 	}
 	if len(matches) != 1 {
 		return scratch{}, fmt.Errorf("expected exactly one trusted scratch publish, got %d", len(matches))
 	}
+	accepted = true
 	return matches[0], nil
+}
+
+// TopoLVM publishes root-owned 2777 roots. Only the validated scratch leaf is
+// tightened, after every OCI source has been restricted to its data subtree.
+func protectScratch(c config, s scratch) error {
+	all, err := mounts()
+	if err != nil {
+		return err
+	}
+	m, err := atMount(all, s.Path)
+	if err != nil || m.ID != s.Mount.ID || m.Device != s.Mount.Device || m.Root != "/" {
+		return errors.New("scratch publish changed before protection")
+	}
+	info, err := os.ReadFile(fmt.Sprintf("/proc/self/fdinfo/%d", s.rootFD.Fd()))
+	if err != nil {
+		return err
+	}
+	id := 0
+	for _, line := range strings.Split(string(info), "\n") {
+		if strings.HasPrefix(line, "mnt_id:") {
+			if _, err = fmt.Sscanf(line, "mnt_id: %d", &id); err != nil {
+				return err
+			}
+		}
+	}
+	var st syscall.Stat_t
+	if err = syscall.Fstat(int(s.rootFD.Fd()), &st); err != nil || id != m.ID || st.Ino != s.Inode || device(st.Dev) != m.Device || st.Uid != 0 {
+		return errors.New("scratch FD changed before protection")
+	}
+	dm, err := dmIdentity(c, m.Device)
+	if err != nil || dm != s.DMUUID {
+		return errors.New("scratch DM identity changed before protection")
+	}
+	if st.Mode&0022 != 0 {
+		if st.Mode&07777 != 02777 {
+			return errors.New("unsupported scratch publish permissions")
+		}
+		if err = syscall.Fchmod(int(s.rootFD.Fd()), 0755); err != nil {
+			return err
+		}
+	}
+	return revalidate(c, s)
 }
 func revalidate(c config, s scratch) error {
 	all, err := mounts()
@@ -714,10 +778,16 @@ func prepare(c config, in invocation) (record, error) {
 	if err != nil || len(entries) != 0 {
 		return r, errors.New("original snapshot upper is not empty")
 	}
+	podLock, err := lockFile(filepath.Join(c.StateRoot, pod+".lock"))
+	if err != nil {
+		return r, err
+	}
+	defer podLock.Close()
 	sc, err := resolve(c, pod, all)
 	if err != nil {
 		return r, err
 	}
+	defer sc.rootFD.Close()
 	// Every volume source on scratch must expose only data, including readonly mounts.
 	for _, m := range s.Mounts {
 		if !filepath.IsAbs(m.Source) {
@@ -750,12 +820,7 @@ func prepare(c config, in invocation) (record, error) {
 			}
 		}
 	}
-	podLock, err := lockFile(filepath.Join(c.StateRoot, pod+".lock"))
-	if err != nil {
-		return r, err
-	}
-	defer podLock.Close()
-	if err = revalidate(c, sc); err != nil {
+	if err = protectScratch(c, sc); err != nil {
 		return r, err
 	}
 	private := filepath.Join(sc.Path, "runtime-private")

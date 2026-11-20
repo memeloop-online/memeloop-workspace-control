@@ -36,6 +36,12 @@ paths and revalidates immediately before use. No user annotation supplies host
 paths. The user sees only the `data/` subtree; `runtime-private/<container-id>`
 stays outside every scratch OCI mount, including kubelet subPath mounts.
 
+TopoLVM publishes a new filesystem root with mode `2777`. After validating the
+unique CSI/DM identity and all scratch OCI mounts, the wrapper pins that root by
+FD and changes it to `0755` before creating runtime-private files. Rejected
+volumes or mounts are not modified. This does not change the writable `data/`
+subtree or bypass the later strict scratch checks.
+
 Before real runc create, the same bundle/rootfs target is unmounted and remounted
 with the original ordered lowerdirs and supported flags/options; only upper/work
 move to scratch. Original empty-upper metadata and xattrs are copied. No nested
@@ -66,6 +72,10 @@ At pause create, a trusted empty Pod log directory is replaced with a symlink to
 configured log root plus CRI namespace/name/UID. An existing correct link is
 verified and reused; a nonempty directory or wrong link fails create. This runs
 under the existing Pod lock before ordinary container loggers can open files.
+On nodes with a group-writable `/var/log`, the canonical `/var/log/pods` must be
+a protected mountpoint that prevents replacing the directory. The wrapper pins
+that log root by FD and keeps all child operations relative to it; the general
+trusted-path policy is unchanged. The installer must establish this boundary.
 No log bind mount is added. The rmdir/symlink interval is a short, recoverable
 gap, not an atomic replacement. Single-container or sandbox deletion and failed
 pause creation preserve the shared link and logs. Existing kubelet Pod log GC

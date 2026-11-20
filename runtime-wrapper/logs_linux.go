@@ -7,12 +7,89 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"syscall"
 )
 
 type podLogs struct {
 	Path   string `json:"path"`
 	Target string `json:"target"`
+}
+
+// Only canonical kubelet logs may use a mounted leaf to pin the boundary
+// below root-owned /var/log. Other trusted paths keep the strict policy.
+func openPodLogRoot(path string) (*os.File, error) {
+	f, strictErr := openTrusted(path, true)
+	if strictErr == nil {
+		return f, nil
+	}
+	if path != "/var/log/pods" {
+		return nil, strictErr
+	}
+	ancestor, err := openTrusted("/var", true)
+	if err != nil {
+		return nil, err
+	}
+	ancestor.Close()
+	parent, err := openPath("/var/log", true)
+	if err != nil {
+		return nil, err
+	}
+	var st syscall.Stat_t
+	err = syscall.Fstat(int(parent.Fd()), &st)
+	parent.Close()
+	if err != nil || st.Uid != 0 || st.Mode&0002 != 0 {
+		return nil, errors.New("untrusted canonical log parent")
+	}
+	f, err = openPath(path, true)
+	if err != nil {
+		return nil, err
+	}
+	fail := func(err error) (*os.File, error) {
+		f.Close()
+		return nil, err
+	}
+	if err = syscall.Fstat(int(f.Fd()), &st); err != nil {
+		return fail(err)
+	}
+	if st.Uid != 0 || st.Mode&0022 != 0 {
+		return fail(errors.New("untrusted canonical log root"))
+	}
+	all, err := mounts()
+	if err != nil {
+		return fail(err)
+	}
+	m, err := atMount(all, path)
+	if err != nil {
+		return fail(err)
+	}
+	// fdinfo ties the held inode to this exact mount, not a covered directory.
+	info, err := os.ReadFile(fmt.Sprintf("/proc/self/fdinfo/%d", f.Fd()))
+	if err != nil {
+		return fail(err)
+	}
+	id := 0
+	for _, line := range strings.Split(string(info), "\n") {
+		if strings.HasPrefix(line, "mnt_id:") {
+			if _, err = fmt.Sscanf(line, "mnt_id: %d", &id); err != nil {
+				return fail(err)
+			}
+		}
+	}
+	if id != m.ID || id == 0 || device(st.Dev) != m.Device {
+		return fail(errors.New("canonical log root mount identity changed"))
+	}
+	current, err := openPath(path, true)
+	if err != nil {
+		return fail(err)
+	}
+	var now syscall.Stat_t
+	err = syscall.Fstat(int(current.Fd()), &now)
+	current.Close()
+	if err != nil || now.Dev != st.Dev || now.Ino != st.Ino {
+		return fail(errors.New("canonical log root directory changed"))
+	}
+	return f, nil
 }
 
 // Runs only before pause create, under the existing Pod lock. Ordinary container
@@ -28,11 +105,11 @@ func redirectPodLogs(c config, sc scratch, s spec) (*podLogs, error) {
 	if s.Annotations["io.kubernetes.cri.sandbox-log-directory"] != path {
 		return nil, errors.New("Pod log path does not match trusted namespace/name/UID")
 	}
-	parent, err := openTrusted(c.PodLogRoot, true)
+	parent, err := openPodLogRoot(c.PodLogRoot)
 	if err != nil {
 		return nil, err
 	}
-	parent.Close()
+	defer parent.Close()
 	targetRoot := filepath.Join(sc.Path, "runtime-private", "logs")
 	target := filepath.Join(targetRoot, pod)
 	for _, dir := range []string{targetRoot, target} {
@@ -50,44 +127,64 @@ func redirectPodLogs(c config, sc scratch, s spec) (*podLogs, error) {
 			return nil, errors.New("Pod log target is not on trusted scratch")
 		}
 	}
+	if err = redirectPodLogEntry(parent, filepath.Base(path), target); err != nil {
+		return nil, err
+	}
+	return &podLogs{Path: path, Target: target}, nil
+}
+
+// The proc FD path anchors entry operations to the held directory capability.
+// A single validated basename cannot escape it; the caller retains the FD.
+func redirectPodLogEntry(parent *os.File, name, target string) error {
+	if name == "." || name == ".." || filepath.Base(name) != name || name == "" {
+		return errors.New("invalid Pod log entry")
+	}
+	path := fmt.Sprintf("/proc/self/fd/%d/%s", parent.Fd(), name)
 	st, err := os.Lstat(path)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	if st.Mode()&os.ModeSymlink != 0 {
-		return verifyPodLogLink(path, target)
+		_, err = verifyPodLogLink(path, target)
+		return err
 	}
 	if !st.IsDir() {
-		return nil, errors.New("Pod log path is neither the expected symlink nor an empty directory")
+		return errors.New("Pod log path is neither the expected symlink nor an empty directory")
 	}
-	f, err := openTrusted(path, true)
+	fd, err := syscall.Openat(int(parent.Fd()), name, syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	entries, err := f.ReadDir(1)
-	f.Close()
+	child := os.NewFile(uintptr(fd), name)
+	var stat syscall.Stat_t
+	err = syscall.Fstat(fd, &stat)
+	if err != nil || stat.Uid != 0 || stat.Mode&0022 != 0 {
+		child.Close()
+		return errors.New("untrusted Pod log directory")
+	}
+	entries, err := child.ReadDir(1)
+	child.Close()
 	if err != nil && !errors.Is(err, io.EOF) {
-		return nil, err
+		return err
 	}
 	if len(entries) != 0 {
-		return nil, errors.New("Pod log directory is not empty")
+		return errors.New("Pod log directory is not empty")
 	}
-	// rmdir never removes a nonempty directory, including a concurrent writer.
+	// Empty-only removal also rejects a concurrent kubelet writer.
 	if err = syscall.Rmdir(path); err != nil {
-		return nil, fmt.Errorf("remove empty Pod log directory: %w", err)
+		return fmt.Errorf("remove empty Pod log directory: %w", err)
 	}
-	// The short rmdir/symlink gap is intentional. A subsequent kubelet retry can
-	// recreate the empty directory; no recursive delete, overwrite or fallback.
 	if err = os.Symlink(target, path); err != nil {
 		if os.IsExist(err) {
-			return verifyPodLogLink(path, target)
+			_, err = verifyPodLogLink(path, target)
 		}
-		return nil, err
+		return err
 	}
-	if err = syncDirectory(c.PodLogRoot); err != nil {
-		return nil, err
+	if err = parent.Sync(); err != nil {
+		return err
 	}
-	return verifyPodLogLink(path, target)
+	_, err = verifyPodLogLink(path, target)
+	return err
 }
 
 func verifyPodLogLink(path, target string) (*podLogs, error) {
