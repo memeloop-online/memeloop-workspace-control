@@ -214,7 +214,9 @@ func TestMountedLogRootAttacker(t *testing.T) {
 	if err = syscall.Rmdir(leaf); !errors.Is(err, syscall.EBUSY) {
 		t.Fatalf("rmdir mountpoint: %v", err)
 	}
-	if err = os.Rename(sibling, leaf); !errors.Is(err, syscall.EBUSY) {
+	// os.Rename rejects an existing directory in user space before the kernel
+	// sees it. Use the syscall to exercise destination mountpoint protection.
+	if err = syscall.Rename(sibling, leaf); !errors.Is(err, syscall.EBUSY) {
 		t.Fatalf("overwrite mountpoint: %v", err)
 	}
 	// renameat2(RENAME_EXCHANGE), linux/amd64 as required by the parent gate.
