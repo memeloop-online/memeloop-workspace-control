@@ -124,6 +124,65 @@ impl Database {
         }
     }
 
+    /// Updates the declaration in place, retaining its stable public address.
+    /// Port changes revoke credentials for the previous application atomically.
+    pub async fn update_port_mapping(
+        &self,
+        workspace_id: Uuid,
+        mapping_id: Uuid,
+        internal_port: u16,
+        display_name: Option<&str>,
+    ) -> Result<PortMapping, StorageError> {
+        validate_http_port(internal_port)?;
+        let display_name = validate_display_name(display_name)?;
+        let result: Result<PortMapping, StorageError> = async {
+            match self {
+                Self::Sqlite { pool, installation_id } => {
+                    let mut tx = pool.begin().await?;
+                    for table in ["workspace_port_mapping_tickets", "workspace_port_mapping_sessions"] {
+                        let sql = format!("DELETE FROM {table} WHERE installation_id = ?1 AND mapping_id = ?2 AND EXISTS (SELECT 1 FROM workspace_port_mappings WHERE installation_id = ?1 AND workspace_id = ?3 AND id = ?2 AND internal_port <> ?4)");
+                        sqlx::query(&sql).bind(installation_id.as_str()).bind(mapping_id.to_string())
+                            .bind(workspace_id.to_string()).bind(i64::from(internal_port)).execute(&mut *tx).await?;
+                    }
+                    let changed = sqlx::query("UPDATE workspace_port_mappings SET internal_port = ?1, display_name = ?2 WHERE installation_id = ?3 AND workspace_id = ?4 AND id = ?5 RETURNING id, organization_id, workspace_id, internal_port, display_name, created_by, created_at")
+                        .bind(i64::from(internal_port)).bind(&display_name).bind(installation_id.as_str())
+                        .bind(workspace_id.to_string()).bind(mapping_id.to_string())
+                        .fetch_optional(&mut *tx).await?;
+                    tx.commit().await?;
+                    decode(changed.ok_or(StorageError::PortMappingNotFound)?)
+                }
+                Self::Postgres { pool, installation_id } => {
+                    let mut tx = pool.begin().await?;
+                    // Serialize port edits with other edits of this mapping.
+                    sqlx::query("SELECT id FROM workspace_port_mappings WHERE installation_id = $1 AND workspace_id = $2 AND id = $3 FOR UPDATE")
+                        .bind(installation_id.as_str()).bind(workspace_id.to_string()).bind(mapping_id.to_string())
+                        .fetch_optional(&mut *tx).await?;
+                    for table in ["workspace_port_mapping_tickets", "workspace_port_mapping_sessions"] {
+                        let sql = format!("DELETE FROM {table} WHERE installation_id = $1 AND mapping_id = $2 AND EXISTS (SELECT 1 FROM workspace_port_mappings WHERE installation_id = $1 AND workspace_id = $3 AND id = $2 AND internal_port <> $4)");
+                        sqlx::query(&sql).bind(installation_id.as_str()).bind(mapping_id.to_string())
+                            .bind(workspace_id.to_string()).bind(i64::from(internal_port)).execute(&mut *tx).await?;
+                    }
+                    let changed = sqlx::query("UPDATE workspace_port_mappings SET internal_port = $1, display_name = $2 WHERE installation_id = $3 AND workspace_id = $4 AND id = $5 RETURNING id, organization_id, workspace_id, internal_port, display_name, created_by, created_at")
+                        .bind(i64::from(internal_port)).bind(&display_name).bind(installation_id.as_str())
+                        .bind(workspace_id.to_string()).bind(mapping_id.to_string())
+                        .fetch_optional(&mut *tx).await?;
+                    tx.commit().await?;
+                    decode(changed.ok_or(StorageError::PortMappingNotFound)?)
+                }
+            }
+        }.await;
+        match result {
+            Err(StorageError::Database(error))
+                if error
+                    .as_database_error()
+                    .is_some_and(|error| error.is_unique_violation()) =>
+            {
+                Err(StorageError::PortMappingPortConflict)
+            }
+            result => result,
+        }
+    }
+
     pub async fn list_port_mappings(
         &self,
         workspace_id: Uuid,
@@ -349,7 +408,7 @@ fn validate_display_name(value: Option<&str>) -> Result<Option<String>, StorageE
     let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
         return Ok(None);
     };
-    if value.len() > 80 || value.chars().any(|character| character.is_control()) {
+    if value.chars().count() > 80 || value.chars().any(|character| character.is_control()) {
         return Err(StorageError::InvalidPortMappingDisplayName);
     }
     Ok(Some(value.to_owned()))
@@ -367,6 +426,18 @@ mod tests {
         assert!(validate_http_port(7681).is_err());
         assert!(validate_http_port(8080).is_err());
         assert!(validate_http_port(3389).is_err());
+    }
+
+    #[test]
+    fn display_name_limit_counts_unicode_characters_instead_of_utf8_bytes() {
+        for character in ["中", "a", "🦀"] {
+            let name = character.repeat(80);
+            assert_eq!(validate_display_name(Some(&name)).unwrap(), Some(name));
+            assert!(matches!(
+                validate_display_name(Some(&character.repeat(81))),
+                Err(StorageError::InvalidPortMappingDisplayName)
+            ));
+        }
     }
 
     #[test]

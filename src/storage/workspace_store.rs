@@ -242,7 +242,7 @@ impl Database {
         command: CreateWorkspace,
         options: WorkspaceCreationOptions<'_>,
     ) -> Result<Workspace, StorageError> {
-        if command.name.trim().is_empty() || command.name.len() > 120 {
+        if command.name.trim().is_empty() || command.name.trim().chars().count() > 120 {
             return Err(StorageError::InvalidWorkspace);
         }
         let injection_refs = WorkspaceInjectionRefs {

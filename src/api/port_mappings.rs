@@ -211,6 +211,80 @@ pub(super) async fn create(
 }
 
 #[utoipa::path(
+    put,
+    path = "/api/v1/workspaces/{workspace_id}/port-mappings/{mapping_id}",
+    params(("workspace_id" = Uuid, Path), ("mapping_id" = Uuid, Path)),
+    request_body = CreatePortMappingRequest,
+    responses((status = 200, body = PortMappingResponse), (status = 400, body = super::ErrorEnvelope), (status = 403, body = super::ErrorEnvelope), (status = 404, body = super::ErrorEnvelope), (status = 409, body = super::ErrorEnvelope))
+)]
+pub(super) async fn update(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path((workspace_id, mapping_id)): Path<(Uuid, Uuid)>,
+    Json(request): Json<CreatePortMappingRequest>,
+) -> Result<Json<PortMappingResponse>, ApiError> {
+    let actor = principal(&state, &headers).await?;
+    let workspace = state.database.get_workspace(workspace_id).await?;
+    if !actor.allows(Permission::ConnectWorkspace, workspace.organization_id)
+        || !actor.may_access_workspace_template(workspace.template_id)
+    {
+        return Err(ApiError::Forbidden);
+    }
+    let current = state.database.get_port_mapping(mapping_id).await?;
+    if current.workspace_id != workspace_id {
+        return Err(StorageError::PortMappingNotFound.into());
+    }
+    if is_desktop_mapping(&workspace, &current)
+        || workspace
+            .template
+            .desktop
+            .as_ref()
+            .is_some_and(|desktop| desktop.internal_port == request.internal_port)
+    {
+        return Err(ApiError::BadRequest(
+            "the template-owned desktop port mapping cannot be edited by users",
+        ));
+    }
+    let mapping = state
+        .database
+        .update_port_mapping(
+            workspace_id,
+            mapping_id,
+            request.internal_port,
+            request.display_name.as_deref(),
+        )
+        .await?;
+    let now = unix_timestamp()?;
+    if current.internal_port != mapping.internal_port {
+        enqueue_reconcile(&state, workspace.id, workspace.generation, now).await?;
+    }
+    state
+        .database
+        .record_audit(
+            Some(actor.user_id),
+            Some(workspace.organization_id),
+            Some(workspace.id),
+            "workspace.port_mapping.update",
+            serde_json::json!({"mapping_id": mapping.id, "internal_port": mapping.internal_port}),
+            now,
+        )
+        .await?;
+    let status = if current.internal_port != mapping.internal_port
+        && workspace.state == crate::workspaces::WorkspaceState::Ready
+    {
+        "provisioning"
+    } else {
+        mapping_status(&state, &workspace, &mapping).await
+    };
+    Ok(Json(response(
+        &state,
+        &mapping,
+        status,
+        PortMappingPurpose::User,
+    )?))
+}
+
+#[utoipa::path(
     post,
     path = "/api/v1/workspaces/{workspace_id}/port-mappings/{mapping_id}/open",
     params(("workspace_id" = Uuid, Path), ("mapping_id" = Uuid, Path)),
@@ -269,6 +343,9 @@ pub(super) async fn delete(
         return Err(ApiError::Forbidden);
     }
     let mapping = state.database.get_port_mapping(mapping_id).await?;
+    if mapping.workspace_id != workspace_id {
+        return Err(StorageError::PortMappingNotFound.into());
+    }
     if is_desktop_mapping(&workspace, &mapping) {
         return Err(ApiError::BadRequest(
             "the template-owned desktop port mapping cannot be deleted by users",
@@ -419,7 +496,23 @@ pub(super) async fn mapping_status(
                         == Some(&state.config.installation_id.to_string())
                     && labels.get(crate::kubernetes::WORKSPACE_ID_LABEL)
                         == Some(&workspace.id.to_string())
-            }) =>
+            }) && ingress
+                .spec
+                .as_ref()
+                .and_then(|spec| spec.rules.as_ref())
+                .is_some_and(|rules| {
+                    rules
+                        .iter()
+                        .filter_map(|rule| rule.http.as_ref())
+                        .flat_map(|http| &http.paths)
+                        .any(|path| {
+                            path.backend.service.as_ref().is_some_and(|service| {
+                                service.name == ingress_name
+                                    && service.port.as_ref().and_then(|port| port.number)
+                                        == Some(i32::from(mapping.internal_port))
+                            })
+                        })
+                }) =>
         {
             "ready"
         }

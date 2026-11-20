@@ -394,3 +394,169 @@ async fn port_mapping_creation_rejects_forbidden_and_invalid_ports() {
         Err(StorageError::InvalidPortMappingPort)
     ));
 }
+
+#[tokio::test]
+async fn updating_port_mapping_preserves_identity_and_revokes_credentials_only_for_port_changes() {
+    let (database, organization_id, workspace_id, user_id) = seeded_database().await;
+    let original = database
+        .create_port_mapping(
+            organization_id,
+            workspace_id,
+            3000,
+            Some("网站"),
+            user_id,
+            110,
+        )
+        .await
+        .unwrap();
+    let session_ticket = database
+        .issue_port_mapping_ticket(&original, user_id, 120)
+        .await
+        .unwrap();
+    let cookie = hash_secret("edit-session-cookie");
+    assert!(
+        database
+            .exchange_port_mapping_ticket(original.id, &session_ticket.ticket, &cookie, 121, 180)
+            .await
+            .unwrap()
+            .is_some()
+    );
+    let pending_ticket = database
+        .issue_port_mapping_ticket(&original, user_id, 122)
+        .await
+        .unwrap();
+    let name = "中文".repeat(40);
+    let renamed = database
+        .update_port_mapping(workspace_id, original.id, 3000, Some(&name))
+        .await
+        .unwrap();
+    assert_eq!(renamed.id, original.id);
+    assert_eq!(renamed.created_at, original.created_at);
+    assert_eq!(renamed.display_name.as_deref(), Some(name.as_str()));
+    assert!(
+        database
+            .port_mapping_session_valid(original.id, &cookie, 123)
+            .await
+            .unwrap()
+    );
+    let changed = database
+        .update_port_mapping(workspace_id, original.id, 4000, None)
+        .await
+        .unwrap();
+    assert_eq!(changed.id, original.id);
+    assert_eq!(changed.internal_port, 4000);
+    assert_eq!(changed.display_name, None);
+    assert!(
+        !database
+            .port_mapping_session_valid(original.id, &cookie, 124)
+            .await
+            .unwrap()
+    );
+    assert!(
+        database
+            .exchange_port_mapping_ticket(
+                original.id,
+                &pending_ticket.ticket,
+                &hash_secret("new-cookie"),
+                124,
+                180
+            )
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        database
+            .list_port_mappings(workspace_id)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn conflicting_port_update_rolls_back_revocation_and_keeps_both_mappings() {
+    let (database, organization_id, workspace_id, user_id) = seeded_database().await;
+    let original = database
+        .create_port_mapping(
+            organization_id,
+            workspace_id,
+            3000,
+            Some("original"),
+            user_id,
+            110,
+        )
+        .await
+        .unwrap();
+    database
+        .create_port_mapping(organization_id, workspace_id, 4000, None, user_id, 110)
+        .await
+        .unwrap();
+    let issued = database
+        .issue_port_mapping_ticket(&original, user_id, 120)
+        .await
+        .unwrap();
+    assert!(matches!(
+        database
+            .update_port_mapping(workspace_id, original.id, 4000, Some("changed"))
+            .await,
+        Err(StorageError::PortMappingPortConflict)
+    ));
+    assert_eq!(
+        database.get_port_mapping(original.id).await.unwrap(),
+        original
+    );
+    assert!(
+        database
+            .exchange_port_mapping_ticket(
+                original.id,
+                &issued.ticket,
+                &hash_secret("conflict-cookie"),
+                121,
+                180
+            )
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert_eq!(
+        database
+            .list_port_mappings(workspace_id)
+            .await
+            .unwrap()
+            .len(),
+        2
+    );
+}
+
+#[tokio::test]
+async fn port_mapping_update_is_workspace_scoped_and_validates_new_values() {
+    let (database, organization_id, workspace_id, user_id) = seeded_database().await;
+    let original = database
+        .create_port_mapping(organization_id, workspace_id, 3000, None, user_id, 110)
+        .await
+        .unwrap();
+    assert!(matches!(
+        database
+            .update_port_mapping(Uuid::now_v7(), original.id, 4000, None)
+            .await,
+        Err(StorageError::PortMappingNotFound)
+    ));
+    assert!(matches!(
+        database
+            .update_port_mapping(workspace_id, original.id, 3389, None)
+            .await,
+        Err(StorageError::InvalidPortMappingPort)
+    ));
+    assert!(matches!(
+        database
+            .update_port_mapping(workspace_id, original.id, 4000, Some(&"中".repeat(81)))
+            .await,
+        Err(StorageError::InvalidPortMappingDisplayName)
+    ));
+    assert_eq!(
+        database.get_port_mapping(original.id).await.unwrap(),
+        original
+    );
+}
