@@ -39,7 +39,7 @@ import type {
   WorkspaceTemplate,
 } from "./types";
 import i18next from "i18next";
-import type { CreatePortMappingInput, PortMapping } from "./portMappings";
+import type { CreatePortMappingInput, PortMapping, UpdatePortMappingInput } from "./portMappings";
 
 /** Options shared by the keyset-paginated list endpoints. */
 export interface PageOptions {
@@ -244,6 +244,29 @@ export class ApiClient {
     });
   }
 
+  /** Rename and resize a workspace's compute; compute changes apply while stopped. */
+  updateWorkspaceSettings(workspaceId: string, input: {
+    name: string;
+    cpu_millis: number;
+    memory_mib: number;
+    gpu_count: number;
+    expected_generation: number;
+  }): Promise<WorkspaceResponse> {
+    return this.request(`/api/v1/workspaces/${workspaceId}/settings`, {
+      method: "PUT", body: JSON.stringify(input), idempotent: true,
+    });
+  }
+
+  /** Admin-only temporary-storage resize for a stopped workspace. */
+  updateWorkspaceTemporaryStorage(workspaceId: string, input: {
+    temporary_storage_gib: number;
+    expected_generation: number;
+  }): Promise<WorkspaceResponse> {
+    return this.request(`/api/v1/workspaces/${workspaceId}/temporary-storage`, {
+      method: "PUT", body: JSON.stringify(input), idempotent: true,
+    });
+  }
+
   startStorageShrink(workspaceId: string, input: StorageShrinkRequest): Promise<StorageShrinkOperation> {
     return this.request(`/api/v1/workspaces/${workspaceId}/storage-shrink`, {
       method: "POST", body: JSON.stringify(input), idempotent: true,
@@ -349,11 +372,12 @@ export class ApiClient {
     return this.request(`/api/v1/workspaces?${queryString({ organization_id: organizationId, ...options })}`);
   }
 
-  createWorkspace(command: CreateWorkspace): Promise<WorkspaceResponse> {
+  createWorkspace(command: CreateWorkspace, idempotencyKey?: string): Promise<WorkspaceResponse> {
     return this.request("/api/v1/workspaces", {
       method: "POST",
       body: JSON.stringify(command),
       idempotent: true,
+      idempotencyKey,
     });
   }
 
@@ -389,6 +413,12 @@ export class ApiClient {
   createPortMapping(workspaceId: string, input: CreatePortMappingInput): Promise<PortMapping> {
     return this.request(`/api/v1/workspaces/${workspaceId}/port-mappings`, {
       method: "POST", body: JSON.stringify(input), idempotent: true,
+    });
+  }
+
+  updatePortMapping(workspaceId: string, mappingId: string, input: UpdatePortMappingInput): Promise<PortMapping> {
+    return this.request(`/api/v1/workspaces/${workspaceId}/port-mappings/${mappingId}`, {
+      method: "PUT", body: JSON.stringify(input), idempotent: true,
     });
   }
 
@@ -447,12 +477,12 @@ export class ApiClient {
 
   private async request<T>(
     path: string,
-    init: RequestInit & { idempotent?: boolean } = {},
+    init: RequestInit & { idempotent?: boolean; idempotencyKey?: string } = {},
   ): Promise<T> {
     const headers = new Headers(init.headers);
     headers.set("Authorization", `Bearer ${this.token}`);
     if (init.body) headers.set("Content-Type", "application/json");
-    if (init.idempotent) headers.set("Idempotency-Key", crypto.randomUUID());
+    if (init.idempotent) headers.set("Idempotency-Key", init.idempotencyKey ?? crypto.randomUUID());
     const response = await fetch(path, { ...init, headers });
     if (!response.ok) {
       if (response.status === 401) this.onUnauthorized?.();

@@ -227,12 +227,20 @@ fn pod_metrics_resource() -> ApiResource {
 
 fn metrics_from_pod(pod: DynamicObject) -> Vec<PodMetric> {
     let pod_name = pod.metadata.name.unwrap_or_default();
+    let observed_at = pod
+        .data
+        .get("timestamp")
+        .and_then(|value| value.as_str())
+        .map(str::to_owned);
     pod.data
         .get("containers")
         .and_then(|value| value.as_array())
         .into_iter()
         .flatten()
         .map(|container| PodMetric {
+            memory_limit: None,
+            memory_used_percent: None,
+            observed_at: observed_at.clone(),
             pod: pod_name.clone(),
             container: container
                 .get("name")
@@ -547,6 +555,9 @@ mod tests {
             container: "workspace".to_owned(),
             cpu: Some("1m".to_owned()),
             memory: Some("1Mi".to_owned()),
+            memory_limit: None,
+            memory_used_percent: None,
+            observed_at: None,
         }
     }
 }

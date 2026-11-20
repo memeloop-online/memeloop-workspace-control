@@ -1,0 +1,162 @@
+name: TopoLVM controller polling
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/topolvm-controller.yml
+      - images/topolvm-controller/**
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/topolvm-controller.yml
+      - images/topolvm-controller/**
+
+permissions:
+  contents: read
+
+jobs:
+  controller-image:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    env:
+      UPSTREAM_COMMIT: 2d0c5174afb93856d9fc5105e7c04ed50b65628f
+      BASE_IMAGE: ghcr.io/topolvm/topolvm-with-sidecar@sha256:70548dbe0c6addcccf79a557f29e95db2e6dc2cba2102988c91f30086004d0fc
+      IMAGE_NAME: ghcr.io/memeloop-online/memeloop-workspace-control-topolvm-controller
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Fetch and patch the pinned TopoLVM source
+        run: |
+          git init "$RUNNER_TEMP/topolvm"
+          git -C "$RUNNER_TEMP/topolvm" remote add origin https://github.com/topolvm/topolvm.git
+          git -C "$RUNNER_TEMP/topolvm" fetch --depth=1 origin refs/tags/v0.41.1:refs/tags/v0.41.1
+          git -C "$RUNNER_TEMP/topolvm" checkout --detach refs/tags/v0.41.1
+          test "$(git -C "$RUNNER_TEMP/topolvm" rev-parse HEAD)" = "$UPSTREAM_COMMIT"
+          mkdir -p "$RUNNER_TEMP/topolvm-controller"
+          git -C "$RUNNER_TEMP/topolvm" apply --check "$GITHUB_WORKSPACE/images/topolvm-controller/provisioning-poll.patch"
+          git -C "$RUNNER_TEMP/topolvm" apply "$GITHUB_WORKSPACE/images/topolvm-controller/provisioning-poll.patch"
+          gofmt -d "$RUNNER_TEMP/topolvm/internal/driver/internal/k8s/logicalvolume_service.go" "$RUNNER_TEMP/topolvm/internal/driver/internal/k8s/logicalvolume_service_test.go" > "$RUNNER_TEMP/gofmt.diff"
+          test ! -s "$RUNNER_TEMP/gofmt.diff"
+
+      - name: Test status observation and cancellation, then build only the controller
+        run: |
+          docker run --rm \
+            --volume "$RUNNER_TEMP/topolvm:/src" \
+            --volume "$RUNNER_TEMP/topolvm-controller:/out" \
+            --workdir /src \
+            golang:1.25.7-bookworm \
+            sh -ec '
+              go test -race -count=1 ./internal/driver/internal/k8s
+              CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -buildvcs=false -trimpath \
+                -ldflags "-w -s -X github.com/topolvm/topolvm.Version=0.41.1-mwc250ms" \
+                -o /out/topolvm-controller ./cmd/topolvm-controller
+            '
+
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+
+      - name: Build and validate the controller-only overlay
+        env:
+          PATCH_SHA256: ${{ hashFiles('images/topolvm-controller/provisioning-poll.patch') }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/controller-image"
+          cp "$RUNNER_TEMP/topolvm-controller/topolvm-controller" "$RUNNER_TEMP/controller-image/"
+          cp images/topolvm-controller/Dockerfile "$RUNNER_TEMP/controller-image/"
+          docker pull --platform linux/amd64 "$BASE_IMAGE"
+          docker image inspect "$BASE_IMAGE" --format '{{.Os}}/{{.Architecture}}' | grep -Fx linux/amd64
+          docker image inspect "$BASE_IMAGE" --format '{{json .Config.Entrypoint}}|{{json .Config.Cmd}}' > "$RUNNER_TEMP/base-entrypoint.txt"
+          docker run --rm --entrypoint /bin/sh "$BASE_IMAGE" -ec '
+            test -x /hypertopolvm
+            test -L /topolvm-controller
+            test "$(readlink /topolvm-controller)" = hypertopolvm
+            test -L /topolvm-node
+            test -L /topolvm-scheduler
+            test -L /lvmd
+            for binary in /csi-provisioner /csi-node-driver-registrar /csi-resizer /csi-snapshotter /livenessprobe; do
+              test -x "$binary"
+            done
+          '
+          docker buildx build \
+            --platform linux/amd64 \
+            --load \
+            --build-arg "BASE_IMAGE=$BASE_IMAGE" \
+            --build-arg "SOURCE_COMMIT=$UPSTREAM_COMMIT" \
+            --build-arg "PATCH_SHA256=$PATCH_SHA256" \
+            --tag topolvm-controller-poll-ci \
+            "$RUNNER_TEMP/controller-image"
+          docker run --rm --entrypoint /bin/sh topolvm-controller-poll-ci -ec '
+            test -x /hypertopolvm
+            test -x /topolvm-controller
+            test ! -L /topolvm-controller
+            test -L /topolvm-node
+            test -L /topolvm-scheduler
+            test -L /lvmd
+            for binary in /csi-provisioner /csi-node-driver-registrar /csi-resizer /csi-snapshotter /livenessprobe; do
+              test -x "$binary"
+            done
+            /topolvm-controller --version | grep -F 0.41.1-mwc250ms
+            /topolvm-node --version > /dev/null
+            /lvmd --version > /dev/null
+          '
+          for binary in /hypertopolvm /topolvm-node /topolvm-scheduler /lvmd /csi-provisioner /csi-node-driver-registrar /csi-resizer /csi-snapshotter /livenessprobe; do
+            binary_name=${binary#/}
+            docker run --rm --entrypoint /bin/sh topolvm-controller-poll-ci -ec "sha256sum '$binary' | cut -d' ' -f1" > "$RUNNER_TEMP/patched-$binary_name.sha"
+            docker run --rm --entrypoint /bin/sh "$BASE_IMAGE" -ec "sha256sum '$binary' | cut -d' ' -f1" > "$RUNNER_TEMP/base-$binary_name.sha"
+            diff -u "$RUNNER_TEMP/base-$binary_name.sha" "$RUNNER_TEMP/patched-$binary_name.sha"
+          done
+          docker image inspect topolvm-controller-poll-ci --format '{{json .Config.Entrypoint}}|{{json .Config.Cmd}}' > "$RUNNER_TEMP/patched-entrypoint.txt"
+          diff -u "$RUNNER_TEMP/base-entrypoint.txt" "$RUNNER_TEMP/patched-entrypoint.txt"
+
+      - name: Log in to GHCR for the main-branch image
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: image
+        name: Publish an immutable source-SHA image from main
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: ${{ runner.temp }}/controller-image
+          file: ${{ runner.temp }}/controller-image/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ghcr.io/memeloop-online/memeloop-workspace-control-topolvm-controller:sha-${{ github.sha }}
+          build-args: |
+            BASE_IMAGE=${{ env.BASE_IMAGE }}
+            SOURCE_COMMIT=${{ env.UPSTREAM_COMMIT }}
+            PATCH_SHA256=${{ hashFiles('images/topolvm-controller/provisioning-poll.patch') }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          cache-from: type=gha,scope=topolvm-controller
+          cache-to: type=gha,mode=max,scope=topolvm-controller
+
+      - name: Record source and binary digests
+        if: success()
+        env:
+          IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
+          PATCH_SHA256: ${{ hashFiles('images/topolvm-controller/provisioning-poll.patch') }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/topolvm-controller-provenance"
+          binary_sha=$(sha256sum "$RUNNER_TEMP/topolvm-controller/topolvm-controller" | cut -d' ' -f1)
+          printf '{"upstream_repository":"https://github.com/topolvm/topolvm","upstream_commit":"%s","base_image":"%s","patch_sha256":"%s","binary_sha256":"%s","output_image":"%s","output_digest":"%s","mwc_source_commit":"%s"}\n' \
+            "$UPSTREAM_COMMIT" "$BASE_IMAGE" "$PATCH_SHA256" "$binary_sha" "$IMAGE_NAME" "$IMAGE_DIGEST" "$GITHUB_SHA" \
+            > "$RUNNER_TEMP/topolvm-controller-provenance/source.json"
+
+      - name: Upload build provenance
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: topolvm-controller-provenance-${{ github.sha }}
+          path: ${{ runner.temp }}/topolvm-controller-provenance/source.json
+          if-no-files-found: warn
+          retention-days: 30

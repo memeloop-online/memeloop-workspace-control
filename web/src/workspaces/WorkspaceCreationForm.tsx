@@ -42,7 +42,7 @@ export function WorkspaceCreationForm(props: Props) {
   const selectedTemplate = props.templates.find((template) => template.id === props.templateId);
   const selectableLocations = props.nodePools.filter((pool) => selectedTemplate?.placement.allowed_node_pools.includes(pool.name));
   const [attempted, setAttempted] = useState(false);
-  const nameError = attempted && !props.name.trim() ? t("workspaceNameRequired") : undefined;
+  const nameError = Array.from(props.name.trim()).length > 120 ? t("workspaceNameInvalid") : attempted && !props.name.trim() ? t("workspaceNameRequired") : undefined;
   // A template default that is disabled or absent from the public list is not a
   // usable choice: a single remaining location is submitted explicitly, and with
   // several remaining locations the user must pick one.
@@ -53,7 +53,7 @@ export function WorkspaceCreationForm(props: Props) {
   const locationBlocked = props.nodePoolsStatus !== "ready" || (selectedTemplate !== undefined && selectableLocations.length === 0) || (explicitChoiceRequired && !props.nodePool);
   return <Card className={styles.createCard} appearance="filled-alternative">
     <form className={styles.formGrid} onSubmit={(event) => { setAttempted(true); props.onSubmit(event); }}>
-    <Field label={t("name")} required validationState={nameError ? "error" : undefined} validationMessage={nameError}><Input value={props.name} maxLength={120} onChange={(_, data) => props.onNameChange(data.value)} /></Field>
+    <Field label={t("name")} required validationState={nameError ? "error" : undefined} validationMessage={nameError}><Input value={props.name} onChange={(_, data) => props.onNameChange(data.value)} /></Field>
     <Field label={<InfoLabel info={t("templatePersistenceHelp")}>{t("template")}</InfoLabel>} required>
       <Dropdown value={selectedTemplate?.name ?? ""} selectedOptions={props.templateId ? [props.templateId] : []} placeholder={t("chooseTemplate")} onOptionSelect={(_, data) => props.onTemplateChange(data.optionValue ?? "")}>
         {props.templates.map((template) => <Option key={template.id} value={template.id}>{template.name}</Option>)}

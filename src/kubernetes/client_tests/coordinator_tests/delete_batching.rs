@@ -10,6 +10,7 @@ struct DeleteMock {
     objects: Mutex<BTreeMap<String, Value>>,
     requests: Mutex<Vec<(Method, String, Value)>>,
     replace_before_delete: Mutex<Option<String>>,
+    update_before_delete: Mutex<Option<String>>,
 }
 
 impl DeleteMock {
@@ -81,10 +82,18 @@ impl DeleteMock {
             if self.replace_before_delete.lock().unwrap().take().as_ref() == Some(&path) {
                 objects.get_mut(&path).unwrap()["metadata"]["uid"] = json!("replacement-uid");
             }
+            if self.update_before_delete.lock().unwrap().take().as_ref() == Some(&path) {
+                objects.get_mut(&path).unwrap()["metadata"]["resourceVersion"] =
+                    json!("new-version");
+            }
             let Some(existing) = objects.get(&path) else {
                 return not_found();
             };
-            if body["preconditions"]["uid"] != existing["metadata"]["uid"] {
+            if body["preconditions"]["uid"] != existing["metadata"]["uid"]
+                || body["preconditions"]
+                    .get("resourceVersion")
+                    .is_some_and(|version| version != &existing["metadata"]["resourceVersion"])
+            {
                 return json_response(
                     StatusCode::CONFLICT,
                     json!({
@@ -135,6 +144,9 @@ impl DeleteMock {
         not_found()
     }
 }
+
+#[path = "scratch_recovery.rs"]
+mod scratch_recovery;
 
 fn setup() -> (
     Workspace,
@@ -505,4 +517,133 @@ async fn cluster_role_binding_stays_a_separate_first_phase() {
     );
     assert_eq!(mock.deletes(), [binding]);
     assert!(mock.exists(&ingress));
+}
+
+#[tokio::test]
+async fn stop_preserves_home_and_waits_for_actual_pods_before_deleting_scratch() {
+    let (mut workspace, builder, mock, coordinator) = setup();
+    workspace.state = WorkspaceState::Stopping;
+    let names = builder.runtime_names(&workspace).unwrap().resources;
+    let scratch = mock.insert(
+        &core("persistentvolumeclaims"),
+        &names.scratch_pvc(),
+        "PersistentVolumeClaim",
+        workspace.id,
+    );
+    let home = mock.insert(
+        &core("persistentvolumeclaims"),
+        &names.data_pvc_ordinal_zero(),
+        "PersistentVolumeClaim",
+        workspace.id,
+    );
+    let pod = mock.insert(
+        &core("pods"),
+        &names.pod_ordinal_zero(),
+        "Pod",
+        workspace.id,
+    );
+    mock.terminating(&pod);
+    assert!(
+        !coordinator
+            .delete_stopped_scratch(&workspace)
+            .await
+            .unwrap()
+    );
+    assert!(mock.deletes().is_empty());
+    mock.remove(&pod);
+    let helper = mock.insert(&core("pods"), "scratch-copy", "Pod", workspace.id);
+    mock.objects.lock().unwrap().get_mut(&helper).unwrap()["spec"] = json!({"containers":[],"volumes":[{"name":"data","persistentVolumeClaim":{"claimName":names.scratch_pvc()}}]});
+    assert!(
+        !coordinator
+            .delete_stopped_scratch(&workspace)
+            .await
+            .unwrap()
+    );
+    assert!(mock.deletes().is_empty());
+    mock.remove(&helper);
+    assert!(
+        !coordinator
+            .delete_stopped_scratch(&workspace)
+            .await
+            .unwrap()
+    );
+    assert!(!mock.exists(&scratch));
+    assert!(mock.exists(&home));
+    assert!(
+        coordinator
+            .delete_stopped_scratch(&workspace)
+            .await
+            .unwrap()
+    );
+    assert_eq!(mock.deletes(), vec![scratch]);
+}
+
+#[tokio::test]
+async fn delete_removes_owned_home_and_scratch_in_the_same_storage_phase() {
+    let (workspace, builder, mock, coordinator) = setup();
+    let names = builder.runtime_names(&workspace).unwrap().resources;
+    let scratch = mock.insert(
+        &core("persistentvolumeclaims"),
+        &names.scratch_pvc(),
+        "PersistentVolumeClaim",
+        workspace.id,
+    );
+    let home = mock.insert(
+        &core("persistentvolumeclaims"),
+        &names.data_pvc_ordinal_zero(),
+        "PersistentVolumeClaim",
+        workspace.id,
+    );
+    assert_eq!(
+        coordinator.delete_or_confirm(&workspace).await.unwrap(),
+        DeleteProgress::DeletionRequested
+    );
+    assert!(!mock.exists(&scratch));
+    assert!(!mock.exists(&home));
+    assert_eq!(
+        coordinator.delete_or_confirm(&workspace).await.unwrap(),
+        DeleteProgress::Gone
+    );
+    let mut deleted = mock.deletes();
+    deleted.sort();
+    let mut expected = vec![home, scratch];
+    expected.sort();
+    assert_eq!(deleted, expected);
+}
+
+#[tokio::test]
+async fn stop_and_delete_preserve_explicitly_bound_scratch() {
+    let (mut workspace, builder, mock, coordinator) = setup();
+    let names = builder.runtime_names(&workspace).unwrap().resources;
+    let default_claim = mock.insert(
+        &core("persistentvolumeclaims"),
+        &names.scratch_pvc(),
+        "PersistentVolumeClaim",
+        workspace.id,
+    );
+    let bound_claim = mock.insert(
+        &core("persistentvolumeclaims"),
+        "explicit-scratch",
+        "PersistentVolumeClaim",
+        workspace.id,
+    );
+    workspace.scratch_volume_binding = Some(WorkspaceHomeVolumeBinding {
+        namespace: NAMESPACE.into(),
+        claim_name: "explicit-scratch".into(),
+        claim_uid: "explicit-scratch-uid".into(),
+        capacity_gib: 10,
+    });
+    assert!(
+        coordinator
+            .delete_stopped_scratch(&workspace)
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        coordinator.delete_or_confirm(&workspace).await.unwrap(),
+        DeleteProgress::Gone
+    );
+    assert!(mock.exists(&default_claim));
+    assert!(mock.exists(&bound_claim));
+    assert!(mock.deletes().is_empty());
 }

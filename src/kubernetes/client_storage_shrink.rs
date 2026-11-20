@@ -699,8 +699,7 @@ impl KubernetesCoordinator {
             return Err("Home target is not smaller than actual source capacity".to_owned());
         }
         if operation.temporary.source.is_none() {
-            self.discover_scratch_source(workspace, operation, &names.pod_ordinal_zero())
-                .await?;
+            self.discover_scratch_source(workspace, operation).await?;
         }
         if let Some(scratch) = operation.temporary.source.as_ref() {
             self.shrink_claim(workspace, scratch, true).await?;
@@ -726,52 +725,30 @@ impl KubernetesCoordinator {
         &self,
         workspace: &Workspace,
         operation: &mut StorageShrinkOperation,
-        pod_name: &str,
     ) -> Result<(), String> {
         let claims = Api::<PersistentVolumeClaim>::namespaced(
             self.client.clone(),
             workspace.runtime.namespace(),
         );
-        let pods = Api::<Pod>::namespaced(self.client.clone(), workspace.runtime.namespace());
-        let Some(pod) = pods.get_opt(pod_name).await.map_err(safe_error)? else {
+        let names = self
+            .builder
+            .runtime_names(workspace)
+            .map_err(safe_error)?
+            .resources;
+        let claim_name = workspace
+            .scratch_volume_binding
+            .as_ref()
+            .map_or_else(|| names.scratch_pvc(), |binding| binding.claim_name.clone());
+        let Some(claim) = claims.get_opt(&claim_name).await.map_err(safe_error)? else {
             if operation.temporary.target_gib.is_some() {
-                return Err("stopped workspace has no retained scratch claim; start it before requesting a scratch shrink".to_owned());
+                return Err(
+                    "workspace has no scratch claim; start it before requesting a scratch shrink"
+                        .to_owned(),
+                );
             }
             return Ok(());
         };
-        self.shrink_owned(&pod.metadata, workspace)?;
-        let scratch = pod
-            .spec
-            .as_ref()
-            .and_then(|spec| spec.volumes.as_ref())
-            .and_then(|volumes| {
-                volumes
-                    .iter()
-                    .find(|volume| volume.name == "workspace-scratch")
-            })
-            .ok_or("workspace scratch volume is missing")?;
-        let claim_name = if let Some(source) = scratch.persistent_volume_claim.as_ref() {
-            source.claim_name.clone()
-        } else {
-            format!("{pod_name}-workspace-scratch")
-        };
-        let claim = claims.get(&claim_name).await.map_err(safe_error)?;
         self.shrink_owned(&claim.metadata, workspace)?;
-        if scratch.ephemeral.is_some()
-            && !claim
-                .metadata
-                .owner_references
-                .as_ref()
-                .is_some_and(|owners| {
-                    owners.iter().any(|owner| {
-                        owner.kind == "Pod"
-                            && Some(owner.uid.as_str()) == pod.metadata.uid.as_deref()
-                            && owner.name == pod_name
-                    })
-                })
-        {
-            return Err("scratch claim is not owned by the validated workspace Pod UID".to_owned());
-        }
         operation.temporary.source = Some(binding_from_claim(&claim, workspace)?);
         Ok(())
     }

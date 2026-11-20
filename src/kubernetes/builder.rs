@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use k8s_openapi::{
     api::{
         apps::v1::StatefulSet,
-        core::v1::{ConfigMap, Namespace, Service, ServiceAccount},
+        core::v1::{ConfigMap, Namespace, PersistentVolumeClaim, Service, ServiceAccount},
         networking::v1::{Ingress, NetworkPolicy},
         rbac::v1::ClusterRoleBinding,
     },
@@ -50,7 +50,7 @@ pub struct ResourceBuilder {
     pub jump_host_pod_labels: BTreeMap<String, String>,
     /// StorageClass for the durable workspace Home PVC.
     pub storage_class_name: Option<String>,
-    /// CSI class for Pod-owned generic ephemeral scratch PVCs.
+    /// CSI class for workspace-owned temporary scratch PVCs.
     pub scratch_storage_class_name: String,
     pub web_shell_domain: Option<String>,
     pub port_mapping_domain: Option<String>,
@@ -67,6 +67,7 @@ pub struct DesiredResources {
     pub service_account: Option<ServiceAccount>,
     pub cluster_role_binding: Option<ClusterRoleBinding>,
     pub stateful_set: StatefulSet,
+    pub scratch_claim: Option<PersistentVolumeClaim>,
     pub network_policy: NetworkPolicy,
     pub injections: InjectionMaterialization,
     pub workspace_config: ConfigMap,
@@ -141,6 +142,8 @@ impl ResourceBuilder {
         let injections = materialization::build(&names, &labels, &[])?;
         let (web_shell_ingress, web_shell_envoy_filter) = self.web_shell_resources(&names, &labels);
         Ok(DesiredResources {
+            scratch_claim: (replicas > 0 && workspace.scratch_volume_binding.is_none())
+                .then(|| workload::scratch_claim(self, &names, &stable_labels, workspace)),
             namespace: Namespace {
                 metadata: ObjectMeta {
                     name: Some(workspace.runtime.namespace().to_owned()),

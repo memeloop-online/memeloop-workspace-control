@@ -118,7 +118,11 @@ mod coordinator_tests {
                 if request.method() == Method::GET {
                     return Ok::<_, Infallible>(not_found());
                 }
-                assert_eq!(request.method(), Method::PATCH);
+                assert!(
+                    request.method() == Method::PATCH
+                        || (request.method() == Method::POST
+                            && request.uri().path().ends_with("/persistentvolumeclaims"))
+                );
                 let path = request.uri().path().to_owned();
                 let body: serde_json::Value = serde_json::from_slice(
                     &request.into_body().collect().await.unwrap().to_bytes(),
@@ -186,7 +190,11 @@ mod coordinator_tests {
                             }
                             return Ok(not_found());
                         }
-                        assert_eq!(method, Method::PATCH);
+                        assert!(
+                            method == Method::PATCH
+                                || (method == Method::POST
+                                    && path.ends_with("/persistentvolumeclaims"))
+                        );
                         if foreign && path == blocked {
                             assert!(
                                 !fail.load(Ordering::SeqCst),
@@ -308,6 +316,52 @@ mod coordinator_tests {
             observe_ready_fixture(&workspace, stateful_set, Some(pod), 1).await;
         assert!(result.unwrap());
         assert_eq!(requests.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn direct_readiness_reads_pod_before_stateful_set_response_arrives() {
+        let (workspace, stateful_set, pod) = ready_pod_fixture();
+        let builder =
+            workspace_coordinator(Arc::new(WorkspaceDeleteMock::new("public-a", workspace.id)))
+                .builder;
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let both_requested = Arc::new(tokio::sync::Notify::new());
+        let service = service_fn({
+            let requests = requests.clone();
+            let both_requested = both_requested.clone();
+            move |request: Request<kube::client::Body>| {
+                assert_eq!(request.method(), Method::GET);
+                let path = request.uri().path().to_owned();
+                let stateful_set = stateful_set.clone();
+                let pod = pod.clone();
+                let both_requested = both_requested.clone();
+                let is_stateful_set = path.contains("/statefulsets/");
+                if !is_stateful_set {
+                    assert!(path.contains("/pods/"));
+                }
+                requests.lock().unwrap().push(path);
+                async move {
+                    if is_stateful_set {
+                        both_requested.notified().await;
+                        Ok::<_, Infallible>(json_response(StatusCode::OK, stateful_set))
+                    } else {
+                        both_requested.notify_one();
+                        Ok(json_response(StatusCode::OK, pod))
+                    }
+                }
+            }
+        });
+        let coordinator =
+            KubernetesCoordinator::new(kube::Client::new(service, "default"), builder);
+        let ready = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            coordinator.has_observed_replicas(&workspace, 1),
+        )
+        .await
+        .expect("Pod GET must start before the StatefulSet response is released")
+        .unwrap();
+        assert!(ready);
+        assert_eq!(requests.lock().unwrap().len(), 2);
     }
 
     #[tokio::test]
@@ -479,7 +533,7 @@ mod coordinator_tests {
             let (result, requests) =
                 observe_ready_fixture(&next, stateful_set.clone(), None, expected).await;
             assert!(!result.unwrap());
-            assert_eq!(requests.len(), 1);
+            assert_eq!(requests.len(), if expected == 0 { 1 } else { 2 });
 
             for (pointer, value) in [
                 ("/spec/replicas", serde_json::json!(1 - expected)),
@@ -723,7 +777,7 @@ mod coordinator_tests {
                 .lock()
                 .unwrap()
                 .iter()
-                .all(|(_, uri)| !uri.contains("persistentvolumeclaims"))
+                .all(|(_, uri)| !uri.contains("persistentvolumeclaims/workspace-data-"))
         );
     }
 
@@ -871,7 +925,9 @@ mod coordinator_tests {
                         .lock()
                         .unwrap()
                         .push((method.clone(), path.clone()));
-                    if path.contains("persistentvolumeclaims") {
+                    if path.ends_with("/workspace-data-w-8000000000000001-0")
+                        || path.ends_with("/existing-home")
+                    {
                         assert_eq!(method, Method::GET);
                         if !bound {
                             assert!(path.ends_with("/workspace-data-w-8000000000000001-0"));
@@ -890,7 +946,12 @@ mod coordinator_tests {
                     if method == Method::GET {
                         return Ok(not_found());
                     }
-                    assert_eq!(method, Method::PATCH, "unexpected mutation: {path}");
+                    assert!(
+                        method == Method::PATCH
+                            || (method == Method::POST
+                                && path.ends_with("/persistentvolumeclaims")),
+                        "unexpected mutation: {method} {path}"
+                    );
                     let bytes = request.into_body().collect().await.unwrap().to_bytes();
                     let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
                     if path.contains("/statefulsets/") {
@@ -1008,7 +1069,12 @@ mod coordinator_tests {
                     if method == Method::GET {
                         return Ok(not_found());
                     }
-                    assert_eq!(method, Method::PATCH, "unexpected mutation: {path}");
+                    assert!(
+                        method == Method::PATCH
+                            || (method == Method::POST
+                                && path.ends_with("/persistentvolumeclaims")),
+                        "unexpected mutation: {method} {path}"
+                    );
                     let bytes = request.into_body().collect().await.unwrap().to_bytes();
                     let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
                     if path.contains("/statefulsets/") {
@@ -1050,7 +1116,7 @@ mod coordinator_tests {
                 assert!(
                     requests
                         .iter()
-                        .all(|(_, path)| !path.contains("/persistentvolumeclaims/"))
+                        .all(|(_, path)| !path.ends_with("/workspace-data-w-8000000000000001-0"))
                 );
             }
         }

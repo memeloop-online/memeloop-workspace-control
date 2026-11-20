@@ -31,7 +31,10 @@ pub(super) fn bootstrap_container(
             limits: Some(quantities("100m", "128Mi", "128Mi")),
             ..ResourceRequirements::default()
         }),
-        volume_mounts: Some(vec![cache_mount("/var/lib/mwc-buildkit", CACHE_SUB_PATH)]),
+        volume_mounts: Some(vec![
+            cache_mount("/var/lib/mwc-buildkit", CACHE_SUB_PATH),
+            cache_mount("/home/user/.local/share/buildkit", CACHE_SUB_PATH),
+        ]),
         security_context: Some(non_root_security_context(false, false)),
         ..Container::default()
     })
@@ -88,6 +91,8 @@ pub(super) fn container(enabled: bool, image: &str, cpu_request_millis: u64) -> 
         }),
         volume_mounts: Some(vec![
             cache_mount("/var/lib/mwc-buildkit", CACHE_SUB_PATH),
+            // Override the rootless image's VOLUME so CRI cannot allocate a node-local volume.
+            cache_mount("/home/user/.local/share/buildkit", CACHE_SUB_PATH),
             buildkit_tmp_mount(),
         ]),
         security_context: Some(non_root_security_context(true, true)),

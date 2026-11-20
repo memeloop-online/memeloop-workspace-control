@@ -47,6 +47,8 @@ mod workspace_injection_refs;
 mod workspace_observation_jobs;
 mod workspace_placement_update;
 mod workspace_scratch_resize;
+mod workspace_settings;
+pub use workspace_settings::WorkspaceSettingsUpdate;
 mod workspace_storage_shrink;
 mod workspace_store;
 

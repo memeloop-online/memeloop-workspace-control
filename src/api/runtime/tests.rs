@@ -167,3 +167,47 @@ fn same_source_uses_latest_facts_without_decreasing_count_or_changing_start() {
         historical.observed_at
     );
 }
+
+#[tokio::test]
+async fn runtime_batch_reads_pods_claims_and_metrics_concurrently() {
+    let barrier = Arc::new(tokio::sync::Barrier::new(3));
+    let paths = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let service = tower::service_fn({
+        let paths = paths.clone();
+        move |request: axum::http::Request<kube::client::Body>| {
+            let barrier = barrier.clone();
+            let paths = paths.clone();
+            async move {
+                let path = request.uri().path().to_owned();
+                let (version, kind) = match path.as_str() {
+                    "/api/v1/pods" => ("v1", "PodList"),
+                    "/api/v1/persistentvolumeclaims" => ("v1", "PersistentVolumeClaimList"),
+                    "/apis/metrics.k8s.io/v1beta1/pods" => {
+                        ("metrics.k8s.io/v1beta1", "PodMetricsList")
+                    }
+                    other => panic!("unexpected runtime request: {other}"),
+                };
+                paths.lock().unwrap().push(path);
+                barrier.wait().await;
+                Ok::<_, std::convert::Infallible>(axum::http::Response::new(axum::body::Body::from(
+                    serde_json::json!({"apiVersion":version,"kind":kind,"metadata":{},"items":[]}).to_string(),
+                )))
+            }
+        }
+    });
+    let observed = tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        fetch_kubernetes_runtime(
+            &crate::observability::Observability::default(),
+            kube::Client::new(service, "default"),
+            "workspace.memeloop.dev/owner-installation=test",
+            &[],
+        ),
+    )
+    .await
+    .expect("independent observation reads must not wait for one another")
+    .unwrap();
+    assert!(observed.metrics_available);
+    assert!(observed.pods.is_empty());
+    assert_eq!(paths.lock().unwrap().len(), 3);
+}

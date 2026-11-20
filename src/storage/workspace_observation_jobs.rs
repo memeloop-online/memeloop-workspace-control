@@ -1,4 +1,4 @@
-//! A watch can request a read-only reconciliation, never change workspace intent.
+//! A watch can request a runtime check, never change workspace intent.
 use sqlx::Row;
 use uuid::Uuid;
 

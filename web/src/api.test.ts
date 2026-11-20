@@ -169,3 +169,42 @@ test("run location deletion surfaces actionable backend conflicts instead of a s
     assert.equal(error.status, 409);
   } finally { globalThis.fetch = originalFetch; }
 });
+
+test("mapping edits preserve the mapping route and explicitly clear its display name", async () => {
+  const prior = globalThis.fetch;
+  const requests: Array<{ path: string; init?: RequestInit }> = [];
+  globalThis.fetch = async (input, init) => {
+    requests.push({ path: String(input), init });
+    return Response.json({ id: "mapping-one", internal_port: 4000, display_name: null });
+  };
+  try {
+    const api = new ApiClient("fixture-token");
+    await api.updatePortMapping("workspace-one", "mapping-one", { internal_port: 4000, display_name: null });
+    assert.equal(requests[0]?.path, "/api/v1/workspaces/workspace-one/port-mappings/mapping-one");
+    assert.equal(requests[0]?.init?.method, "PUT");
+    assert.deepEqual(JSON.parse(String(requests[0]?.init?.body)), { internal_port: 4000, display_name: null });
+    assert.ok(new Headers(requests[0]?.init?.headers).get("Idempotency-Key"));
+  } finally { globalThis.fetch = prior; }
+});
+
+test("workspace and temporary settings carry the current generation in separate writes", async () => {
+  const prior = globalThis.fetch;
+  const requests: Array<{ path: string; init?: RequestInit }> = [];
+  globalThis.fetch = async (input, init) => {
+    requests.push({ path: String(input), init });
+    return Response.json({ workspace: { generation: 8 } });
+  };
+  try {
+    const api = new ApiClient("fixture-token");
+    const settings = { name: "支付开发", cpu_millis: 2000, memory_mib: 4096, gpu_count: 0, expected_generation: 7 };
+    const updated = await api.updateWorkspaceSettings("workspace-one", settings);
+    await api.updateWorkspaceTemporaryStorage("workspace-one", { temporary_storage_gib: 10, expected_generation: updated.workspace.generation });
+    assert.deepEqual(requests.map(({ path }) => path), ["/api/v1/workspaces/workspace-one/settings", "/api/v1/workspaces/workspace-one/temporary-storage"]);
+    assert.deepEqual(JSON.parse(String(requests[0]?.init?.body)), settings);
+    assert.deepEqual(JSON.parse(String(requests[1]?.init?.body)), { temporary_storage_gib: 10, expected_generation: 8 });
+    for (const { init } of requests) {
+      assert.equal(init?.method, "PUT");
+      assert.ok(new Headers(init?.headers).get("Idempotency-Key"));
+    }
+  } finally { globalThis.fetch = prior; }
+});

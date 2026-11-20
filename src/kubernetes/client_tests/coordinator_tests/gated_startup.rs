@@ -10,6 +10,7 @@ mod injection_updates;
 mod namespace_plan_overlap;
 mod prerequisite_overlap;
 mod route_overlap;
+mod scratch;
 mod worker_capacity;
 
 struct GateMock {
@@ -199,6 +200,24 @@ impl GateMock {
             return success();
         }
         if method == Method::POST {
+            if path.ends_with("/persistentvolumeclaims") {
+                let mut body: Value = serde_json::from_slice(
+                    &request.into_body().collect().await.unwrap().to_bytes(),
+                )
+                .unwrap();
+                let name = body["metadata"]["name"].as_str().unwrap().to_owned();
+                body["metadata"]["uid"] = json!(format!("{name}-uid"));
+                let object_path = format!("{path}/{name}");
+                self.objects
+                    .lock()
+                    .unwrap()
+                    .insert(object_path.clone(), body.clone());
+                self.writes
+                    .lock()
+                    .unwrap()
+                    .push((object_path, body.clone()));
+                return json_response(StatusCode::CREATED, body);
+            }
             return self.create_approval(&path, request).await;
         }
         assert_eq!(method, Method::PATCH);

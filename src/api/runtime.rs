@@ -28,6 +28,7 @@ use crate::{
 use super::{ApiError, AppState, auth::principal};
 
 mod details;
+mod memory_metrics;
 pub(super) mod organization_metrics;
 mod pod_views;
 mod startup;
@@ -91,6 +92,12 @@ pub(super) struct PodMetric {
     container: String,
     cpu: Option<String>,
     memory: Option<String>,
+    /// Actual live container limit, which may differ from the workspace template.
+    memory_limit: Option<String>,
+    /// Metrics-server working-set usage relative to the effective limit.
+    /// Missing or stale usage is unknown; a low value does not rule out PSI stalls.
+    memory_used_percent: Option<f64>,
+    observed_at: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
@@ -144,17 +151,8 @@ pub(super) async fn list(
         .clone()
         .ok_or(ApiError::KubernetesUnavailable)?;
     let selector = runtime_selector(&state.config.installation_id, &workspaces);
-    let mut kubernetes_runtime =
-        fetch_kubernetes_runtime(state.as_ref(), client.clone(), &selector).await?;
-    for workspace in &workspaces {
-        if let Some(binding) = &workspace.home_volume_binding {
-            kubernetes_runtime
-                .storage_pvcs
-                .entry(workspace.id)
-                .or_default()
-                .persistent = details::bound_home_identity(&client, binding).await?;
-        }
-    }
+    let kubernetes_runtime =
+        fetch_kubernetes_runtime(&state.observability, client, &selector, &workspaces).await?;
     let storage_identities = kubernetes_runtime
         .storage_pvcs
         .values()
@@ -196,27 +194,54 @@ fn runtime_selector(installation_id: &InstallationId, workspaces: &[Workspace]) 
 }
 
 async fn fetch_kubernetes_runtime(
-    state: &AppState,
+    observability: &crate::observability::Observability,
     client: Client,
     selector: &str,
+    workspaces: &[Workspace],
 ) -> Result<KubernetesRuntimeBatch, ApiError> {
-    let request = state
-        .observability
-        .begin_upstream(crate::observability::UpstreamKind::Kubernetes);
-    let pod_list = Api::<Pod>::all(client.clone())
-        .list(&ListParams::default().labels(selector))
-        .await
-        .map_err(ApiError::Kubernetes)?;
-    let pvc_list = Api::<PersistentVolumeClaim>::all(client.clone())
-        .list(&ListParams::default().labels(selector))
-        .await
-        .map_err(ApiError::Kubernetes)?;
-    let metric_result = pod_metrics_all(client, selector).await;
+    let request = observability.begin_upstream(crate::observability::UpstreamKind::Kubernetes);
+    let pods = Api::<Pod>::all(client.clone());
+    let pvcs = Api::<PersistentVolumeClaim>::all(client.clone());
+    let params = ListParams::default().labels(selector);
+    let (pod_list, pvc_list, metric_result) = tokio::join!(
+        pods.list(&params),
+        pvcs.list(&params),
+        tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            pod_metrics_all(client.clone(), selector)
+        ),
+    );
+    let pod_list = pod_list.map_err(ApiError::Kubernetes)?;
+    let pvc_list = pvc_list.map_err(ApiError::Kubernetes)?;
+    let metric_result = metric_result
+        .map_err(|error| error.to_string())
+        .and_then(|result| result.map_err(|error| error.to_string()));
+    let bound_homes = futures::future::try_join_all(workspaces.iter().filter_map(|workspace| {
+        let client = &client;
+        let claims = &pvc_list.items;
+        workspace
+            .home_volume_binding
+            .as_ref()
+            .map(|binding| async move {
+                Ok::<_, ApiError>((
+                    workspace.id,
+                    details::bound_home_identity(client, claims, binding).await?,
+                ))
+            })
+    }))
+    .await?;
+    let mut storage_pvcs = index_storage_pvcs(pvc_list.items);
+    for (id, identity) in bound_homes {
+        storage_pvcs.entry(id).or_default().persistent = identity;
+    }
     let metrics_available = metric_result.is_ok();
-    let metrics = metric_result.unwrap_or_else(|error| {
+    let mut metrics = metric_result.unwrap_or_else(|error| {
         tracing::debug!(%error, "metrics.k8s.io is unavailable");
         BTreeMap::new()
     });
+    for values in metrics.values_mut() {
+        memory_metrics::annotate(values, &pod_list.items, unix_timestamp());
+    }
     request.success();
     let (pods, active_pods, node_names, scratch_backings) = index_pods(&pod_list.items);
     let mut scheduling_events = BTreeMap::<Uuid, Vec<PodEvent>>::new();
@@ -232,7 +257,7 @@ async fn fetch_kubernetes_runtime(
         pods,
         active_pods,
         node_names,
-        storage_pvcs: index_storage_pvcs(pvc_list.items),
+        storage_pvcs,
         scratch_backings,
         metrics,
         metrics_available,
