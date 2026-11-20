@@ -120,7 +120,7 @@ jobs:
         run: |
           status=0
           sudo --preserve-env=GITHUB_ACTIONS,GITHUB_WORKSPACE,RUNNER_TEMP,PRODUCT_RENDERER_SHA,WRAPPER_SHA,MWC_PRODUCT_STORAGE_INPUTS \
-            bash tests/runtime_product_storage.sh || status=$?
+            unshare --mount --propagation private bash tests/runtime_product_storage.sh || status=$?
           sudo chown -R "$(id -u):$(id -g)" artifacts
           exit "$status"
       - name: Preserve actual evidence, including failed prerequisites

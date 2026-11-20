@@ -21,6 +21,11 @@ mkdir -p "$base" "$out" "$base/state/mwc-native" "$base/state/mwc-runsc"
 install -d -o root -g root -m 0755 "$pod_log_root"
 chmod 0700 "$base/state" "$base/state/"*
 exec > >(tee "$out/product-csi.log") 2>&1
+# The whole harness, both daemons, their shims, and the wrapper share this
+# namespace. Keep the shell alive through cleanup as its stable identity anchor.
+mount_namespace="/proc/$$/ns/mnt"
+test "$(readlink "$mount_namespace")" != "$(readlink /proc/1/ns/mnt)"
+test "$(findmnt -n -o PROPAGATION --mountpoint /)" = private
 k3s_pid=''; containerd_pid=''; loops=()
 kube() { KUBECONFIG="$base/kubeconfig" "$base/k3s-bin" kubectl "$@"; }
 cri() { crictl --runtime-endpoint "unix://$base/containerd.sock" --image-endpoint "unix://$base/containerd.sock" "$@"; }
@@ -116,8 +121,8 @@ mapfile -t pool_uuids < <(
 )
 test "${#pool_uuids[@]}" = 1
 pool_uuid="${pool_uuids[0]}"
-jq -n --arg runtime "$(readlink -f "$(command -v runc)")" --arg vg "$vg_uuid" --arg pool "$pool_uuid" --arg dmsetup "$(readlink -f "$(command -v dmsetup)")" --arg base "$base" --arg logs "$pod_log_root" \
- '{real_runtime:$runtime,kubelet_root:"/var/lib/kubelet",cri_root:($base+"/containerd-root/io.containerd.grpc.v1.cri"),cri_state_root:($base+"/containerd-state/io.containerd.grpc.v1.cri"),workspace_namespace:"memeloop-workspace-control",pod_log_root:$logs,bundle_root:($base+"/containerd-state/io.containerd.runtime.v2.task/k8s.io"),snapshot_root:($base+"/containerd-root/io.containerd.snapshotter.v1.overlayfs/snapshots"),state_root:($base+"/state/mwc-native"),mount_namespace:"/proc/1/ns/mnt",scratch_vg_uuid:$vg,scratch_pool_dm_uuid:$pool,dmsetup:$dmsetup}' > /etc/mwc-runtime-wrapper.json
+jq -n --arg runtime "$(readlink -f "$(command -v runc)")" --arg vg "$vg_uuid" --arg pool "$pool_uuid" --arg dmsetup "$(readlink -f "$(command -v dmsetup)")" --arg base "$base" --arg logs "$pod_log_root" --arg namespace "$mount_namespace" \
+ '{real_runtime:$runtime,kubelet_root:"/var/lib/kubelet",cri_root:($base+"/containerd-root/io.containerd.grpc.v1.cri"),cri_state_root:($base+"/containerd-state/io.containerd.grpc.v1.cri"),workspace_namespace:"memeloop-workspace-control",pod_log_root:$logs,bundle_root:($base+"/containerd-state/io.containerd.runtime.v2.task/k8s.io"),snapshot_root:($base+"/containerd-root/io.containerd.snapshotter.v1.overlayfs/snapshots"),state_root:($base+"/state/mwc-native"),mount_namespace:$namespace,scratch_vg_uuid:$vg,scratch_pool_dm_uuid:$pool,dmsetup:$dmsetup}' > /etc/mwc-runtime-wrapper.json
 chmod 0600 /etc/mwc-runtime-wrapper.json
 jq --arg runtime "$base/gvisor/runsc" --arg state "$base/state/mwc-runsc" '.real_runtime=$runtime | .state_root=$state' /etc/mwc-runtime-wrapper.json > /etc/mwc-runsc-wrapper.json
 chmod 0600 /etc/mwc-runsc-wrapper.json
@@ -216,6 +221,16 @@ for n in $(seq 1 150); do
  sleep 1
 done
 kube wait --for=condition=Ready node/mwc-product-ci --timeout=120s
+# Kubelet makes only its own root shared for the CSI node plugin's bidirectional
+# mounts. The containerd bundle tree stays on the private root in this namespace.
+jq -n --arg host "$(readlink /proc/1/ns/mnt)" --arg harness "$(readlink "$mount_namespace")" \
+ --arg containerd "$(readlink "/proc/$containerd_pid/ns/mnt")" --arg k3s "$(readlink "/proc/$k3s_pid/ns/mnt")" \
+ --arg configured "$(jq -r .mount_namespace /etc/mwc-runtime-wrapper.json)" \
+ '{host:$host,harness:$harness,containerd:$containerd,k3s:$k3s,wrapper_mount_namespace:$configured}' > "$out/actual-mount-namespaces.json"
+jq -e --arg namespace "$mount_namespace" '.host!=.harness and .harness==.containerd and .harness==.k3s and .wrapper_mount_namespace==$namespace' "$out/actual-mount-namespaces.json"
+findmnt -J -o TARGET,PROPAGATION --mountpoint /var/lib/kubelet > "$out/actual-kubelet-mount-propagation.json"
+test "$(findmnt -n -o PROPAGATION --mountpoint /var/lib/kubelet)" = shared
+test "$(findmnt -n -o PROPAGATION --target "$base/containerd-state")" = private
 kube get --raw /api/v1/nodes/mwc-product-ci/proxy/configz | jq '.kubeletconfig | {podLogsDir,evictionHard,evictionMinimumReclaim,containerLogMaxSize,containerLogMaxFiles}' > "$out/actual-kubelet-log-config.json"
 jq -e --arg logs "$pod_log_root" '.podLogsDir==$logs' "$out/actual-kubelet-log-config.json"
 kube apply -f - <<'YAML'
