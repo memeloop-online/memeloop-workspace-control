@@ -13,7 +13,7 @@ fetch() {
  printf '%s  %s\n' "$digest" "$inputs/$name" | sha256sum -c -
 }
 fetch k3s 'https://github.com/k3s-io/k3s/releases/download/v1.36.2%2Bk3s1/k3s' 65a55ec56c24eab44383086166ec620a491952b7e23941a49ddca6e8a4c4b4de
-fetch gvisor.tar.bz2 'https://github.com/google/gvisor/releases/download/release-20260831.0/gvisor-x86_64.tar.bz2' 014b3871a5c698c802fd7a03758e0dbf4c1683f9e3f8c743979ea66bbf6553a4
+fetch gvisor.tar.bz2 'https://github.com/gvisor/gvisor/releases/download/release-20261019.0/gvisor-x86_64.tar.bz2' 1298e8ed9c3fee900f00d2ea96ec2d79d80ed93f2175812f29b7e7da718041a3
 fetch helm.tgz 'https://get.helm.sh/helm-v4.2.4-linux-amd64.tar.gz' c306b46f719b0a4da32d0f78ee21bf90ce8d602f15b22ab753f0674d1670a7f3
 fetch topolvm.tgz 'https://github.com/topolvm/topolvm/releases/download/topolvm-chart-v17.2.0/topolvm-17.2.0.tgz' 4b6c070da0b38f098c9ef6b6a38ef4e2dfff52adecedc280ad92bfab408f90ee
 # rust-dev is an independently maintained private Forgejo image, not a GHCR

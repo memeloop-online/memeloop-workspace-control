@@ -83,11 +83,11 @@ install -m 0755 "$RUNNER_TEMP/product-storage-bin/mwc-runtime-wrapper" "$base/mw
 install -m 0755 "$RUNNER_TEMP/product-storage-bin/mwc-runsc-wrapper" "$base/mwc-runsc-wrapper"
 mkdir -p "$base/gvisor" "$base/runsc-state"
 copy_input gvisor.tar.bz2 \
- 014b3871a5c698c802fd7a03758e0dbf4c1683f9e3f8c743979ea66bbf6553a4 "$base/gvisor.tar.bz2"
+ 1298e8ed9c3fee900f00d2ea96ec2d79d80ed93f2175812f29b7e7da718041a3 "$base/gvisor.tar.bz2"
 tar -xjf "$base/gvisor.tar.bz2" -C "$base/gvisor"
 export PATH="$base/gvisor:$PATH"
 "$base/gvisor/runsc" --version | tee "$out/runsc-version.txt"
-grep -F release-20260831.0 "$out/runsc-version.txt"
+grep -F release-20261019.0 "$out/runsc-version.txt"
 test -x "$base/gvisor/containerd-shim-runsc-v1"
 test -d "$base/gvisor/gvisor-bin"
 find "$base/gvisor" -type f -printf '%P\n' > "$out/gvisor-payload-files.txt"
