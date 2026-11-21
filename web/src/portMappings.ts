@@ -8,7 +8,12 @@ export interface PortMapping {
   id: string;
   internal_port: number;
   display_name: string | null;
-  /** Persisted DNS label assigned by the backend (a custom value or the automatic app-<8hex> label). */
+  /**
+   * Persisted DNS label assigned by the backend: only the user portion after the fixed "p-" prefix
+   * (a custom value, an automatic 8-hex label, or a preserved migrated value). The external hostname
+   * is always p-{subdomain}.{platformSuffix}; the "p-" prefix is reserved so user labels never
+   * collide with shared infrastructure names on the platform suffix.
+   */
   subdomain: string;
   status: "provisioning" | "ready" | "failed" | "deleting" | string;
   https_url: string | null;
@@ -21,7 +26,7 @@ export interface PortMapping {
 export interface CreatePortMappingInput {
   internal_port: number;
   display_name?: string;
-  /** Optional globally unique DNS label; when omitted the backend assigns an automatic app-<8hex> label. */
+  /** Optional globally unique DNS label — the portion after the fixed "p-" prefix; when omitted the backend assigns an automatic label of 8 lowercase hex characters, for example hostname p-1a2b3c4d.{platformSuffix}. */
   subdomain?: string;
 }
 
@@ -71,8 +76,12 @@ export function validateDisplayName(raw: string): DisplayNameValidation {
   return { value, length, tooLong: length > DISPLAY_NAME_MAX_CODE_POINTS };
 }
 
-/** Maximum length of a single DNS label, matching RFC 1035 and the backend. */
-export const SUBDOMAIN_MAX_LENGTH = 63;
+/**
+ * Maximum length of the user-editable subdomain portion, matching the backend.
+ * The system adds the fixed "p-" prefix, so the full DNS label stays within the
+ * RFC 1035 limit of 63 characters (2 + 61).
+ */
+export const SUBDOMAIN_MAX_LENGTH = 61;
 
 export interface SubdomainValidation {
   /** Trimmed, lowercased value to send; empty means the field was left blank. */
@@ -82,10 +91,11 @@ export interface SubdomainValidation {
 }
 
 /**
- * Normalize and validate the optional subdomain prefix: a single DNS label of
- * 1–63 ASCII lowercase letters, digits, or hyphens that starts and ends with
- * a letter or digit. Blank input is valid and means "keep the automatic or
- * current label"; the domain suffix always comes from the platform.
+ * Normalize and validate the optional subdomain label: the user-editable portion
+ * after the fixed "p-" prefix, 1–61 ASCII lowercase letters, digits, or hyphens
+ * that starts and ends with a letter or digit. Blank input is valid and means
+ * "keep the automatic or current label"; the "p-" prefix and the domain suffix
+ * always come from the platform.
  */
 export function validateSubdomain(raw: string): SubdomainValidation {
   const value = raw.trim().toLowerCase();

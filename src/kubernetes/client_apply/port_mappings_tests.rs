@@ -60,31 +60,6 @@ impl PruneMock {
             .lock()
             .unwrap()
             .push((method.clone(), path.clone()));
-        if path.contains("/pods/") {
-            return Response::builder().status(404).header("content-type", "application/json")
-                .body(Body::from(json!({"apiVersion":"v1", "kind":"Status", "status":"Failure", "reason":"NotFound", "code":404}).to_string())).unwrap();
-        }
-        if path.contains("/configmaps/") {
-            if method == Method::GET {
-                return Response::builder().status(200).header("content-type", "application/json")
-                    .body(Body::from(json!({"apiVersion":"v1", "kind":"ConfigMap", "metadata":{
-                        "name":path.rsplit('/').next().unwrap(), "namespace":NAMESPACE,
-                        "labels":{(OWNER_INSTALLATION_LABEL):"mapping-test", (WORKSPACE_ID_LABEL):self.workspace_id.to_string()}
-                    }, "data":{"sshd_config":"preserved", "mwc-workspace-bootstrap":"preserved"}}).to_string())).unwrap();
-            }
-            assert_eq!(method, Method::PATCH);
-            let body: serde_json::Value =
-                serde_json::from_slice(&request.into_body().collect().await.unwrap().to_bytes())
-                    .unwrap();
-            assert_eq!(body["data"]["port-mappings.json"], "[]");
-            // SSA owns only metadata key; the ordinary config and bootstrap remain untouched.
-            assert_eq!(body["data"].as_object().unwrap().len(), 1);
-            return Response::builder()
-                .status(200)
-                .header("content-type", "application/json")
-                .body(Body::from(body.to_string()))
-                .unwrap();
-        }
         let (status, body) = if method == Method::GET {
             let (_, kind) = COLLECTIONS
                 .iter()
@@ -269,7 +244,7 @@ async fn empty_mappings_list_concurrently_and_delete_owned_residue_in_order() {
         ]
     );
     let requests = mock.requests.lock().unwrap();
-    assert_eq!(requests.len(), 9);
+    assert_eq!(requests.len(), 6);
     assert!(
         requests[..3]
             .iter()

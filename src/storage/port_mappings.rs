@@ -44,7 +44,7 @@ pub struct PortMapping {
 
 impl PortMapping {
     pub fn hostname(&self, domain: &str) -> String {
-        format!("{}.{}", self.subdomain, domain)
+        format!("p-{}.{}", self.subdomain, domain)
     }
 }
 
@@ -497,7 +497,7 @@ fn validate_display_name(value: Option<&str>) -> Result<Option<String>, StorageE
 fn normalize_subdomain(value: &str) -> Result<String, StorageError> {
     let value = value.trim().to_ascii_lowercase();
     if value.is_empty()
-        || value.len() > 63
+        || value.len() > 61
         || !value
             .as_bytes()
             .first()
@@ -518,7 +518,7 @@ fn normalize_subdomain(value: &str) -> Result<String, StorageError> {
 fn random_subdomain() -> Result<String, StorageError> {
     let mut random = [0_u8; 4];
     getrandom::fill(&mut random).map_err(|_| StorageError::RandomSource)?;
-    Ok(format!("app-{:08x}", u32::from_be_bytes(random)))
+    Ok(format!("{:08x}", u32::from_be_bytes(random)))
 }
 
 fn subdomain_write_error(error: sqlx::Error) -> StorageError {

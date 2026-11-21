@@ -65,12 +65,10 @@ impl KubernetesCoordinator {
             self.prune_mapping_tls_filters(workspace, &desired_filters)
                 .await?;
         }
-        self.apply_port_mapping_metadata(workspace, mappings)
-            .await?;
         Ok(())
     }
 
-    async fn apply_port_mapping_metadata(
+    pub async fn apply_port_mapping_metadata(
         &self,
         workspace: &Workspace,
         mappings: &[PortMapping],

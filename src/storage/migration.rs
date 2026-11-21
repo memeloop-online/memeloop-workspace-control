@@ -37,11 +37,9 @@ async fn migrate_sqlite(pool: &SqlitePool, applied_at: i64) -> Result<(), Storag
             )
             .execute(&mut *transaction)
             .await?;
-            sqlx::query(
-                "UPDATE workspace_port_mappings SET subdomain = 'p-' || replace(id, '-', '')",
-            )
-            .execute(&mut *transaction)
-            .await?;
+            sqlx::query("UPDATE workspace_port_mappings SET subdomain = replace(id, '-', '')")
+                .execute(&mut *transaction)
+                .await?;
             sqlx::query("CREATE UNIQUE INDEX workspace_port_mappings_subdomain_idx ON workspace_port_mappings (subdomain)")
                 .execute(&mut *transaction).await?;
             sqlx::query("CREATE TABLE workspace_port_subdomain_claims (subdomain TEXT PRIMARY KEY, installation_id TEXT NOT NULL, workspace_id TEXT NOT NULL)")
@@ -99,11 +97,9 @@ async fn migrate_postgres(
             sqlx::query("ALTER TABLE workspace_port_mappings ADD COLUMN subdomain TEXT")
                 .execute(&mut *transaction)
                 .await?;
-            sqlx::query(
-                "UPDATE workspace_port_mappings SET subdomain = 'p-' || replace(id, '-', '')",
-            )
-            .execute(&mut *transaction)
-            .await?;
+            sqlx::query("UPDATE workspace_port_mappings SET subdomain = replace(id, '-', '')")
+                .execute(&mut *transaction)
+                .await?;
             sqlx::query("ALTER TABLE workspace_port_mappings ALTER COLUMN subdomain SET NOT NULL")
                 .execute(&mut *transaction)
                 .await?;

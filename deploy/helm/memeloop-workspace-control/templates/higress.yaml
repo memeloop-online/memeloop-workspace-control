@@ -62,12 +62,12 @@ spec:
 {{ end }}
 {{ if .Values.public.portMappingDomain }}
     - domain:
-        # Every label in this dedicated application domain requires authentication.
+        # The suffix is shared with other services; only reserved p-* mapping hosts use this auth policy.
         - {{ printf "*.%s" .Values.public.portMappingDomain | quote }}
       config:
         match_type: blacklist
         match_list:
-          - match_rule_domain: {{ printf "*.%s" .Values.public.portMappingDomain | quote }}
+          - match_rule_domain: {{ printf "p-*.%s" .Values.public.portMappingDomain | quote }}
             match_rule_path: /
             match_rule_type: prefix
         failure_mode_allow: false

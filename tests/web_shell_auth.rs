@@ -243,7 +243,7 @@ async fn browser_access_tickets_are_scoped_and_consumed_once() {
         .clone()
         .oneshot(
             Request::get("/api/v1/internal/port-mappings/authorize")
-                .header("x-forwarded-host", "unknown.apps.example.com")
+                .header("x-forwarded-host", "p-unknown.apps.example.com")
                 .header("x-forwarded-uri", &bootstrap_uri)
                 .body(Body::empty())
                 .unwrap(),

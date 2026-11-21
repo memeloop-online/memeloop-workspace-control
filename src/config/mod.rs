@@ -46,7 +46,7 @@ pub struct AppConfig {
     pub web_shell_public_origin: Option<String>,
 
     /// DNS suffix used for authenticated workspace HTTP mappings, for example
-    /// `k3s.example.com` for `<mapping-subdomain>.k3s.example.com`.
+    /// `k3s.example.com` for `p-<mapping-subdomain>.k3s.example.com`.
     #[arg(long, env = "MWC_PORT_MAPPING_PUBLIC_DOMAIN")]
     pub port_mapping_public_domain: Option<String>,
 

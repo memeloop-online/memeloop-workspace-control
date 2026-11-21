@@ -268,7 +268,7 @@ fn port_mapping_response(error: &StorageError) -> Option<ErrorResponse> {
         StorageError::InvalidPortMappingSubdomain => response(
             StatusCode::BAD_REQUEST,
             "invalid_port_mapping_subdomain",
-            "choose a DNS label of 1 through 63 letters, digits, or hyphens, starting and ending with a letter or digit",
+            "choose a DNS label of 1 through 61 letters, digits, or hyphens, starting and ending with a letter or digit",
         ),
         StorageError::PortMappingSubdomainConflict => response(
             StatusCode::CONFLICT,

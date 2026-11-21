@@ -17,13 +17,13 @@ test("validates internal ports without accepting decimals or reserved values", (
 });
 
 test("prefers HTTPS mapping URLs", () => {
-  assert.equal(mappingUrl({ id: "a", internal_port: 3000, display_name: null, subdomain: "app-1a2b3c4d", status: "ready", https_url: "https://x", managed: false, purpose: "user" }), "https://x");
-  assert.equal(mappingUrl({ id: "a", internal_port: 3000, display_name: null, subdomain: "app-1a2b3c4d", status: "provisioning", https_url: null, managed: false, purpose: "user" }), null);
+  assert.equal(mappingUrl({ id: "a", internal_port: 3000, display_name: null, subdomain: "1a2b3c4d", status: "ready", https_url: "https://x", managed: false, purpose: "user" }), "https://x");
+  assert.equal(mappingUrl({ id: "a", internal_port: 3000, display_name: null, subdomain: "1a2b3c4d", status: "provisioning", https_url: null, managed: false, purpose: "user" }), null);
 });
 
 test("does not turn a non-HTTPS field into a browser destination", () => {
   assert.equal(
-    mappingUrl({ id: "a", internal_port: 3000, display_name: null, subdomain: "app-1a2b3c4d", status: "ready", https_url: null, managed: false, purpose: "user", url: "http://x" } as PortMapping),
+    mappingUrl({ id: "a", internal_port: 3000, display_name: null, subdomain: "1a2b3c4d", status: "ready", https_url: null, managed: false, purpose: "user", url: "http://x" } as PortMapping),
     null,
   );
 });
@@ -46,13 +46,13 @@ test("display names count trimmed Chinese and emoji characters rather than bytes
   for (const port of ["22", "2222", "3389", "7681", "8080", "8081", "8443"]) assert.equal(parseInternalPort(port), null);
 });
 
-test("normalizes and validates optional subdomain labels as DNS single labels", () => {
+test("normalizes and validates the user portion after the fixed p- prefix as a DNS single label", () => {
   assert.deepEqual(validateSubdomain("  My-App  "), { value: "my-app", valid: true });
   assert.deepEqual(validateSubdomain("   "), { value: "", valid: true });
   assert.equal(validateSubdomain("a").valid, true);
   assert.equal(validateSubdomain("app-123").valid, true);
-  assert.equal(validateSubdomain("a".repeat(63)).valid, true);
-  assert.equal(validateSubdomain("a".repeat(64)).valid, false);
+  assert.equal(validateSubdomain("a".repeat(61)).valid, true);
+  assert.equal(validateSubdomain("a".repeat(62)).valid, false);
   assert.equal(validateSubdomain("-app").valid, false);
   assert.equal(validateSubdomain("app-").valid, false);
   assert.equal(validateSubdomain("app_dev").valid, false);

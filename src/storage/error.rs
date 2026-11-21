@@ -86,7 +86,7 @@ pub enum StorageError {
     InvalidPortMappingPort,
     #[error("workspace port mapping display name is invalid")]
     InvalidPortMappingDisplayName,
-    #[error("port mapping subdomain must be a DNS label of 1 through 63 characters")]
+    #[error("port mapping subdomain must be a DNS label of 1 through 61 characters")]
     InvalidPortMappingSubdomain,
     #[error("the port mapping subdomain is already in use")]
     PortMappingSubdomainConflict,

@@ -718,7 +718,7 @@ async fn exercise_subdomain_ownership(
         .await
         .unwrap();
     assert_eq!(mapping.subdomain, "preview");
-    assert_eq!(mapping.hostname("apps.example"), "preview.apps.example");
+    assert_eq!(mapping.hostname("apps.example"), "p-preview.apps.example");
     let session_ticket = database
         .issue_port_mapping_ticket(&mapping, user_id, 120)
         .await
@@ -907,10 +907,10 @@ async fn subdomains_are_normalized_validated_and_generated_short() {
         .create_port_mapping(organization, workspace, 3000, None, None, user, 110)
         .await
         .unwrap();
-    assert_eq!(generated.subdomain.len(), 12);
-    assert!(generated.subdomain.starts_with("app-"));
+    assert_eq!(generated.subdomain.len(), 8);
     assert!(
-        generated.subdomain[4..]
+        generated
+            .subdomain
             .bytes()
             .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
     );
@@ -954,7 +954,7 @@ async fn subdomains_are_normalized_validated_and_generated_short() {
             "{invalid:?}"
         );
     }
-    let longest = "a".repeat(63);
+    let longest = "a".repeat(61);
     let accepted = database
         .create_port_mapping(
             organization,
@@ -970,7 +970,7 @@ async fn subdomains_are_normalized_validated_and_generated_short() {
     assert_eq!(accepted.subdomain, longest);
     assert!(matches!(
         database
-            .update_port_mapping(workspace, accepted.id, 5000, None, Some(&"a".repeat(64)))
+            .update_port_mapping(workspace, accepted.id, 5000, None, Some(&"a".repeat(62)))
             .await,
         Err(StorageError::InvalidPortMappingSubdomain)
     ));

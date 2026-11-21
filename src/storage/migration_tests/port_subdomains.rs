@@ -3,11 +3,15 @@ use super::*;
 async fn assert_backfilled(database: &Database) {
     database.migrate().await.unwrap();
     let mapping = database.get_port_mapping(uuid::Uuid::nil()).await.unwrap();
-    assert_eq!(mapping.subdomain, "p-00000000000000000000000000000000");
+    assert_eq!(mapping.subdomain, "00000000000000000000000000000000");
+    assert_eq!(
+        mapping.hostname("apps.example"),
+        "p-00000000000000000000000000000000.apps.example"
+    );
     assert_eq!(mapping.internal_port, 3000);
     let claim_owner: String = match database {
-        Database::Sqlite { pool, .. } => sqlx::query_scalar("SELECT workspace_id FROM workspace_port_subdomain_claims WHERE subdomain = 'p-00000000000000000000000000000000'").fetch_one(pool).await.unwrap(),
-        Database::Postgres { pool, .. } => sqlx::query_scalar("SELECT workspace_id FROM workspace_port_subdomain_claims WHERE subdomain = 'p-00000000000000000000000000000000'").fetch_one(pool).await.unwrap(),
+        Database::Sqlite { pool, .. } => sqlx::query_scalar("SELECT workspace_id FROM workspace_port_subdomain_claims WHERE subdomain = '00000000000000000000000000000000'").fetch_one(pool).await.unwrap(),
+        Database::Postgres { pool, .. } => sqlx::query_scalar("SELECT workspace_id FROM workspace_port_subdomain_claims WHERE subdomain = '00000000000000000000000000000000'").fetch_one(pool).await.unwrap(),
     };
     assert_eq!(claim_owner, mapping.workspace_id.to_string());
     assert_eq!(mapping.display_name.as_deref(), Some("Preserved mapping"));

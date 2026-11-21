@@ -29,10 +29,10 @@ for (const rendered of [enabled, disabled]) {
   assert.deepEqual(rule.domain, ["*.example.com"]);
   assert.equal(rule.config.failure_mode_allow, false);
   assert.deepEqual(rule.config.match_list, [{
-    match_rule_domain: "*.example.com",
+    match_rule_domain: "p-*.example.com",
     match_rule_path: "/",
     match_rule_type: "prefix",
-  }], "custom labels must have the same authentication coverage as generated labels");
+  }], "custom mapping labels require authentication without intercepting other services sharing the suffix");
 }
 for (const document of [...enabled, ...disabled]) {
   if (document.kind === "ClusterRole") {

@@ -93,7 +93,7 @@ pub fn name(mapping: &PortMapping) -> String {
 }
 
 /// Requires a wildcard DNS record and wildcard TLS certificate for
-/// `*.{wildcard_domain}`. The persisted single DNS label is shared with the API
+/// `*.{wildcard_domain}`. The reserved p- prefix and persisted short label are shared with the API
 /// and authorization lookup. Resource names remain UUID-derived.
 pub fn hostname(mapping: &PortMapping, wildcard_domain: &str) -> String {
     mapping.hostname(wildcard_domain)
@@ -182,12 +182,12 @@ mod tests {
         let ingress_spec = ingress.spec.unwrap();
         assert_eq!(
             ingress_spec.rules.unwrap()[0].host.as_deref(),
-            Some("preview.ports.example.test")
+            Some("p-preview.ports.example.test")
         );
         let tls = &ingress_spec.tls.unwrap()[0];
         assert_eq!(
             tls.hosts.as_deref(),
-            Some(["preview.ports.example.test".to_owned()].as_slice())
+            Some(["p-preview.ports.example.test".to_owned()].as_slice())
         );
         assert_eq!(tls.secret_name.as_deref(), Some("mwc-port-mapping-tls"));
     }

@@ -117,9 +117,10 @@ fn subdomain_from_host(headers: &HeaderMap, domain: &str) -> Result<String, ApiE
     let suffix = format!(".{}", domain.to_ascii_lowercase());
     let label = hostname
         .strip_suffix(&suffix)
+        .and_then(|label| label.strip_prefix("p-"))
         .ok_or(ApiError::Unauthorized)?;
     if label.is_empty()
-        || label.len() > 63
+        || label.len() > 61
         || !label
             .as_bytes()
             .first()
@@ -176,9 +177,9 @@ mod tests {
     #[test]
     fn custom_hosts_require_the_exact_public_suffix_and_one_dns_label() {
         for host in [
-            "preview.apps.example",
-            "PREVIEW.apps.example:443",
-            "preview.apps.example.",
+            "p-preview.apps.example",
+            "P-PREVIEW.apps.example:443",
+            "p-preview.apps.example.",
         ] {
             let mut headers = HeaderMap::new();
             headers.insert("x-forwarded-host", host.parse().unwrap());
@@ -189,13 +190,16 @@ mod tests {
         }
         for host in [
             "apps.example",
-            "preview.evil.example",
-            "preview.apps.example.evil",
-            "nested.preview.apps.example",
-            "-preview.apps.example",
-            "preview-.apps.example",
-            "preview_.apps.example",
-            "preview.apps.example:garbage",
+            "preview.apps.example",
+            "wiki.apps.example",
+            "harbor.apps.example",
+            "p-preview.evil.example",
+            "p-preview.apps.example.evil",
+            "nested.p-preview.apps.example",
+            "p--preview.apps.example",
+            "p-preview-.apps.example",
+            "p-preview_.apps.example",
+            "p-preview.apps.example:garbage",
         ] {
             let mut headers = HeaderMap::new();
             headers.insert("x-forwarded-host", host.parse().unwrap());
