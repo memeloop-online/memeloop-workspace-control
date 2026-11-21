@@ -27,12 +27,18 @@ pub(in crate::api) async fn authorize(
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     verify_internal_caller(&state, &headers)?;
-    let mapping_id = mapping_id_from_host(&headers, &state)?;
+    let domain = state
+        .config
+        .port_mapping_public_domain
+        .as_deref()
+        .ok_or(ApiError::Unauthorized)?;
+    let subdomain = subdomain_from_host(&headers, domain)?;
     let mapping = state
         .database
-        .get_port_mapping(mapping_id)
+        .get_port_mapping_by_subdomain(&subdomain)
         .await
         .map_err(|_| ApiError::Unauthorized)?;
+    let mapping_id = mapping.id;
     let workspace = state
         .database
         .get_workspace(mapping.workspace_id)
@@ -96,28 +102,40 @@ async fn exchange_ticket(
     Ok(response)
 }
 
-fn mapping_id_from_host(headers: &HeaderMap, state: &AppState) -> Result<Uuid, ApiError> {
+fn subdomain_from_host(headers: &HeaderMap, domain: &str) -> Result<String, ApiError> {
     let host = headers
         .get("x-forwarded-host")
         .or_else(|| headers.get("host"))
-        .and_then(|v| v.to_str().ok())
+        .and_then(|value| value.to_str().ok())
         .ok_or(ApiError::Unauthorized)?;
-    let suffix = state
-        .config
-        .port_mapping_public_domain
-        .as_deref()
+    let hostname = match host.split_once(':') {
+        Some((hostname, port)) if port.parse::<u16>().is_ok() => hostname,
+        Some(_) => return Err(ApiError::Unauthorized),
+        None => host,
+    };
+    let hostname = hostname.trim_end_matches('.').to_ascii_lowercase();
+    let suffix = format!(".{}", domain.to_ascii_lowercase());
+    let label = hostname
+        .strip_suffix(&suffix)
+        .and_then(|label| label.strip_prefix("p-"))
         .ok_or(ApiError::Unauthorized)?;
-    let normalized = host
-        .trim_end_matches('.')
-        .split_once(':')
-        .map_or(host, |(hostname, _)| hostname)
-        .to_ascii_lowercase();
-    let value = normalized
-        .trim_end_matches('.')
-        .strip_suffix(&format!(".{suffix}"))
-        .and_then(|v| v.strip_prefix("p-"))
-        .ok_or(ApiError::Unauthorized)?;
-    Uuid::parse_str(value).map_err(|_| ApiError::Unauthorized)
+    if label.is_empty()
+        || label.len() > 61
+        || !label
+            .as_bytes()
+            .first()
+            .is_some_and(u8::is_ascii_alphanumeric)
+        || !label
+            .as_bytes()
+            .last()
+            .is_some_and(u8::is_ascii_alphanumeric)
+        || !label
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || c == b'-')
+    {
+        return Err(ApiError::Unauthorized);
+    }
+    Ok(label.to_owned())
 }
 
 fn verify_internal_caller(state: &AppState, headers: &HeaderMap) -> Result<(), ApiError> {
@@ -155,6 +173,42 @@ fn cookie<'a>(headers: &'a HeaderMap, wanted: &str) -> Option<&'a str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn custom_hosts_require_the_exact_public_suffix_and_one_dns_label() {
+        for host in [
+            "p-preview.apps.example",
+            "P-PREVIEW.apps.example:443",
+            "p-preview.apps.example.",
+        ] {
+            let mut headers = HeaderMap::new();
+            headers.insert("x-forwarded-host", host.parse().unwrap());
+            assert_eq!(
+                subdomain_from_host(&headers, "apps.example").unwrap(),
+                "preview"
+            );
+        }
+        for host in [
+            "apps.example",
+            "preview.apps.example",
+            "wiki.apps.example",
+            "harbor.apps.example",
+            "p-preview.evil.example",
+            "p-preview.apps.example.evil",
+            "nested.p-preview.apps.example",
+            "p--preview.apps.example",
+            "p-preview-.apps.example",
+            "p-preview_.apps.example",
+            "p-preview.apps.example:garbage",
+        ] {
+            let mut headers = HeaderMap::new();
+            headers.insert("x-forwarded-host", host.parse().unwrap());
+            assert!(
+                subdomain_from_host(&headers, "apps.example").is_err(),
+                "{host}"
+            );
+        }
+    }
 
     #[test]
     fn ticket_and_cookie_parsing_do_not_accept_near_matches() {

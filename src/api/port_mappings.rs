@@ -14,7 +14,7 @@ use uuid::Uuid;
 
 use crate::{
     auth::Permission,
-    storage::{IdempotencyDecision, NewJob, PortMapping, StorageError, validate_http_port},
+    storage::{IdempotencyDecision, NewJob, PortMapping, StorageError},
 };
 
 use super::{
@@ -34,6 +34,7 @@ pub(super) use auth::authorize;
 pub(super) struct CreatePortMappingRequest {
     pub internal_port: u16,
     pub display_name: Option<String>,
+    pub subdomain: Option<String>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -41,6 +42,7 @@ pub(super) struct PortMappingResponse {
     pub id: Uuid,
     pub internal_port: u16,
     pub display_name: Option<String>,
+    pub subdomain: String,
     pub status: &'static str,
     /// Whether this mapping is owned by the workspace controller rather than
     /// the user. Controller-owned mappings cannot be created or deleted by the
@@ -110,8 +112,6 @@ pub(super) async fn create(
     Path(workspace_id): Path<Uuid>,
     Json(request): Json<CreatePortMappingRequest>,
 ) -> Result<Response, ApiError> {
-    validate_http_port(request.internal_port)
-        .map_err(|_| ApiError::BadRequest("port is not an allowed workspace HTTP port"))?;
     let actor = principal(&state, &headers).await?;
     let workspace = state.database.get_workspace(workspace_id).await?;
     if !actor.allows(Permission::ConnectWorkspace, workspace.organization_id)
@@ -161,6 +161,7 @@ pub(super) async fn create(
                 workspace.id,
                 request.internal_port,
                 request.display_name.as_deref(),
+                request.subdomain.as_deref(),
                 actor.user_id,
                 now,
             )
@@ -252,10 +253,11 @@ pub(super) async fn update(
             mapping_id,
             request.internal_port,
             request.display_name.as_deref(),
+            request.subdomain.as_deref(),
         )
         .await?;
     let now = unix_timestamp()?;
-    if current.internal_port != mapping.internal_port {
+    if current.internal_port != mapping.internal_port || current.subdomain != mapping.subdomain {
         enqueue_reconcile(&state, workspace.id, workspace.generation, now).await?;
     }
     state
@@ -269,7 +271,8 @@ pub(super) async fn update(
             now,
         )
         .await?;
-    let status = if current.internal_port != mapping.internal_port
+    let status = if (current.internal_port != mapping.internal_port
+        || current.subdomain != mapping.subdomain)
         && workspace.state == crate::workspaces::WorkspaceState::Ready
     {
         "provisioning"
@@ -379,7 +382,7 @@ pub(super) async fn delete(
 
 fn mapping_origin(state: &AppState, mapping: &PortMapping) -> Result<String, ApiError> {
     let domain = mapping_domain(state)?;
-    Ok(format!("https://p-{}.{}", mapping.id.simple(), domain))
+    Ok(format!("https://{}", mapping.hostname(domain)))
 }
 
 pub(super) fn mapping_https_url(
@@ -428,6 +431,7 @@ pub(super) fn response(
         id: mapping.id,
         internal_port: mapping.internal_port,
         display_name: mapping.display_name.clone(),
+        subdomain: mapping.subdomain.clone(),
         status,
         managed: matches!(purpose, PortMappingPurpose::Desktop),
         purpose,
@@ -503,6 +507,15 @@ pub(super) async fn mapping_status(
                 .is_some_and(|rules| {
                     rules
                         .iter()
+                        .filter(|rule| {
+                            state
+                                .config
+                                .port_mapping_public_domain
+                                .as_deref()
+                                .is_some_and(|domain| {
+                                    rule.host.as_deref() == Some(mapping.hostname(domain).as_str())
+                                })
+                        })
                         .filter_map(|rule| rule.http.as_ref())
                         .flat_map(|http| &http.paths)
                         .any(|path| {
@@ -598,6 +611,7 @@ mod tests {
             workspace_id: workspace.id,
             internal_port: 6901,
             display_name: Some("Browser desktop".to_owned()),
+            subdomain: "desktop-test".to_owned(),
             created_by: workspace.owner_id,
             created_at: 1,
         };

@@ -254,6 +254,7 @@ async fn port_mapping_policy_uses_the_same_spec_only_refresh() {
         workspace_id: workspace.id,
         internal_port: 3000,
         display_name: None,
+        subdomain: "network-test".to_owned(),
         created_by: workspace.owner_id,
         created_at: 1,
     };

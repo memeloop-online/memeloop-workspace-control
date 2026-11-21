@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import { test } from "node:test";
 import { chromium } from "playwright-core";
 
@@ -24,7 +24,7 @@ function item(id, state) {
 test("workspace settings and mapping editing retain drafts, stable addresses and current generations", { timeout: 120_000 }, async () => {
   const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_BIN || chromium.executablePath(), headless: true, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
   const workspaces = [item("ready-workspace", "ready"), item("stopped-workspace", "stopped")];
-  const mappings = [{ id: "mapping-one", internal_port: 3000, display_name: "Application", status: "stopped", managed: false, purpose: "user", https_url: "https://p-mapping-one.example.test" }];
+  const mappings = [{ id: "mapping-one", internal_port: 3000, display_name: "Application", subdomain: "mapping-one", status: "stopped", managed: false, purpose: "user", https_url: "https://p-mapping-one.example.test" }];
   const writes = [];
   const unexpected = [];
   const errors = [];
@@ -57,6 +57,15 @@ test("workspace settings and mapping editing retain drafts, stable addresses and
         else if (path === "/api/v1/node-pools") body = [{ name: "default", display_name: "Default" }];
         else if (path.endsWith("/port-mappings")) body = mappings;
         else if (path.startsWith("/api/v1/injections/") || path === "/api/v1/me/api-keys") body = [];
+      } else if (request.method() === "POST") {
+        const input = request.postDataJSON();
+        writes.push({ path, input });
+        assert.ok(request.headers()["idempotency-key"]);
+        if (path.endsWith("/port-mappings")) {
+          const label = input.subdomain ?? "1a2b3c4d";
+          body = { id: "mapping-created", internal_port: input.internal_port, display_name: input.display_name ?? null, subdomain: label, status: "ready", managed: false, purpose: "user", https_url: `https://p-${label}.example.test` };
+          mappings.push(body);
+        }
       } else if (request.method() === "PUT") {
         const input = request.postDataJSON();
         writes.push({ path, input });
@@ -77,7 +86,13 @@ test("workspace settings and mapping editing retain drafts, stable addresses and
             body = target;
           }
         } else if (path.endsWith("/port-mappings/mapping-one")) {
-          Object.assign(mappings[0], input); body = mappings[0];
+          if (input.subdomain === "taken-label") {
+            status = 409; body = { error: { code: "subdomain_conflict", message: "label already taken" } };
+          } else {
+            const label = input.subdomain ?? mappings[0].subdomain;
+            Object.assign(mappings[0], input, { subdomain: label, https_url: `https://p-${label}.example.test` });
+            body = mappings[0];
+          }
         }
       }
       if (body === undefined) { unexpected.push(`${request.method()} ${path}`); status = 501; }
@@ -110,8 +125,13 @@ test("workspace settings and mapping editing retain drafts, stable addresses and
 
     await page.getByRole("group", { name: "stopped-workspace", exact: true }).getByRole("button", { name: messages.portMappings, exact: true }).click();
     dialog = page.getByRole("dialog");
+    await dialog.getByText("MWC_PORT_MAPPINGS_FILE", { exact: true }).waitFor();
+    await dialog.getByText("MWC_PORT_MAPPINGS_JSON", { exact: true }).waitFor();
+    await dialog.getByText('cat "$MWC_PORT_MAPPINGS_FILE"', { exact: true }).waitFor();
     await dialog.getByRole("button", { name: messages.edit, exact: true }).click();
     const name = dialog.getByLabel(messages.displayNameOptional, { exact: true });
+    const subdomain = dialog.getByLabel(messages.portMappingSubdomainOptional, { exact: true });
+    assert.equal(await subdomain.inputValue(), "mapping-one");
     await name.fill("名".repeat(81));
     assert.equal(await dialog.getByRole("button", { name: messages.saveMapping, exact: true }).isDisabled(), true);
     await name.fill("名".repeat(80));
@@ -120,12 +140,55 @@ test("workspace settings and mapping editing retain drafts, stable addresses and
     await dialog.getByRole("button", { name: messages.edit, exact: true }).click();
     await dialog.getByLabel(messages.internalPort, { exact: true }).fill("4000");
     await name.fill("");
+    await subdomain.fill("");
     await dialog.getByRole("button", { name: messages.saveMapping, exact: true }).click();
     await dialog.getByText("4000", { exact: true }).waitFor();
     assert.equal(mappings[0].id, "mapping-one");
     assert.equal(mappings[0].https_url, "https://p-mapping-one.example.test");
     assert.equal(mappings[0].display_name, null);
+    const mappingWrites = writes.filter(({ path }) => path.endsWith("/port-mappings/mapping-one"));
+    assert.equal(mappingWrites[0].input.subdomain, "mapping-one");
+    assert.equal("subdomain" in mappingWrites[mappingWrites.length - 1].input, false);
+    assert.equal(mappings[0].subdomain, "mapping-one");
     assert.equal(await dialog.getByRole("button", { name: messages.open, exact: true }).isDisabled(), true);
+
+    await dialog.getByRole("button", { name: messages.edit, exact: true }).click();
+    await subdomain.fill("taken-label");
+    await dialog.getByRole("button", { name: messages.saveMapping, exact: true }).click();
+    await dialog.getByText(messages.portMappingSubdomainConflict, { exact: true }).waitFor();
+    assert.equal(await subdomain.inputValue(), "taken-label");
+    await subdomain.fill("  Neat-Label  ");
+    await Promise.all([page.waitForResponse((response) => response.url().endsWith("/port-mappings/mapping-one") && response.status() === 200), dialog.getByRole("button", { name: messages.saveMapping, exact: true }).click()]);
+    await dialog.getByText("https://p-neat-label.example.test", { exact: true }).waitFor();
+    const labelWrites = writes.filter(({ path }) => path.endsWith("/port-mappings/mapping-one"));
+    assert.equal(labelWrites[labelWrites.length - 1].input.subdomain, "neat-label");
+    assert.equal(mappings[0].https_url, "https://p-neat-label.example.test");
+    assert.equal(await dialog.getByRole("button", { name: messages.open, exact: true }).isDisabled(), true);
+    if (process.env.RUNNER_TEMP) {
+      const screenshotDir = `${process.env.RUNNER_TEMP}/mwc-settings-screenshots`;
+      await mkdir(screenshotDir, { recursive: true });
+      await dialog.screenshot({ path: `${screenshotDir}/port-mapping-domains.png` });
+    }
+
+    await dialog.getByRole("button", { name: messages.edit, exact: true }).click();
+    await subdomain.fill("bad_label");
+    await dialog.getByText(messages.portMappingSubdomainInvalid, { exact: true }).waitFor();
+    assert.equal(await dialog.getByRole("button", { name: messages.saveMapping, exact: true }).isDisabled(), true);
+    const beforeInvalidWrites = writes.length;
+    await subdomain.press("Enter");
+    assert.equal(writes.length, beforeInvalidWrites);
+    await dialog.getByRole("button", { name: messages.close, exact: true }).click();
+
+    await page.getByRole("group", { name: "支付工作区", exact: true }).getByRole("button", { name: messages.portMappings, exact: true }).click();
+    dialog = page.getByRole("dialog");
+    await dialog.getByText('cat "$MWC_PORT_MAPPINGS_FILE"', { exact: true }).waitFor();
+    await dialog.getByLabel(messages.internalPort, { exact: true }).fill("5000");
+    await Promise.all([page.waitForResponse((response) => response.url().endsWith("/port-mappings") && response.request().method() === "POST" && response.status() === 200), dialog.getByRole("button", { name: messages.addMapping, exact: true }).click()]);
+    await dialog.getByText("https://p-1a2b3c4d.example.test", { exact: true }).waitFor();
+    const createWrite = writes[writes.length - 1];
+    assert.equal(createWrite.input.internal_port, 5000);
+    assert.equal("subdomain" in createWrite.input, false);
+    assert.equal("display_name" in createWrite.input, false);
     assert.deepEqual(unexpected, []);
     assert.deepEqual(errors, []);
     assert.equal(writes.filter(({ path }) => path.endsWith("/temporary-storage"))[0].input.expected_generation, 2);

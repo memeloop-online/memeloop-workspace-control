@@ -28,6 +28,7 @@ fn configured() -> (ResourceBuilder, Workspace, PortMapping) {
         workspace_id: workspace.id,
         internal_port: 3000,
         display_name: None,
+        subdomain: "proxy-test".to_owned(),
         created_by: workspace.owner_id,
         created_at: 1,
     };

@@ -19,6 +19,21 @@ function permitsFilters(rule: { apiGroups?: string[]; resources?: string[] }) {
 
 const enabled = documents(enabledPath);
 const disabled = documents(disabledPath);
+for (const rendered of [enabled, disabled]) {
+  const rules = rendered.filter((document) => document.kind === "WasmPlugin")
+    .flatMap((document) => document.spec?.matchRules ?? []);
+  const mappingRules = rules.filter((rule) => rule.config?.http_service?.endpoint?.path
+    === "/api/v1/internal/port-mappings/authorize");
+  assert.equal(mappingRules.length, 1, "port mappings need exactly one authentication rule");
+  const rule = mappingRules[0];
+  assert.deepEqual(rule.domain, ["*.example.com"]);
+  assert.equal(rule.config.failure_mode_allow, false);
+  assert.deepEqual(rule.config.match_list, [{
+    match_rule_domain: "p-*.example.com",
+    match_rule_path: "/",
+    match_rule_type: "prefix",
+  }], "custom mapping labels require authentication without intercepting other services sharing the suffix");
+}
 for (const document of [...enabled, ...disabled]) {
   if (document.kind === "ClusterRole") {
     assert(!document.rules?.some(permitsFilters), "gateway filter permissions must not be cluster-wide");

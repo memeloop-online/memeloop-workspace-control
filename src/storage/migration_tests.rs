@@ -15,7 +15,7 @@ async fn fresh_sqlite_bootstraps_current_schema_and_reaccepts_it() {
 
 #[tokio::test]
 async fn unsupported_sqlite_versions_are_rejected_without_conversion() {
-    for version in (0..schema::SCHEMA_VERSION).chain([schema::SCHEMA_VERSION + 1]) {
+    for version in (0..31).chain([schema::SCHEMA_VERSION + 1]) {
         let database = Database::connect("sqlite::memory:", "schema-test".parse().unwrap())
             .await
             .unwrap();
@@ -59,7 +59,7 @@ async fn postgres_accepts_only_fresh_or_current_schema_when_configured() {
     );
     fresh.migrate().await.unwrap();
     drop(fresh);
-    for version in (0..schema::SCHEMA_VERSION).chain([schema::SCHEMA_VERSION + 1]) {
+    for version in (0..31).chain([schema::SCHEMA_VERSION + 1]) {
         let name = format!("mwc_schema_old_{}", uuid::Uuid::now_v7().simple());
         let database = postgres_database(&url, &name, Some(version)).await;
         assert!(matches!(
@@ -166,3 +166,6 @@ async fn unversioned_nonempty_sqlite_database_is_rejected() {
 
 #[path = "migration_tests/cpu_settings.rs"]
 mod cpu_settings;
+
+#[path = "migration_tests/port_subdomains.rs"]
+mod port_subdomains;

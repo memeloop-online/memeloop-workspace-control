@@ -1,6 +1,8 @@
 #!/bin/sh
 set -eu
 
+export MWC_PORT_MAPPINGS_FILE=/etc/workspace-platform/port-mappings.json
+
 workspace_user=${MWC_WORKSPACE_USER:-workspace}
 workspace_root=${MWC_WORKSPACE_HOME:-/workspace}
 workspace_group=$(id -gn "$workspace_user")
@@ -428,6 +430,16 @@ prepare_runtime_sshd_config() (
         escaped=$(printf 'RUSTUP_HOME=%s' "$RUSTUP_HOME" | sed 's/\\/\\\\/g; s/"/\\"/g')
         assignments="$assignments \"$escaped\""
     fi
+    port_mappings_file=/etc/workspace-platform/port-mappings.json
+    port_mappings_json='[]'
+    if [ -r "$port_mappings_file" ]; then
+        port_mappings_json=$(jq -c . "$port_mappings_file")
+    fi
+    # The file updates through its projected ConfigMap; JSON is a per-login snapshot.
+    # Replace existing platform assignments before merging into the single SetEnv line.
+    assignments=$(printf '%s' "$assignments" | sed 's/ "MWC_PORT_MAPPINGS_FILE=[^"]*"//g')
+    escaped=$(printf 'MWC_PORT_MAPPINGS_JSON=%s' "$port_mappings_json" | sed 's/\\/\\\\/g; s/"/\\"/g')
+    assignments="$assignments \"MWC_PORT_MAPPINGS_FILE=$port_mappings_file\" \"$escaped\""
     if [ -r "$environment_manifest" ]; then
         # These three nonempty metadata fields are generated identifiers, never values.
         # Parse the complete list before consuming it so jq failures cannot be hidden.
@@ -437,7 +449,7 @@ prepare_runtime_sshd_config() (
     tab=$(printf '\t')
     while IFS="$tab" read -r name object data_key; do
         case "$name" in
-            PATH|HOME|RUSTUP_HOME|CARGO_HOME|NPM_CONFIG_CACHE|TMPDIR|TMP|TEMP|XDG_CACHE_HOME|CARGO_TARGET_DIR|MWC_WORKSPACE_USER|MWC_WORKSPACE_HOME|MWC_IN_CLUSTER_KUBECONFIG|MWC_BUILDKIT_ENABLED|MWC_BUILD_SCRATCH|MWC_HOME_RESERVE_MIB|MWC_DESKTOP_ENABLED|MWC_DESKTOP_PORT)
+            PATH|HOME|RUSTUP_HOME|CARGO_HOME|NPM_CONFIG_CACHE|TMPDIR|TMP|TEMP|XDG_CACHE_HOME|CARGO_TARGET_DIR|MWC_WORKSPACE_USER|MWC_WORKSPACE_HOME|MWC_IN_CLUSTER_KUBECONFIG|MWC_BUILDKIT_ENABLED|MWC_BUILD_SCRATCH|MWC_HOME_RESERVE_MIB|MWC_DESKTOP_ENABLED|MWC_DESKTOP_PORT|MWC_PORT_MAPPINGS_FILE|MWC_PORT_MAPPINGS_JSON)
                 continue
                 ;;
             KUBECONFIG)
