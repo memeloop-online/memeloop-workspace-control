@@ -11,7 +11,7 @@ permissions:
   actions: read
   packages: read
 env:
-  WRAPPER_SHA: 18b9e8ad3c461554d84746fccea4240597114107
+  WRAPPER_SHA: 136108ec63ee4e64db97c56a34f041afa57fa7ee
 jobs:
   build-inputs:
     name: Compile and verify CSI inputs
@@ -40,15 +40,15 @@ jobs:
         run: |
           release="$RUNNER_TEMP/wrapper-release"
           mkdir -p "$release" "$RUNNER_TEMP/product-storage-bin"
-          gh api repos/memeloop-online/memeloop-workspace-control/actions/artifacts/13294234740/zip > "$RUNNER_TEMP/wrapper-release.zip"
-          echo "067ee972868e0e95a33574271636694b1d2939c71e9bd62c7aae91f52d67ee8d  $RUNNER_TEMP/wrapper-release.zip" | sha256sum -c -
-          test "$(stat -c %s "$RUNNER_TEMP/wrapper-release.zip")" = 4735882
+          gh api repos/memeloop-online/memeloop-workspace-control/actions/artifacts/14678363061/zip > "$RUNNER_TEMP/wrapper-release.zip"
+          echo "3e2eeaccd437fef8a8ee56cf41da630f316e37a64009cdf1f19de2023abc1ea2  $RUNNER_TEMP/wrapper-release.zip" | sha256sum -c -
+          test "$(stat -c %s "$RUNNER_TEMP/wrapper-release.zip")" = 4833551
           unzip -q "$RUNNER_TEMP/wrapper-release.zip" -d "$release"
           test "$(find "$release" -type f | wc -l)" = 4
           (cd "$release" && sha256sum -c SHA256SUMS)
-          echo "79f8b2f0ba17f6b2df647908af438fe939602fce5bd86cd1a44f1927ed32e852  $release/mwc-runtime-wrapper" | sha256sum -c -
-          echo "bc1daf24021f6533513fbc2dfd0c691739fde2b286abcf432cf9c545bdd5d131  $release/mwc-runsc-wrapper" | sha256sum -c -
-          jq -e --arg sha "$WRAPPER_SHA" '.source_sha==$sha and .run_id=="41770885611" and .run_attempt=="1" and .platform=="linux/amd64" and .variants==["native","runsc"]' "$release/artifact-identity.json"
+          echo "ca60f3b1809fa698add515cd75d78bd5468c06e161004df6ceb3fd93aa31d23a  $release/mwc-runtime-wrapper" | sha256sum -c -
+          echo "c33152737b103032ba4396d880a8be3d331e56bce4ee525a9cd6440dfc02234c  $release/mwc-runsc-wrapper" | sha256sum -c -
+          jq -e --arg sha "$WRAPPER_SHA" '.source_sha==$sha and .run_id=="44836913269" and .run_attempt=="1" and .platform=="linux/amd64" and .variants==["native","runsc"]' "$release/artifact-identity.json"
           cp "$release/mwc-runtime-wrapper" "$release/mwc-runsc-wrapper" "$RUNNER_TEMP/product-storage-bin/"
       - name: Build exact renderer fixtures and probe (CI only)
         run: |
@@ -67,7 +67,7 @@ jobs:
           cp "$RUNNER_TEMP/wrapper-release/"{SHA256SUMS,artifact-identity.json} input-bundle/wrapper-release/
           jq -n --arg renderer "$PRODUCT_RENDERER_SHA" --arg wrapper "$WRAPPER_SHA" \
             --arg harness "$(git rev-parse HEAD)" --arg run "$GITHUB_RUN_ID" --arg attempt "$GITHUB_RUN_ATTEMPT" \
-            '{renderer_sha:$renderer,wrapper_sha:$wrapper,harness_sha:$harness,run_id:$run,run_attempt:$attempt,wrapper_artifact:{run_id:"41770885611",run_attempt:"1",artifact_id:13294234740,artifact_zip_sha256:"067ee972868e0e95a33574271636694b1d2939c71e9bd62c7aae91f52d67ee8d"}}' > input-bundle/source-shas.json
+            '{renderer_sha:$renderer,wrapper_sha:$wrapper,harness_sha:$harness,run_id:$run,run_attempt:$attempt,wrapper_artifact:{run_id:"44836913269",run_attempt:"1",artifact_id:14678363061,artifact_zip_sha256:"3e2eeaccd437fef8a8ee56cf41da630f316e37a64009cdf1f19de2023abc1ea2"}}' > input-bundle/source-shas.json
           (cd input-bundle && sha256sum bin/* fixtures/* wrapper-release/* source-shas.json > SHA256SUMS)
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
