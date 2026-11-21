@@ -3,8 +3,11 @@ package main
 import (
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 )
 
 // Only the exact shim and dedicated TOML options are supported. The original
@@ -139,9 +142,9 @@ func parseRunscArgs(args []string) (invocation, error) {
 
 func validateRunscSpec(c config, s spec) error {
 	// The exact shim synthesizes these four hints for existing shared-memory
-	// semantics. They authorize only its one /dev/shm tmpfs, never a disk hint.
+	// semantics, including the size of its actual host tmpfs. Never accept a
+	// caller-selected size, a disk source, or the previous unbounded hint.
 	const shmPrefix = "dev.gvisor.spec.mount.gvisorinternaldevshm."
-	shm := map[string]string{shmPrefix + "source": "", shmPrefix + "type": "tmpfs", shmPrefix + "share": "pod", shmPrefix + "options": "rw"}
 	shmFields := 0
 	for key := range s.Annotations {
 		if strings.HasPrefix(key, shmPrefix) {
@@ -150,30 +153,20 @@ func validateRunscSpec(c config, s spec) error {
 	}
 	if shmFields != 0 {
 		id := s.Annotations["io.kubernetes.cri.sandbox-id"]
-		if s.Annotations["io.kubernetes.cri.container-type"] != "sandbox" || !idRE.MatchString(id) || shmFields != len(shm) {
+		if s.Annotations["io.kubernetes.cri.container-type"] != "sandbox" || !idRE.MatchString(id) || shmFields != 4 {
 			return errors.New("unsupported runsc shared-memory hints")
 		}
-		shm[shmPrefix+"source"] = filepath.Join(c.CRIStateRoot, "sandboxes", id, "shm")
-		for key, expected := range shm {
-			if s.Annotations[key] != expected {
-				return fmt.Errorf("unsupported runsc shared-memory hint %s", key)
-			}
+		source := filepath.Join(c.CRIStateRoot, "sandboxes", id, "shm")
+		size, err := runscShmSize(source)
+		if err != nil {
+			return err
 		}
-		count := 0
-		for _, m := range s.Mounts {
-			if m.Destination == "/dev/shm" {
-				count++
-				if m.Type != "tmpfs" || m.Source != shm[shmPrefix+"source"] {
-					return errors.New("runsc shared-memory hints differ from tmpfs mount")
-				}
-			}
-		}
-		if count != 1 {
-			return errors.New("runsc requires exactly one shared-memory tmpfs")
+		if err := validateRunscShmHints(c, s, size); err != nil {
+			return err
 		}
 	}
 	for key := range s.Annotations {
-		if _, builtin := shm[key]; builtin && shmFields != 0 {
+		if strings.HasPrefix(key, shmPrefix) && shmFields != 0 {
 			continue
 		}
 		for _, prefix := range []string{"dev.gvisor.spec.rootfs.", "dev.gvisor.spec.mount.", "dev.gvisor.flag.", "dev.gvisor.bundle."} {
@@ -181,6 +174,114 @@ func validateRunscSpec(c config, s spec) error {
 				return fmt.Errorf("unsupported runsc override annotation %s", key)
 			}
 		}
+	}
+	return nil
+}
+
+// Only this fixed CRI leaf may be writable: containerd creates shm as tmpfs
+// mode 1777. Its parent remains protected and every open is no-follow.
+func runscShmSize(source string) (uint64, error) {
+	parent, err := openTrusted(filepath.Dir(source), true)
+	if err != nil {
+		return 0, err
+	}
+	defer parent.Close()
+	fd, err := syscall.Openat(int(parent.Fd()), "shm", syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
+	if err != nil {
+		return 0, err
+	}
+	f := os.NewFile(uintptr(fd), source)
+	defer f.Close()
+	var st syscall.Stat_t
+	if err := syscall.Fstat(fd, &st); err != nil || st.Uid != 0 {
+		return 0, errors.New("untrusted runsc shared-memory root")
+	}
+	all, err := mounts()
+	if err != nil {
+		return 0, err
+	}
+	m, err := atMount(all, source)
+	if err != nil || m.FS != "tmpfs" || m.Root != "/" || m.Device != device(st.Dev) {
+		return 0, errors.New("runsc shared-memory source is not its actual tmpfs mount")
+	}
+	var fs syscall.Statfs_t
+	if err := syscall.Fstatfs(fd, &fs); err != nil {
+		return 0, err
+	}
+	current, err := openPath(source, true)
+	if err != nil {
+		return 0, err
+	}
+	defer current.Close()
+	var now syscall.Stat_t
+	if err := syscall.Fstat(int(current.Fd()), &now); err != nil || now.Dev != st.Dev || now.Ino != st.Ino {
+		return 0, errors.New("runsc shared-memory directory changed")
+	}
+	// Match both the held capacity FD and the current path to this exact
+	// mount ID; an overmount of the same tmpfs device/inode is insufficient.
+	for _, root := range []*os.File{f, current} {
+		info, err := os.ReadFile(fmt.Sprintf("/proc/self/fdinfo/%d", root.Fd()))
+		if err != nil {
+			return 0, err
+		}
+		id := 0
+		for _, line := range strings.Split(string(info), "\n") {
+			if strings.HasPrefix(line, "mnt_id:") {
+				if _, err = fmt.Sscanf(line, "mnt_id: %d", &id); err != nil {
+					return 0, err
+				}
+			}
+		}
+		if id == 0 || id != m.ID {
+			return 0, errors.New("runsc shared-memory mount identity changed")
+		}
+	}
+	return runscShmBytes(fs)
+}
+
+func runscShmBytes(fs syscall.Statfs_t) (uint64, error) {
+	const tmpfsMagic = 0x01021994
+	blockSize := fs.Frsize
+	if blockSize == 0 {
+		blockSize = fs.Bsize
+	}
+	if fs.Type != tmpfsMagic || blockSize <= 0 || fs.Blocks == 0 || fs.Blocks > ^uint64(0)/uint64(blockSize) {
+		return 0, errors.New("runsc shared-memory tmpfs must have a finite size")
+	}
+	return fs.Blocks * uint64(blockSize), nil
+}
+
+func validateRunscShmHints(c config, s spec, size uint64) error {
+	const prefix = "dev.gvisor.spec.mount.gvisorinternaldevshm."
+	id := s.Annotations["io.kubernetes.cri.sandbox-id"]
+	if size == 0 || !idRE.MatchString(id) || s.Annotations["io.kubernetes.cri.container-type"] != "sandbox" {
+		return errors.New("unsupported runsc shared-memory hints")
+	}
+	source := filepath.Join(c.CRIStateRoot, "sandboxes", id, "shm")
+	expected := map[string]string{prefix + "source": source, prefix + "type": "tmpfs", prefix + "share": "pod", prefix + "options": "rw,size=" + strconv.FormatUint(size, 10)}
+	fields := 0
+	for key, value := range s.Annotations {
+		if strings.HasPrefix(key, prefix) {
+			fields++
+			if want, ok := expected[key]; !ok || value != want {
+				return fmt.Errorf("unsupported runsc shared-memory hint %s", key)
+			}
+		}
+	}
+	if fields != len(expected) {
+		return errors.New("unsupported runsc shared-memory hints")
+	}
+	count := 0
+	for _, m := range s.Mounts {
+		if m.Destination == "/dev/shm" {
+			count++
+			if m.Type != "tmpfs" || m.Source != source {
+				return errors.New("runsc shared-memory hints differ from tmpfs mount")
+			}
+		}
+	}
+	if count != 1 {
+		return errors.New("runsc requires exactly one shared-memory tmpfs")
 	}
 	return nil
 }

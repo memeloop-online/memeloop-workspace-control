@@ -9,13 +9,13 @@ cri() {
  return "$status"
 }
 mkdir -p "$base/gvisor" "$base/runsc-state"
-curl --fail --location --retry 3 'https://github.com/google/gvisor/releases/download/release-20260831.0/gvisor-x86_64.tar.bz2' -o "$base/gvisor.tar.bz2"
-echo "014b3871a5c698c802fd7a03758e0dbf4c1683f9e3f8c743979ea66bbf6553a4  $base/gvisor.tar.bz2" | sha256sum --check
+curl --fail --location --retry 3 'https://github.com/gvisor/gvisor/releases/download/release-20261019.0/gvisor-x86_64.tar.bz2' -o "$base/gvisor.tar.bz2"
+echo "1298e8ed9c3fee900f00d2ea96ec2d79d80ed93f2175812f29b7e7da718041a3  $base/gvisor.tar.bz2" | sha256sum --check
 # Keep runsc, shim and all adjacent gvisor-bin sidecars from the exact archive.
 tar -xjf "$base/gvisor.tar.bz2" -C "$base/gvisor"
 export PATH="$base/gvisor:$PATH"
 "$base/gvisor/runsc" --version | tee "$artifacts/runsc-version.txt"
-grep -F 'release-20260831.0' "$artifacts/runsc-version.txt"
+grep -F 'release-20261019.0' "$artifacts/runsc-version.txt"
 find "$base/gvisor" -maxdepth 2 -type f -printf '%P\n' > "$artifacts/gvisor-payload-files.txt"
 test -d "$base/gvisor/gvisor-bin"
 jq --arg runtime "$base/gvisor/runsc" '.real_runtime=$runtime' /etc/mwc-runtime-wrapper.json > /etc/mwc-runsc-wrapper.json

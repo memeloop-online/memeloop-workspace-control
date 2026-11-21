@@ -138,14 +138,20 @@ Only CI results prove a gate passed. Source code and workflow intent do not.
 The `mwc_runsc` build selects a separate fixed config and strict runsc shim
 parser; the default build remains runc. Shared trusted storage functions do not
 select a runtime by filename or fall back to native. The real runsc
-`release-20260831.0` full archive is SHA-256 pinned, including its adjacent
+`release-20261019.0` full archive is SHA-256 pinned, including its adjacent
 `gvisor-bin` sidecars and real `io.containerd.runsc.v1` shim. The isolated handler
 uses grouping, `overlay2=none`, `file-access=shared` and shared mounts. Systrap is
 explicit, OCI seccomp stays enabled, and OCI root readonly/capability fields
 remain unchanged. No ignore-cgroups, allow-suid or privileged Pod workaround is
 introduced. The exact shim's four built-in shared-memory hints are allowed only on pause,
 with fixed values and the unique `/dev/shm` tmpfs source matching its trusted CRI
-state path. Other gVisor override annotations and conflicting storage
+state path. The options must be exactly `rw,size=<bytes>`, where the positive,
+finite byte limit is read from that actual host tmpfs through a no-follow file
+descriptor below its protected CRI parent. The observed containerd default is
+64 MiB (`rw,size=67108864`); missing, duplicate, or different size/options are
+rejected. This release also honors OCI seccomp `errnoRet`, preserving glibc's
+ENOSYS fallback from blocked clone3 to clone without weakening OCI seccomp.
+Other gVisor override annotations and conflicting storage
 flags are rejected; restore/checkpoint/run are unsupported.
 
 A failed runsc create retains its record and overlay until that ID's real delete
