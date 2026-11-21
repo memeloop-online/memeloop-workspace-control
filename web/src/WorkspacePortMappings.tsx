@@ -180,16 +180,13 @@ export function WorkspacePortMappings({ api, workspaceId, workspaceState, onErro
           <DialogContent className={styles.dialogBody}>
             <Text>{t("portMappingIntro")}</Text>
             <form className={styles.formGrid} onSubmit={(event) => void save(event)}>
-              <Field label={t("internalPort")} required><Input aria-label={t("internalPort")} disabled={(!editing && !workspaceReady) || busy} type="number" min={1} max={65535} step={1} required value={draft.port} onChange={(_, data) => setDraft((current) => ({ ...current, port: data.value }))} placeholder={t("portMappingPortPlaceholder")} /></Field>
-              <Field label={t("displayNameOptional")} validationState={nameValidation.tooLong ? "error" : undefined} validationMessage={nameValidation.tooLong ? t("portMappingNameTooLong") : undefined}>
+              <Field label={t("internalPort")} required hint={t("portMappingPortHelp")}><Input aria-label={t("internalPort")} disabled={(!editing && !workspaceReady) || busy} type="number" min={1} max={65535} step={1} required value={draft.port} onChange={(_, data) => setDraft((current) => ({ ...current, port: data.value }))} placeholder={t("portMappingPortPlaceholder")} /></Field>
+              <Field label={t("displayNameOptional")} hint={<span aria-live="polite">{t("portMappingNameCounter", { count: nameValidation.length, max: DISPLAY_NAME_MAX_CODE_POINTS })}</span>} validationState={nameValidation.tooLong ? "error" : undefined} validationMessage={nameValidation.tooLong ? t("portMappingNameTooLong") : undefined}>
                 <Input disabled={(!editing && !workspaceReady) || busy} value={draft.displayName} onChange={(_, data) => setDraft((current) => ({ ...current, displayName: data.value }))} placeholder={t("portMappingNamePlaceholder")} />
               </Field>
-              <Field label={t("portMappingSubdomainOptional")} validationState={subdomainValidation.valid ? undefined : "error"} validationMessage={subdomainValidation.valid ? undefined : t("portMappingSubdomainInvalid")}>
+              <Field className={styles.formWide} label={t("portMappingSubdomainOptional")} hint={`${t("portMappingSubdomainHelp")} ${editing ? t("portMappingSubdomainChangeHelp") : t("portMappingSubdomainAutoHelp")}`} validationState={subdomainValidation.valid ? undefined : "error"} validationMessage={subdomainValidation.valid ? undefined : t("portMappingSubdomainInvalid")}>
                 <Input disabled={(!editing && !workspaceReady) || busy} value={draft.subdomain} onChange={(_, data) => setDraft((current) => ({ ...current, subdomain: data.value }))} placeholder={t("portMappingSubdomainPlaceholder")} />
               </Field>
-              <Caption1 className={styles.formWide}>{t("portMappingSubdomainHelp")} {editing ? t("portMappingSubdomainChangeHelp") : t("portMappingSubdomainAutoHelp")}</Caption1>
-              <Caption1 className={styles.formWide} aria-live="polite">{t("portMappingNameCounter", { count: nameValidation.length, max: DISPLAY_NAME_MAX_CODE_POINTS })} · {t("portMappingNameHelp")}</Caption1>
-              <Caption1 className={styles.formWide}>{t("portMappingPortHelp")}</Caption1>
               {workspaceStopped && <Caption1 className={styles.formWide} role="status">{t("portMappingStoppedHelp")}</Caption1>}
               {!workspaceReady && !workspaceStopped && <Caption1 className={styles.formWide} role="status">{t("portMappingWorkspaceNotReady")}</Caption1>}
               <div className={`${styles.formActions} ${styles.formWide}`}>
@@ -268,7 +265,7 @@ function PortMappingRow({ api, workspaceId, workspaceReady, item, busy, deleting
     finally { setOpening(false); }
   }
   return <article className={styles.portRow} aria-current={editing ? "true" : undefined}>
-    <div className={styles.portMain}><Text weight="semibold">{item.display_name || `${t("portLabel")} ${item.internal_port}`}</Text><Caption1>{t("internalPort")} <span className={styles.code}>{item.internal_port}</span></Caption1>{url ? <Text className={styles.code}>{url}</Text> : <Caption1>{t("portMappingAddressPending")}</Caption1>}</div>
+    <div className={styles.portMain}><Text weight="semibold">{item.display_name || `${t("portLabel")} ${item.internal_port}`}</Text><Caption1>{t("internalPort")} <span className={styles.code}>{item.internal_port}</span></Caption1>{url ? <Text className={styles.mappingUrl}>{url}</Text> : <Caption1>{t("portMappingAddressPending")}</Caption1>}</div>
     <div className={styles.portActions}><Badge appearance="tint" color={item.status === "ready" ? "success" : item.status === "failed" ? "danger" : "informative"}>{statusLabel(item.status, t)}</Badge><Button type="button" appearance="secondary" icon={<OpenRegular />} disabled={!workspaceReady || !url || opening || item.status !== "ready"} onClick={() => void open()}>{opening ? t("portMappingOpening") : t("open")}</Button><Button type="button" appearance="subtle" icon={<CopyRegular />} disabled={!url} onClick={() => void copy()}>{copied ? t("copied") : t("copyLink")}</Button>{!item.managed && <Button type="button" appearance="subtle" icon={<EditRegular />} disabled={busy || editing} onClick={onEdit}>{editing ? t("editing") : t("edit")}</Button>}{!item.managed && <Button type="button" appearance="subtle" icon={<DeleteRegular />} className={styles.dangerButton} disabled={deleting || busy} onClick={onDelete}>{deleting ? t("deleting") : t("delete")}</Button>}</div>
   </article>;
 }
