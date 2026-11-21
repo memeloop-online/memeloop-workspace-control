@@ -26,19 +26,30 @@ exec > >(tee "$out/product-csi.log") 2>&1
 mount_namespace="/proc/$$/ns/mnt"
 test "$(readlink "$mount_namespace")" != "$(readlink /proc/1/ns/mnt)"
 test "$(findmnt -n -o PROPAGATION --mountpoint /)" = private
-k3s_pid=''; containerd_pid=''; loops=(); diagnostic_case=''
+k3s_pid=''; containerd_pid=''; loops=(); diagnostic_case=''; diagnostic_monitor_pid=''
 kube() { KUBECONFIG="$base/kubeconfig" "$base/k3s-bin" kubectl "$@"; }
 cri() { crictl --runtime-endpoint "unix://$base/containerd.sock" --image-endpoint "unix://$base/containerd.sock" "$@"; }
 ctr_ci() { ctr --address "$base/containerd.sock" --namespace k8s.io "$@"; }
 # Preserve only storage/process identities, never the runsc state's OCI env.
 # Frozen cgroup paths remain observable after an OOM has removed its PIDs.
 storage_diagnostics() {
- python3 - "$base" "$diagnostic_case" "$runtime" "$main_id" "$publish" "$1" <<'PY'
-import datetime, json, os, pathlib, re, stat, subprocess, sys
+ local native_pid=''
+ if [ "$1" = before-write ] && [ "$runtime" = mwc-native ]; then
+  native_pid="$(cri inspect "$main_id" | jq -er --arg id "$main_id" 'select(.status.id==$id) | .info.pid | select(type=="number" and .>0)')"
+ fi
+ python3 - "$base" "$diagnostic_case" "$runtime" "$main_id" "$publish" "$1" "$native_pid" <<'PY'
+import datetime, gzip, json, os, pathlib, re, stat, subprocess, sys
 base, output = map(pathlib.Path, sys.argv[1:3])
-runtime, main, publish, stage = sys.argv[3:]
+runtime, main, publish, stage, native_pid = sys.argv[3:]
 identity_file = output / 'runtime-storage-identity.json'
 result = {'stage': stage, 'time': datetime.datetime.now(datetime.timezone.utc).isoformat()}
+def read_bounded(path):
+    try:
+        with pathlib.Path(path).open() as stream:
+            value = stream.read(65537)
+        return {'available': True, 'text': value[:65536], 'truncated': len(value) > 65536}
+    except OSError as error:
+        return {'available': False, 'error': str(error)}
 try:
     if stage == 'before-write':
         record = json.loads((base / 'state' / runtime / (main + '.json')).read_text())
@@ -53,6 +64,31 @@ try:
                     'scratch_mount': record['scratch']['mount'], 'scratch_inode': record['scratch']['inode'],
                     'rootfs_mount': mounts[0],
                     'processes': [], 'gofer_mounts': [], 'cgroups': []}
+        cgroups = set()
+        def process_group(pid):
+            proc = pathlib.Path('/proc', str(pid))
+            membership = proc.joinpath('cgroup').read_text().splitlines()
+            unified = [line[3:] for line in membership if line.startswith('0::')]
+            assert len(unified) == 1 and unified[0].startswith('/'), membership
+            group = pathlib.Path('/sys/fs/cgroup') / unified[0].lstrip('/')
+            assert group.is_relative_to('/sys/fs/cgroup') and '..' not in group.parts
+            assert (group / 'memory.events').is_file() and (group / 'memory.current').is_file(), group
+            parent = group
+            while True:
+                cgroups.add(str(parent))
+                if parent == pathlib.Path('/sys/fs/cgroup'):
+                    break
+                parent = parent.parent
+            return proc, group
+        if runtime == 'mwc-native':
+            pid = int(native_pid)
+            assert pid > 0
+            proc, group = process_group(pid)
+            assert main in group.name, (main, str(group))
+            # This is the recreated workspace, not the pre-log-restart CRI PID.
+            start = proc.joinpath('stat').read_text().rsplit(') ', 1)[1].split()[19]
+            identity['processes'].append({'role': 'native-main', 'pid': pid,
+                                          'starttime_ticks': int(start), 'cgroup': str(group)})
         if runtime == 'mwc-runsc':
             pod = json.loads((output / 'pod-current.json').read_text())
             ids = [s['containerID'].removeprefix('containerd://') for s in pod['status']['containerStatuses']]
@@ -68,7 +104,6 @@ try:
             assert len(paths) == 1, paths
             states.append((sandbox_id, json.loads(paths[0].read_text())))
             processes = set()
-            cgroups = set()
             for cid, state in states:
                 confs = state['goferMountConfs']
                 assert confs and all(c['upper'] == 0 for c in confs), (cid, confs)
@@ -78,13 +113,7 @@ try:
                     if (role, pid) in processes:
                         continue
                     processes.add((role, pid))
-                    proc = pathlib.Path('/proc', str(pid))
-                    membership = proc.joinpath('cgroup').read_text().splitlines()
-                    unified = [line[3:] for line in membership if line.startswith('0::')]
-                    assert len(unified) == 1 and unified[0].startswith('/'), membership
-                    group = pathlib.Path('/sys/fs/cgroup') / unified[0].lstrip('/')
-                    assert group.is_relative_to('/sys/fs/cgroup') and '..' not in group.parts
-                    assert (group / 'memory.events').is_file() and (group / 'memory.current').is_file(), group
+                    proc, group = process_group(pid)
                     fd_targets = []
                     for fd in proc.joinpath('fd').iterdir():
                         try:
@@ -97,24 +126,74 @@ try:
                     assert seccomp == ['2'], (role, pid, seccomp)
                     identity['processes'].append({'role': role, 'pid': pid, 'cgroup': str(group),
                                                   'host_seccomp': 2, 'filestore_fd_present': False})
-                    while True:
-                        cgroups.add(str(group))
-                        if group == pathlib.Path('/sys/fs/cgroup'):
-                            break
-                        group = group.parent
-            identity['cgroups'] = sorted(cgroups)
+        identity['cgroups'] = sorted(cgroups)
+        identity['cgroup_inodes'] = {group: pathlib.Path(group).stat().st_ino for group in identity['cgroups']}
         identity_file.write_text(json.dumps(identity, indent=2) + '\n')
     identity = json.loads(identity_file.read_text())
     result['memory'] = []
     for group in identity['cgroups']:
         entry = {'path': group}
-        for name in ('memory.current', 'memory.max', 'memory.peak', 'memory.events',
-                     'memory.events.local', 'memory.stat', 'cgroup.procs'):
+        try:
+            entry['inode'] = pathlib.Path(group).stat().st_ino
+            assert entry['inode'] == identity['cgroup_inodes'][group], ('cgroup replaced', group)
+        except OSError as error:
+            entry['inode_error'] = str(error)
+        for name in ('memory.current', 'memory.max', 'memory.high', 'memory.peak', 'memory.events',
+                     'memory.events.local', 'memory.stat', 'memory.pressure', 'cgroup.procs',
+                     'cgroup.controllers', 'cgroup.subtree_control', 'cgroup.type', 'io.stat'):
             try:
                 entry[name] = pathlib.Path(group, name).read_text()
             except OSError as error:
                 entry[name] = {'error': str(error)}
         result['memory'].append(entry)
+    # Read existing kernel interfaces only; no sysctl, tracepoint or cgroup writes.
+    config_keys = ('CGROUPS', 'MEMCG', 'BLK_CGROUP', 'CGROUP_WRITEBACK', 'DEBUG_FS', 'XFS_FS')
+    result['kernel_config'] = []
+    for path in (pathlib.Path('/proc/config.gz'), pathlib.Path('/boot/config-' + os.uname().release)):
+        try:
+            text = gzip.open(path, 'rt').read() if path.suffix == '.gz' else path.read_text()
+            selected = [line for line in text.splitlines()
+                        if any(line.startswith('CONFIG_' + key + '=') or
+                               line == '# CONFIG_' + key + ' is not set' for key in config_keys)]
+            result['kernel_config'].append({'path': str(path), 'available': True, 'selected': selected})
+        except OSError as error:
+            result['kernel_config'].append({'path': str(path), 'available': False, 'error': str(error)})
+    # The harness already proved that this disposable VM has a private mount
+    # namespace. Expose kernel writeback counters there without altering an
+    # existing debugfs mount or enabling tracepoints. Preserve CONFIG on failure.
+    debug_mounts = [line for line in pathlib.Path('/proc/self/mountinfo').read_text().splitlines()
+                    if line.split()[4] == '/sys/kernel/debug' and ' - debugfs ' in line]
+    if stage == 'before-write' and not debug_mounts:
+        mounted = subprocess.run(['mount', '-t', 'debugfs', '-o', 'ro', 'debugfs', '/sys/kernel/debug'],
+                                 capture_output=True, text=True)
+        result['debugfs_mount_attempt'] = {'status': mounted.returncode, 'stderr': mounted.stderr[:4096]}
+        assert mounted.returncode == 0, 'required read-only CI debugfs mount failed; see CONFIG and mount receipt'
+        debug_mounts = [line for line in pathlib.Path('/proc/self/mountinfo').read_text().splitlines()
+                        if line.split()[4] == '/sys/kernel/debug' and ' - debugfs ' in line]
+        assert len(debug_mounts) == 1 and 'ro' in debug_mounts[0].split()[5].split(','), debug_mounts
+    result['debugfs_mounts'] = debug_mounts
+    result['dirty_sysctls'] = {path.name: read_bounded(path)
+                              for path in sorted(pathlib.Path('/proc/sys/vm').glob('dirty_*'))}
+    result['vmstat'] = [line for line in pathlib.Path('/proc/vmstat').read_text().splitlines()
+                        if re.match(r'nr_(dirty|writeback|dirtied|written|dirty_threshold|dirty_background_threshold) ', line)]
+    result['controller_mounts'] = [line for line in pathlib.Path('/proc/self/mountinfo').read_text().splitlines()
+                                   if ' - cgroup' in line]
+    result['proc_cgroups'] = [line for line in pathlib.Path('/proc/cgroups').read_text().splitlines()
+                              if line.startswith('#') or line.split()[0] in ('memory', 'blkio')]
+    device = identity['scratch_mount']['device']
+    bdi_link = pathlib.Path('/sys/dev/block', device, 'bdi')
+    bdi = bdi_link.resolve(strict=False)
+    result['scratch_bdi'] = {'device': device, 'sysfs_link': str(bdi_link),
+                              'resolved_path': str(bdi), 'available': bdi_link.is_dir(),
+                              'sysfs': {}, 'debugfs': {}}
+    for name in ('read_ahead_kb', 'min_ratio', 'max_ratio', 'min_bytes', 'max_bytes', 'strict_limit',
+                 'stable_pages_required'):
+        result['scratch_bdi']['sysfs'][name] = read_bounded(bdi / name)
+    for name in ('stats', 'wb_stats'):
+        result['scratch_bdi']['debugfs'][name] = read_bounded(pathlib.Path('/sys/kernel/debug/bdi', bdi.name, name))
+    if stage == 'before-write':
+        assert bdi_link.is_dir() and all(item['available'] for item in result['scratch_bdi']['debugfs'].values()), \
+            'required actual scratch BDI writeback counters unavailable; see diagnostic receipt'
     if stage in ('root-written', 'root-full'):
         # No-follow every component, then the exact upper file. Host fsync and
         # allocated blocks prove that guest writes reached the genuine CSI LV.
@@ -172,6 +251,63 @@ finally:
     (output / ('runtime-storage-' + stage + '.json')).write_text(json.dumps(result, indent=2) + '\n')
 PY
 }
+# Observe only frozen host cgroup counters while the unchanged guest writer runs.
+# The sampler is bounded by the same 180-second writer deadline and owns no mounts.
+storage_write() {
+ local write_status=0
+ python3 - "$diagnostic_case" "$1" <<'PY' &
+import datetime, json, pathlib, signal, sys, time
+output, phase = pathlib.Path(sys.argv[1]), sys.argv[2]
+identity = json.loads((output / 'runtime-storage-identity.json').read_text())
+stopping = False
+def stop(*unused):
+    global stopping
+    stopping = True
+signal.signal(signal.SIGTERM, stop)
+keys = {'anon', 'file', 'kernel', 'shmem', 'file_dirty', 'file_writeback',
+        'inactive_file', 'active_file', 'pgscan', 'pgsteal', 'pgfault', 'pgmajfault'}
+deadline = time.monotonic() + 180
+with (output / ('runtime-storage-' + phase + '-pressure.jsonl')).open('w') as stream:
+    while True:
+        if stopping or time.monotonic() >= deadline:
+            break
+        sample = {'time': datetime.datetime.now(datetime.timezone.utc).isoformat(), 'memory': []}
+        for group in identity['cgroups']:
+            entry = {'path': group}
+            try:
+                entry['inode'] = pathlib.Path(group).stat().st_ino
+                if entry['inode'] != identity['cgroup_inodes'][group]:
+                    entry['error'] = 'frozen cgroup inode changed; counters not read'
+                    sample['memory'].append(entry)
+                    continue
+            except OSError as error:
+                entry['inode_error'] = str(error)
+            for name in ('memory.current', 'memory.events', 'memory.events.local', 'memory.pressure', 'memory.stat'):
+                try:
+                    text = pathlib.Path(group, name).read_text()
+                    entry[name] = ({line.split()[0]: int(line.split()[1]) for line in text.splitlines()
+                                    if line.split()[0] in keys} if name == 'memory.stat' else text)
+                except OSError as error:
+                    entry[name] = {'available': False, 'error': str(error)}
+            sample['memory'].append(entry)
+        bdi = pathlib.Path('/sys/dev/block', identity['scratch_mount']['device'], 'bdi').resolve(strict=False)
+        try:
+            with (pathlib.Path('/sys/kernel/debug/bdi', bdi.name, 'wb_stats')).open() as stats:
+                text = stats.read(65537)
+            sample['scratch_wb_stats'] = {'available': True, 'text': text[:65536], 'truncated': len(text) > 65536}
+        except OSError as error:
+            sample['scratch_wb_stats'] = {'available': False, 'error': str(error)}
+        stream.write(json.dumps(sample) + '\n')
+        stream.flush()
+        time.sleep(min(0.5, max(0, deadline - time.monotonic())))
+PY
+ diagnostic_monitor_pid=$!
+ timeout 180s "$base/k3s-bin" kubectl --kubeconfig "$base/kubeconfig" exec -n "$namespace" "$pod" -c workspace -- /usr/local/bin/storage-ci-probe "$@" || write_status=$?
+ kill "$diagnostic_monitor_pid" 2>/dev/null || true
+ wait "$diagnostic_monitor_pid" || write_status=1
+ diagnostic_monitor_pid=''
+ return "$write_status"
+}
 snapshot() {
  kube get pods,pvc -A -o json > "$out/final-pods-pvc.json" 2>/dev/null || true
  kube get pv,logicalvolumes.topolvm.io -o json > "$out/final-pv-lv.json" 2>/dev/null || true
@@ -186,6 +322,10 @@ snapshot() {
 finish() {
  status=$?
  trap - EXIT
+ if [ -n "$diagnostic_monitor_pid" ]; then
+  kill "$diagnostic_monitor_pid" 2>/dev/null || true
+  wait "$diagnostic_monitor_pid" || true
+ fi
  if [ -n "$diagnostic_case" ]; then storage_diagnostics finish || status=1; fi
  snapshot
  if [ -n "$k3s_pid" ]; then kill "$k3s_pid" 2>/dev/null || true; wait "$k3s_pid" || true; fi
@@ -574,7 +714,7 @@ for enabled in false true; do
  kube exec -i -n "$namespace" "$pod" -c workspace -- sh -ec 'cat > /usr/local/bin/storage-ci-probe; chmod 0755 /usr/local/bin/storage-ci-probe' < "$RUNNER_TEMP/product-storage-bin/mwc-budget-probe"
  diagnostic_case="$case_out"
  storage_diagnostics before-write
- timeout 180s "$base/k3s-bin" kubectl --kubeconfig "$base/kubeconfig" exec -n "$namespace" "$pod" -c workspace -- /usr/local/bin/storage-ci-probe write /storage-ci-root-fill 2415919104 > "$case_out/root-over-two-gib.json"
+ storage_write write /storage-ci-root-fill 2415919104 > "$case_out/root-over-two-gib.json"
  jq -e '.written_bytes==2415919104 and .fsync_result==0 and .fsync_errno==0' "$case_out/root-over-two-gib.json"
  kube exec -n "$namespace" "$pod" -c workspace -- stat -c '%s %b' /storage-ci-root-fill > "$case_out/root-over-two-gib-stat.txt"
  read -r logical blocks < "$case_out/root-over-two-gib-stat.txt"
@@ -595,7 +735,7 @@ for enabled in false true; do
   sleep 2
  done
  test "$volume_accounted" = true
- timeout 180s "$base/k3s-bin" kubectl --kubeconfig "$base/kubeconfig" exec -n "$namespace" "$pod" -c workspace -- /usr/local/bin/storage-ci-probe fill /storage-ci-root-fill > "$case_out/root-enospc.json"
+ storage_write fill /storage-ci-root-fill > "$case_out/root-enospc.json"
  jq -e '.write_errno==28 or .write_errno==122' "$case_out/root-enospc.json"
  storage_diagnostics root-full
  kube exec -n "$namespace" "$pod" -c workspace -- /usr/local/bin/storage-ci-probe pwrite /tmp/storage-ci-temp-fill > "$case_out/tmp-enospc.json"
