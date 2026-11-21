@@ -144,9 +144,19 @@ impl WorkspaceReconcileHandler {
             .map_err(job_error)?;
 
         let reconciled_at = unix_timestamp()?;
-        self.observe_workspace(workspace)
-            .await
-            .map_err(|error| checkpoint_error(error, job, workspace, Some(reconciled_at)))
+        // Public mapping discovery is refreshed alongside observation, so a slow
+        // ConfigMap write cannot postpone recording an already-ready workspace.
+        let (observation, metadata) = tokio::join!(
+            Box::pin(self.observe_workspace(workspace)),
+            Box::pin(
+                self.coordinator
+                    .apply_port_mapping_metadata(workspace, &port_mappings)
+            ),
+        );
+        // Discovery metadata uses the existing deferred-job retry; its failure
+        // must never mark a healthy workspace failed.
+        metadata.map_err(|error| JobHandlerError::Pending(error.to_string()))?;
+        observation.map_err(|error| checkpoint_error(error, job, workspace, Some(reconciled_at)))
     }
 
     async fn observe_workspace(&self, workspace: &Workspace) -> Result<(), JobHandlerError> {

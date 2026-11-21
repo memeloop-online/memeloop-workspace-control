@@ -3,6 +3,7 @@ set -eu
 unset RUSTUP_HOME
 
 install -d /etc/ssh/platform /etc/workspace-platform /workspace/.mwc
+printf '[]\n' > /etc/workspace-platform/port-mappings.json
 install -d -m 0750 -o workspace -g workspace /workspace/.codex /workspace/.codex/sessions /workspace/.codex/logs
 install -d -m 0750 -o root -g root /workspace/.codex/.tmp
 install -d -m 0750 -o root -g root /workspace/.codex/tmp/arg0/stale-root-owned
@@ -215,7 +216,7 @@ cat > /tmp/expected-metadata-setenv <<'EOF'
 SetEnv "MWC_METADATA_CONFIG=配置 \"双引号\" \\path with spaces" "MWC_METADATA_SECRET=秘密 '单引号' \"double\" \\path $HOME"
 EOF
 while IFS= read -r expected_line; do
-    grep -Fx "$expected_line" /run/mwc-ssh/sshd_config
+    grep -F "${expected_line#SetEnv }" /run/mwc-ssh/sshd_config
 done < /tmp/expected-metadata-setenv
 test "$(grep -c '^SetEnv ' /run/mwc-ssh/sshd_config)" = 1
 test -z "$(find /run/mwc-ssh -maxdepth 1 -name '.environment-metadata.*' -print -quit)"
@@ -244,7 +245,7 @@ rm "$injection_config/workspace-environment.json"
 # Image-provided Rustup paths use the same SSH quoting as injected values. Empty or absent
 # image values must not create a platform default, and injected values cannot replace them.
 RUSTUP_HOME='/workspace/toolchains "quoted" \path' prepare_recovery_fixture
-grep -Fx 'SetEnv "RUSTUP_HOME=/workspace/toolchains \"quoted\" \\path"' /run/mwc-ssh/sshd_config
+grep -F '"RUSTUP_HOME=/workspace/toolchains \"quoted\" \\path"' /run/mwc-ssh/sshd_config
 RUSTUP_HOME= prepare_recovery_fixture
 ! grep -q 'RUSTUP_HOME=' /run/mwc-ssh/sshd_config
 unset RUSTUP_HOME
@@ -392,3 +393,36 @@ done
 test ! -e /run/mwc-ssh/injection-failed
 test "$(stat -c %i /run/mwc-ssh/sshd_config)" = "$config_inode"
 test "$(grep -c 'Received SIGHUP' /tmp/sshd-reload.log)" = 1
+
+# Mapping discovery updates through the existing projection/monitor, without Pod replacement.
+# New logins receive a snapshot; a file pointer is authoritative for existing agents.
+cat > /etc/workspace-platform/port-mappings.json <<'EOF_MAPPING'
+[{"id":"fixture","internal_port":9000,"display_name":"中文 \"quoted\" \\path $HOME","https_url":"https://short.apps.example","status":"configured","managed":false}]
+EOF_MAPPING
+expected_mappings=$(jq -c . /etc/workspace-platform/port-mappings.json)
+for attempt in $(seq 1 25); do
+    observed=$(ssh -i /tmp/reload-client -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=2 \
+        -o StrictHostKeyChecking=yes -o HostKeyAlias=localhost \
+        -o UserKnownHostsFile=/run/mwc-ssh/known_hosts -p 2222 workspace@localhost \
+        'test "$MWC_PORT_MAPPINGS_FILE" = /etc/workspace-platform/port-mappings.json; printf "%s" "$MWC_PORT_MAPPINGS_JSON"' 2>/dev/null) || observed=
+    if [ "$observed" = "$expected_mappings" ]; then break; fi
+    sleep 1
+done
+test "$observed" = "$expected_mappings"
+test "$(grep -c '^SetEnv ' /run/mwc-ssh/sshd_config)" = 1
+metadata_inode=$(stat -c %i /run/mwc-ssh/sshd_config)
+metadata_hups=$(grep -c 'Received SIGHUP' /tmp/sshd-reload.log)
+sleep 16
+test "$(stat -c %i /run/mwc-ssh/sshd_config)" = "$metadata_inode"
+test "$(grep -c 'Received SIGHUP' /tmp/sshd-reload.log)" = "$metadata_hups"
+
+printf '[]\n' > /etc/workspace-platform/port-mappings.json
+for attempt in $(seq 1 25); do
+    observed=$(ssh -i /tmp/reload-client -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=2 \
+        -o StrictHostKeyChecking=yes -o HostKeyAlias=localhost \
+        -o UserKnownHostsFile=/run/mwc-ssh/known_hosts -p 2222 workspace@localhost \
+        'test "$(cat "$MWC_PORT_MAPPINGS_FILE")" = "[]"; printf "%s" "$MWC_PORT_MAPPINGS_JSON"' 2>/dev/null) || observed=
+    if [ "$observed" = '[]' ]; then break; fi
+    sleep 1
+done
+test "$observed" = '[]'

@@ -623,7 +623,7 @@ async fn postgres_binding_competition_is_atomic_and_survives_database_reconnect(
         .await
         .unwrap();
     let fixture = Fixture::with_database(database).await;
-    assert_eq!(fixture.database.schema_version().await.unwrap(), 31);
+    assert_eq!(fixture.database.schema_version().await.unwrap(), 32);
     fixture.database.migrate().await.unwrap();
     assert_eq!(
         fixture
@@ -678,7 +678,7 @@ async fn current_sqlite_schema_preserves_workspace_and_rejects_template_binding(
     let fixture = Fixture::new().await;
     fixture.database.migrate().await.unwrap();
     fixture.database.migrate().await.unwrap();
-    assert_eq!(fixture.database.schema_version().await.unwrap(), 31);
+    assert_eq!(fixture.database.schema_version().await.unwrap(), 32);
     let stored = fixture
         .database
         .get_workspace(fixture.workspace.id)

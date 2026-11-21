@@ -26,7 +26,7 @@ const CODEX_SESSION_SUB_PATH: &str = "codex-session-scratch";
 const BUILD_SCRATCH: &str = "/var/lib/mwc/build-scratch";
 const CODEX_SCRATCH: &str = "/var/lib/mwc/codex-scratch";
 const BUILDKIT_VOLUME_MOUNT: &str = "/run/mwc-buildkit";
-const INTERNAL_PLATFORM_ENVIRONMENT: [&str; 8] = [
+const INTERNAL_PLATFORM_ENVIRONMENT: [&str; 10] = [
     "MWC_WORKSPACE_USER",
     "MWC_WORKSPACE_HOME",
     "MWC_IN_CLUSTER_KUBECONFIG",
@@ -35,6 +35,8 @@ const INTERNAL_PLATFORM_ENVIRONMENT: [&str; 8] = [
     "MWC_HOME_RESERVE_MIB",
     "MWC_DESKTOP_ENABLED",
     "MWC_DESKTOP_PORT",
+    "MWC_PORT_MAPPINGS_FILE",
+    "MWC_PORT_MAPPINGS_JSON",
 ];
 #[derive(Clone, Copy)]
 pub(super) struct WorkspacePod<'a> {
@@ -75,6 +77,10 @@ impl<'a> WorkspacePod<'a> {
         let assignments = self
             .session_platform_env()
             .into_iter()
+            .chain(std::iter::once(env(
+                "MWC_PORT_MAPPINGS_FILE",
+                "/etc/workspace-platform/port-mappings.json",
+            )))
             .filter_map(|variable| {
                 variable
                     .value

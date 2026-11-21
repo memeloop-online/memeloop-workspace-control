@@ -82,7 +82,7 @@ public:
   apiDomain: ""
   webShellDomain: ""
   webShellOrigin: ""
-  # DNS suffix for p-<mapping-id>.<suffix>. It requires wildcard DNS/TLS.
+  # DNS suffix for p-<mapping-subdomain>.<suffix>. It requires wildcard DNS/TLS.
   portMappingDomain: ""
 
 higress:

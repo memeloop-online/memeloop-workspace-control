@@ -107,6 +107,13 @@ impl OverlapMock {
                     "metadata":{"resourceVersion":"1"}, "items":[]}),
             );
         }
+        if method == Method::GET && path.contains("/configmaps/") {
+            let mut object = self.object("ConfigMap", path.rsplit('/').next().unwrap());
+            object["apiVersion"] = json!("v1");
+            object["data"] =
+                json!({"sshd_config":"preserve", "mwc-workspace-bootstrap":"preserve"});
+            return response(StatusCode::OK, object);
+        }
         if method == Method::GET {
             // Existing desired resources must survive an inventory captured before
             // their updates. Other per-object reads represent absent resources.
@@ -221,6 +228,7 @@ fn setup_overlap(
         workspace_id: workspace.id,
         internal_port: 3000,
         display_name: None,
+        subdomain: "fixture-short".to_owned(),
         created_by: workspace.owner_id,
         created_at: 1,
     };
@@ -521,4 +529,10 @@ async fn failed_desired_write_does_not_prune_a_successful_inventory() {
     ));
     assert_eq!(mock.writes.lock().unwrap().first(), Some(&mock.route_path));
     assert!(mock.deletes().is_empty());
+}
+
+// Reuse the same actual workspace/mapping construction without starting the mock server.
+pub(super) fn metadata_fixture() -> (Workspace, PortMapping) {
+    let (_, workspace, mapping, _) = setup_overlap(false, false, false);
+    (workspace, mapping)
 }

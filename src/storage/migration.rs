@@ -31,6 +31,27 @@ async fn migrate_sqlite(pool: &SqlitePool, applied_at: i64) -> Result<(), Storag
         .await?;
     match version {
         Some(schema::SCHEMA_VERSION) => {}
+        Some(31) => {
+            sqlx::query(
+                "ALTER TABLE workspace_port_mappings ADD COLUMN subdomain TEXT NOT NULL DEFAULT ''",
+            )
+            .execute(&mut *transaction)
+            .await?;
+            sqlx::query("UPDATE workspace_port_mappings SET subdomain = replace(id, '-', '')")
+                .execute(&mut *transaction)
+                .await?;
+            sqlx::query("CREATE UNIQUE INDEX workspace_port_mappings_subdomain_idx ON workspace_port_mappings (subdomain)")
+                .execute(&mut *transaction).await?;
+            sqlx::query("CREATE TABLE workspace_port_subdomain_claims (subdomain TEXT PRIMARY KEY, installation_id TEXT NOT NULL, workspace_id TEXT NOT NULL)")
+                .execute(&mut *transaction).await?;
+            sqlx::query("INSERT INTO workspace_port_subdomain_claims (subdomain, installation_id, workspace_id) SELECT subdomain, installation_id, workspace_id FROM workspace_port_mappings")
+                .execute(&mut *transaction).await?;
+            sqlx::query("INSERT INTO schema_migrations (version, applied_at) VALUES (?1, ?2)")
+                .bind(schema::SCHEMA_VERSION)
+                .bind(applied_at)
+                .execute(&mut *transaction)
+                .await?;
+        }
         None if has_application_tables == 0 => {
             for statement in schema::BASELINE {
                 sqlx::query(statement).execute(&mut *transaction).await?;
@@ -72,6 +93,28 @@ async fn migrate_postgres(
         .await?;
     match version {
         Some(schema::SCHEMA_VERSION) => {}
+        Some(31) => {
+            sqlx::query("ALTER TABLE workspace_port_mappings ADD COLUMN subdomain TEXT")
+                .execute(&mut *transaction)
+                .await?;
+            sqlx::query("UPDATE workspace_port_mappings SET subdomain = replace(id, '-', '')")
+                .execute(&mut *transaction)
+                .await?;
+            sqlx::query("ALTER TABLE workspace_port_mappings ALTER COLUMN subdomain SET NOT NULL")
+                .execute(&mut *transaction)
+                .await?;
+            sqlx::query("CREATE UNIQUE INDEX workspace_port_mappings_subdomain_idx ON workspace_port_mappings (subdomain)")
+                .execute(&mut *transaction).await?;
+            sqlx::query("CREATE TABLE workspace_port_subdomain_claims (subdomain TEXT PRIMARY KEY, installation_id TEXT NOT NULL, workspace_id TEXT NOT NULL)")
+                .execute(&mut *transaction).await?;
+            sqlx::query("INSERT INTO workspace_port_subdomain_claims (subdomain, installation_id, workspace_id) SELECT subdomain, installation_id, workspace_id FROM workspace_port_mappings")
+                .execute(&mut *transaction).await?;
+            sqlx::query("INSERT INTO schema_migrations (version, applied_at) VALUES ($1, $2)")
+                .bind(schema::SCHEMA_VERSION)
+                .bind(applied_at)
+                .execute(&mut *transaction)
+                .await?;
+        }
         None if has_application_tables == 0 => {
             for statement in schema::BASELINE {
                 sqlx::query(statement).execute(&mut *transaction).await?;

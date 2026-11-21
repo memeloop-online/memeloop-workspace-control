@@ -37,8 +37,15 @@ pub struct PortMapping {
     pub workspace_id: Uuid,
     pub internal_port: u16,
     pub display_name: Option<String>,
+    pub subdomain: String,
     pub created_by: Uuid,
     pub created_at: i64,
+}
+
+impl PortMapping {
+    pub fn hostname(&self, domain: &str) -> String {
+        format!("p-{}.{}", self.subdomain, domain)
+    }
 }
 
 #[derive(Clone, Serialize, ToSchema)]
@@ -76,6 +83,7 @@ impl Database {
             workspace.id,
             desktop.internal_port,
             desktop.display_name.as_deref(),
+            None,
             workspace.owner_id,
             now,
         )
@@ -86,96 +94,157 @@ impl Database {
     /// Inserts a mapping exactly once per workspace/port.  Concurrent requests
     /// (including requests reaching different control-plane replicas) converge
     /// on the same row rather than allocating duplicate public resources.
+    #[allow(clippy::too_many_arguments)]
     pub async fn create_port_mapping(
         &self,
         organization_id: Uuid,
         workspace_id: Uuid,
         internal_port: u16,
         display_name: Option<&str>,
+        subdomain: Option<&str>,
         created_by: Uuid,
         created_at: i64,
     ) -> Result<PortMapping, StorageError> {
         validate_http_port(internal_port)?;
         let display_name = validate_display_name(display_name)?;
+        let custom_subdomain = subdomain.map(normalize_subdomain).transpose()?;
         let id = Uuid::now_v7();
-        match self {
-            Self::Sqlite {
-                pool,
-                installation_id,
-            } => {
-                sqlx::query("INSERT INTO workspace_port_mappings (id, installation_id, organization_id, workspace_id, internal_port, display_name, created_by, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) ON CONFLICT (installation_id, workspace_id, internal_port) DO NOTHING")
-                    .bind(id.to_string()).bind(installation_id.as_str()).bind(organization_id.to_string())
-                    .bind(workspace_id.to_string()).bind(i64::from(internal_port)).bind(display_name).bind(created_by.to_string()).bind(created_at)
-                    .execute(pool).await?;
-                self.port_mapping_by_workspace_port(workspace_id, internal_port)
-                    .await
-            }
-            Self::Postgres {
-                pool,
-                installation_id,
-            } => {
-                sqlx::query("INSERT INTO workspace_port_mappings (id, installation_id, organization_id, workspace_id, internal_port, display_name, created_by, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT (installation_id, workspace_id, internal_port) DO NOTHING")
-                    .bind(id.to_string()).bind(installation_id.as_str()).bind(organization_id.to_string())
-                    .bind(workspace_id.to_string()).bind(i64::from(internal_port)).bind(display_name).bind(created_by.to_string()).bind(created_at)
-                    .execute(pool).await?;
-                self.port_mapping_by_workspace_port(workspace_id, internal_port)
-                    .await
+        // Only an actual random-label collision retries; user requests and
+        // unrelated database errors are never retried here.
+        for _ in 0..4 {
+            let subdomain = match &custom_subdomain {
+                Some(value) => value.clone(),
+                None => random_subdomain()?,
+            };
+            let inserted: Result<(), StorageError> = async {
+                match self {
+                    Self::Sqlite { pool, installation_id } => {
+                        let mut tx = pool.begin().await?;
+                        let claim: Option<String> = sqlx::query_scalar("INSERT INTO workspace_port_subdomain_claims (subdomain, installation_id, workspace_id) VALUES (?1, ?2, ?3) ON CONFLICT (subdomain) DO UPDATE SET subdomain = excluded.subdomain WHERE workspace_port_subdomain_claims.installation_id = excluded.installation_id AND workspace_port_subdomain_claims.workspace_id = excluded.workspace_id RETURNING subdomain")
+                            .bind(&subdomain).bind(installation_id.as_str()).bind(workspace_id.to_string())
+                            .fetch_optional(&mut *tx).await?;
+                        if claim.is_none() { return Err(StorageError::PortMappingSubdomainConflict); }
+                        let rows = sqlx::query("INSERT INTO workspace_port_mappings (id, installation_id, organization_id, workspace_id, internal_port, display_name, subdomain, created_by, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9) ON CONFLICT (installation_id, workspace_id, internal_port) DO NOTHING")
+                            .bind(id.to_string()).bind(installation_id.as_str()).bind(organization_id.to_string())
+                            .bind(workspace_id.to_string()).bind(i64::from(internal_port)).bind(&display_name)
+                            .bind(&subdomain).bind(created_by.to_string()).bind(created_at).execute(&mut *tx).await
+                            .map_err(subdomain_write_error)?.rows_affected();
+                        if rows == 0 { tx.rollback().await?; } else { tx.commit().await?; }
+                    }
+                    Self::Postgres { pool, installation_id } => {
+                        let mut tx = pool.begin().await?;
+                        let claim: Option<String> = sqlx::query_scalar("INSERT INTO workspace_port_subdomain_claims (subdomain, installation_id, workspace_id) VALUES ($1, $2, $3) ON CONFLICT (subdomain) DO UPDATE SET subdomain = excluded.subdomain WHERE workspace_port_subdomain_claims.installation_id = excluded.installation_id AND workspace_port_subdomain_claims.workspace_id = excluded.workspace_id RETURNING subdomain")
+                            .bind(&subdomain).bind(installation_id.as_str()).bind(workspace_id.to_string())
+                            .fetch_optional(&mut *tx).await?;
+                        if claim.is_none() { return Err(StorageError::PortMappingSubdomainConflict); }
+                        let rows = sqlx::query("INSERT INTO workspace_port_mappings (id, installation_id, organization_id, workspace_id, internal_port, display_name, subdomain, created_by, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) ON CONFLICT (installation_id, workspace_id, internal_port) DO NOTHING")
+                            .bind(id.to_string()).bind(installation_id.as_str()).bind(organization_id.to_string())
+                            .bind(workspace_id.to_string()).bind(i64::from(internal_port)).bind(&display_name)
+                            .bind(&subdomain).bind(created_by.to_string()).bind(created_at).execute(&mut *tx).await
+                            .map_err(subdomain_write_error)?.rows_affected();
+                        if rows == 0 { tx.rollback().await?; } else { tx.commit().await?; }
+                    }
+                }
+                Ok(())
+            }.await;
+            match inserted {
+                Ok(_) => {
+                    return self
+                        .port_mapping_by_workspace_port(workspace_id, internal_port)
+                        .await;
+                }
+                Err(StorageError::PortMappingSubdomainConflict) => {
+                    // A simultaneous create for the same workspace/port still
+                    // converges on the existing declaration.
+                    match self
+                        .port_mapping_by_workspace_port(workspace_id, internal_port)
+                        .await
+                    {
+                        Ok(existing) => return Ok(existing),
+                        Err(StorageError::PortMappingNotFound) => {}
+                        Err(error) => return Err(error),
+                    }
+                    if custom_subdomain.is_some() {
+                        return Err(StorageError::PortMappingSubdomainConflict);
+                    }
+                }
+                Err(error) => return Err(error),
             }
         }
+        Err(StorageError::PortMappingSubdomainConflict)
     }
 
-    /// Updates the declaration in place, retaining its stable public address.
-    /// Port changes revoke credentials for the previous application atomically.
+    /// Edits retain the mapping UUID and Kubernetes resource identities. A
+    /// hostname or application-port change atomically revokes old credentials.
     pub async fn update_port_mapping(
         &self,
         workspace_id: Uuid,
         mapping_id: Uuid,
         internal_port: u16,
         display_name: Option<&str>,
+        subdomain: Option<&str>,
     ) -> Result<PortMapping, StorageError> {
         validate_http_port(internal_port)?;
         let display_name = validate_display_name(display_name)?;
+        let subdomain = subdomain.map(normalize_subdomain).transpose()?;
         let result: Result<PortMapping, StorageError> = async {
             match self {
                 Self::Sqlite { pool, installation_id } => {
                     let mut tx = pool.begin().await?;
-                    for table in ["workspace_port_mapping_tickets", "workspace_port_mapping_sessions"] {
-                        let sql = format!("DELETE FROM {table} WHERE installation_id = ?1 AND mapping_id = ?2 AND EXISTS (SELECT 1 FROM workspace_port_mappings WHERE installation_id = ?1 AND workspace_id = ?3 AND id = ?2 AND internal_port <> ?4)");
-                        sqlx::query(&sql).bind(installation_id.as_str()).bind(mapping_id.to_string())
-                            .bind(workspace_id.to_string()).bind(i64::from(internal_port)).execute(&mut *tx).await?;
+                    if let Some(subdomain) = &subdomain {
+                        let claim: Option<String> = sqlx::query_scalar("INSERT INTO workspace_port_subdomain_claims (subdomain, installation_id, workspace_id) SELECT ?1, ?2, ?3 WHERE EXISTS (SELECT 1 FROM workspace_port_mappings WHERE installation_id = ?2 AND workspace_id = ?3 AND id = ?4) ON CONFLICT (subdomain) DO UPDATE SET subdomain = excluded.subdomain WHERE workspace_port_subdomain_claims.installation_id = excluded.installation_id AND workspace_port_subdomain_claims.workspace_id = excluded.workspace_id RETURNING subdomain")
+                            .bind(subdomain).bind(installation_id.as_str()).bind(workspace_id.to_string()).bind(mapping_id.to_string())
+                            .fetch_optional(&mut *tx).await?;
+                        if claim.is_none() {
+                            let exists: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM workspace_port_mappings WHERE installation_id = ?1 AND workspace_id = ?2 AND id = ?3")
+                                .bind(installation_id.as_str()).bind(workspace_id.to_string()).bind(mapping_id.to_string()).fetch_one(&mut *tx).await?;
+                            return Err(if exists == 0 { StorageError::PortMappingNotFound } else { StorageError::PortMappingSubdomainConflict });
+                        }
                     }
-                    let changed = sqlx::query("UPDATE workspace_port_mappings SET internal_port = ?1, display_name = ?2 WHERE installation_id = ?3 AND workspace_id = ?4 AND id = ?5 RETURNING id, organization_id, workspace_id, internal_port, display_name, created_by, created_at")
-                        .bind(i64::from(internal_port)).bind(&display_name).bind(installation_id.as_str())
-                        .bind(workspace_id.to_string()).bind(mapping_id.to_string())
-                        .fetch_optional(&mut *tx).await?;
+                    for table in ["workspace_port_mapping_tickets", "workspace_port_mapping_sessions"] {
+                        let sql = format!("DELETE FROM {table} WHERE installation_id = ?1 AND mapping_id = ?2 AND EXISTS (SELECT 1 FROM workspace_port_mappings WHERE installation_id = ?1 AND workspace_id = ?3 AND id = ?2 AND (internal_port <> ?4 OR (?5 IS NOT NULL AND subdomain <> ?5)))");
+                        sqlx::query(&sql).bind(installation_id.as_str()).bind(mapping_id.to_string())
+                            .bind(workspace_id.to_string()).bind(i64::from(internal_port)).bind(&subdomain).execute(&mut *tx).await?;
+                    }
+                    let changed = sqlx::query("UPDATE workspace_port_mappings SET internal_port = ?1, display_name = ?2, subdomain = COALESCE(?3, subdomain) WHERE installation_id = ?4 AND workspace_id = ?5 AND id = ?6 RETURNING id, organization_id, workspace_id, internal_port, display_name, subdomain, created_by, created_at")
+                        .bind(i64::from(internal_port)).bind(&display_name).bind(&subdomain).bind(installation_id.as_str())
+                        .bind(workspace_id.to_string()).bind(mapping_id.to_string()).fetch_optional(&mut *tx).await?;
                     tx.commit().await?;
                     decode(changed.ok_or(StorageError::PortMappingNotFound)?)
                 }
                 Self::Postgres { pool, installation_id } => {
                     let mut tx = pool.begin().await?;
-                    // Serialize port edits with other edits of this mapping.
-                    sqlx::query("SELECT id FROM workspace_port_mappings WHERE installation_id = $1 AND workspace_id = $2 AND id = $3 FOR UPDATE")
+                    let existing = sqlx::query("SELECT id FROM workspace_port_mappings WHERE installation_id = $1 AND workspace_id = $2 AND id = $3 FOR UPDATE")
                         .bind(installation_id.as_str()).bind(workspace_id.to_string()).bind(mapping_id.to_string())
                         .fetch_optional(&mut *tx).await?;
-                    for table in ["workspace_port_mapping_tickets", "workspace_port_mapping_sessions"] {
-                        let sql = format!("DELETE FROM {table} WHERE installation_id = $1 AND mapping_id = $2 AND EXISTS (SELECT 1 FROM workspace_port_mappings WHERE installation_id = $1 AND workspace_id = $3 AND id = $2 AND internal_port <> $4)");
-                        sqlx::query(&sql).bind(installation_id.as_str()).bind(mapping_id.to_string())
-                            .bind(workspace_id.to_string()).bind(i64::from(internal_port)).execute(&mut *tx).await?;
+                    if existing.is_none() { return Err(StorageError::PortMappingNotFound); }
+                    if let Some(subdomain) = &subdomain {
+                        let claim: Option<String> = sqlx::query_scalar("INSERT INTO workspace_port_subdomain_claims (subdomain, installation_id, workspace_id) VALUES ($1, $2, $3) ON CONFLICT (subdomain) DO UPDATE SET subdomain = excluded.subdomain WHERE workspace_port_subdomain_claims.installation_id = excluded.installation_id AND workspace_port_subdomain_claims.workspace_id = excluded.workspace_id RETURNING subdomain")
+                            .bind(subdomain).bind(installation_id.as_str()).bind(workspace_id.to_string())
+                            .fetch_optional(&mut *tx).await?;
+                        if claim.is_none() { return Err(StorageError::PortMappingSubdomainConflict); }
                     }
-                    let changed = sqlx::query("UPDATE workspace_port_mappings SET internal_port = $1, display_name = $2 WHERE installation_id = $3 AND workspace_id = $4 AND id = $5 RETURNING id, organization_id, workspace_id, internal_port, display_name, created_by, created_at")
-                        .bind(i64::from(internal_port)).bind(&display_name).bind(installation_id.as_str())
-                        .bind(workspace_id.to_string()).bind(mapping_id.to_string())
-                        .fetch_optional(&mut *tx).await?;
+                    for table in ["workspace_port_mapping_tickets", "workspace_port_mapping_sessions"] {
+                        let sql = format!("DELETE FROM {table} WHERE installation_id = $1 AND mapping_id = $2 AND EXISTS (SELECT 1 FROM workspace_port_mappings WHERE installation_id = $1 AND workspace_id = $3 AND id = $2 AND (internal_port <> $4 OR ($5::text IS NOT NULL AND subdomain <> $5)))");
+                        sqlx::query(&sql).bind(installation_id.as_str()).bind(mapping_id.to_string())
+                            .bind(workspace_id.to_string()).bind(i64::from(internal_port)).bind(&subdomain).execute(&mut *tx).await?;
+                    }
+                    let changed = sqlx::query("UPDATE workspace_port_mappings SET internal_port = $1, display_name = $2, subdomain = COALESCE($3, subdomain) WHERE installation_id = $4 AND workspace_id = $5 AND id = $6 RETURNING id, organization_id, workspace_id, internal_port, display_name, subdomain, created_by, created_at")
+                        .bind(i64::from(internal_port)).bind(&display_name).bind(&subdomain).bind(installation_id.as_str())
+                        .bind(workspace_id.to_string()).bind(mapping_id.to_string()).fetch_optional(&mut *tx).await?;
                     tx.commit().await?;
                     decode(changed.ok_or(StorageError::PortMappingNotFound)?)
                 }
             }
         }.await;
         match result {
+            Err(StorageError::Database(error)) if is_subdomain_conflict(&error) => {
+                Err(StorageError::PortMappingSubdomainConflict)
+            }
             Err(StorageError::Database(error))
                 if error
                     .as_database_error()
-                    .is_some_and(|error| error.is_unique_violation()) =>
+                    .is_some_and(|e| e.is_unique_violation()) =>
             {
                 Err(StorageError::PortMappingPortConflict)
             }
@@ -183,12 +252,22 @@ impl Database {
         }
     }
 
+    pub async fn get_port_mapping_by_subdomain(
+        &self,
+        subdomain: &str,
+    ) -> Result<PortMapping, StorageError> {
+        match self {
+            Self::Sqlite { pool, installation_id } => decode(sqlx::query("SELECT id, organization_id, workspace_id, internal_port, display_name, subdomain, created_by, created_at FROM workspace_port_mappings WHERE installation_id = ?1 AND subdomain = ?2").bind(installation_id.as_str()).bind(subdomain).fetch_optional(pool).await?.ok_or(StorageError::PortMappingNotFound)?),
+            Self::Postgres { pool, installation_id } => decode(sqlx::query("SELECT id, organization_id, workspace_id, internal_port, display_name, subdomain, created_by, created_at FROM workspace_port_mappings WHERE installation_id = $1 AND subdomain = $2").bind(installation_id.as_str()).bind(subdomain).fetch_optional(pool).await?.ok_or(StorageError::PortMappingNotFound)?),
+        }
+    }
+
     pub async fn list_port_mappings(
         &self,
         workspace_id: Uuid,
     ) -> Result<Vec<PortMapping>, StorageError> {
-        let sql_sqlite = "SELECT id, organization_id, workspace_id, internal_port, display_name, created_by, created_at FROM workspace_port_mappings WHERE installation_id = ?1 AND workspace_id = ?2 ORDER BY internal_port";
-        let sql_postgres = "SELECT id, organization_id, workspace_id, internal_port, display_name, created_by, created_at FROM workspace_port_mappings WHERE installation_id = $1 AND workspace_id = $2 ORDER BY internal_port";
+        let sql_sqlite = "SELECT id, organization_id, workspace_id, internal_port, display_name, subdomain, created_by, created_at FROM workspace_port_mappings WHERE installation_id = ?1 AND workspace_id = ?2 ORDER BY internal_port";
+        let sql_postgres = "SELECT id, organization_id, workspace_id, internal_port, display_name, subdomain, created_by, created_at FROM workspace_port_mappings WHERE installation_id = $1 AND workspace_id = $2 ORDER BY internal_port";
         let mappings = match self {
             Self::Sqlite {
                 pool,
@@ -230,8 +309,8 @@ impl Database {
 
     pub async fn get_port_mapping(&self, mapping_id: Uuid) -> Result<PortMapping, StorageError> {
         match self {
-            Self::Sqlite { pool, installation_id } => decode(sqlx::query("SELECT id, organization_id, workspace_id, internal_port, display_name, created_by, created_at FROM workspace_port_mappings WHERE installation_id = ?1 AND id = ?2").bind(installation_id.as_str()).bind(mapping_id.to_string()).fetch_optional(pool).await?.ok_or(StorageError::PortMappingNotFound)?),
-            Self::Postgres { pool, installation_id } => decode(sqlx::query("SELECT id, organization_id, workspace_id, internal_port, display_name, created_by, created_at FROM workspace_port_mappings WHERE installation_id = $1 AND id = $2").bind(installation_id.as_str()).bind(mapping_id.to_string()).fetch_optional(pool).await?.ok_or(StorageError::PortMappingNotFound)?),
+            Self::Sqlite { pool, installation_id } => decode(sqlx::query("SELECT id, organization_id, workspace_id, internal_port, display_name, subdomain, created_by, created_at FROM workspace_port_mappings WHERE installation_id = ?1 AND id = ?2").bind(installation_id.as_str()).bind(mapping_id.to_string()).fetch_optional(pool).await?.ok_or(StorageError::PortMappingNotFound)?),
+            Self::Postgres { pool, installation_id } => decode(sqlx::query("SELECT id, organization_id, workspace_id, internal_port, display_name, subdomain, created_by, created_at FROM workspace_port_mappings WHERE installation_id = $1 AND id = $2").bind(installation_id.as_str()).bind(mapping_id.to_string()).fetch_optional(pool).await?.ok_or(StorageError::PortMappingNotFound)?),
         }
     }
 
@@ -376,8 +455,8 @@ impl Database {
         internal_port: u16,
     ) -> Result<PortMapping, StorageError> {
         match self {
-            Self::Sqlite { pool, installation_id } => decode(sqlx::query("SELECT id, organization_id, workspace_id, internal_port, display_name, created_by, created_at FROM workspace_port_mappings WHERE installation_id = ?1 AND workspace_id = ?2 AND internal_port = ?3").bind(installation_id.as_str()).bind(workspace_id.to_string()).bind(i64::from(internal_port)).fetch_optional(pool).await?.ok_or(StorageError::PortMappingNotFound)?),
-            Self::Postgres { pool, installation_id } => decode(sqlx::query("SELECT id, organization_id, workspace_id, internal_port, display_name, created_by, created_at FROM workspace_port_mappings WHERE installation_id = $1 AND workspace_id = $2 AND internal_port = $3").bind(installation_id.as_str()).bind(workspace_id.to_string()).bind(i64::from(internal_port)).fetch_optional(pool).await?.ok_or(StorageError::PortMappingNotFound)?),
+            Self::Sqlite { pool, installation_id } => decode(sqlx::query("SELECT id, organization_id, workspace_id, internal_port, display_name, subdomain, created_by, created_at FROM workspace_port_mappings WHERE installation_id = ?1 AND workspace_id = ?2 AND internal_port = ?3").bind(installation_id.as_str()).bind(workspace_id.to_string()).bind(i64::from(internal_port)).fetch_optional(pool).await?.ok_or(StorageError::PortMappingNotFound)?),
+            Self::Postgres { pool, installation_id } => decode(sqlx::query("SELECT id, organization_id, workspace_id, internal_port, display_name, subdomain, created_by, created_at FROM workspace_port_mappings WHERE installation_id = $1 AND workspace_id = $2 AND internal_port = $3").bind(installation_id.as_str()).bind(workspace_id.to_string()).bind(i64::from(internal_port)).fetch_optional(pool).await?.ok_or(StorageError::PortMappingNotFound)?),
         }
     }
 }
@@ -395,6 +474,7 @@ where
         internal_port: u16::try_from(row.try_get::<i64, _>("internal_port")?)
             .map_err(|_| StorageError::InvalidPortMappingPort)?,
         display_name: row.try_get("display_name")?,
+        subdomain: row.try_get("subdomain")?,
         created_by: Uuid::parse_str(&row.try_get::<String, _>("created_by")?)?,
         created_at: row.try_get("created_at")?,
     })
@@ -412,6 +492,51 @@ fn validate_display_name(value: Option<&str>) -> Result<Option<String>, StorageE
         return Err(StorageError::InvalidPortMappingDisplayName);
     }
     Ok(Some(value.to_owned()))
+}
+
+fn normalize_subdomain(value: &str) -> Result<String, StorageError> {
+    let value = value.trim().to_ascii_lowercase();
+    if value.is_empty()
+        || value.len() > 61
+        || !value
+            .as_bytes()
+            .first()
+            .is_some_and(u8::is_ascii_alphanumeric)
+        || !value
+            .as_bytes()
+            .last()
+            .is_some_and(u8::is_ascii_alphanumeric)
+        || !value
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || c == b'-')
+    {
+        return Err(StorageError::InvalidPortMappingSubdomain);
+    }
+    Ok(value)
+}
+
+fn random_subdomain() -> Result<String, StorageError> {
+    let mut random = [0_u8; 4];
+    getrandom::fill(&mut random).map_err(|_| StorageError::RandomSource)?;
+    Ok(format!("{:08x}", u32::from_be_bytes(random)))
+}
+
+fn subdomain_write_error(error: sqlx::Error) -> StorageError {
+    if is_subdomain_conflict(&error) {
+        StorageError::PortMappingSubdomainConflict
+    } else {
+        StorageError::Database(error)
+    }
+}
+
+fn is_subdomain_conflict(error: &sqlx::Error) -> bool {
+    error.as_database_error().is_some_and(|error| {
+        error.is_unique_violation()
+            && (error.constraint() == Some("workspace_port_mappings_subdomain_idx")
+                || error
+                    .message()
+                    .contains("workspace_port_mappings.subdomain"))
+    })
 }
 
 #[cfg(test)]

@@ -230,6 +230,7 @@ const IMPORT_ORDER: &[&str] = &[
     "workspaces",
     "workspace_storage_shrinks",
     "workspace_runtime_incidents",
+    "workspace_port_subdomain_claims",
     "workspace_port_mappings",
     "workspace_injection_refs",
     "audit_log",
@@ -259,6 +260,7 @@ const IMPORT_DESTINATION_DATA_TABLES: &[&str] = &[
     "workspaces",
     "workspace_storage_shrinks",
     "workspace_runtime_incidents",
+    "workspace_port_subdomain_claims",
     "workspace_port_mappings",
     "workspace_port_mapping_tickets",
     "workspace_port_mapping_sessions",
@@ -344,8 +346,12 @@ const EXPORT_QUERIES: &[(&str, &str)] = &[
         "SELECT json_object('id', id, 'installation_id', installation_id, 'workspace_id', workspace_id, 'category', category, 'observed_at', observed_at, 'count', count, 'first_seen_at', first_seen_at, 'last_seen_at', last_seen_at, 'details_json', details_json) item FROM workspace_runtime_incidents WHERE installation_id = ?1 ORDER BY workspace_id, observed_at, category, id",
     ),
     (
+        "workspace_port_subdomain_claims",
+        "SELECT json_object('subdomain', subdomain, 'installation_id', installation_id, 'workspace_id', workspace_id) item FROM workspace_port_subdomain_claims WHERE installation_id = ?1 ORDER BY subdomain",
+    ),
+    (
         "workspace_port_mappings",
-        "SELECT json_object('id', id, 'installation_id', installation_id, 'organization_id', organization_id, 'workspace_id', workspace_id, 'internal_port', internal_port, 'display_name', display_name, 'created_by', created_by, 'created_at', created_at) item FROM workspace_port_mappings WHERE installation_id = ?1 ORDER BY workspace_id, created_at, id",
+        "SELECT json_object('id', id, 'installation_id', installation_id, 'organization_id', organization_id, 'workspace_id', workspace_id, 'internal_port', internal_port, 'display_name', display_name, 'subdomain', subdomain, 'created_by', created_by, 'created_at', created_at) item FROM workspace_port_mappings WHERE installation_id = ?1 ORDER BY workspace_id, created_at, id",
     ),
     (
         "workspace_injection_refs",

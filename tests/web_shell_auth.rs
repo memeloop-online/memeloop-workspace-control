@@ -124,6 +124,7 @@ async fn browser_access_tickets_are_scoped_and_consumed_once() {
             workspace.id,
             3000,
             Some("test app"),
+            Some("preview"),
             user.user_id,
             now,
         )
@@ -220,7 +221,7 @@ async fn browser_access_tickets_are_scoped_and_consumed_once() {
     let replay = internal_app.clone().oneshot(authorize()).await.unwrap();
     assert_eq!(replay.status(), StatusCode::UNAUTHORIZED);
 
-    let mapping_host = format!("p-{}.apps.example.com", mapping.id.simple());
+    let mapping_host = mapping.hostname("apps.example.com");
     let port_request = |uri: &str, cookie: Option<&str>| {
         let mut request = Request::get("/api/v1/internal/port-mappings/authorize")
             .header("x-forwarded-host", &mapping_host)
@@ -238,6 +239,18 @@ async fn browser_access_tickets_are_scoped_and_consumed_once() {
     assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
 
     let bootstrap_uri = format!("/_mwc/bootstrap?ticket={}", mapping_ticket.ticket);
+    let unknown_host = internal_app
+        .clone()
+        .oneshot(
+            Request::get("/api/v1/internal/port-mappings/authorize")
+                .header("x-forwarded-host", "p-unknown.apps.example.com")
+                .header("x-forwarded-uri", &bootstrap_uri)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(unknown_host.status(), StatusCode::UNAUTHORIZED);
     let bootstrap = internal_app
         .clone()
         .oneshot(port_request(&bootstrap_uri, None))

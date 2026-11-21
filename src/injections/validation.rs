@@ -76,6 +76,9 @@ pub fn validate_injection_key(key: &str) -> Result<(), InjectionError> {
 }
 
 fn validate_environment_target(target: &str) -> Result<(), InjectionError> {
+    if matches!(target, "MWC_PORT_MAPPINGS_FILE" | "MWC_PORT_MAPPINGS_JSON") {
+        return Err(InjectionError::InvalidTarget);
+    }
     let mut chars = target.chars();
     if chars
         .next()
@@ -113,4 +116,20 @@ fn validate_file_target(target: &str) -> Result<(), InjectionError> {
         return Err(InjectionError::InvalidTarget);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod port_discovery_tests {
+    use super::*;
+
+    #[test]
+    fn platform_mapping_metadata_cannot_be_replaced_by_an_injection() {
+        for target in ["MWC_PORT_MAPPINGS_FILE", "MWC_PORT_MAPPINGS_JSON"] {
+            assert!(matches!(
+                validate_environment_target(target),
+                Err(InjectionError::InvalidTarget)
+            ));
+        }
+        assert!(validate_environment_target("MWC_APPLICATION_URL").is_ok());
+    }
 }

@@ -13,6 +13,7 @@ import {
   parseInternalPort,
   safeBootstrapUrl,
   validateDisplayName,
+  validateSubdomain,
   type PortMapping,
   type PortMappingsApi,
 } from "./portMappings";
@@ -31,9 +32,11 @@ interface MappingDraft {
   id: string | null;
   port: string;
   displayName: string;
+  /** Optional globally unique DNS label; blank keeps the automatic/current label. */
+  subdomain: string;
 }
 
-const EMPTY_DRAFT: MappingDraft = { id: null, port: "", displayName: "" };
+const EMPTY_DRAFT: MappingDraft = { id: null, port: "", displayName: "", subdomain: "" };
 
 /** Port forwarding controls rendered for a ready or stopped workspace. */
 export function WorkspacePortMappings({ api, workspaceId, workspaceState, onError }: Props) {
@@ -52,6 +55,7 @@ export function WorkspacePortMappings({ api, workspaceId, workspaceState, onErro
   const [dialogOpen, setDialogOpen] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<PortMapping | null>(null);
   const nameValidation = validateDisplayName(draft.displayName);
+  const subdomainValidation = validateSubdomain(draft.subdomain);
   const editing = draft.id !== null;
   const busy = saving || deleting !== null;
 
@@ -62,6 +66,9 @@ export function WorkspacePortMappings({ api, workspaceId, workspaceState, onErro
     if (code === "port_mapping_port_conflict") { setError(t("portMappingConflictUseEdit")); return; }
     if (code === "invalid_port_mapping_display_name") { setError(t("portMappingNameTooLong")); return; }
     if (code === "invalid_port_mapping_port") { setError(t("portMappingInvalidPort")); return; }
+    // Subdomain failures keep the draft inline so the user can pick a new value.
+    if (code === "subdomain_conflict") { setError(t("portMappingSubdomainConflict")); return; }
+    if (code === "invalid_port_mapping_subdomain") { setError(t("portMappingSubdomainInvalid")); return; }
     const message = failure instanceof Error ? failure.message : t("portMappingRequestFailed");
     setError(message);
     onError?.(message);
@@ -103,6 +110,7 @@ export function WorkspacePortMappings({ api, workspaceId, workspaceState, onErro
     const internalPort = parseInternalPort(draft.port);
     if (internalPort === null) return showValidation("portMappingInvalidPort");
     if (nameValidation.tooLong) return showValidation("portMappingNameTooLong");
+    if (!subdomainValidation.valid) return showValidation("portMappingSubdomainInvalid");
     const duplicate = items.some((item) => item.internal_port === internalPort && item.id !== draft.id);
     if (duplicate) return showValidation(editing ? "portMappingConflictEditOther" : "portMappingConflictUseEdit");
     if (!editing && !workspaceReady) return showValidation("portMappingAddNeedsReady");
@@ -111,12 +119,21 @@ export function WorkspacePortMappings({ api, workspaceId, workspaceState, onErro
     try {
       const displayName = nameValidation.value ? nameValidation.value : null;
       if (editing) {
-        const updated = await api.updatePortMapping(workspaceId, draft.id as string, { internal_port: internalPort, display_name: displayName });
+        const updated = await api.updatePortMapping(workspaceId, draft.id as string, {
+          internal_port: internalPort,
+          display_name: displayName,
+          // A blank field keeps the current label; the prepopulated value is
+          // sent back unchanged unless the user actually edits it.
+          ...(subdomainValidation.value ? { subdomain: subdomainValidation.value } : {}),
+        });
         setItems((current) => current.map((item) => item.id === updated.id ? updated : item));
       } else {
         const created = await api.createPortMapping(workspaceId, {
           internal_port: internalPort,
           ...(displayName ? { display_name: displayName } : {}),
+          // Omitted on purpose when blank: the backend assigns the short
+          // automatic app-<8hex> label.
+          ...(subdomainValidation.value ? { subdomain: subdomainValidation.value } : {}),
         });
         setItems((current) => [...current.filter((item) => item.id !== created.id), created]);
       }
@@ -130,7 +147,8 @@ export function WorkspacePortMappings({ api, workspaceId, workspaceState, onErro
 
   function startEdit(item: PortMapping) {
     setError(null);
-    setDraft({ id: item.id, port: String(item.internal_port), displayName: item.display_name ?? "" });
+    // Prepopulate the persisted label so users see exactly what will change.
+    setDraft({ id: item.id, port: String(item.internal_port), displayName: item.display_name ?? "", subdomain: item.subdomain });
   }
 
   async function remove() {
@@ -162,20 +180,29 @@ export function WorkspacePortMappings({ api, workspaceId, workspaceState, onErro
           <DialogContent className={styles.dialogBody}>
             <Text>{t("portMappingIntro")}</Text>
             <form className={styles.formGrid} onSubmit={(event) => void save(event)}>
-              <Field label={t("internalPort")} required><Input aria-label={t("internalPort")} disabled={(!editing && !workspaceReady) || busy} type="number" min={1} max={65535} step={1} required value={draft.port} onChange={(_, data) => setDraft((current) => ({ ...current, port: data.value }))} placeholder={t("portMappingPortPlaceholder")} /></Field>
-              <Field label={t("displayNameOptional")} validationState={nameValidation.tooLong ? "error" : undefined} validationMessage={nameValidation.tooLong ? t("portMappingNameTooLong") : undefined}>
+              <Field label={t("internalPort")} required hint={t("portMappingPortHelp")}><Input aria-label={t("internalPort")} disabled={(!editing && !workspaceReady) || busy} type="number" min={1} max={65535} step={1} required value={draft.port} onChange={(_, data) => setDraft((current) => ({ ...current, port: data.value }))} placeholder={t("portMappingPortPlaceholder")} /></Field>
+              <Field label={t("displayNameOptional")} hint={<span aria-live="polite">{t("portMappingNameCounter", { count: nameValidation.length, max: DISPLAY_NAME_MAX_CODE_POINTS })}</span>} validationState={nameValidation.tooLong ? "error" : undefined} validationMessage={nameValidation.tooLong ? t("portMappingNameTooLong") : undefined}>
                 <Input disabled={(!editing && !workspaceReady) || busy} value={draft.displayName} onChange={(_, data) => setDraft((current) => ({ ...current, displayName: data.value }))} placeholder={t("portMappingNamePlaceholder")} />
               </Field>
-              <Caption1 className={styles.formWide} aria-live="polite">{t("portMappingNameCounter", { count: nameValidation.length, max: DISPLAY_NAME_MAX_CODE_POINTS })} · {t("portMappingNameHelp")}</Caption1>
-              <Caption1 className={styles.formWide}>{t("portMappingPortHelp")}</Caption1>
+              <Field className={styles.formWide} label={t("portMappingSubdomainOptional")} hint={`${t("portMappingSubdomainHelp")} ${editing ? t("portMappingSubdomainChangeHelp") : t("portMappingSubdomainAutoHelp")}`} validationState={subdomainValidation.valid ? undefined : "error"} validationMessage={subdomainValidation.valid ? undefined : t("portMappingSubdomainInvalid")}>
+                <Input disabled={(!editing && !workspaceReady) || busy} value={draft.subdomain} onChange={(_, data) => setDraft((current) => ({ ...current, subdomain: data.value }))} placeholder={t("portMappingSubdomainPlaceholder")} />
+              </Field>
               {workspaceStopped && <Caption1 className={styles.formWide} role="status">{t("portMappingStoppedHelp")}</Caption1>}
               {!workspaceReady && !workspaceStopped && <Caption1 className={styles.formWide} role="status">{t("portMappingWorkspaceNotReady")}</Caption1>}
               <div className={`${styles.formActions} ${styles.formWide}`}>
-                <Button type="submit" appearance="primary" icon={editing ? undefined : <AddRegular />} disabled={(!editing && !workspaceReady) || busy || nameValidation.tooLong}>{saving ? (editing ? t("saving") : t("portMappingAdding")) : (editing ? t("saveMapping") : t("addMapping"))}</Button>
+                <Button type="submit" appearance="primary" icon={editing ? undefined : <AddRegular />} disabled={(!editing && !workspaceReady) || busy || nameValidation.tooLong || !subdomainValidation.valid}>{saving ? (editing ? t("saving") : t("portMappingAdding")) : (editing ? t("saveMapping") : t("addMapping"))}</Button>
                 {editing && <Button type="button" appearance="secondary" disabled={busy} onClick={() => { setDraft(EMPTY_DRAFT); setError(null); }}>{t("cancel")}</Button>}
               </div>
             </form>
             {error && <Text role="alert">{error}</Text>}
+            <section aria-label={t("portMappingAgentHintTitle")}>
+              <Caption1 block>{t("portMappingAgentHintIntro")}</Caption1>
+              <Caption1 block><code>MWC_PORT_MAPPINGS_FILE</code>{t("portMappingAgentHintFile")}</Caption1>
+              <Caption1 block><code>MWC_PORT_MAPPINGS_JSON</code>{t("portMappingAgentHintJson")}</Caption1>
+              <Caption1 block>{t("portMappingAgentHintStale")}</Caption1>
+              <Caption1 block>{t("portMappingAgentHintAuth")}</Caption1>
+              <AgentHintCommand />
+            </section>
             <section className={styles.portList} aria-live="polite">
               {loading && items.length === 0 && <Text>{t("portMappingsLoading")}</Text>}
               {!loading && items.length === 0 && !error && <Text>{t("noPortMappings")}</Text>}
@@ -198,6 +225,19 @@ export function WorkspacePortMappings({ api, workspaceId, workspaceState, onErro
       onConfirm={() => void remove()}
     />
   </>;
+}
+
+/** Copyable one-liner agents can run inside the workspace to read the live mappings file. */
+function AgentHintCommand() {
+  const { t } = useI18n();
+  const styles = useWorkspaceStyles();
+  const [copied, setCopied] = useState(false);
+  const command = 'cat "$MWC_PORT_MAPPINGS_FILE"';
+  async function copy() {
+    try { await navigator.clipboard.writeText(command); setCopied(true); window.setTimeout(() => setCopied(false), 1_200); }
+    catch { /* Clipboard permissions are optional; the command remains selectable. */ }
+  }
+  return <div className={styles.toolbarGroup}><code className={styles.code}>{command}</code><Button type="button" appearance="subtle" size="small" icon={<CopyRegular />} onClick={() => void copy()}>{copied ? t("copied") : t("portMappingCopyCommand")}</Button></div>;
 }
 
 function PortMappingRow({ api, workspaceId, workspaceReady, item, busy, deleting, editing, onEdit, onDelete, onError }: { api: PortMappingsApi; workspaceId: string; workspaceReady: boolean; item: PortMapping; busy: boolean; deleting: boolean; editing: boolean; onEdit: () => void; onDelete: () => void; onError: (error: unknown) => void }) {
@@ -225,7 +265,7 @@ function PortMappingRow({ api, workspaceId, workspaceReady, item, busy, deleting
     finally { setOpening(false); }
   }
   return <article className={styles.portRow} aria-current={editing ? "true" : undefined}>
-    <div className={styles.portMain}><Text weight="semibold">{item.display_name || `${t("portLabel")} ${item.internal_port}`}</Text><Caption1>{t("internalPort")} <span className={styles.code}>{item.internal_port}</span></Caption1>{url ? <Text className={styles.code}>{url}</Text> : <Caption1>{t("portMappingAddressPending")}</Caption1>}</div>
+    <div className={styles.portMain}><Text weight="semibold">{item.display_name || `${t("portLabel")} ${item.internal_port}`}</Text><Caption1>{t("internalPort")} <span className={styles.code}>{item.internal_port}</span></Caption1>{url ? <Text className={styles.mappingUrl}>{url}</Text> : <Caption1>{t("portMappingAddressPending")}</Caption1>}</div>
     <div className={styles.portActions}><Badge appearance="tint" color={item.status === "ready" ? "success" : item.status === "failed" ? "danger" : "informative"}>{statusLabel(item.status, t)}</Badge><Button type="button" appearance="secondary" icon={<OpenRegular />} disabled={!workspaceReady || !url || opening || item.status !== "ready"} onClick={() => void open()}>{opening ? t("portMappingOpening") : t("open")}</Button><Button type="button" appearance="subtle" icon={<CopyRegular />} disabled={!url} onClick={() => void copy()}>{copied ? t("copied") : t("copyLink")}</Button>{!item.managed && <Button type="button" appearance="subtle" icon={<EditRegular />} disabled={busy || editing} onClick={onEdit}>{editing ? t("editing") : t("edit")}</Button>}{!item.managed && <Button type="button" appearance="subtle" icon={<DeleteRegular />} className={styles.dangerButton} disabled={deleting || busy} onClick={onDelete}>{deleting ? t("deleting") : t("delete")}</Button>}</div>
   </article>;
 }
