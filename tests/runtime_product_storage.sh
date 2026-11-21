@@ -158,8 +158,12 @@ try:
                 os.close(fd)
     if stage == 'finish':
         kernel = subprocess.run(['dmesg', '--time-format', 'iso'], capture_output=True, text=True)
-        result['kernel_oom'] = [line for line in kernel.stdout.splitlines()
+        kernel_lines = kernel.stdout.splitlines()
+        result['kernel_oom'] = [line for line in kernel_lines
                                 if re.search(r'oom|out of memory|killed process|memory cgroup', line, re.I)][-80:]
+        starts = [i for i, line in enumerate(kernel_lines) if 'invoked oom-killer' in line]
+        if starts:
+            result['kernel_oom_context'] = kernel_lines[max(0, starts[0] - 3):starts[0] + 160]
         result['kernel_read_status'] = kernel.returncode
 except Exception as error:
     result['error'] = str(error)
@@ -233,10 +237,29 @@ find "$base/gvisor" -type f -printf '%P\n' > "$out/gvisor-payload-files.txt"
 for kind in home scratch; do
  if [ "$kind" = home ]; then backing=14G; pool=12G; else backing=7G; pool=6G; fi
  truncate -s "$backing" "$base/$kind.img"
- loop="$(losetup --find --show "$base/$kind.img")"; loops+=("$loop")
+ # Model a block device without an extra buffered backing-file cache. The
+ # kernel may reject or disable DIO, so verify effective flags before LVM I/O.
+ if ! loop="$(losetup --find --show --direct-io=on "$base/$kind.img")"; then
+  echo "Required direct I/O loop setup failed for $kind" >&2
+  exit 1
+ fi
+ loops+=("$loop")
+ losetup --list --json --output NAME,MAJ:MIN,BACK-FILE,DIO,LOG-SEC "$loop" > "$out/loop-$kind.json"
+ cat "/sys/block/${loop##*/}/loop/dio" > "$out/loop-$kind-sysfs-dio.txt"
+ cat "/sys/block/${loop##*/}/loop/backing_file" > "$out/loop-$kind-sysfs-backing-file.txt"
+ if ! jq -e --arg device "$loop" --arg backing "$base/$kind.img" \
+  '.loopdevices | length==1 and .[0].name==$device and .[0]["back-file"]==$backing and .[0].dio==true' "$out/loop-$kind.json" || \
+  [ "$(cat "$out/loop-$kind-sysfs-dio.txt")" != 1 ] || \
+  [ "$(cat "$out/loop-$kind-sysfs-backing-file.txt")" != "$base/$kind.img" ]; then
+  echo "Required direct I/O/backing-file identity did not read back for $loop ($kind)" >&2
+  exit 1
+ fi
  pvcreate -y "$loop"
  vgcreate "mwc-ci-$kind" "$loop"
  lvcreate -L "$pool" --poolmetadatasize 32M -T "mwc-ci-$kind/pool"
+ pvs --reportformat json -o pv_name,pv_uuid,vg_name,pv_size "$loop" > "$out/loop-$kind-pv.json"
+ lvs --reportformat json -a -o lv_name,vg_name,lv_uuid,lv_attr,segtype,pool_lv,devices "mwc-ci-$kind" > "$out/loop-$kind-lvs.json"
+ lsblk --json --paths --output NAME,MAJ:MIN,TYPE,SIZE,FSTYPE,PKNAME "$loop" > "$out/loop-$kind-device-stack.json"
 done
 vg_uuid="$(vgs --noheadings -o vg_uuid mwc-ci-scratch | tr -d '[:space:]-')"
 # LVM versions do not all name an active thin pool with a -tpool suffix.
