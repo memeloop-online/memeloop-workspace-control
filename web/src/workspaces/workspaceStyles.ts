@@ -83,6 +83,7 @@ export const useWorkspaceStyles = makeStyles({
   portList: { display: "grid", gap: tokens.spacingVerticalS, maxHeight: "360px", overflowY: "auto" },
   portRow: { display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", gap: tokens.spacingHorizontalM, alignItems: "center", padding: tokens.spacingHorizontalM, borderRadius: tokens.borderRadiusMedium, backgroundColor: tokens.colorNeutralBackground2, "@media (max-width: 600px)": { gridTemplateColumns: "1fr" } },
   portMain: { display: "grid", gap: tokens.spacingVerticalXXS, minWidth: 0 },
+  mappingUrl: { fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase200, minWidth: 0, overflowWrap: "anywhere" },
   portActions: { display: "flex", gap: tokens.spacingHorizontalXS, flexWrap: "wrap", justifyContent: "flex-end" },
   notice: { display: "flex", alignItems: "center", gap: tokens.spacingHorizontalS },
   empty: { display: "grid", placeItems: "center", minHeight: "140px", padding: tokens.spacingHorizontalL, color: tokens.colorNeutralForeground2, borderRadius: tokens.borderRadiusMedium, backgroundColor: tokens.colorNeutralBackground2 },
