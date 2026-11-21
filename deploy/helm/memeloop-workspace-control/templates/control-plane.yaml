@@ -34,6 +34,10 @@ spec:
       {{- end }}
       securityContext:
         runAsNonRoot: true
+        {{- if eq .Values.mode "sqlite" }}
+        fsGroup: 19000
+        fsGroupChangePolicy: OnRootMismatch
+        {{- end }}
         seccompProfile:
           type: RuntimeDefault
       containers:

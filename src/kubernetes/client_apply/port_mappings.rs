@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
 use k8s_openapi::api::{
-    core::v1::Service,
+    core::v1::{ConfigMap, Pod, Service},
     networking::v1::{Ingress, NetworkPolicy},
 };
 use kube::{
@@ -10,6 +10,7 @@ use kube::{
 };
 
 use crate::{storage::PortMapping, workspaces::Workspace};
+use sha2::{Digest, Sha256};
 
 use super::super::super::{
     OWNER_INSTALLATION_LABEL, WORKSPACE_ID_LABEL, port_mappings as resource_port_mappings,
@@ -63,6 +64,82 @@ impl KubernetesCoordinator {
         if self.builder.http_proxy_enabled() {
             self.prune_mapping_tls_filters(workspace, &desired_filters)
                 .await?;
+        }
+        self.apply_port_mapping_metadata(workspace, mappings)
+            .await?;
+        Ok(())
+    }
+
+    async fn apply_port_mapping_metadata(
+        &self,
+        workspace: &Workspace,
+        mappings: &[PortMapping],
+    ) -> Result<(), ReconcileError> {
+        let runtime = self.builder.runtime_names(workspace)?;
+        let name = &runtime.resources.workspace_config;
+        let maps = Api::<ConfigMap>::namespaced(self.client.clone(), workspace.runtime.namespace());
+        let existing = maps.get_opt(name).await?;
+        if let Some(existing) = &existing {
+            self.builder
+                .verify_delete_ownership(&existing.metadata, workspace.id)?;
+        }
+        let items = port_mapping_metadata(
+            workspace,
+            mappings,
+            self.builder.port_mapping_domain.as_deref(),
+        );
+        let contents = items.to_string();
+        let changed = existing
+            .as_ref()
+            .and_then(|map| map.data.as_ref())
+            .and_then(|data| data.get("port-mappings.json"))
+            != Some(&contents);
+        if changed {
+            let patch = serde_json::json!({
+                "apiVersion": "v1", "kind": "ConfigMap",
+                "metadata": {"name": name, "namespace": workspace.runtime.namespace(),
+                    "labels": self.builder.labels(workspace.id)},
+                "data": {"port-mappings.json": contents},
+            });
+            observe_request(
+                workspace.id,
+                "ConfigMap",
+                name,
+                "apply-port-metadata",
+                maps.patch(
+                    name,
+                    &PatchParams::apply("mwc-port-mapping-metadata"),
+                    &Patch::Apply(&patch),
+                ),
+            )
+            .await?;
+        }
+        // Updating existing Pod metadata prompts kubelet to refresh its projected ConfigMap.
+        // This is asynchronous and changes neither Pod identity nor its StatefulSet template.
+        let pods = Api::<Pod>::namespaced(self.client.clone(), workspace.runtime.namespace());
+        let pod_name = runtime.resources.pod_ordinal_zero();
+        if let Some(pod) = pods.get_opt(&pod_name).await? {
+            self.builder
+                .verify_delete_ownership(&pod.metadata, workspace.id)?;
+            let hash = format!("{:x}", Sha256::digest(contents.as_bytes()));
+            let key = "workspace.memeloop.dev/port-mappings-hash";
+            if pod
+                .metadata
+                .annotations
+                .as_ref()
+                .and_then(|annotations| annotations.get(key))
+                != Some(&hash)
+            {
+                let patch = serde_json::json!({"metadata": {"uid":pod.metadata.uid, "resourceVersion":pod.metadata.resource_version, "annotations":{(key): hash}}});
+                match pods
+                    .patch(&pod_name, &PatchParams::default(), &Patch::Merge(&patch))
+                    .await
+                {
+                    Ok(_) => {}
+                    Err(kube::Error::Api(error)) if error.code == 404 => {}
+                    Err(error) => return Err(error.into()),
+                }
+            }
         }
         Ok(())
     }
@@ -231,4 +308,25 @@ impl KubernetesCoordinator {
         }
         Ok(())
     }
+}
+
+// This projected file describes configured public routes; it is not an authorization token
+// or a live application health probe. Read it again to discover subsequent mapping edits.
+fn port_mapping_metadata(
+    workspace: &Workspace,
+    mappings: &[PortMapping],
+    domain: Option<&str>,
+) -> serde_json::Value {
+    let items: Vec<_> = mappings.iter().filter_map(|mapping| {
+        let domain = domain?;
+        Some(serde_json::json!({
+            "id": mapping.id,
+            "internal_port": mapping.internal_port,
+            "display_name": mapping.display_name,
+            "https_url": format!("https://{}", resource_port_mappings::hostname(mapping, domain)),
+            "status": "configured",
+            "managed": workspace.template.desktop.as_ref().is_some_and(|desktop| desktop.internal_port == mapping.internal_port),
+        }))
+    }).collect();
+    serde_json::json!(items)
 }

@@ -265,6 +265,16 @@ fn port_mapping_response(error: &StorageError) -> Option<ErrorResponse> {
             "invalid_port_mapping_display_name",
             "port mapping display name must be at most 80 characters",
         ),
+        StorageError::InvalidPortMappingSubdomain => response(
+            StatusCode::BAD_REQUEST,
+            "invalid_port_mapping_subdomain",
+            "choose a DNS label of 1 through 63 letters, digits, or hyphens, starting and ending with a letter or digit",
+        ),
+        StorageError::PortMappingSubdomainConflict => response(
+            StatusCode::CONFLICT,
+            "subdomain_conflict",
+            "this subdomain is already in use; choose another one",
+        ),
         _ => return None,
     })
 }

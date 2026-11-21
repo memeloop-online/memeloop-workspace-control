@@ -8,6 +8,8 @@ export interface PortMapping {
   id: string;
   internal_port: number;
   display_name: string | null;
+  /** Persisted DNS label assigned by the backend (a custom value or the automatic app-<8hex> label). */
+  subdomain: string;
   status: "provisioning" | "ready" | "failed" | "deleting" | string;
   https_url: string | null;
   /** Managed mappings are created by a workspace capability and cannot be removed manually. */
@@ -19,12 +21,16 @@ export interface PortMapping {
 export interface CreatePortMappingInput {
   internal_port: number;
   display_name?: string;
+  /** Optional globally unique DNS label; when omitted the backend assigns an automatic app-<8hex> label. */
+  subdomain?: string;
 }
 
 export interface UpdatePortMappingInput {
   internal_port: number;
   /** `null` clears the name; the server trims and normalizes blank names. */
   display_name: string | null;
+  /** Optional; when omitted or `null` the current label is retained unchanged. */
+  subdomain?: string | null;
 }
 
 export interface PortMappingsApi {
@@ -63,6 +69,29 @@ export function validateDisplayName(raw: string): DisplayNameValidation {
   const value = raw.trim();
   const length = codePointLength(value);
   return { value, length, tooLong: length > DISPLAY_NAME_MAX_CODE_POINTS };
+}
+
+/** Maximum length of a single DNS label, matching RFC 1035 and the backend. */
+export const SUBDOMAIN_MAX_LENGTH = 63;
+
+export interface SubdomainValidation {
+  /** Trimmed, lowercased value to send; empty means the field was left blank. */
+  value: string;
+  /** True for blank input or a well-formed DNS single label. */
+  valid: boolean;
+}
+
+/**
+ * Normalize and validate the optional subdomain prefix: a single DNS label of
+ * 1–63 ASCII lowercase letters, digits, or hyphens that starts and ends with
+ * a letter or digit. Blank input is valid and means "keep the automatic or
+ * current label"; the domain suffix always comes from the platform.
+ */
+export function validateSubdomain(raw: string): SubdomainValidation {
+  const value = raw.trim().toLowerCase();
+  if (!value) return { value: "", valid: true };
+  const valid = value.length <= SUBDOMAIN_MAX_LENGTH && /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(value);
+  return { value, valid };
 }
 
 export function parseInternalPort(value: string): number | null {

@@ -305,6 +305,8 @@ jobs:
           grep -q '^    whenDeleted: Retain$' <<<"${rendered_sqlite_default}"
           grep -q '^    whenScaled: Retain$' <<<"${rendered_sqlite_default}"
           grep -q '^  volumeClaimTemplates:$' <<<"${rendered_sqlite_default}"
+          grep -q '^        fsGroup: 19000$' <<<"${rendered_sqlite_default}"
+          grep -q '^        fsGroupChangePolicy: OnRootMismatch$' <<<"${rendered_sqlite_default}"
           if invalid_namespace_output=$(linux-amd64/helm template wrong-namespace \
             deploy/helm/memeloop-workspace-control \
             --namespace default \

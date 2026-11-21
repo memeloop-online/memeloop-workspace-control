@@ -93,10 +93,10 @@ pub fn name(mapping: &PortMapping) -> String {
 }
 
 /// Requires a wildcard DNS record and wildcard TLS certificate for
-/// `*.{wildcard_domain}`.  UUID-derived labels are DNS-safe and never reveal
-/// a user supplied workspace name or application port.
+/// `*.{wildcard_domain}`. The persisted single DNS label is shared with the API
+/// and authorization lookup. Resource names remain UUID-derived.
 pub fn hostname(mapping: &PortMapping, wildcard_domain: &str) -> String {
-    format!("p-{}.{}", mapping.id.simple(), wildcard_domain)
+    mapping.hostname(wildcard_domain)
 }
 
 /// This additional policy is intentionally separate from the base workspace
@@ -167,6 +167,7 @@ mod tests {
             workspace_id: Uuid::nil(),
             internal_port: 3000,
             display_name: None,
+            subdomain: "preview".to_owned(),
             created_by: Uuid::nil(),
             created_at: 1,
         };
@@ -181,12 +182,12 @@ mod tests {
         let ingress_spec = ingress.spec.unwrap();
         assert_eq!(
             ingress_spec.rules.unwrap()[0].host.as_deref(),
-            Some("p-00000000000000000000000000000000.ports.example.test")
+            Some("preview.ports.example.test")
         );
         let tls = &ingress_spec.tls.unwrap()[0];
         assert_eq!(
             tls.hosts.as_deref(),
-            Some(["p-00000000000000000000000000000000.ports.example.test".to_owned()].as_slice())
+            Some(["preview.ports.example.test".to_owned()].as_slice())
         );
         assert_eq!(tls.secret_name.as_deref(), Some("mwc-port-mapping-tls"));
     }
@@ -199,6 +200,7 @@ mod tests {
             workspace_id: Uuid::nil(),
             internal_port: 3000,
             display_name: None,
+            subdomain: "preview".to_owned(),
             created_by: Uuid::nil(),
             created_at: 1,
         };

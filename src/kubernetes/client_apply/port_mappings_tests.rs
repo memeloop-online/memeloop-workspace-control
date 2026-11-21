@@ -5,6 +5,8 @@ use std::{
     time::Duration,
 };
 
+use http_body_util::BodyExt;
+
 use axum::{
     body::Body,
     http::{Method, Request, Response, StatusCode},
@@ -58,6 +60,31 @@ impl PruneMock {
             .lock()
             .unwrap()
             .push((method.clone(), path.clone()));
+        if path.contains("/pods/") {
+            return Response::builder().status(404).header("content-type", "application/json")
+                .body(Body::from(json!({"apiVersion":"v1", "kind":"Status", "status":"Failure", "reason":"NotFound", "code":404}).to_string())).unwrap();
+        }
+        if path.contains("/configmaps/") {
+            if method == Method::GET {
+                return Response::builder().status(200).header("content-type", "application/json")
+                    .body(Body::from(json!({"apiVersion":"v1", "kind":"ConfigMap", "metadata":{
+                        "name":path.rsplit('/').next().unwrap(), "namespace":NAMESPACE,
+                        "labels":{(OWNER_INSTALLATION_LABEL):"mapping-test", (WORKSPACE_ID_LABEL):self.workspace_id.to_string()}
+                    }, "data":{"sshd_config":"preserved", "mwc-workspace-bootstrap":"preserved"}}).to_string())).unwrap();
+            }
+            assert_eq!(method, Method::PATCH);
+            let body: serde_json::Value =
+                serde_json::from_slice(&request.into_body().collect().await.unwrap().to_bytes())
+                    .unwrap();
+            assert_eq!(body["data"]["port-mappings.json"], "[]");
+            // SSA owns only metadata key; the ordinary config and bootstrap remain untouched.
+            assert_eq!(body["data"].as_object().unwrap().len(), 1);
+            return Response::builder()
+                .status(200)
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap();
+        }
         let (status, body) = if method == Method::GET {
             let (_, kind) = COLLECTIONS
                 .iter()
@@ -242,7 +269,7 @@ async fn empty_mappings_list_concurrently_and_delete_owned_residue_in_order() {
         ]
     );
     let requests = mock.requests.lock().unwrap();
-    assert_eq!(requests.len(), 6);
+    assert_eq!(requests.len(), 9);
     assert!(
         requests[..3]
             .iter()
@@ -268,4 +295,113 @@ async fn failed_cleanup_list_keeps_reconciliation_failed_without_deletes() {
         Err(ReconcileError::Kubernetes(kube::Error::Api(status))) if status.code == 500,
     ));
     assert!(mock.deletes().is_empty());
+}
+
+#[tokio::test]
+async fn metadata_uses_ingress_hostname_and_reflects_edits_and_removal_without_credentials() {
+    let (workspace, mut mapping) = overlap::metadata_fixture();
+    let items = port_mapping_metadata(&workspace, &[mapping.clone()], Some("apps.example"));
+    assert_eq!(
+        items[0]["https_url"],
+        format!(
+            "https://{}",
+            resource_port_mappings::hostname(&mapping, "apps.example")
+        )
+    );
+    assert_eq!(items[0]["status"], "configured");
+    assert_eq!(items[0].as_object().unwrap().len(), 6);
+    mapping.display_name = Some("中文 \"quoted\" \\path".to_owned());
+    mapping.internal_port = 9000;
+    let updated = port_mapping_metadata(&workspace, &[mapping.clone()], Some("apps.example"));
+    assert_eq!(updated[0]["display_name"], mapping.display_name.unwrap());
+    assert_eq!(updated[0]["internal_port"], 9000);
+    assert_eq!(updated[0]["https_url"], items[0]["https_url"]);
+    assert_eq!(
+        port_mapping_metadata(&workspace, &[], Some("apps.example")),
+        json!([])
+    );
+}
+
+#[tokio::test]
+async fn metadata_changes_preserve_config_and_only_refresh_existing_pod_once_per_contents() {
+    let (base, _, _) = setup(false, false);
+    let (workspace, mut mapping) = overlap::metadata_fixture();
+    let mut builder = base.builder;
+    builder.port_mapping_domain = Some("apps.example".to_owned());
+    let labels = builder.labels(workspace.id);
+    let objects = Arc::new(Mutex::new((
+        json!({"apiVersion":"v1","kind":"ConfigMap","metadata":{"name":"fixture-config","labels":labels},"data":{"sshd_config":"keep sshd","mwc-workspace-bootstrap":"keep script"}}),
+        json!({"apiVersion":"v1","kind":"Pod","metadata":{"uid":"original-pod-uid","resourceVersion":"1","labels":labels},"spec":{"containers":[{"name":"workspace","image":"keep-image"}]}}),
+        Vec::<String>::new(),
+    )));
+    let captured = objects.clone();
+    let service = service_fn(move |request: Request<kube::client::Body>| {
+        let captured = captured.clone();
+        async move {
+            let path = request.uri().path().to_owned();
+            let method = request.method().clone();
+            let body = request.into_body().collect().await.unwrap().to_bytes();
+            let mut state = captured.lock().unwrap();
+            let is_config = path.contains("/configmaps/");
+            assert!(is_config || path.contains("/pods/"));
+            if method == Method::PATCH {
+                let patch: serde_json::Value = serde_json::from_slice(&body).unwrap();
+                if is_config {
+                    assert_eq!(patch["data"].as_object().unwrap().len(), 1);
+                    state.0["data"]["port-mappings.json"] =
+                        patch["data"]["port-mappings.json"].clone();
+                } else {
+                    assert_eq!(patch["metadata"]["uid"], "original-pod-uid");
+                    assert!(patch.get("spec").is_none());
+                    state.1["metadata"]["annotations"] = patch["metadata"]["annotations"].clone();
+                }
+                state.2.push(path);
+            } else {
+                assert_eq!(method, Method::GET);
+            }
+            let value = if is_config {
+                state.0.clone()
+            } else {
+                state.1.clone()
+            };
+            Ok::<_, Infallible>(
+                Response::builder()
+                    .status(200)
+                    .header("content-type", "application/json")
+                    .body(Body::from(value.to_string()))
+                    .unwrap(),
+            )
+        }
+    });
+    let coordinator = KubernetesCoordinator::new(kube::Client::new(service, NAMESPACE), builder);
+    coordinator
+        .apply_port_mapping_metadata(&workspace, &[mapping.clone()])
+        .await
+        .unwrap();
+    coordinator
+        .apply_port_mapping_metadata(&workspace, &[mapping.clone()])
+        .await
+        .unwrap();
+    assert_eq!(
+        objects.lock().unwrap().2.len(),
+        2,
+        "unchanged metadata never patches either object again"
+    );
+    mapping.display_name = Some("updated name".to_owned());
+    mapping.internal_port = 9000;
+    coordinator
+        .apply_port_mapping_metadata(&workspace, &[mapping])
+        .await
+        .unwrap();
+    coordinator
+        .apply_port_mapping_metadata(&workspace, &[])
+        .await
+        .unwrap();
+    let state = objects.lock().unwrap();
+    assert_eq!(state.2.len(), 6);
+    assert_eq!(state.0["data"]["sshd_config"], "keep sshd");
+    assert_eq!(state.0["data"]["mwc-workspace-bootstrap"], "keep script");
+    assert_eq!(state.0["data"]["port-mappings.json"], "[]");
+    assert_eq!(state.1["metadata"]["uid"], "original-pod-uid");
+    assert_eq!(state.1["spec"]["containers"][0]["image"], "keep-image");
 }
