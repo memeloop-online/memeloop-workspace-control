@@ -14,7 +14,7 @@ use uuid::Uuid;
 
 use crate::{
     auth::Permission,
-    storage::{IdempotencyDecision, NewJob, PortMapping, StorageError, validate_http_port},
+    storage::{IdempotencyDecision, NewJob, PortMapping, StorageError},
 };
 
 use super::{
@@ -112,8 +112,6 @@ pub(super) async fn create(
     Path(workspace_id): Path<Uuid>,
     Json(request): Json<CreatePortMappingRequest>,
 ) -> Result<Response, ApiError> {
-    validate_http_port(request.internal_port)
-        .map_err(|_| ApiError::BadRequest("port is not an allowed workspace HTTP port"))?;
     let actor = principal(&state, &headers).await?;
     let workspace = state.database.get_workspace(workspace_id).await?;
     if !actor.allows(Permission::ConnectWorkspace, workspace.organization_id)
