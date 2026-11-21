@@ -26,10 +26,148 @@ exec > >(tee "$out/product-csi.log") 2>&1
 mount_namespace="/proc/$$/ns/mnt"
 test "$(readlink "$mount_namespace")" != "$(readlink /proc/1/ns/mnt)"
 test "$(findmnt -n -o PROPAGATION --mountpoint /)" = private
-k3s_pid=''; containerd_pid=''; loops=()
+k3s_pid=''; containerd_pid=''; loops=(); diagnostic_case=''
 kube() { KUBECONFIG="$base/kubeconfig" "$base/k3s-bin" kubectl "$@"; }
 cri() { crictl --runtime-endpoint "unix://$base/containerd.sock" --image-endpoint "unix://$base/containerd.sock" "$@"; }
 ctr_ci() { ctr --address "$base/containerd.sock" --namespace k8s.io "$@"; }
+# Preserve only storage/process identities, never the runsc state's OCI env.
+# Frozen cgroup paths remain observable after an OOM has removed its PIDs.
+storage_diagnostics() {
+ python3 - "$base" "$diagnostic_case" "$runtime" "$main_id" "$publish" "$1" <<'PY'
+import datetime, json, os, pathlib, re, stat, subprocess, sys
+base, output = map(pathlib.Path, sys.argv[1:3])
+runtime, main, publish, stage = sys.argv[3:]
+identity_file = output / 'runtime-storage-identity.json'
+result = {'stage': stage, 'time': datetime.datetime.now(datetime.timezone.utc).isoformat()}
+try:
+    if stage == 'before-write':
+        record = json.loads((base / 'state' / runtime / (main + '.json')).read_text())
+        upper = pathlib.Path(publish) / 'runtime-private' / main / 'upper'
+        assert record['id'] == main and record['phase'] == 'created'
+        assert record['scratch']['path'] == publish and record['upper'] == str(upper)
+        mounts = [line for line in pathlib.Path('/proc/self/mountinfo').read_text().splitlines()
+                  if line.split()[4] == record['rootfs']]
+        assert len(mounts) == 1 and ' - overlay ' in mounts[0], mounts
+        assert 'upperdir=' + str(upper) in mounts[0].split(' - ', 1)[1].split()[2].split(',')
+        identity = {'main_id': main, 'publish': publish, 'upper': str(upper),
+                    'scratch_mount': record['scratch']['mount'], 'scratch_inode': record['scratch']['inode'],
+                    'rootfs_mount': mounts[0],
+                    'processes': [], 'gofer_mounts': [], 'cgroups': []}
+        if runtime == 'mwc-runsc':
+            pod = json.loads((output / 'pod-current.json').read_text())
+            ids = [s['containerID'].removeprefix('containerd://') for s in pod['status']['containerStatuses']]
+            states = []
+            for cid in ids:
+                paths = list((base / 'runsc-state/k8s.io').glob(cid + '_sandbox:*.state'))
+                assert len(paths) == 1, (cid, paths)
+                states.append((cid, json.loads(paths[0].read_text())))
+            sandbox_ids = {state['sandbox']['id'] for _, state in states}
+            assert len(sandbox_ids) == 1, sandbox_ids
+            sandbox_id = sandbox_ids.pop()
+            paths = list((base / 'runsc-state/k8s.io').glob(sandbox_id + '_sandbox:*.state'))
+            assert len(paths) == 1, paths
+            states.append((sandbox_id, json.loads(paths[0].read_text())))
+            processes = set()
+            cgroups = set()
+            for cid, state in states:
+                confs = state['goferMountConfs']
+                assert confs and all(c['upper'] == 0 for c in confs), (cid, confs)
+                identity['gofer_mounts'].append({'container_id': cid, 'mount_confs': confs})
+                for role, pid in [('sentry', state['sandbox']['pid']), ('gofer', state['goferPid'])]:
+                    assert pid > 0, (role, pid)
+                    if (role, pid) in processes:
+                        continue
+                    processes.add((role, pid))
+                    proc = pathlib.Path('/proc', str(pid))
+                    membership = proc.joinpath('cgroup').read_text().splitlines()
+                    unified = [line[3:] for line in membership if line.startswith('0::')]
+                    assert len(unified) == 1 and unified[0].startswith('/'), membership
+                    group = pathlib.Path('/sys/fs/cgroup') / unified[0].lstrip('/')
+                    assert group.is_relative_to('/sys/fs/cgroup') and '..' not in group.parts
+                    assert (group / 'memory.events').is_file() and (group / 'memory.current').is_file(), group
+                    fd_targets = []
+                    for fd in proc.joinpath('fd').iterdir():
+                        try:
+                            fd_targets.append(os.readlink(fd))
+                        except FileNotFoundError:
+                            pass
+                    assert not any('filestore' in target for target in fd_targets)
+                    status = proc.joinpath('status').read_text().splitlines()
+                    seccomp = [line.split(':', 1)[1].strip() for line in status if line.startswith('Seccomp:')]
+                    assert seccomp == ['2'], (role, pid, seccomp)
+                    identity['processes'].append({'role': role, 'pid': pid, 'cgroup': str(group),
+                                                  'host_seccomp': 2, 'filestore_fd_present': False})
+                    while True:
+                        cgroups.add(str(group))
+                        if group == pathlib.Path('/sys/fs/cgroup'):
+                            break
+                        group = group.parent
+            identity['cgroups'] = sorted(cgroups)
+        identity_file.write_text(json.dumps(identity, indent=2) + '\n')
+    identity = json.loads(identity_file.read_text())
+    result['memory'] = []
+    for group in identity['cgroups']:
+        entry = {'path': group}
+        for name in ('memory.current', 'memory.max', 'memory.peak', 'memory.events',
+                     'memory.events.local', 'memory.stat', 'cgroup.procs'):
+            try:
+                entry[name] = pathlib.Path(group, name).read_text()
+            except OSError as error:
+                entry[name] = {'error': str(error)}
+        result['memory'].append(entry)
+    if stage in ('root-written', 'root-full'):
+        # No-follow every component, then the exact upper file. Host fsync and
+        # allocated blocks prove that guest writes reached the genuine CSI LV.
+        fds = []
+        try:
+            for path in (identity['publish'], identity['upper']):
+                fd = os.open('/', os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+                fds.append(fd)
+                for part in pathlib.Path(path).parts[1:]:
+                    fd = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=fd)
+                    fds.append(fd)
+                if path == identity['publish']:
+                    publish_fd = fd
+                    published = os.fstat(fd)
+                    assert published.st_ino == identity['scratch_inode']
+                else:
+                    upper_fd = fd
+            fd = os.open('storage-ci-root-fill', os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=upper_fd)
+            fds.append(fd)
+            before = os.fstat(fd)
+            assert stat.S_ISREG(before.st_mode)
+            assert before.st_dev == published.st_dev == os.fstat(upper_fd).st_dev
+            assert f'{os.major(before.st_dev)}:{os.minor(before.st_dev)}' == identity['scratch_mount']['device']
+            for held in (publish_fd, upper_fd, fd):
+                info = pathlib.Path('/proc/self/fdinfo', str(held)).read_text().splitlines()
+                mount_ids = [int(line.split(':', 1)[1]) for line in info if line.startswith('mnt_id:')]
+                assert mount_ids == [identity['scratch_mount']['id']], mount_ids
+            expected = 2415919104
+            if stage == 'root-full':
+                expected += json.loads((output / 'root-enospc.json').read_text())['written_bytes']
+            assert before.st_size == expected and before.st_blocks * 512 >= expected, (before.st_size, before.st_blocks, expected)
+            os.fsync(fd)
+            after = os.fstat(fd)
+            assert (after.st_dev, after.st_ino, after.st_size) == (before.st_dev, before.st_ino, before.st_size)
+            result['host_upper_file'] = {'path': str(pathlib.Path(identity['upper']) / 'storage-ci-root-fill'),
+                                         'device': identity['scratch_mount']['device'], 'inode': after.st_ino,
+                                         'size': after.st_size, 'allocated_bytes': after.st_blocks * 512,
+                                         'host_fsync': True}
+        finally:
+            for fd in reversed(fds):
+                os.close(fd)
+    if stage == 'finish':
+        kernel = subprocess.run(['dmesg', '--time-format', 'iso'], capture_output=True, text=True)
+        result['kernel_oom'] = [line for line in kernel.stdout.splitlines()
+                                if re.search(r'oom|out of memory|killed process|memory cgroup', line, re.I)][-80:]
+        result['kernel_read_status'] = kernel.returncode
+except Exception as error:
+    result['error'] = str(error)
+    raise
+finally:
+    (output / ('runtime-storage-' + stage + '.json')).write_text(json.dumps(result, indent=2) + '\n')
+PY
+}
 snapshot() {
  kube get pods,pvc -A -o json > "$out/final-pods-pvc.json" 2>/dev/null || true
  kube get pv,logicalvolumes.topolvm.io -o json > "$out/final-pv-lv.json" 2>/dev/null || true
@@ -44,6 +182,7 @@ snapshot() {
 finish() {
  status=$?
  trap - EXIT
+ if [ -n "$diagnostic_case" ]; then storage_diagnostics finish || status=1; fi
  snapshot
  if [ -n "$k3s_pid" ]; then kill "$k3s_pid" 2>/dev/null || true; wait "$k3s_pid" || true; fi
  if [ -n "$containerd_pid" ]; then kill "$containerd_pid" 2>/dev/null || true; wait "$containerd_pid" || true; fi
@@ -410,12 +549,15 @@ for enabled in false true; do
  grep -q MWC_LOG_PREVIOUS "$case_out/log-previous-markers.txt"
  ssh_product 'test "$(cat /home/user/storage-ci-home-marker)" = home-survives; printf strict-ssh-logs-ok' > "$case_out/strict-ssh-logs.txt"
  kube exec -i -n "$namespace" "$pod" -c workspace -- sh -ec 'cat > /usr/local/bin/storage-ci-probe; chmod 0755 /usr/local/bin/storage-ci-probe' < "$RUNNER_TEMP/product-storage-bin/mwc-budget-probe"
+ diagnostic_case="$case_out"
+ storage_diagnostics before-write
  timeout 180s "$base/k3s-bin" kubectl --kubeconfig "$base/kubeconfig" exec -n "$namespace" "$pod" -c workspace -- /usr/local/bin/storage-ci-probe write /storage-ci-root-fill 2415919104 > "$case_out/root-over-two-gib.json"
  jq -e '.written_bytes==2415919104 and .fsync_result==0 and .fsync_errno==0' "$case_out/root-over-two-gib.json"
  kube exec -n "$namespace" "$pod" -c workspace -- stat -c '%s %b' /storage-ci-root-fill > "$case_out/root-over-two-gib-stat.txt"
  read -r logical blocks < "$case_out/root-over-two-gib-stat.txt"
  test "$logical" = 2415919104
  test "$((blocks*512))" -ge 2415919104
+ storage_diagnostics root-written
  # Cross several kubelet summary/eviction cycles with the same running Pod.
  for n in $(seq 1 30); do
   check_identity
@@ -432,6 +574,7 @@ for enabled in false true; do
  test "$volume_accounted" = true
  timeout 180s "$base/k3s-bin" kubectl --kubeconfig "$base/kubeconfig" exec -n "$namespace" "$pod" -c workspace -- /usr/local/bin/storage-ci-probe fill /storage-ci-root-fill > "$case_out/root-enospc.json"
  jq -e '.write_errno==28 or .write_errno==122' "$case_out/root-enospc.json"
+ storage_diagnostics root-full
  kube exec -n "$namespace" "$pod" -c workspace -- /usr/local/bin/storage-ci-probe pwrite /tmp/storage-ci-temp-fill > "$case_out/tmp-enospc.json"
  kube exec -n "$namespace" "$pod" -c workspace -- /usr/local/bin/storage-ci-probe pwrite /var/lib/mwc/build-scratch/storage-ci-cache-fill > "$case_out/cache-enospc.json"
  kube exec -n "$namespace" "$pod" -c workspace -- sha256sum /etc/hosts > "$case_out/hosts-before.sha256"
@@ -488,6 +631,7 @@ for enabled in false true; do
  test "$remaining" = 0
  jq -n --arg runtime "$runtime" --argjson buildkit "$enabled" --arg uid "$uid" --arg new_uid "$new_uid" --arg scratch_uid "$scratch_uid" --arg home_uid "$home_uid" \
   '{accepted:true,runtime:$runtime,buildkit:$buildkit,root_written_bytes:2415919104,root_fsync:true,scratch_enospc:true,logs_rotation:true,logs_follow_reopen:true,logs_previous:true,kubelet_logs_accounted:true,kubelet_scratch_accounted:true,logs_share_scratch:true,ssh_survived:true,pod_identity_preserved_under_pressure:true,old_pod_uid:$uid,new_pod_uid:$new_uid,scratch_pvc_uid:$scratch_uid,home_pvc_uid:$home_uid,pvc_reused:true,node_unpublish_observed:true,pv_lv_deleted:true,crash_reboot_proven:false,all_templates_proven:false,eviction_settings_changed:false}' > "$case_out/acceptance.json"
+ diagnostic_case=''
 done
 done
 snapshot
