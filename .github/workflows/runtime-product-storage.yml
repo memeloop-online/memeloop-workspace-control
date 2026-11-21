@@ -42,7 +42,7 @@ jobs:
           mkdir -p "$release" "$RUNNER_TEMP/product-storage-bin"
           gh api repos/memeloop-online/memeloop-workspace-control/actions/artifacts/14695821561/zip > "$RUNNER_TEMP/wrapper-release.zip"
           echo "eb738bea10473f7bc76c2198b0265913ffb150e6dd8a90485ffbda632ecd4e22  $RUNNER_TEMP/wrapper-release.zip" | sha256sum -c -
-          test "$(stat -c %s "$RUNNER_TEMP/wrapper-release.zip")" = 4833551
+          test "$(stat -c %s "$RUNNER_TEMP/wrapper-release.zip")" = 4838070
           unzip -q "$RUNNER_TEMP/wrapper-release.zip" -d "$release"
           test "$(find "$release" -type f | wc -l)" = 4
           (cd "$release" && sha256sum -c SHA256SUMS)
