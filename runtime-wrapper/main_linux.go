@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -581,15 +582,15 @@ func resolve(c config, pod string, all []mount) (scratch, error) {
 	return matches[0], nil
 }
 
-// TopoLVM publishes root-owned 2777 roots. Only the validated scratch leaf is
-// tightened, after every OCI source has been restricted to its data subtree.
+// TopoLVM publishes root-owned 2777 roots. Apply the BDI policy and tighten the
+// validated scratch leaf after checking all scratch OCI sources.
 func protectScratch(c config, s scratch) error {
 	all, err := mounts()
 	if err != nil {
 		return err
 	}
 	m, err := atMount(all, s.Path)
-	if err != nil || m.ID != s.Mount.ID || m.Device != s.Mount.Device || m.Root != "/" {
+	if err != nil || m.ID != s.Mount.ID || m.Device != s.Mount.Device || m.Root != "/" || m.FS != "xfs" || !strings.HasPrefix(m.Flags, "rw") {
 		return errors.New("scratch publish changed before protection")
 	}
 	info, err := os.ReadFile(fmt.Sprintf("/proc/self/fdinfo/%d", s.rootFD.Fd()))
@@ -612,16 +613,71 @@ func protectScratch(c config, s scratch) error {
 	if err != nil || dm != s.DMUUID {
 		return errors.New("scratch DM identity changed before protection")
 	}
-	if st.Mode&0022 != 0 {
-		if st.Mode&07777 != 02777 {
-			return errors.New("unsupported scratch publish permissions")
-		}
+	tighten := st.Mode&0022 != 0
+	if tighten && st.Mode&07777 != 02777 {
+		return errors.New("unsupported scratch publish permissions")
+	}
+	// The held XFS mount pins the checked LV. Set its BDI policy before
+	// changing scratch metadata or creating any runtime-owned scratch files.
+	if err := setScratchWriteback(m.Device); err != nil {
+		return fmt.Errorf("scratch BDI %s strict_limit: %w", m.Device, err)
+	}
+	if tighten {
 		if err = syscall.Fchmod(int(s.rootFD.Fd()), 0755); err != nil {
 			return err
 		}
 	}
 	return revalidate(c, s)
 }
+
+// Call only with dev from a pinned scratch mount checked by protectScratch.
+func setScratchWriteback(dev string) error {
+	want := "/sys/devices/virtual/bdi/" + dev
+	path, err := filepath.EvalSymlinks("/sys/dev/block/" + dev + "/bdi")
+	if err != nil {
+		return err
+	}
+	if path != want {
+		return fmt.Errorf("unexpected block-device BDI path %q", path)
+	}
+	dir, err := openTrusted(want, true)
+	if err != nil {
+		return err
+	}
+	defer dir.Close()
+	fd, err := syscall.Openat(int(dir.Fd()), "strict_limit", syscall.O_RDWR|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
+	if err != nil {
+		return err
+	}
+	f := os.NewFile(uintptr(fd), "strict_limit")
+	defer f.Close()
+	const sysfsMagic = 0x62656572
+	var fs syscall.Statfs_t
+	if err := syscall.Fstatfs(fd, &fs); err != nil {
+		return err
+	}
+	if fs.Type != sysfsMagic {
+		return errors.New("strict_limit is not a sysfs attribute")
+	}
+	// Every create sets the same value. Deleting one container must not
+	// restore the setting while other containers can still use this LV.
+	const enabled = "1\n"
+	if _, err := f.WriteString(enabled); err != nil {
+		return err
+	}
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		return err
+	}
+	value, err := io.ReadAll(io.LimitReader(f, 16))
+	if err != nil {
+		return err
+	}
+	if string(value) != enabled {
+		return fmt.Errorf("unexpected readback %q", value)
+	}
+	return nil
+}
+
 func revalidate(c config, s scratch) error {
 	all, err := mounts()
 	if err != nil {
