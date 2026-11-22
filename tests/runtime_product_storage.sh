@@ -16,6 +16,10 @@ out="$GITHUB_WORKSPACE/artifacts"
 fixtures="$RUNNER_TEMP/product-storage-fixtures"
 namespace=memeloop-workspace-control
 mkdir -p "$base" "$out" "$base/state/mwc-native" "$base/state/mwc-runsc"
+writeback_experiment="${MWC_CSI_WRITEBACK_EXPERIMENT:-false}"
+case "$writeback_experiment" in true|false) ;; *) exit 64 ;; esac
+jq -n --argjson enabled "$writeback_experiment" \
+ '{enabled:$enabled,experimental_policy:"one eighth of the smallest finite actual host memory.max, rounded down to a page",production_policy:false}' > "$out/writeback-experiment.json"
 # The hosted VM's /var/log can be group-writable, which the runtime correctly
 # rejects. Keep kubelet and wrapper logs under the same trusted, dedicated root.
 install -d -o root -g root -m 0755 "$pod_log_root"
@@ -251,25 +255,103 @@ finally:
     (output / ('runtime-storage-' + stage + '.json')).write_text(json.dumps(result, indent=2) + '\n')
 PY
 }
+# CI hypothesis only. One owner applies one policy to this disposable scratch LV;
+# no wrapper, Home device, thin pool, global sysctl or memory limit is changed.
+apply_writeback_experiment() {
+ [ "$writeback_experiment" = true ] || return 0
+ python3 - "$diagnostic_case" <<'PY'
+import datetime, json, os, pathlib, subprocess, sys
+output = pathlib.Path(sys.argv[1])
+identity = json.loads((output / 'runtime-storage-identity.json').read_text())
+device = identity['scratch_mount']['device']
+major, minor = map(int, device.split(':'))
+assert identity['scratch_mount']['fs'] == 'xfs'
+assert f'{os.major(pathlib.Path(identity["publish"]).stat().st_dev)}:{os.minor(pathlib.Path(identity["publish"]).stat().st_dev)}' == device
+rows = json.loads(subprocess.check_output(['lvs', '--reportformat', 'json', '-o',
+    'lv_uuid,vg_uuid,vg_name,lv_attr,lv_kernel_major,lv_kernel_minor'], text=True))
+matches = [lv for report in rows['report'] for lv in report['lv']
+           if int(lv['lv_kernel_major']) == major and int(lv['lv_kernel_minor']) == minor]
+assert len(matches) == 1
+lv = matches[0]
+config = json.loads(pathlib.Path('/etc/mwc-runtime-wrapper.json').read_text())
+vg_uuid, lv_uuid = lv['vg_uuid'].replace('-', ''), lv['lv_uuid'].replace('-', '')
+assert lv['vg_name'] == 'mwc-ci-scratch' and lv['lv_attr'].startswith('V')
+assert vg_uuid == config['scratch_vg_uuid']
+sysdev = pathlib.Path('/sys/dev/block', device)
+assert sysdev.joinpath('dm/uuid').read_text().strip() == 'LVM-' + vg_uuid + lv_uuid
+bdi = sysdev.joinpath('bdi').resolve(strict=True)
+assert bdi.name == device
+limits = {}
+assert identity['processes']
+for process in identity['processes']:
+    membership = pathlib.Path('/proc', str(process['pid']), 'cgroup').read_text().splitlines()
+    assert '0::' + (process['cgroup'].removeprefix('/sys/fs/cgroup') or '/') in membership
+for group in identity['cgroups']:
+    path = pathlib.Path(group)
+    assert path.stat().st_ino == identity['cgroup_inodes'][group]
+    maximum = path / 'memory.max'
+    if maximum.exists() and maximum.read_text().strip() != 'max':
+        limits[group] = int(maximum.read_text())
+assert limits and min(limits.values()) > 0
+page = os.sysconf('SC_PAGE_SIZE')
+budget = min(limits.values()) // 8 // page * page
+assert budget > 0
+def readback():
+    return {name: (bdi / name).read_text().strip()
+            for name in ('max_bytes', 'max_ratio', 'max_ratio_fine', 'strict_limit')}
+receipt = {'at': datetime.datetime.now(datetime.timezone.utc).isoformat(),
+           'experiment_only': True, 'device': device, 'bdi': str(bdi), 'lv_uuid': lv['lv_uuid'],
+           'finite_memory_limits': limits, 'requested_max_bytes': budget, 'before': readback()}
+(output / 'writeback-budget-intent.json').write_text(json.dumps(receipt, indent=2) + '\n')
+(bdi / 'max_bytes').write_text(str(budget))
+(bdi / 'strict_limit').write_text('1')
+receipt['after'] = readback()
+assert receipt['after']['strict_limit'] == '1' and int(receipt['after']['max_ratio_fine']) > 0
+# max_bytes stores a ratio, so the effective byte readback can legitimately drift.
+(output / 'writeback-budget-applied.json').write_text(json.dumps(receipt, indent=2) + '\n')
+PY
+}
 # Observe only frozen host cgroup counters while the unchanged guest writer runs.
 # The sampler is bounded by the same 180-second writer deadline and owns no mounts.
 storage_write() {
  local write_status=0
- python3 - "$diagnostic_case" "$1" <<'PY' &
-import datetime, json, pathlib, signal, sys, time
+ python3 - "$diagnostic_case" "$1" "$base" "$case_id" "$address" "$writeback_experiment" <<'PY' &
+import datetime, json, pathlib, signal, subprocess, sys, threading, time
 output, phase = pathlib.Path(sys.argv[1]), sys.argv[2]
 identity = json.loads((output / 'runtime-storage-identity.json').read_text())
-stopping = False
+base, case_id, address, experiment = sys.argv[3:]
+stopping = threading.Event()
+stop_requested = False
 def stop(*unused):
-    global stopping
-    stopping = True
+    global stop_requested
+    stop_requested = True
 signal.signal(signal.SIGTERM, stop)
 keys = {'anon', 'file', 'kernel', 'shmem', 'file_dirty', 'file_writeback',
         'inactive_file', 'active_file', 'pgscan', 'pgsteal', 'pgfault', 'pgmajfault'}
 deadline = time.monotonic() + 180
+def probe_ssh():
+    command = ['ssh', '-F', '/dev/null', '-p', '2222', '-o', 'BatchMode=yes',
+               '-o', 'StrictHostKeyChecking=yes', '-o', 'ConnectTimeout=5',
+               '-o', 'UserKnownHostsFile=' + base + '/known-' + case_id,
+               '-i', base + '/client-' + case_id, 'user@' + address, 'true']
+    with (output / ('runtime-storage-' + phase + '-ssh.jsonl')).open('w') as stream:
+        while not stopping.is_set() and time.monotonic() < deadline:
+            started = time.monotonic()
+            result = {'at': datetime.datetime.now(datetime.timezone.utc).isoformat(), 'deadline_seconds': 5}
+            try:
+                result['exit'] = subprocess.run(command, timeout=5, stdout=subprocess.DEVNULL,
+                                                stderr=subprocess.DEVNULL).returncode
+            except subprocess.TimeoutExpired:
+                result['timeout'] = True
+            result['seconds'] = time.monotonic() - started
+            stream.write(json.dumps(result) + '\n'); stream.flush()
+            stopping.wait(2)
+ssh_thread = threading.Thread(target=probe_ssh) if experiment == 'true' else None
+if ssh_thread:
+    ssh_thread.start()
 with (output / ('runtime-storage-' + phase + '-pressure.jsonl')).open('w') as stream:
     while True:
-        if stopping or time.monotonic() >= deadline:
+        if stop_requested or time.monotonic() >= deadline:
             break
         sample = {'time': datetime.datetime.now(datetime.timezone.utc).isoformat(), 'memory': []}
         for group in identity['cgroups']:
@@ -282,7 +364,7 @@ with (output / ('runtime-storage-' + phase + '-pressure.jsonl')).open('w') as st
                     continue
             except OSError as error:
                 entry['inode_error'] = str(error)
-            for name in ('memory.current', 'memory.events', 'memory.events.local', 'memory.pressure', 'memory.stat'):
+            for name in ('memory.current', 'memory.events', 'memory.events.local', 'memory.pressure', 'io.pressure', 'memory.stat'):
                 try:
                     text = pathlib.Path(group, name).read_text()
                     entry[name] = ({line.split()[0]: int(line.split()[1]) for line in text.splitlines()
@@ -291,6 +373,12 @@ with (output / ('runtime-storage-' + phase + '-pressure.jsonl')).open('w') as st
                     entry[name] = {'available': False, 'error': str(error)}
             sample['memory'].append(entry)
         bdi = pathlib.Path('/sys/dev/block', identity['scratch_mount']['device'], 'bdi').resolve(strict=False)
+        sample['scratch_bdi_limits'] = {}
+        for name in ('max_bytes', 'max_ratio_fine', 'strict_limit'):
+            try:
+                sample['scratch_bdi_limits'][name] = (bdi / name).read_text().strip()
+            except OSError as error:
+                sample['scratch_bdi_limits'][name] = {'available': False, 'error': str(error)}
         try:
             with (pathlib.Path('/sys/kernel/debug/bdi', bdi.name, 'wb_stats')).open() as stats:
                 text = stats.read(65537)
@@ -299,13 +387,19 @@ with (output / ('runtime-storage-' + phase + '-pressure.jsonl')).open('w') as st
             sample['scratch_wb_stats'] = {'available': False, 'error': str(error)}
         stream.write(json.dumps(sample) + '\n')
         stream.flush()
-        time.sleep(min(0.5, max(0, deadline - time.monotonic())))
+        stopping.wait(min(0.5, max(0, deadline - time.monotonic())))
+stopping.set()
+if ssh_thread:
+    ssh_thread.join(timeout=6)
 PY
  diagnostic_monitor_pid=$!
+ local started=$SECONDS
  timeout 180s "$base/k3s-bin" kubectl --kubeconfig "$base/kubeconfig" exec -n "$namespace" "$pod" -c workspace -- /usr/local/bin/storage-ci-probe "$@" || write_status=$?
  kill "$diagnostic_monitor_pid" 2>/dev/null || true
  wait "$diagnostic_monitor_pid" || write_status=1
  diagnostic_monitor_pid=''
+ jq -n --arg phase "$1" --argjson seconds "$((SECONDS-started))" --argjson status "$write_status" \
+  '{phase:$phase,elapsed_seconds:$seconds,exit:$status}' > "$diagnostic_case/runtime-storage-$1-duration.json"
  return "$write_status"
 }
 snapshot() {
@@ -714,6 +808,7 @@ for enabled in false true; do
  kube exec -i -n "$namespace" "$pod" -c workspace -- sh -ec 'cat > /usr/local/bin/storage-ci-probe; chmod 0755 /usr/local/bin/storage-ci-probe' < "$RUNNER_TEMP/product-storage-bin/mwc-budget-probe"
  diagnostic_case="$case_out"
  storage_diagnostics before-write
+ apply_writeback_experiment
  storage_write write /storage-ci-root-fill 2415919104 > "$case_out/root-over-two-gib.json"
  jq -e '.written_bytes==2415919104 and .fsync_result==0 and .fsync_errno==0' "$case_out/root-over-two-gib.json"
  kube exec -n "$namespace" "$pod" -c workspace -- stat -c '%s %b' /storage-ci-root-fill > "$case_out/root-over-two-gib-stat.txt"
@@ -798,9 +893,9 @@ for enabled in false true; do
 done
 done
 snapshot
-jq -es --arg renderer "$PRODUCT_RENDERER_SHA" --arg wrapper "$WRAPPER_SHA" --arg product "$(jq -r '.pod.spec.containers[]|select(.name=="workspace")|.image' "$fixtures/mwc-native-buildkit-false.json")" '
+jq -es --arg renderer "$PRODUCT_RENDERER_SHA" --arg wrapper "$WRAPPER_SHA" --argjson experiment "$writeback_experiment" --arg product "$(jq -r '.pod.spec.containers[]|select(.name=="workspace")|.image' "$fixtures/mwc-native-buildkit-false.json")" '
  sort_by(.runtime,.buildkit) as $cases |
  if ($cases|length)==4 and ([$cases[]|[.runtime,.buildkit]]==[["mwc-native",false],["mwc-native",true],["mwc-runsc",false],["mwc-runsc",true]]) and
  all($cases[]; .accepted and .root_written_bytes>2147483648 and .root_fsync and .scratch_enospc and .logs_rotation and .logs_follow_reopen and .logs_previous and .kubelet_logs_accounted and .kubelet_scratch_accounted and .logs_share_scratch and .ssh_survived and .pod_identity_preserved_under_pressure and .pvc_reused and .node_unpublish_observed and .pv_lv_deleted)
- then {accepted:true,renderer_sha:$renderer,wrapper_sha:$wrapper,product:$product,cases:$cases,real_csi:true,production_deployed:false,runtime_matrix_complete:true}
+ then {accepted:true,renderer_sha:$renderer,wrapper_sha:$wrapper,product:$product,cases:$cases,real_csi:true,production_deployed:false,runtime_matrix_complete:true,writeback_experiment:$experiment}
  else error("incomplete real CSI quota runtime matrix") end' "$out/"mwc-*/acceptance.json > "$out/acceptance.json"
