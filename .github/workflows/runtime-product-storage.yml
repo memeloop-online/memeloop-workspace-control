@@ -7,10 +7,11 @@ on:
     paths: ['tests/runtime_product_storage*', 'tests/runtime-product-vm/**', 'src/kubernetes/workspace_pod*', 'src/kubernetes/workspace_pod/**', '.github/workflows/runtime-product-storage.yml']
   workflow_dispatch:
     inputs:
-      writeback_budget_experiment:
-        description: 'Experiment only: constrain the independent scratch BDI without changing workload limits'
-        type: boolean
-        default: false
+      writeback_experiment:
+        description: 'CI-only scratch BDI experiment; compare runs three complete matrices on this runner'
+        type: choice
+        options: [control, strict-only, budget, compare]
+        default: control
         required: false
 permissions:
   contents: read
@@ -85,7 +86,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     env:
-      MWC_CSI_WRITEBACK_EXPERIMENT: ${{ github.event_name == 'workflow_dispatch' && inputs.writeback_budget_experiment && 'true' || 'false' }}
+      MWC_CSI_WRITEBACK_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.writeback_experiment || 'control' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -127,7 +128,7 @@ jobs:
       - name: Actual Rust product and TopoLVM lifecycle
         run: |
           status=0
-          sudo --preserve-env=GITHUB_ACTIONS,GITHUB_WORKSPACE,RUNNER_TEMP,PRODUCT_RENDERER_SHA,WRAPPER_SHA,MWC_PRODUCT_STORAGE_INPUTS,MWC_CSI_WRITEBACK_EXPERIMENT \
+          sudo --preserve-env=GITHUB_ACTIONS,GITHUB_WORKSPACE,RUNNER_TEMP,PRODUCT_RENDERER_SHA,WRAPPER_SHA,MWC_PRODUCT_STORAGE_INPUTS,MWC_CSI_WRITEBACK_MODE \
             unshare --mount --propagation private bash tests/runtime_product_storage.sh || status=$?
           sudo chown -R "$(id -u):$(id -g)" artifacts
           exit "$status"
