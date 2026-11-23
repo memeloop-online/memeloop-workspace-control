@@ -70,6 +70,7 @@ pub use plugin_package_store::{
     PluginPackageRecord, PluginUiSession, StorePluginInspection,
 };
 pub use plugin_store::{PluginConfigurationWrite, StoredPluginConfiguration};
+pub(crate) use port_mappings::PORT_MAPPING_RECONCILE_JOB;
 pub use port_mappings::{IssuedPortMappingTicket, PortMapping, hash_secret, validate_http_port};
 pub use runtime_incidents::{
     NewWorkspaceRuntimeIncident, RuntimeEventCategory, WorkspaceRuntimeIncident,

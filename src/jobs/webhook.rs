@@ -97,7 +97,9 @@ impl ControlPlaneJobHandler {
 impl JobHandler for ControlPlaneJobHandler {
     async fn handle(&self, job: &ClaimedJob) -> Result<(), JobHandlerError> {
         match job.kind.as_str() {
-            "reconcile_workspace" | "workspace_storage_shrink" => {
+            "reconcile_workspace"
+            | "workspace_storage_shrink"
+            | crate::storage::PORT_MAPPING_RECONCILE_JOB => {
                 self.workspace
                     .as_ref()
                     .ok_or_else(|| {

@@ -95,6 +95,9 @@ async fn test_state(database: Database, database_url: &str) -> (AppState, Uuid) 
 #[path = "api_workspaces/creation_capacity.rs"]
 mod creation_capacity;
 
+#[path = "api_workspaces/port_mapping_isolation.rs"]
+mod port_mapping_isolation;
+
 fn request(
     method: Method,
     uri: &str,
