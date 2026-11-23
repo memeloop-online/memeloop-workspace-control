@@ -29,6 +29,7 @@ pub(super) fn router(state: Arc<AppState>) -> Router {
             state.clone(),
             metrics::count,
         ))
+        .layer(axum::middleware::from_fn(auth::authentik::csrf))
         .with_state(state)
 }
 

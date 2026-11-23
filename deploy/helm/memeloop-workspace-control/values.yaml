@@ -32,6 +32,14 @@ controlPlane:
   # is provisioned from node-local storage.
   nodeSelector: {}
 
+# Optional browser SSO with a dedicated authentik Forward Auth (single app) provider.
+# Route /outpost.goauthentik.io/ on origin to the same outpost. Map immutable
+# authentik UID strings to existing Workspace Control user IDs.
+browserAuth:
+  origin: ""
+  outpost: ""
+  users: {}
+
 workspace:
   storageClassName: ""
   # Required CSI class for temporary build/cache storage. Each workspace uses one

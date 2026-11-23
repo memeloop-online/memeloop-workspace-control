@@ -1,4 +1,5 @@
 {
+  "ssoAccountNotLinked": "This authentik account has no enabled Workspace Control account linked.",
   "language": "Language",
   "languageChinese": "简体中文",
   "languageEnglish": "English",

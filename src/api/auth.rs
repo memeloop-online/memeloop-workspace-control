@@ -6,22 +6,38 @@ use crate::storage::Principal;
 
 use super::{ApiError, AppState};
 
+pub(super) mod authentik;
+
 pub(super) async fn principal(
     state: &AppState,
     headers: &HeaderMap,
 ) -> Result<Principal, ApiError> {
-    let authorization = headers
-        .get(axum::http::header::AUTHORIZATION)
-        .and_then(|value| value.to_str().ok())
-        .ok_or(ApiError::Unauthorized)?;
-    let token = authorization
-        .strip_prefix("Bearer ")
-        .ok_or(ApiError::Unauthorized)?;
-    state
-        .database
-        .authenticate(token)
+    optional_principal(state, headers)
         .await?
         .ok_or(ApiError::Unauthorized)
+}
+
+pub(super) async fn optional_principal(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<Option<Principal>, ApiError> {
+    if let Some(authorization) = headers.get(axum::http::header::AUTHORIZATION) {
+        let token = authorization
+            .to_str()
+            .ok()
+            .and_then(|value| value.strip_prefix("Bearer "))
+            .ok_or(ApiError::Unauthorized)?;
+        return Ok(state.database.authenticate(token).await?);
+    }
+    if let Some(user_id) = authentik::browser_user(headers).await? {
+        return state
+            .database
+            .browser_principal(user_id)
+            .await?
+            .map(Some)
+            .ok_or(ApiError::Forbidden);
+    }
+    Ok(None)
 }
 
 #[utoipa::path(
