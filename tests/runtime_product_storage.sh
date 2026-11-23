@@ -16,14 +16,6 @@ out="$GITHUB_WORKSPACE/artifacts"
 fixtures="$RUNNER_TEMP/product-storage-fixtures"
 namespace=memeloop-workspace-control
 mkdir -p "$base" "$out" "$base/state/mwc-native" "$base/state/mwc-runsc"
-writeback_mode="${MWC_CSI_WRITEBACK_MODE:-control}"
-case "$writeback_mode" in
- compare) writeback_modes=(strict-only budget control) ;;
- control|strict-only|budget) writeback_modes=("$writeback_mode") ;;
- *) exit 64 ;;
-esac
-jq -n --arg mode "$writeback_mode" --arg kernel "$(uname -r)" --argjson modes "$(jq -n --args '$ARGS.positional' "${writeback_modes[@]}")" \
- '{mode:$mode,execution_order:$modes,kernel:$kernel,budget_policy:"one eighth of the smallest finite actual host memory.max, rounded down to a page",production_policy:false}' > "$out/writeback-experiment.json"
 # The hosted VM's /var/log can be group-writable, which the runtime correctly
 # rejects. Keep kubelet and wrapper logs under the same trusted, dedicated root.
 install -d -o root -g root -m 0755 "$pod_log_root"
@@ -35,9 +27,32 @@ mount_namespace="/proc/$$/ns/mnt"
 test "$(readlink "$mount_namespace")" != "$(readlink /proc/1/ns/mnt)"
 test "$(findmnt -n -o PROPAGATION --mountpoint /)" = private
 k3s_pid=''; containerd_pid=''; loops=(); diagnostic_case=''; diagnostic_monitor_pid=''
+runtime_config=''; restore_config=''
 kube() { KUBECONFIG="$base/kubeconfig" "$base/k3s-bin" kubectl "$@"; }
 cri() { crictl --runtime-endpoint "unix://$base/containerd.sock" --image-endpoint "unix://$base/containerd.sock" "$@"; }
 ctr_ci() { ctr --address "$base/containerd.sock" --namespace k8s.io "$@"; }
+restore_wrapper_config() {
+ if [ -n "$restore_config" ]; then
+  mv "$restore_config" "$runtime_config" || return 1
+  restore_config=''
+ fi
+}
+writeback_state() {
+ python3 "$GITHUB_WORKSPACE/tests/runtime_product_storage_bdi.py" "$vg_uuid" "$pool_uuid" "$@"
+}
+check_active_writeback() {
+ local checkpoint="$1" scratch_path="$2" home_path="$3"
+ writeback_state "$scratch_path" "$home_path" > "$case_out/writeback-$checkpoint.json"
+ jq -es '
+  .[0] as $before | .[1] as $after |
+  ($before.scratch.knobs.strict_limit==0) and
+  ($after.scratch.knobs.strict_limit==1) and
+  ([$before.scratch.dm_uuid, ($before.scratch.knobs | del(.strict_limit))] ==
+   [$after.scratch.dm_uuid, ($after.scratch.knobs | del(.strict_limit))]) and
+  ([$before.home.dm_uuid, $before.home.knobs] == [$after.home.dm_uuid, $after.home.knobs]) and
+  ($before.scope==$after.scope)
+ ' "$case_out/writeback-rejected.json" "$case_out/writeback-$checkpoint.json"
+}
 # Preserve only storage/process identities, never the runsc state's OCI env.
 # Frozen cgroup paths remain observable after an OOM has removed its PIDs.
 storage_diagnostics() {
@@ -70,6 +85,7 @@ try:
         assert 'upperdir=' + str(upper) in mounts[0].split(' - ', 1)[1].split()[2].split(',')
         identity = {'main_id': main, 'publish': publish, 'upper': str(upper),
                     'scratch_mount': record['scratch']['mount'], 'scratch_inode': record['scratch']['inode'],
+                    'scratch_dm_uuid': record['scratch']['dm_uuid'],
                     'rootfs_mount': mounts[0],
                     'processes': [], 'gofer_mounts': [], 'cgroups': []}
         cgroups = set()
@@ -259,79 +275,15 @@ finally:
     (output / ('runtime-storage-' + stage + '.json')).write_text(json.dumps(result, indent=2) + '\n')
 PY
 }
-# CI hypothesis only. One owner applies one policy to this disposable scratch LV;
-# no wrapper, Home device, thin pool, global sysctl or memory limit is changed.
-apply_writeback_mode() {
- python3 - "$diagnostic_case" "$mode" <<'PY'
-import datetime, json, os, pathlib, subprocess, sys
-output = pathlib.Path(sys.argv[1])
-mode = sys.argv[2]
-assert mode in ('control', 'strict-only', 'budget')
-identity = json.loads((output / 'runtime-storage-identity.json').read_text())
-device = identity['scratch_mount']['device']
-major, minor = map(int, device.split(':'))
-assert identity['scratch_mount']['fs'] == 'xfs'
-assert f'{os.major(pathlib.Path(identity["publish"]).stat().st_dev)}:{os.minor(pathlib.Path(identity["publish"]).stat().st_dev)}' == device
-rows = json.loads(subprocess.check_output(['lvs', '--reportformat', 'json', '-o',
-    'lv_uuid,vg_uuid,vg_name,lv_attr,lv_kernel_major,lv_kernel_minor'], text=True))
-matches = [lv for report in rows['report'] for lv in report['lv']
-           if int(lv['lv_kernel_major']) == major and int(lv['lv_kernel_minor']) == minor]
-assert len(matches) == 1
-lv = matches[0]
-config = json.loads(pathlib.Path('/etc/mwc-runtime-wrapper.json').read_text())
-vg_uuid, lv_uuid = lv['vg_uuid'].replace('-', ''), lv['lv_uuid'].replace('-', '')
-assert lv['vg_name'] == 'mwc-ci-scratch' and lv['lv_attr'].startswith('V')
-assert vg_uuid == config['scratch_vg_uuid']
-sysdev = pathlib.Path('/sys/dev/block', device)
-assert sysdev.joinpath('dm/uuid').read_text().strip() == 'LVM-' + vg_uuid + lv_uuid
-bdi = sysdev.joinpath('bdi').resolve(strict=True)
-assert bdi.name == device
-limits = {}
-assert identity['processes']
-for process in identity['processes']:
-    membership = pathlib.Path('/proc', str(process['pid']), 'cgroup').read_text().splitlines()
-    assert '0::' + (process['cgroup'].removeprefix('/sys/fs/cgroup') or '/') in membership
-for group in identity['cgroups']:
-    path = pathlib.Path(group)
-    assert path.stat().st_ino == identity['cgroup_inodes'][group]
-    maximum = path / 'memory.max'
-    if maximum.exists() and maximum.read_text().strip() != 'max':
-        limits[group] = int(maximum.read_text())
-assert limits and min(limits.values()) > 0
-page = os.sysconf('SC_PAGE_SIZE')
-budget = min(limits.values()) // 8 // page * page
-assert budget > 0
-def readback():
-    return {name: (bdi / name).read_text().strip()
-            for name in ('max_bytes', 'max_ratio', 'max_ratio_fine', 'strict_limit')}
-receipt = {'at': datetime.datetime.now(datetime.timezone.utc).isoformat(),
-           'mode': mode, 'production_policy': False, 'device': device, 'bdi': str(bdi), 'lv_uuid': lv['lv_uuid'],
-           'finite_memory_limits': limits, 'requested_max_bytes': budget if mode == 'budget' else None,
-           'before': readback()}
-assert receipt['before']['max_ratio_fine'] == '1000000' and receipt['before']['strict_limit'] == '0'
-(output / 'writeback-mode-intent.json').write_text(json.dumps(receipt, indent=2) + '\n')
-if mode == 'budget':
-    (bdi / 'max_bytes').write_text(str(budget))
-if mode != 'control':
-    (bdi / 'strict_limit').write_text('1')
-receipt['after'] = readback()
-assert receipt['after']['strict_limit'] == ('0' if mode == 'control' else '1')
-assert int(receipt['after']['max_ratio_fine']) > 0
-if mode != 'budget':
-    assert receipt['after']['max_ratio_fine'] == receipt['before']['max_ratio_fine'] == '1000000'
-# max_bytes stores a ratio, so the effective byte readback can legitimately drift.
-(output / 'writeback-mode-applied.json').write_text(json.dumps(receipt, indent=2) + '\n')
-PY
-}
 # Observe only frozen host cgroup counters while the unchanged guest writer runs.
 # The sampler is bounded by the same 180-second writer deadline and owns no mounts.
 storage_write() {
  local write_status=0
- python3 - "$diagnostic_case" "$1" "$base" "$case_id" "$address" "$mode" <<'PY' &
+ python3 - "$diagnostic_case" "$1" "$base" "$case_id" "$address" <<'PY' &
 import datetime, json, pathlib, signal, subprocess, sys, threading, time
 output, phase = pathlib.Path(sys.argv[1]), sys.argv[2]
 identity = json.loads((output / 'runtime-storage-identity.json').read_text())
-base, case_id, address, mode = sys.argv[3:]
+base, case_id, address = sys.argv[3:]
 stopping = threading.Event()
 stop_requested = False
 def stop(*unused):
@@ -349,7 +301,7 @@ def probe_ssh():
     with (output / ('runtime-storage-' + phase + '-ssh.jsonl')).open('w') as stream:
         while not stopping.is_set() and time.monotonic() < deadline:
             started = time.monotonic()
-            result = {'at': datetime.datetime.now(datetime.timezone.utc).isoformat(), 'mode': mode, 'deadline_seconds': 5}
+            result = {'at': datetime.datetime.now(datetime.timezone.utc).isoformat(), 'deadline_seconds': 5}
             try:
                 result['exit'] = subprocess.run(command, timeout=5, stdout=subprocess.DEVNULL,
                                                 stderr=subprocess.DEVNULL).returncode
@@ -364,7 +316,7 @@ with (output / ('runtime-storage-' + phase + '-pressure.jsonl')).open('w') as st
     while True:
         if stop_requested or time.monotonic() >= deadline:
             break
-        sample = {'time': datetime.datetime.now(datetime.timezone.utc).isoformat(), 'mode': mode, 'memory': []}
+        sample = {'time': datetime.datetime.now(datetime.timezone.utc).isoformat(), 'memory': []}
         for group in identity['cgroups']:
             entry = {'path': group}
             try:
@@ -409,8 +361,8 @@ PY
  kill "$diagnostic_monitor_pid" 2>/dev/null || true
  wait "$diagnostic_monitor_pid" || write_status=1
  diagnostic_monitor_pid=''
- jq -n --arg mode "$mode" --arg phase "$1" --argjson seconds "$elapsed" --argjson status "$write_status" \
-  '{mode:$mode,phase:$phase,elapsed_seconds:$seconds,exit:$status}' > "$diagnostic_case/runtime-storage-$1-duration.json"
+ jq -n --arg phase "$1" --argjson seconds "$elapsed" --argjson status "$write_status" \
+  '{phase:$phase,elapsed_seconds:$seconds,exit:$status}' > "$diagnostic_case/runtime-storage-$1-duration.json"
  return "$write_status"
 }
 snapshot() {
@@ -427,6 +379,7 @@ snapshot() {
 finish() {
  status=$?
  trap - EXIT
+ restore_wrapper_config || status=1
  if [ -n "$diagnostic_monitor_pid" ]; then
   kill "$diagnostic_monitor_pid" 2>/dev/null || true
   wait "$diagnostic_monitor_pid" || true
@@ -679,13 +632,11 @@ YAML
 KUBECONFIG="$base/kubeconfig" "$base/linux-amd64/helm" install topolvm "$base/topolvm.tgz" -n topolvm-system --create-namespace -f "$base/topolvm-values.yaml" --wait --timeout 5m
 kube get storageclasses,csidrivers,csinodes -o json > "$out/actual-csi-installation.json"
 
-for mode in "${writeback_modes[@]}"; do
 for runtime in mwc-native mwc-runsc; do
 for enabled in false true; do
- fixture_id="$runtime-buildkit-$enabled"
- case_id="$mode-$fixture_id"
- fixture="$fixtures/$fixture_id.json"
- case_out="$out/$mode/$fixture_id"; mkdir -p "$case_out"
+ case_id="$runtime-buildkit-$enabled"
+ fixture="$fixtures/$case_id.json"
+ case_out="$out/$case_id"; mkdir -p "$case_out"
  jq -e --arg runtime "$runtime" --argjson enabled "$enabled" '.pod.spec.runtimeClassName==$runtime and .scope.runtime==$runtime and .scope.buildkit==$enabled and .scope.scratch_gib>=4 and .scratch.spec.resources.requests.storage=="4Gi" and all((.pod.spec.containers + (.pod.spec.initContainers // []))[]; (.resources.limits // {} | has("ephemeral-storage") | not))' "$fixture"
  pod="$(jq -r '.names.pod' "$fixture")"
  home_claim="$(jq -r '.names.home' "$fixture")"
@@ -696,10 +647,33 @@ for enabled in false true; do
  ssh-keygen -q -t ed25519 -N '' -f "$base/host-$case_id"
  kube create secret generic -n "$namespace" "$identity" \
   --from-file="ssh_host_ed25519_key=$base/host-$case_id" --from-file="ssh_host_ed25519_key.pub=$base/host-$case_id.pub"
+ # Let real CSI publish fresh volumes, but reject the first sandbox using a
+ # wrong thin-pool UUID in the correct VG. This observes the default knob
+ # without resetting it between cases or bypassing the candidate wrapper.
+ runtime_config=/etc/mwc-runtime-wrapper.json
+ if [ "$runtime" = mwc-runsc ]; then runtime_config=/etc/mwc-runsc-wrapper.json; fi
+ wrong_pool="LVM-${vg_uuid}00000000000000000000000000000000-tpool"
+ test "$wrong_pool" != "$pool_uuid"
+ writeback_state > "$case_out/writeback-before-pod.json"
+ saved_config="$(mktemp "$runtime_config.positive.XXXXXX")"
+ cp -p "$runtime_config" "$saved_config"
+ restore_config="$saved_config"
+ wrong_config="$(mktemp "$runtime_config.wrong-pool.XXXXXX")"
+ jq --arg pool "$wrong_pool" '.scratch_pool_dm_uuid=$pool' "$restore_config" > "$wrong_config"
+ mv "$wrong_config" "$runtime_config"
+ errors="$base/state/$runtime/errors.log"
+ error_offset=0
+ if [ -f "$errors" ]; then error_offset="$(wc -l < "$errors")"; fi
  jq '.statefulset' "$fixture" | kube apply -f -
- kube wait -n "$namespace" --for=condition=Ready "pod/$pod" --timeout=10m
- kube get pod -n "$namespace" "$pod" -o json > "$case_out/pod-initial.json"
- uid="$(jq -r '.metadata.uid' "$case_out/pod-initial.json")"
+ for n in $(seq 1 150); do
+  if kube get pod -n "$namespace" "$pod" -o json > "$case_out/writeback-rejected-pod.json" 2>/dev/null &&
+     [ -s "$errors" ] &&
+     tail -n "+$((error_offset+1))" "$errors" | grep -F 'expected exactly one trusted scratch publish, got 0' > "$case_out/writeback-rejected-errors.txt"; then break; fi
+  sleep 2
+ done
+ test -s "$case_out/writeback-rejected-errors.txt"
+ uid="$(jq -er '.metadata.uid' "$case_out/writeback-rejected-pod.json")"
+ jq -e 'all(.status.conditions[]?; .type!="Ready" or .status!="True")' "$case_out/writeback-rejected-pod.json"
  scratch_uid="$(kube get pvc -n "$namespace" "$scratch_claim" -o jsonpath='{.metadata.uid}')"
  home_uid="$(kube get pvc -n "$namespace" "$home_claim" -o jsonpath='{.metadata.uid}')"
  scratch_pv="$(kube get pvc -n "$namespace" "$scratch_claim" -o jsonpath='{.spec.volumeName}')"
@@ -707,6 +681,20 @@ for enabled in false true; do
  kube get pv "$scratch_pv" "$home_pv" -o json > "$case_out/actual-pvs.json"
  jq -e 'all(.items[];.spec.csi.driver=="topolvm.io" and .status.phase=="Bound")' "$case_out/actual-pvs.json"
  publish="/var/lib/kubelet/pods/$uid/volumes/kubernetes.io~csi/$scratch_pv/mount"
+ home_publish="/var/lib/kubelet/pods/$uid/volumes/kubernetes.io~csi/$home_pv/mount"
+ pod_logs="$pod_log_root/${namespace}_${pod}_${uid}"
+ writeback_state "$publish" "$home_publish" > "$case_out/writeback-rejected.json"
+ jq -es '.[0].scope==.[1].scope and .[1].scratch.knobs.strict_limit==0 and .[1].home.knobs.strict_limit==0' \
+  "$case_out/writeback-before-pod.json" "$case_out/writeback-rejected.json"
+ test ! -e "$publish/runtime-private"
+ test ! -L "$publish/runtime-private"
+ test ! -L "$pod_logs"
+ if grep -F "$publish/runtime-private/" /proc/self/mountinfo; then exit 1; fi
+ restore_wrapper_config
+ kube wait -n "$namespace" --for=condition=Ready "pod/$pod" --timeout=10m
+ kube get pod -n "$namespace" "$pod" -o json > "$case_out/pod-initial.json"
+ jq -e --arg uid "$uid" '.metadata.uid==$uid' "$case_out/pod-initial.json"
+ check_active_writeback first-ready "$publish" "$home_publish"
  test -f "$(dirname "$publish")/vol_data.json"
  cp "$(dirname "$publish")/vol_data.json" "$case_out/actual-csi-vol-data.json"
  findmnt -J -T "$publish" > "$case_out/actual-publish-mount.json"
@@ -743,12 +731,14 @@ for enabled in false true; do
  tty_id="$(jq -r '.status.containerStatuses[]|select(.name=="ttyd")|.containerID|sub("containerd://";"")' "$case_out/pod-initial.json")"
  cri stop "$tty_id"
  cri rm "$tty_id"
+ check_active_writeback peer-deleted "$publish" "$home_publish"
  for n in $(seq 1 90); do
   replacement_tty="$(kube get pod -n "$namespace" "$pod" -o json | jq -r '.status.containerStatuses[]|select(.name=="ttyd" and .ready)|.containerID|sub("containerd://";"")')"
   if [ -n "$replacement_tty" ] && [ "$replacement_tty" != "$tty_id" ]; then break; fi
   sleep 1
  done
  test -n "$replacement_tty"; test "$replacement_tty" != "$tty_id"
+ check_active_writeback peer-recreated "$publish" "$home_publish"
  test "$(kube get pod -n "$namespace" "$pod" -o json | jq -r '.status.containerStatuses[]|select(.name=="workspace")|.containerID|sub("containerd://";"")')" = "$main_id"
  ssh_product 'test "$(cat /home/user/storage-ci-home-marker)" = home-survives; printf main-survives-sidecar-delete' > "$case_out/strict-ssh-sidecar-replacement.txt"
  active_ids="$(kube get pod -n "$namespace" "$pod" -o json | jq '[.status.containerStatuses[].containerID|sub("containerd://";"")]')"
@@ -759,7 +749,6 @@ for enabled in false true; do
   test "$(stat -Lc %d "$upper")" = "$(stat -Lc %d "$publish")"
  done
  kube exec -i -n "$namespace" "$pod" -c workspace -- sh -ec 'cat > /usr/local/bin/storage-ci-probe; chmod 0755 /usr/local/bin/storage-ci-probe' < "$RUNNER_TEMP/product-storage-bin/mwc-budget-probe"
- pod_logs="$pod_log_root/${namespace}_${pod}_${uid}"
  test -L "$pod_logs"
  test "$(readlink "$pod_logs")" = "$publish/runtime-private/logs/$uid"
  test "$(stat -Lc %d "$pod_logs")" = "$(stat -Lc %d "$publish")"
@@ -821,7 +810,11 @@ for enabled in false true; do
  kube exec -i -n "$namespace" "$pod" -c workspace -- sh -ec 'cat > /usr/local/bin/storage-ci-probe; chmod 0755 /usr/local/bin/storage-ci-probe' < "$RUNNER_TEMP/product-storage-bin/mwc-budget-probe"
  diagnostic_case="$case_out"
  storage_diagnostics before-write
- apply_writeback_mode
+ check_active_writeback before-writer "$publish" "$home_publish"
+ jq -es '
+  .[0].scratch as $bdi | .[1].scratch_mount.device==$bdi.device and .[1].scratch_dm_uuid==$bdi.dm_uuid and
+  all(.[2][]; .scratch.mount.device==$bdi.device and .scratch.dm_uuid==$bdi.dm_uuid)
+ ' "$case_out/writeback-before-writer.json" "$case_out/runtime-storage-identity.json" "$case_out/actual-wrapper-records.json"
  storage_write write /storage-ci-root-fill 2415919104 > "$case_out/root-over-two-gib.json"
  jq -e '.written_bytes==2415919104 and .fsync_result==0 and .fsync_errno==0' "$case_out/root-over-two-gib.json"
  kube exec -n "$namespace" "$pod" -c workspace -- stat -c '%s %b' /storage-ci-root-fill > "$case_out/root-over-two-gib-stat.txt"
@@ -877,6 +870,8 @@ for enabled in false true; do
  test "$(kube get pvc -n "$namespace" "$scratch_claim" -o jsonpath='{.metadata.uid}')" = "$scratch_uid"
  test "$(kube get pvc -n "$namespace" "$home_claim" -o jsonpath='{.metadata.uid}')" = "$home_uid"
  kube get pod -n "$namespace" "$pod" -o json > "$case_out/pod-replacement.json"
+ check_active_writeback republished "/var/lib/kubelet/pods/$new_uid/volumes/kubernetes.io~csi/$scratch_pv/mount" \
+  "/var/lib/kubelet/pods/$new_uid/volumes/kubernetes.io~csi/$home_pv/mount"
  address="$(jq -r '.status.podIP' "$case_out/pod-replacement.json")"
  printf '[%s]:2222 %s\n' "$address" "$(cut -d ' ' -f 1,2 "$base/host-$case_id.pub")" > "$base/known-$case_id"
  kube exec -n "$namespace" "$pod" -c workspace -- cat /run/mwc-ssh/ttyd_client_key > "$base/client-$case_id"
@@ -888,8 +883,7 @@ for enabled in false true; do
   if ! findmnt -rn -o TARGET | grep -F "/var/lib/kubelet/pods/$new_uid/" >/dev/null; then break; fi
   sleep 1
  done
- ! findmnt -rn -o TARGET | grep -F "/var/lib/kubelet/pods/$new_uid/"
- ! findmnt -rn -o TARGET | grep -F "/var/lib/kubelet/pods/$uid/"
+ if findmnt -rn -o TARGET | grep -F -e "/var/lib/kubelet/pods/$new_uid/" -e "/var/lib/kubelet/pods/$uid/"; then exit 1; fi
  handles="$(jq -r '.items[].spec.csi.volumeHandle' "$case_out/actual-pvs.json")"
  kube delete pvc -n "$namespace" "$home_claim" "$scratch_claim" --wait=true --timeout=120s
  kube wait --for=delete "pv/$home_pv" "pv/$scratch_pv" --timeout=180s
@@ -900,25 +894,28 @@ for enabled in false true; do
   sleep 1
  done
  test "$remaining" = 0
+ # A major:minor may be allocated again; it must not still identify this LV.
+ scratch_device="$(jq -r .scratch.device "$case_out/writeback-republished.json")"
+ scratch_dm_uuid="$(jq -r .scratch.dm_uuid "$case_out/writeback-republished.json")"
+ dm_uuid_path="/sys/dev/block/$scratch_device/dm/uuid"
+ remaining_dm_uuid=''
+ if [ -e "$dm_uuid_path" ]; then remaining_dm_uuid="$(cat "$dm_uuid_path")"; fi
+ test "$remaining_dm_uuid" != "$scratch_dm_uuid"
+ writeback_state | jq --arg device "$scratch_device" --arg old "$scratch_dm_uuid" --arg observed "$remaining_dm_uuid" \
+  '. + {old_scratch_device:$device,old_scratch_dm_uuid:$old,observed_dm_uuid:(if $observed=="" then null else $observed end)}' \
+  > "$case_out/writeback-after-lv-delete.json"
+ jq -es '.[0].scope==.[1].scope' "$case_out/writeback-before-pod.json" "$case_out/writeback-after-lv-delete.json"
  kube delete secret -n "$namespace" "$identity" --wait=true --timeout=120s
- jq -n --arg mode "$mode" --arg runtime "$runtime" --argjson buildkit "$enabled" --arg uid "$uid" --arg new_uid "$new_uid" --arg scratch_uid "$scratch_uid" --arg home_uid "$home_uid" \
-  '{accepted:true,mode:$mode,runtime:$runtime,buildkit:$buildkit,root_written_bytes:2415919104,root_fsync:true,scratch_enospc:true,logs_rotation:true,logs_follow_reopen:true,logs_previous:true,kubelet_logs_accounted:true,kubelet_scratch_accounted:true,logs_share_scratch:true,ssh_survived:true,pod_identity_preserved_under_pressure:true,old_pod_uid:$uid,new_pod_uid:$new_uid,scratch_pvc_uid:$scratch_uid,home_pvc_uid:$home_uid,pvc_reused:true,node_unpublish_observed:true,pv_lv_deleted:true,crash_reboot_proven:false,all_templates_proven:false,eviction_settings_changed:false}' > "$case_out/acceptance.json"
+ jq -n --arg runtime "$runtime" --argjson buildkit "$enabled" --arg uid "$uid" --arg new_uid "$new_uid" --arg scratch_uid "$scratch_uid" --arg home_uid "$home_uid" --arg scratch_dm_uuid "$scratch_dm_uuid" \
+  '{accepted:true,runtime:$runtime,buildkit:$buildkit,writeback_wrapper_owned:true,wrong_pool_rejected_without_tuning:true,writeback_peer_and_republish_readback:true,root_written_bytes:2415919104,root_fsync:true,scratch_enospc:true,logs_rotation:true,logs_follow_reopen:true,logs_previous:true,kubelet_logs_accounted:true,kubelet_scratch_accounted:true,logs_share_scratch:true,ssh_survived:true,pod_identity_preserved_under_pressure:true,old_pod_uid:$uid,new_pod_uid:$new_uid,scratch_pvc_uid:$scratch_uid,scratch_dm_uuid:$scratch_dm_uuid,home_pvc_uid:$home_uid,pvc_reused:true,node_unpublish_observed:true,pv_lv_deleted:true,crash_reboot_proven:false,all_templates_proven:false,eviction_settings_changed:false}' > "$case_out/acceptance.json"
  diagnostic_case=''
 done
 done
-jq -es --arg renderer "$PRODUCT_RENDERER_SHA" --arg wrapper "$WRAPPER_SHA" --arg mode "$mode" --arg product "$(jq -r '.pod.spec.containers[]|select(.name=="workspace")|.image' "$fixtures/mwc-native-buildkit-false.json")" '
+snapshot
+jq -es --arg renderer "$PRODUCT_RENDERER_SHA" --arg wrapper "$WRAPPER_SHA" --arg product "$(jq -r '.pod.spec.containers[]|select(.name=="workspace")|.image' "$fixtures/mwc-native-buildkit-false.json")" '
  sort_by(.runtime,.buildkit) as $cases |
  if ($cases|length)==4 and ([$cases[]|[.runtime,.buildkit]]==[["mwc-native",false],["mwc-native",true],["mwc-runsc",false],["mwc-runsc",true]]) and
- all($cases[]; .mode==$mode and .accepted and .root_written_bytes>2147483648 and .root_fsync and .scratch_enospc and .logs_rotation and .logs_follow_reopen and .logs_previous and .kubelet_logs_accounted and .kubelet_scratch_accounted and .logs_share_scratch and .ssh_survived and .pod_identity_preserved_under_pressure and .pvc_reused and .node_unpublish_observed and .pv_lv_deleted)
- then {accepted:true,renderer_sha:$renderer,wrapper_sha:$wrapper,product:$product,cases:$cases,real_csi:true,production_deployed:false,runtime_matrix_complete:true,mode:$mode}
- else error("incomplete real CSI quota runtime matrix") end' "$out/$mode/"mwc-*/acceptance.json > "$out/$mode/acceptance.json"
-done
-snapshot
-jq -es --arg mode "$writeback_mode" --argjson modes "$(jq -n --args '$ARGS.positional' "${writeback_modes[@]}")" '
- sort_by(.mode) as $groups |
- if ([$groups[].mode] == ($modes|sort)) and
- all($groups[]; .accepted and (.cases|length)==4 and .renderer_sha==$groups[0].renderer_sha and .wrapper_sha==$groups[0].wrapper_sha and .product==$groups[0].product) and
- ([$groups[].cases[]]|length)==(if $mode=="compare" then 12 else 4 end)
- then {accepted:true,renderer_sha:$groups[0].renderer_sha,wrapper_sha:$groups[0].wrapper_sha,product:$groups[0].product,
-       mode:$mode,modes:$modes,cases:[$groups[].cases[]],real_csi:true,production_deployed:false,runtime_matrix_complete:true}
- else error("incomplete writeback mode comparison") end' "$out/"*/acceptance.json > "$out/acceptance.json"
+ ([$cases[].scratch_dm_uuid] | unique | length)==4 and
+ all($cases[]; .accepted and .writeback_wrapper_owned and .wrong_pool_rejected_without_tuning and .writeback_peer_and_republish_readback and .root_written_bytes>2147483648 and .root_fsync and .scratch_enospc and .logs_rotation and .logs_follow_reopen and .logs_previous and .kubelet_logs_accounted and .kubelet_scratch_accounted and .logs_share_scratch and .ssh_survived and .pod_identity_preserved_under_pressure and .pvc_reused and .node_unpublish_observed and .pv_lv_deleted)
+ then {accepted:true,renderer_sha:$renderer,wrapper_sha:$wrapper,product:$product,cases:$cases,real_csi:true,production_deployed:false,runtime_matrix_complete:true,writeback_policy:"wrapper-strict-limit"}
+ else error("incomplete real CSI quota runtime matrix") end' "$out/"mwc-*/acceptance.json > "$out/acceptance.json"

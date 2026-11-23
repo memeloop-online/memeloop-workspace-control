@@ -6,19 +6,12 @@ on:
   pull_request:
     paths: ['tests/runtime_product_storage*', 'tests/runtime-product-vm/**', 'src/kubernetes/workspace_pod*', 'src/kubernetes/workspace_pod/**', '.github/workflows/runtime-product-storage.yml']
   workflow_dispatch:
-    inputs:
-      writeback_experiment:
-        description: 'CI-only scratch BDI experiment; compare runs three complete matrices on this runner'
-        type: choice
-        options: [control, strict-only, budget, compare]
-        default: control
-        required: false
 permissions:
   contents: read
   actions: read
   packages: read
 env:
-  WRAPPER_SHA: 0235e502c76ae6e1b31be2492974686742a30b8d
+  WRAPPER_SHA: 9e25c9ec773845a7cf84312ca03ae4326866f3e3
 jobs:
   build-inputs:
     name: Compile and verify CSI inputs
@@ -33,7 +26,10 @@ jobs:
           echo "PRODUCT_RENDERER_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
           echo "MWC_PRODUCT_STORAGE_WORKSPACE_IMAGE=localhost/mwc-product-storage-workspace:$(git rev-parse HEAD)" >> "$GITHUB_ENV"
       - name: Check CSI harness syntax
-        run: bash -n tests/runtime_product_storage.sh tests/runtime-product-vm/prepare-public-inputs.sh
+        run: |
+          bash -n tests/runtime_product_storage.sh
+          bash -n tests/runtime-product-vm/prepare-public-inputs.sh
+          python3 -m py_compile tests/runtime_product_storage_bdi.py
       - uses: dtolnay/rust-toolchain@1.98.0
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
         with:
@@ -41,22 +37,36 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: 24
-      - name: Verify the previously accepted dual runtime release
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ env.WRAPPER_SHA }}
+          path: ci-wrapper-source
+          persist-credentials: false
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5
+        with:
+          go-version: '1.26.4'
+          cache: false
+      - name: Build both wrappers from the pinned candidate (CI only)
+        working-directory: ci-wrapper-source/runtime-wrapper
         env:
-          GH_TOKEN: ${{ github.token }}
+          CGO_ENABLED: '0'
+          GOOS: linux
+          GOARCH: amd64
         run: |
           release="$RUNNER_TEMP/wrapper-release"
-          mkdir -p "$release" "$RUNNER_TEMP/product-storage-bin"
-          gh api repos/memeloop-online/memeloop-workspace-control/actions/artifacts/14695821561/zip > "$RUNNER_TEMP/wrapper-release.zip"
-          echo "eb738bea10473f7bc76c2198b0265913ffb150e6dd8a90485ffbda632ecd4e22  $RUNNER_TEMP/wrapper-release.zip" | sha256sum -c -
-          test "$(stat -c %s "$RUNNER_TEMP/wrapper-release.zip")" = 4838070
-          unzip -q "$RUNNER_TEMP/wrapper-release.zip" -d "$release"
-          test "$(find "$release" -type f | wc -l)" = 4
-          (cd "$release" && sha256sum -c SHA256SUMS)
-          echo "708dec8f5b18762ececc9d9f2d74c0f46475094ade52460c319a43b0fc608e07  $release/mwc-runtime-wrapper" | sha256sum -c -
-          echo "437da1f7a05118abc087f6f17b8ad8756d0df680abd3c19316e10bd414993e66  $release/mwc-runsc-wrapper" | sha256sum -c -
-          jq -e --arg sha "$WRAPPER_SHA" '.source_sha==$sha and .run_id=="44875097886" and .run_attempt=="1" and .platform=="linux/amd64" and .variants==["native","runsc"]' "$release/artifact-identity.json"
-          cp "$release/mwc-runtime-wrapper" "$release/mwc-runsc-wrapper" "$RUNNER_TEMP/product-storage-bin/"
+          bin="$RUNNER_TEMP/product-storage-bin"
+          mkdir -p "$release" "$bin"
+          test "$(git rev-parse HEAD)" = "$WRAPPER_SHA"
+          test -z "$(git status --porcelain)"
+          test -z "$(gofmt -l *.go)"
+          go build -buildvcs=true -trimpath -o "$bin/mwc-runtime-wrapper" .
+          go build -buildvcs=true -trimpath -tags=mwc_runsc -o "$bin/mwc-runsc-wrapper" .
+          for variant in mwc-runtime-wrapper mwc-runsc-wrapper; do
+            go version -m "$bin/$variant" | awk '{print $2}' | grep -Fx "vcs.revision=$WRAPPER_SHA"
+          done
+          (cd "$bin" && sha256sum mwc-runtime-wrapper mwc-runsc-wrapper > "$release/SHA256SUMS")
+          jq -n --arg sha "$WRAPPER_SHA" --arg run "$GITHUB_RUN_ID" --arg attempt "$GITHUB_RUN_ATTEMPT" \
+            '{source_sha:$sha,run_id:$run,run_attempt:$attempt,platform:"linux/amd64",variants:["native","runsc"]}' > "$release/artifact-identity.json"
       - name: Build exact renderer fixtures and probe (CI only)
         run: |
           mkdir -p artifacts "$RUNNER_TEMP/product-storage-fixtures" "$RUNNER_TEMP/product-storage-bin"
@@ -74,7 +84,7 @@ jobs:
           cp "$RUNNER_TEMP/wrapper-release/"{SHA256SUMS,artifact-identity.json} input-bundle/wrapper-release/
           jq -n --arg renderer "$PRODUCT_RENDERER_SHA" --arg wrapper "$WRAPPER_SHA" \
             --arg harness "$(git rev-parse HEAD)" --arg run "$GITHUB_RUN_ID" --arg attempt "$GITHUB_RUN_ATTEMPT" \
-            '{renderer_sha:$renderer,wrapper_sha:$wrapper,harness_sha:$harness,run_id:$run,run_attempt:$attempt,wrapper_artifact:{run_id:"44875097886",run_attempt:"1",artifact_id:14695821561,artifact_zip_sha256:"eb738bea10473f7bc76c2198b0265913ffb150e6dd8a90485ffbda632ecd4e22"}}' > input-bundle/source-shas.json
+            '{renderer_sha:$renderer,wrapper_sha:$wrapper,harness_sha:$harness,run_id:$run,run_attempt:$attempt}' > input-bundle/source-shas.json
           (cd input-bundle && sha256sum bin/* fixtures/* wrapper-release/* source-shas.json > SHA256SUMS)
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
@@ -85,8 +95,6 @@ jobs:
     needs: build-inputs
     runs-on: ubuntu-24.04
     timeout-minutes: 120
-    env:
-      MWC_CSI_WRITEBACK_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.writeback_experiment || 'control' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -102,9 +110,12 @@ jobs:
       - name: Verify immutable compiled inputs
         run: |
           (cd input-bundle && sha256sum -c SHA256SUMS)
+          (cd input-bundle/bin && sha256sum -c ../wrapper-release/SHA256SUMS)
           jq -e --arg renderer "$PRODUCT_RENDERER_SHA" --arg wrapper "$WRAPPER_SHA" \
             --arg run "$GITHUB_RUN_ID" --arg attempt "$GITHUB_RUN_ATTEMPT" \
             '.renderer_sha==$renderer and .harness_sha==$renderer and .wrapper_sha==$wrapper and .run_id==$run and .run_attempt==$attempt' input-bundle/source-shas.json
+          jq -e --arg sha "$WRAPPER_SHA" --arg run "$GITHUB_RUN_ID" --arg attempt "$GITHUB_RUN_ATTEMPT" \
+            '.source_sha==$sha and .run_id==$run and .run_attempt==$attempt and .platform=="linux/amd64" and .variants==["native","runsc"]' input-bundle/wrapper-release/artifact-identity.json
           mkdir -p artifacts "$RUNNER_TEMP/product-storage-fixtures" "$RUNNER_TEMP/product-storage-bin"
           cp input-bundle/bin/* "$RUNNER_TEMP/product-storage-bin/"
           chmod 0755 "$RUNNER_TEMP/product-storage-bin/"*
@@ -128,7 +139,7 @@ jobs:
       - name: Actual Rust product and TopoLVM lifecycle
         run: |
           status=0
-          sudo --preserve-env=GITHUB_ACTIONS,GITHUB_WORKSPACE,RUNNER_TEMP,PRODUCT_RENDERER_SHA,WRAPPER_SHA,MWC_PRODUCT_STORAGE_INPUTS,MWC_CSI_WRITEBACK_MODE \
+          sudo --preserve-env=GITHUB_ACTIONS,GITHUB_WORKSPACE,RUNNER_TEMP,PRODUCT_RENDERER_SHA,WRAPPER_SHA,MWC_PRODUCT_STORAGE_INPUTS \
             unshare --mount --propagation private bash tests/runtime_product_storage.sh || status=$?
           sudo chown -R "$(id -u):$(id -g)" artifacts
           exit "$status"
