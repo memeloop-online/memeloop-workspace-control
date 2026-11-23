@@ -44,6 +44,17 @@ pub(super) async fn asset(uri: Uri) -> Response<Body> {
 }
 
 fn response(path: &str, bytes: Vec<u8>, status: StatusCode) -> Response<Body> {
+    let bytes = if path == "index.html" && super::auth::authentik::enabled() {
+        String::from_utf8_lossy(&bytes)
+            .replacen(
+                "</head>",
+                "<meta name=\"mwc-browser-sso\" content=\"enabled\"></head>",
+                1,
+            )
+            .into_bytes()
+    } else {
+        bytes
+    };
     let cache_control = if path == "index.html" {
         "no-cache"
     } else {
