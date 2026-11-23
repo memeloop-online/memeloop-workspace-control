@@ -257,7 +257,7 @@ impl Database {
             } => {
                 let Some((name, admin)) = sqlx::query_as::<_, (String, i64)>(
                     "SELECT display_name, system_admin FROM users WHERE installation_id = $1 AND id = $2 AND disabled = 0",
-                ).bind(installation_id.as_str()).bind(user_id).fetch_optional(pool).await? else {
+                ).bind(installation_id.as_str()).bind(user_id.to_string()).fetch_optional(pool).await? else {
                     return Ok(None);
                 };
                 (
