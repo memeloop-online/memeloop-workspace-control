@@ -1,4 +1,5 @@
 {
+  "ssoAccountNotLinked": "此 authentik 身份未绑定可用的 Workspace Control 账号。",
   "language": "语言",
   "languageChinese": "简体中文",
   "languageEnglish": "English",

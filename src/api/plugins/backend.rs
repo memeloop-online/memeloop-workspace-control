@@ -170,14 +170,7 @@ async fn optional_actor(
     state: &AppState,
     headers: &HeaderMap,
 ) -> Result<Option<crate::storage::Principal>, ApiError> {
-    let Some(token) = headers
-        .get(header::AUTHORIZATION)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.strip_prefix("Bearer "))
-    else {
-        return Ok(None);
-    };
-    Ok(state.database.authenticate(token).await?)
+    crate::api::auth::optional_principal(state, headers).await
 }
 
 use axum::response::IntoResponse as _;

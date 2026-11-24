@@ -1,4 +1,5 @@
 {
+  "ssoAccountNotLinked": "К этой учётной записи authentik не привязана активная учётная запись Workspace Control.",
   "language": "Язык",
   "languageChinese": "简体中文",
   "languageEnglish": "English",

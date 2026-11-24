@@ -1,3 +1,4 @@
+import { BROWSER_SESSION } from "../browserAuth.ts";
 import type {
   PluginConfiguration,
   PluginApiBridgeRequest,
@@ -91,7 +92,8 @@ export class PluginApi {
   ): Promise<PluginApiBridgeResponse> {
     const route = `/api/v1/plugin-api/${encodeURIComponent(pluginId)}/${encodeURIComponent(request.route_id)}/${request.path}`;
     const path = organizationId ? `${route}?organization_id=${encodeURIComponent(organizationId)}` : route;
-    const headers = new Headers({ Authorization: `Bearer ${this.token}` });
+    const headers = new Headers();
+    if (this.token !== BROWSER_SESSION) headers.set("Authorization", `Bearer ${this.token}`);
     const body = request.body === undefined ? undefined : JSON.stringify(request.body);
     if (body !== undefined && new TextEncoder().encode(body).byteLength > MAX_PLUGIN_API_REQUEST_BYTES) throw new Error("plugin_api_request_too_large");
     if (body !== undefined) headers.set("Content-Type", "application/json");
@@ -145,7 +147,7 @@ export class PluginApi {
     init: RequestInit & { idempotent?: boolean } = {},
   ): Promise<T> {
     const headers = new Headers(init.headers);
-    headers.set("Authorization", `Bearer ${this.token}`);
+    if (this.token !== BROWSER_SESSION) headers.set("Authorization", `Bearer ${this.token}`);
     if (init.body && !(init.body instanceof FormData)) headers.set("Content-Type", "application/json");
     if (init.idempotent) headers.set("Idempotency-Key", crypto.randomUUID());
     const response = await fetch(path, { ...init, headers });

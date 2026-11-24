@@ -2,6 +2,7 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } fro
 import type { FormEvent } from "react";
 import { FluentProvider } from "@fluentui/react-components";
 import { ApiClient } from "./api";
+import { BROWSER_SESSION } from "./browserAuth.ts";
 import { AppShell, EmptyOrganization, LoadingView, LoginScreen, type AppNotice, type AppView } from "./design-system/AppShell";
 import { darkTheme, lightTheme } from "./design-system/theme";
 import { WorkspacePanel } from "./WorkspacePanel";
@@ -28,8 +29,14 @@ const PluginPanel = lazy(() => import("./PluginPanel").then(({ PluginPanel: comp
 const SettingsPanel = lazy(() => import("./SettingsPanel").then(({ SettingsPanel: component }) => ({ default: component })));
 
 export default function App() {
+  const browserSession = document.querySelector('meta[name="mwc-browser-sso"][content="enabled"]') !== null;
+  return <WorkspaceApp browserSession={browserSession} />;
+}
+
+function WorkspaceApp({ browserSession }: { browserSession: boolean }) {
   const { locale, setLocale, t } = useI18n();
-  const token = useAppStore((state) => state.token);
+  const storedToken = useAppStore((state) => state.token);
+  const token = browserSession ? BROWSER_SESSION : storedToken;
   const organizationId = useAppStore((state) => state.organizationId);
   const theme = useAppStore((state) => state.theme);
   const view = useAppStore((state) => state.view);
@@ -54,14 +61,19 @@ export default function App() {
     setView("workspaces");
     setTokenDraft("");
     setNoticeState(null);
-  }, [setOrganizationId, setToken, setView]);
+    if (browserSession) window.location.assign("/outpost.goauthentik.io/sign_out");
+  }, [browserSession, setOrganizationId, setToken, setView]);
 
   const api = useMemo(() => new ApiClient(token, () => {
     if (!token || activeTokenRef.current !== token || unauthorizedTokenRef.current === token) return;
     unauthorizedTokenRef.current = token;
+    if (browserSession) {
+      window.location.assign("/outpost.goauthentik.io/start?rd=" + encodeURIComponent(window.location.href));
+      return;
+    }
     setFatal(t("loginInvalidToken"));
     logout();
-  }), [logout, t, token]);
+  }), [browserSession, logout, t, token]);
 
   const principalQuery = usePrincipalQuery(api, Boolean(token));
   const organizationsQuery = useOrganizationsQuery(api, Boolean(token));
@@ -197,6 +209,17 @@ export default function App() {
     // organization-less state from an invalid selection.
     if (!organizations.some((organization) => organization.id === next)) return;
     setOrganizationId(next);
+  }
+
+  if (browserSession && (!principal || authError)) {
+    const denied = authError && (authError as { status?: number }).status === 403;
+    const text = denied ? t("ssoAccountNotLinked") : authError && !isAuthenticationError(authError) ? fatal : t("loading");
+    return (
+      <FluentProvider theme={theme === "dark" ? darkTheme : lightTheme} style={{ minHeight: "100vh" }}>
+        <LoadingView label={text || t("loading")} />
+        {denied ? <a href="/outpost.goauthentik.io/sign_out">{t("logout")}</a> : null}
+      </FluentProvider>
+    );
   }
 
   if (!token || !principal || authError) {
