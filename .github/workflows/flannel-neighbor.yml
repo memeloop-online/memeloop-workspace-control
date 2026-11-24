@@ -1,0 +1,107 @@
+name: Flannel neighbor lifecycle
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/flannel-neighbor.yml
+      - ops/flannel-neighbor/**
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/flannel-neighbor.yml
+      - ops/flannel-neighbor/**
+
+permissions:
+  contents: read
+
+jobs:
+  linux-bridge:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version: '1.25.7'
+          cache: false
+      - name: Build the Linux CNI plugin
+        working-directory: ops/flannel-neighbor
+        run: |
+          test -z "$(gofmt -l .)"
+          mkdir -p "$RUNNER_TEMP/flannel-neighbor"
+          CGO_ENABLED=0 go build -mod=readonly -buildvcs=false -trimpath \
+            -o "$RUNNER_TEMP/flannel-neighbor/mwc-flannel-neighbor" .
+
+      - name: Exercise a reused address on the pinned upstream CNI bridge
+        run: |
+          dir="$RUNNER_TEMP/flannel-neighbor"
+          curl -fsSL --retry 2 -o "$dir/upstream.tgz" \
+            https://github.com/containernetworking/plugins/releases/download/v1.9.1/cni-plugins-linux-amd64-v1.9.1.tgz
+          printf '%s  %s\n' b98f74a0f8522f0a83867178729c1aa70f2158f90c45a2ca8fa791db1c76b303 "$dir/upstream.tgz" | sha256sum -c
+          mkdir "$dir/upstream"
+          tar -xzf "$dir/upstream.tgz" -C "$dir/upstream"
+          ln -s "$dir/upstream/bridge" "$dir/bridge"
+          ln -s "$dir/upstream/static" "$dir/static"
+          cat > "$dir/bridge.json" <<'JSON'
+          {"cniVersion":"1.0.0","name":"mwc-ci","type":"bridge","bridge":"mwc-testbr","isGateway":true,"ipam":{"type":"static","addresses":[{"address":"192.0.2.10/24","gateway":"192.0.2.1"}]}}
+          JSON
+
+          sudo ip netns add mwc-host
+          sudo ip netns add mwc-old
+          sudo ip netns add mwc-new
+          host() { sudo ip netns exec mwc-host "$@"; }
+          cni() {
+            host env CNI_COMMAND="$1" CNI_CONTAINERID="$2" CNI_NETNS="/run/netns/$2" \
+              CNI_IFNAME=eth0 CNI_PATH="$dir" "$dir/$3"
+          }
+          cleanup() {
+            for pid in $(sudo ip netns pids mwc-new); do sudo kill "$pid" || true; done
+            for ns in mwc-new mwc-old mwc-host; do sudo ip netns del "$ns"; done
+          }
+          trap cleanup EXIT
+
+          cni ADD mwc-old bridge < "$dir/bridge.json" > "$dir/old.json"
+          old_mac=$(jq -er '.interfaces[] | select(.name == "eth0" and .sandbox != "") | .mac' "$dir/old.json")
+          cni DEL mwc-old bridge < "$dir/bridge.json"
+          cni ADD mwc-new bridge < "$dir/bridge.json" > "$dir/new.json"
+          new_mac=$(jq -er '.interfaces[] | select(.name == "eth0" and .sandbox != "") | .mac' "$dir/new.json")
+          test "$old_mac" != "$new_mac"
+          jq -n --slurpfile previous "$dir/new.json" \
+            '{cniVersion:"1.0.0",name:"mwc-ci",type:"mwc-flannel-neighbor",bridge:"mwc-testbr",prevResult:$previous[0]}' > "$dir/chain.json"
+
+          host ip neigh replace 192.0.2.10 dev mwc-testbr lladdr "$old_mac" nud stale
+          host ip neigh replace 192.0.2.11 dev mwc-testbr lladdr "$old_mac" nud stale
+          host ip neigh get 192.0.2.10 dev mwc-testbr | grep -F "$old_mac"
+          cni ADD mwc-new mwc-flannel-neighbor < "$dir/chain.json" > "$dir/result.json"
+          diff -u <(jq -S . "$dir/new.json") <(jq -S . "$dir/result.json")
+          if host ip neigh get 192.0.2.10 dev mwc-testbr; then
+            echo 'The reused address retained the previous container MAC' >&2
+            exit 1
+          fi
+          host ip neigh get 192.0.2.11 dev mwc-testbr | grep -F "$old_mac"
+
+          sudo ip netns exec mwc-new python3 -m http.server 8080 --bind 192.0.2.10 > "$dir/http.log" 2>&1 &
+          for attempt in {1..20}; do
+            if sudo ip netns exec mwc-new ss -ltn 'sport = :8080' | grep -Fq '192.0.2.10:8080'; then break; fi
+            sleep 0.1
+          done
+          host curl -fsS --noproxy '*' --max-time 2 http://192.0.2.10:8080/ > /dev/null
+          host ip neigh get 192.0.2.10 dev mwc-testbr | grep -F "$new_mac"
+          cni ADD mwc-new mwc-flannel-neighbor < "$dir/chain.json" > /dev/null
+          host ip neigh get 192.0.2.10 dev mwc-testbr | grep -F "$new_mac"
+          host ip neigh replace 192.0.2.10 dev mwc-testbr lladdr "$old_mac" nud permanent
+          cni ADD mwc-new mwc-flannel-neighbor < "$dir/chain.json" > /dev/null
+          host ip neigh get 192.0.2.10 dev mwc-testbr | grep -F "$old_mac PERMANENT"
+
+      - name: Record binary digest
+        working-directory: ${{ runner.temp }}/flannel-neighbor
+        run: sha256sum mwc-flannel-neighbor > mwc-flannel-neighbor.sha256
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: mwc-flannel-neighbor-linux-amd64-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/flannel-neighbor/mwc-flannel-neighbor
+            ${{ runner.temp }}/flannel-neighbor/mwc-flannel-neighbor.sha256
+          if-no-files-found: error
