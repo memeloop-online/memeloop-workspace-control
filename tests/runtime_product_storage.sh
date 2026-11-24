@@ -51,7 +51,7 @@ import os
 
 os.mkdir('/var/log/rename-probe')  # Confirm the parent really is group-writable.
 try:
-    os.rename('/var/log/pods', '/var/log/rename-probe/pods')
+    os.rename('/var/log/pods', '/var/log/mwc-renamed-pods')
 except OSError as error:
     if error.errno != errno.EBUSY:
         raise
