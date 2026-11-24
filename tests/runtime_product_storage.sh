@@ -44,6 +44,7 @@ log_inode="$(stat -c %d:%i "$pod_log_root")"
 printf '%s\n' original-log-directory > "$pod_log_root/existing-marker"
 mount --bind "$pod_log_root" "$pod_log_root"
 test "$(stat -c %d:%i "$pod_log_root")" = "$log_inode"
+test "$(cat "$pod_log_root/existing-marker")" = original-log-directory
 runuser -u nobody -- python3 - <<'PY'
 import errno
 import os
@@ -675,7 +676,7 @@ spec:
     - name: sentinel
       image: $workspace_image
       imagePullPolicy: Never
-      command: ["sh", "-ec", "printf ordinary-runtime > /tmp/mwc-sentinel; exec sleep 3600"]
+      command: ["sh", "-ec", "printf ordinary-runtime > /tmp/mwc-sentinel; echo ordinary-runtime-log; exec sleep 7200"]
 YAML
 kube wait --for=condition=Ready pod/mwc-default-runtime --timeout=120s
 default_id="$(kube get pod mwc-default-runtime -o json | jq -er 'select(.spec.runtimeClassName==null) | .status.containerStatuses[0].containerID | sub("^containerd://"; "") | select(test("^[a-f0-9]{64}$"))')"
@@ -684,6 +685,7 @@ default_rootfs="$bundle_root/$default_id/rootfs"
 default_logs="$pod_log_root/default_mwc-default-runtime_$default_uid"
 findmnt -n -o TARGET,FSTYPE,PROPAGATION --mountpoint "$default_rootfs" > "$out/default-runtime-rootfs.txt"
 test "$(findmnt -n -o FSTYPE,PROPAGATION --mountpoint "$default_rootfs" | xargs)" = 'overlay private'
+findmnt -n -o FS-OPTIONS --mountpoint "$default_rootfs" | grep -F "upperdir=$base/containerd-root/io.containerd.snapshotter.v1.overlayfs/"
 test -d "$default_logs" && test ! -L "$default_logs"
 test "$(kube exec mwc-default-runtime -- cat /tmp/mwc-sentinel)" = ordinary-runtime
 
@@ -968,7 +970,7 @@ done
 done
 test "$(kube get pod mwc-default-runtime -o jsonpath='{.metadata.uid}:{.status.containerStatuses[0].containerID}:{.status.containerStatuses[0].restartCount}')" = "$default_uid:containerd://$default_id:0"
 test "$(kube exec mwc-default-runtime -- cat /tmp/mwc-sentinel)" = ordinary-runtime
-test "$(cat "$pod_log_root/existing-marker")" = original-log-directory
+test "$(kube logs mwc-default-runtime)" = ordinary-runtime-log
 test "$(stat -c %d:%i "$pod_log_root")" = "$log_inode"
 kube delete pod mwc-default-runtime --wait=true --timeout=120s
 for n in $(seq 1 30); do
