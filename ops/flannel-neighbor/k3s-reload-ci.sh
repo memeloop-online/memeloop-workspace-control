@@ -22,7 +22,7 @@ image=docker.io/library/mwc-k3s-ci-sshd:fixture
 docker build --tag "$image" - <<'DOCKERFILE'
 FROM alpine:3.22.1@sha256:4bcff63911fcb4448bd4fdacec207030997caf25e9bea4045fa6c8c44de311d1
 RUN apk add --no-cache openssh-server && adduser -D mwcci && passwd -d mwcci
-CMD ["sh", "-ec", "ssh-keygen -A; exec /usr/sbin/sshd -De -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no -o AuthorizedKeysFile=/ssh/authorized_keys"]
+CMD ["sh", "-ec", "install -d -o mwcci -g mwcci -m 0700 /home/mwcci/.ssh; install -o mwcci -g mwcci -m 0600 /ssh/authorized_keys /home/mwcci/.ssh/authorized_keys; ssh-keygen -A; exec /usr/sbin/sshd -De -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no -o LogLevel=VERBOSE"]
 DOCKERFILE
 docker save -o "$dir/ssh.tar" "$image"
 ssh-keygen -q -t ed25519 -N '' -f "$dir/client"
@@ -45,6 +45,9 @@ cleanup() {
   if ((code != 0)); then
     sudo journalctl -q -u "$unit" -n 60 --no-pager || true
     timeout 10 sudo "$k3s" kubectl --kubeconfig "$kubeconfig" get events -A || true
+    for fixture_name in peer replacement after-rollback; do
+      timeout 5 sudo "$k3s" kubectl --kubeconfig "$kubeconfig" logs "$fixture_name" || true
+    done
   fi
   sudo systemctl stop "$unit" || true
 }
@@ -55,6 +58,11 @@ for _ in {1..60}; do
   sleep 1
 done
 k wait --for=condition=Ready "node/$node" --timeout=120s
+for _ in {1..30}; do
+  if sudo test -s /run/flannel/subnet.env; then break; fi
+  sleep 1
+done
+sudo test -s /run/flannel/subnet.env
 cri version | tee "$dir/cri-version.txt"
 grep -Eq '^RuntimeVersion:[[:space:]]+v?2\.3\.2-k3s2$' "$dir/cri-version.txt"
 sudo env K3S_DATA_DIR="$runtime_root" "$k3s" ctr --address /run/k3s/containerd/containerd.sock \
