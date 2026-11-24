@@ -18,23 +18,39 @@ use crate::{
 };
 use axum::{Router, response::IntoResponse};
 use futures::FutureExt;
-use std::{io::Write, panic::AssertUnwindSafe, time::Instant};
+use std::{io::Write, panic::AssertUnwindSafe, sync::atomic::AtomicU64, time::Instant};
 use tokio::{
     net::TcpListener,
     sync::{Barrier, oneshot, watch},
 };
 
-const TOTAL: usize = 32;
-const SLOTS: usize = 4;
+#[derive(Clone, Copy)]
+struct Load {
+    workspaces: usize,
+    slots: usize,
+    write_delay_ms: u64,
+    enforce_peak: bool,
+}
+
+const ACCEPTANCE: Load = Load {
+    workspaces: 32,
+    slots: 4,
+    write_delay_ms: 0,
+    enforce_peak: true,
+};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn sqlite_workers_park_and_shared_relist_completes_all_before_repair() {
+    sqlite_case(ACCEPTANCE).await;
+}
+
+async fn sqlite_case(load: Load) {
     let directory = tempfile::tempdir().unwrap();
     let url = format!(
         "sqlite://{}?mode=rwc",
         directory.path().join("workers.sqlite").display()
     );
-    let result = run_case("sqlite", &url).await;
+    let result = run_case("sqlite", &url, load).await;
     if let Err(error) = result {
         std::panic::resume_unwind(error);
     }
@@ -42,9 +58,32 @@ async fn sqlite_workers_park_and_shared_relist_completes_all_before_repair() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn postgres_workers_park_and_shared_relist_completes_all_before_repair() {
+    postgres_case(ACCEPTANCE).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "finite reconcile capacity sweep; invoked in GitHub Actions"]
+async fn reconcile_worker_capacity_sweep() {
+    assert!(std::env::var_os("MWC_TEST_POSTGRES_URL").is_some());
+    for write_delay_ms in [0, 30] {
+        for slots in [32, 64] {
+            let load = Load {
+                workspaces: 128,
+                slots,
+                write_delay_ms,
+                enforce_peak: false,
+            };
+            sqlite_case(load).await;
+            postgres_case(load).await;
+        }
+    }
+}
+
+async fn postgres_case(load: Load) {
     let Ok(url) = std::env::var("MWC_TEST_POSTGRES_URL") else {
         report(
             "postgres",
+            load,
             false,
             &[json!({"phase":"postgres_unavailable"})],
         );
@@ -64,7 +103,7 @@ async fn postgres_workers_park_and_shared_relist_completes_all_before_repair() {
     scoped
         .query_pairs_mut()
         .append_pair("options", &format!("-c search_path={schema}"));
-    let result = run_case("postgres", scoped.as_str()).await;
+    let result = run_case("postgres", scoped.as_str(), load).await;
     sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
         .execute(&admin)
         .await
@@ -75,9 +114,9 @@ async fn postgres_workers_park_and_shared_relist_completes_all_before_repair() {
     }
 }
 
-fn report(backend: &str, completed: bool, stages: &[Value]) {
+fn report(backend: &str, load: Load, completed: bool, stages: &[Value]) {
     writeln!(std::io::stdout().lock(), "MWC_WORKER_WATCH_ACCEPTANCE {}",
-        json!({"backend":backend,"completed":completed,"workspaces":TOTAL,"slots":SLOTS,"stages":stages})).unwrap();
+        json!({"backend":backend,"completed":completed,"workspaces":load.workspaces,"slots":load.slots,"write_delay_ms":load.write_delay_ms,"stages":stages})).unwrap();
 }
 
 struct Counted {
@@ -86,21 +125,32 @@ struct Counted {
     peak: AtomicUsize,
     calls: AtomicUsize,
     registered: AtomicUsize,
-    first_wave: Barrier,
+    first_wave: Option<(Barrier, usize)>,
+    handle_micros: AtomicU64,
+    registration_micros: AtomicU64,
 }
 impl JobHandler for Counted {
     async fn handle(&self, job: &ClaimedJob) -> Result<(), JobHandlerError> {
         let active = self.active.fetch_add(1, Ordering::SeqCst) + 1;
         self.peak.fetch_max(active, Ordering::SeqCst);
-        if self.calls.fetch_add(1, Ordering::SeqCst) < SLOTS {
-            self.first_wave.wait().await;
+        let call = self.calls.fetch_add(1, Ordering::SeqCst);
+        if let Some((barrier, slots)) = &self.first_wave
+            && call < *slots
+        {
+            barrier.wait().await;
         }
+        let started = Instant::now();
         let result = self.inner.handle(job).await;
+        self.handle_micros
+            .fetch_add(started.elapsed().as_micros() as u64, Ordering::SeqCst);
         self.active.fetch_sub(1, Ordering::SeqCst);
         result
     }
     async fn on_checkpoint_deferred(&self, id: Uuid, now: i64) -> Result<(), StorageError> {
+        let started = Instant::now();
         self.inner.on_checkpoint_deferred(id, now).await?;
+        self.registration_micros
+            .fetch_add(started.elapsed().as_micros() as u64, Ordering::SeqCst);
         self.registered.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
@@ -113,6 +163,7 @@ struct HttpState {
     pod_watches: AtomicUsize,
     set_watches: AtomicUsize,
     release_ready: Arc<Notify>,
+    write_delay_ms: u64,
 }
 impl Default for HttpState {
     fn default() -> Self {
@@ -123,6 +174,7 @@ impl Default for HttpState {
             pod_watches: AtomicUsize::new(0),
             set_watches: AtomicUsize::new(0),
             release_ready: Arc::new(Notify::new()),
+            write_delay_ms: 0,
         }
     }
 }
@@ -205,9 +257,12 @@ impl HttpState {
                 "kind":if pods {"PodList"} else {"StatefulSetList"},"metadata":{"resourceVersion":"snapshot-1"},"items":items}),
             );
         }
+        if self.write_delay_ms > 0 && matches!(method, Method::PATCH | Method::POST) {
+            tokio::time::sleep(Duration::from_millis(self.write_delay_ms)).await;
+        }
         self.mock.respond(request).await
     }
-    fn ready(&self) {
+    fn ready(&self, workspaces: usize) {
         let mut objects = self.mock.objects.lock().unwrap();
         let mut count = 0;
         let mut pods = Vec::new();
@@ -236,12 +291,12 @@ impl HttpState {
             ));
             count += 1;
         }
-        assert_eq!(count, TOTAL);
+        assert_eq!(count, workspaces);
         objects.extend(pods);
     }
 }
 
-async fn seed(database: &Database) {
+async fn seed(database: &Database, workspaces: usize) -> f64 {
     let now = now();
     database
         .upsert_image_policy("example/workspace:1", true, now)
@@ -297,7 +352,8 @@ async fn seed(database: &Database) {
         )
         .await
         .unwrap();
-    for index in 0..TOTAL {
+    let start = Instant::now();
+    for index in 0..workspaces {
         database
             .create_workspace(
                 CreateWorkspace {
@@ -318,6 +374,7 @@ async fn seed(database: &Database) {
             .await
             .unwrap();
     }
+    start.elapsed().as_secs_f64()
 }
 
 async fn queue(database: &Database) -> Value {
@@ -360,17 +417,21 @@ fn now() -> i64 {
         .as_secs() as i64
 }
 
-async fn run_case(backend: &str, url: &str) -> std::thread::Result<()> {
+async fn run_case(backend: &str, url: &str, load: Load) -> std::thread::Result<()> {
+    let total = load.workspaces;
     let database = Database::connect(url, "public-a".parse().unwrap())
         .await
         .unwrap();
     database.migrate().await.unwrap();
     database
-        .set_job_worker_concurrency(SLOTS as u16, now())
+        .set_job_worker_concurrency(load.slots as u16, now())
         .await
         .unwrap();
-    seed(&database).await;
-    let http = Arc::new(HttpState::default());
+    let enqueue_seconds = seed(&database, total).await;
+    let http = Arc::new(HttpState {
+        write_delay_ms: load.write_delay_ms,
+        ..HttpState::default()
+    });
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let config = kube::Config::new(
         format!("http://{}", listener.local_addr().unwrap())
@@ -418,15 +479,19 @@ async fn run_case(backend: &str, url: &str) -> std::thread::Result<()> {
         peak: AtomicUsize::new(0),
         calls: AtomicUsize::new(0),
         registered: AtomicUsize::new(0),
-        first_wave: Barrier::new(SLOTS),
+        first_wave: load
+            .enforce_peak
+            .then(|| (Barrier::new(load.slots), load.slots)),
+        handle_micros: AtomicU64::new(0),
+        registration_micros: AtomicU64::new(0),
     });
     let (shutdown, stopped) = watch::channel(false);
     let observation =
         tokio::spawn(observations.run_until_shutdown(finite, stream, stopped.clone()));
     let worker = JobWorker::new(database.clone(), handler.clone(), "capacity-worker".into());
-    let pool = tokio::spawn(async move { worker.run_pool_until_shutdown(stopped).await.unwrap() });
     let started = Instant::now();
-    let mut stages = Vec::new();
+    let pool = tokio::spawn(async move { worker.run_pool_until_shutdown(stopped).await.unwrap() });
+    let mut stages = vec![json!({"phase":"enqueued","seconds":enqueue_seconds,"workspaces":total})];
     let outcome = AssertUnwindSafe(async {
         tokio::time::timeout(Duration::from_secs(45), async {
             while http.pod_watches.load(Ordering::SeqCst) != 1 || http.set_watches.load(Ordering::SeqCst) != 1 {
@@ -434,16 +499,18 @@ async fn run_case(backend: &str, url: &str) -> std::thread::Result<()> {
             }
             loop {
                 let state=queue(&database).await;
-                if state["pending"]==TOTAL && state["checkpointed"]==TOTAL && state["job_leases"]==0 && state["workspace_leases"]==0 && handler.registered.load(Ordering::SeqCst)==TOTAL {break;}
+                if state["pending"]==total && state["checkpointed"]==total && state["job_leases"]==0 && state["workspace_leases"]==0 && handler.registered.load(Ordering::SeqCst)==total {break;}
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
             assert_eq!(handler.active.load(Ordering::SeqCst),0);
-            assert_eq!(handler.peak.load(Ordering::SeqCst),SLOTS);
-            assert_eq!(handler.calls.load(Ordering::SeqCst),TOTAL);
+            let peak = handler.peak.load(Ordering::SeqCst);
+            assert!(peak > 0 && peak <= load.slots);
+            if load.enforce_peak { assert_eq!(peak, load.slots); }
+            assert_eq!(handler.calls.load(Ordering::SeqCst),total);
             assert_eq!(http.pod_watches.load(Ordering::SeqCst),1);
             assert_eq!(http.set_watches.load(Ordering::SeqCst),1);
             let parked=queue(&database).await;
-            assert_eq!(parked["attempts_zero"],TOTAL);
+            assert_eq!(parked["attempts_zero"],total);
             assert_eq!(parked["ready"],0);
             let verbs=http.verbs();
             let writes=http.mock.writes.lock().unwrap().len();
@@ -453,16 +520,16 @@ async fn run_case(backend: &str, url: &str) -> std::thread::Result<()> {
             assert_eq!(http.verbs(),verbs,"parked jobs must release slots without polling Kubernetes");
             assert_eq!(handler.active.load(Ordering::SeqCst),0);
             stages.push(json!({"phase":"parked","seconds":park_seconds,"quiet_millis":300,"queue":parked,"verbs":verbs,"handler_peak":handler.peak.load(Ordering::SeqCst)}));
-            http.ready();
+            http.ready(total);
             let released=Instant::now();
             http.release_ready.notify_one();
             loop {
                 let state=queue(&database).await;
-                if state["completed"]==TOTAL && state["ready"]==TOTAL && state["workspace_leases"]==0 {break;}
+                if state["completed"]==total && state["ready"]==total && state["workspace_leases"]==0 {break;}
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
             let final_state=queue(&database).await;
-            assert_eq!(final_state["attempts_one"],TOTAL);
+            assert_eq!(final_state["attempts_one"],total);
             assert_eq!(final_state["job_leases"],0);
             assert!(now()<parked["earliest_repair"].as_i64().unwrap(),"Ready must precede the original repair deadline");
             assert_eq!(http.mock.writes.lock().unwrap().len(),writes,"checkpoint resumes must not reapply resources");
@@ -470,8 +537,10 @@ async fn run_case(backend: &str, url: &str) -> std::thread::Result<()> {
             assert_eq!(http.verbs().get("POST"),verbs.get("POST"));
             assert_eq!(http.lists.load(Ordering::SeqCst),2);
             assert_eq!(http.pod_watches.load(Ordering::SeqCst),1);
-            assert_eq!(handler.calls.load(Ordering::SeqCst),2*TOTAL);
-            stages.push(json!({"phase":"completed","seconds":started.elapsed().as_secs_f64(),"ready_after_release_seconds":released.elapsed().as_secs_f64(),"queue":final_state,"verbs":http.verbs(),"handler_peak":handler.peak.load(Ordering::SeqCst),"pod_watches":http.pod_watches.load(Ordering::SeqCst),"set_watches":http.set_watches.load(Ordering::SeqCst),"statefulset_lists":http.lists.load(Ordering::SeqCst)}));
+            assert_eq!(handler.calls.load(Ordering::SeqCst),2*total);
+            stages.push(json!({"phase":"completed","seconds":started.elapsed().as_secs_f64(),"ready_after_release_seconds":released.elapsed().as_secs_f64(),"queue":final_state,"verbs":http.verbs(),"handler_peak":handler.peak.load(Ordering::SeqCst),"pod_watches":http.pod_watches.load(Ordering::SeqCst),"set_watches":http.set_watches.load(Ordering::SeqCst),"statefulset_lists":http.lists.load(Ordering::SeqCst),
+                "mean_handler_plus_registration_ms_per_workspace":
+                    (handler.handle_micros.load(Ordering::SeqCst)+handler.registration_micros.load(Ordering::SeqCst)) as f64 / (1000.0*total as f64)}));
         }).await.expect("worker/watch acceptance exceeded its 45 second budget");
     }).catch_unwind().await;
     shutdown.send(true).unwrap();
@@ -491,6 +560,6 @@ async fn run_case(backend: &str, url: &str) -> std::thread::Result<()> {
         Database::Sqlite { pool, .. } => pool.close().await,
         Database::Postgres { pool, .. } => pool.close().await,
     };
-    report(backend, outcome.is_ok(), &stages);
+    report(backend, load, outcome.is_ok(), &stages);
     outcome
 }
