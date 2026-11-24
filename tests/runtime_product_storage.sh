@@ -458,11 +458,11 @@ install -m 0755 "$RUNNER_TEMP/product-storage-bin/mwc-runtime-wrapper" "$base/mw
 install -m 0755 "$RUNNER_TEMP/product-storage-bin/mwc-runsc-wrapper" "$base/mwc-runsc-wrapper"
 mkdir -p "$base/gvisor" "$base/runsc-state"
 copy_input gvisor.tar.bz2 \
- 014b3871a5c698c802fd7a03758e0dbf4c1683f9e3f8c743979ea66bbf6553a4 "$base/gvisor.tar.bz2"
+ e22638939473759a8602e80f2b96a9b67e4afcdf58f2c51db52b1a8e9031ea45 "$base/gvisor.tar.bz2"
 tar -xjf "$base/gvisor.tar.bz2" -C "$base/gvisor"
 export PATH="$base/gvisor:$PATH"
 "$base/gvisor/runsc" --version | tee "$out/runsc-version.txt"
-grep -Fx 'runsc version release-20260831.0' "$out/runsc-version.txt"
+grep -Fx 'runsc version release-20261116.0' "$out/runsc-version.txt"
 test -x "$base/gvisor/containerd-shim-runsc-v1"
 test -d "$base/gvisor/gvisor-bin"
 find "$base/gvisor" -type f -printf '%P\n' > "$out/gvisor-payload-files.txt"
@@ -752,6 +752,19 @@ for enabled in false true; do
  kube wait -n "$namespace" --for=condition=Ready "pod/$pod" --timeout=10m
  kube get pod -n "$namespace" "$pod" -o json > "$case_out/pod-initial.json"
  jq -e --arg uid "$uid" '.metadata.uid==$uid' "$case_out/pod-initial.json"
+ shm_capacity_json=null
+ if [ "$runtime" = mwc-runsc ]; then
+  sandbox_id="$(cri pods --namespace "$namespace" --name "^$pod$" -q)"
+  [[ "$sandbox_id" =~ ^[a-f0-9]{64}$ ]]
+  shm_host="$containerd_state/io.containerd.grpc.v1.cri/sandboxes/$sandbox_id/shm"
+  read -r host_blocks host_block_size < <(stat -f -c '%b %S' "$shm_host")
+  read -r sandbox_blocks sandbox_block_size < <(kube exec -n "$namespace" "$pod" -c workspace -- stat -f -c '%b %S' /dev/shm)
+  host_shm_bytes=$((host_blocks * host_block_size))
+  sandbox_shm_bytes=$((sandbox_blocks * sandbox_block_size))
+  jq -en --argjson host "$host_shm_bytes" --argjson sandbox "$sandbox_shm_bytes" \
+   '{host_bytes:$host,sandbox_bytes:$sandbox} | select(.host_bytes>0 and .host_bytes==.sandbox_bytes)' > "$case_out/shared-memory.json"
+  shm_capacity_json="$(cat "$case_out/shared-memory.json")"
+ fi
  check_active_writeback first-ready "$publish" "$home_publish"
  test -f "$(dirname "$publish")/vol_data.json"
  cp "$(dirname "$publish")/vol_data.json" "$case_out/actual-csi-vol-data.json"
@@ -964,8 +977,8 @@ for enabled in false true; do
   > "$case_out/writeback-after-lv-delete.json"
  jq -es '.[0].scope==.[1].scope' "$case_out/writeback-before-pod.json" "$case_out/writeback-after-lv-delete.json"
  kube delete secret -n "$namespace" "$identity" --wait=true --timeout=120s
- jq -n --arg runtime "$runtime" --argjson buildkit "$enabled" --arg uid "$uid" --arg new_uid "$new_uid" --arg scratch_uid "$scratch_uid" --arg home_uid "$home_uid" --arg scratch_dm_uuid "$scratch_dm_uuid" \
-  '{accepted:true,runtime:$runtime,buildkit:$buildkit,writeback_wrapper_owned:true,wrong_pool_rejected_without_tuning:true,writeback_peer_and_republish_readback:true,root_written_bytes:2415919104,root_fsync:true,scratch_enospc:true,logs_rotation:true,logs_follow_reopen:true,logs_previous:true,kubelet_logs_accounted:true,kubelet_scratch_accounted:true,logs_share_scratch:true,ssh_survived:true,pod_identity_preserved_under_pressure:true,old_pod_uid:$uid,new_pod_uid:$new_uid,scratch_pvc_uid:$scratch_uid,scratch_dm_uuid:$scratch_dm_uuid,home_pvc_uid:$home_uid,pvc_reused:true,node_unpublish_observed:true,pv_lv_deleted:true,crash_reboot_proven:false,all_templates_proven:false,eviction_settings_changed:false}' > "$case_out/acceptance.json"
+ jq -n --arg runtime "$runtime" --argjson buildkit "$enabled" --arg uid "$uid" --arg new_uid "$new_uid" --arg scratch_uid "$scratch_uid" --arg home_uid "$home_uid" --arg scratch_dm_uuid "$scratch_dm_uuid" --argjson shared_memory "$shm_capacity_json" \
+  '{accepted:true,shared_memory:$shared_memory,runtime:$runtime,buildkit:$buildkit,writeback_wrapper_owned:true,wrong_pool_rejected_without_tuning:true,writeback_peer_and_republish_readback:true,root_written_bytes:2415919104,root_fsync:true,scratch_enospc:true,logs_rotation:true,logs_follow_reopen:true,logs_previous:true,kubelet_logs_accounted:true,kubelet_scratch_accounted:true,logs_share_scratch:true,ssh_survived:true,pod_identity_preserved_under_pressure:true,old_pod_uid:$uid,new_pod_uid:$new_uid,scratch_pvc_uid:$scratch_uid,scratch_dm_uuid:$scratch_dm_uuid,home_pvc_uid:$home_uid,pvc_reused:true,node_unpublish_observed:true,pv_lv_deleted:true,crash_reboot_proven:false,all_templates_proven:false,eviction_settings_changed:false}' > "$case_out/acceptance.json"
  diagnostic_case=''
 done
 done
@@ -984,6 +997,7 @@ jq -es --arg renderer "$PRODUCT_RENDERER_SHA" --arg wrapper "$WRAPPER_SHA" --arg
  sort_by(.runtime,.buildkit) as $cases |
  if ($cases|length)==4 and ([$cases[]|[.runtime,.buildkit]]==[["mwc-native",false],["mwc-native",true],["mwc-runsc",false],["mwc-runsc",true]]) and
  ([$cases[].scratch_dm_uuid] | unique | length)==4 and
+ all($cases[] | select(.runtime=="mwc-runsc"); .shared_memory.host_bytes>0 and .shared_memory.host_bytes==.shared_memory.sandbox_bytes) and
  all($cases[]; .accepted and .writeback_wrapper_owned and .wrong_pool_rejected_without_tuning and .writeback_peer_and_republish_readback and .root_written_bytes>2147483648 and .root_fsync and .scratch_enospc and .logs_rotation and .logs_follow_reopen and .logs_previous and .kubelet_logs_accounted and .kubelet_scratch_accounted and .logs_share_scratch and .ssh_survived and .pod_identity_preserved_under_pressure and .pvc_reused and .node_unpublish_observed and .pv_lv_deleted)
  then {accepted:true,renderer_sha:$renderer,wrapper_sha:$wrapper,product:$product,cases:$cases,real_csi:true,production_deployed:false,runtime_matrix_complete:true,writeback_policy:"wrapper-strict-limit",mount_layout:"shared-parent-private-bundle",canonical_log_leaf_pinned:true,default_runtime_survived:true,default_runtime_cleanup:true}
  else error("incomplete real CSI quota runtime matrix") end' "$out/"mwc-*/acceptance.json > "$out/acceptance.json"
