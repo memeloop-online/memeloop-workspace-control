@@ -284,6 +284,18 @@ fn app_state(
         state.set_kubernetes_client(client);
     }
     state.set_plugin_runtime(plugins);
+    if let Some(origin) = std::env::var_os("MWC_OIDC_ORIGIN") {
+        state
+            .configure_oidc(
+                &std::env::var("MWC_OIDC_ISSUER")?,
+                &std::env::var("MWC_OIDC_CLIENT_ID")?,
+                &std::env::var("MWC_OIDC_CLIENT_SECRET")?,
+                &origin.into_string().map_err(|_| {
+                    io::Error::new(io::ErrorKind::InvalidInput, "invalid MWC_OIDC_ORIGIN")
+                })?,
+            )
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+    }
     if diagnostics_enabled {
         state.enable_diagnostics();
     }

@@ -55,6 +55,7 @@ test("Settings selects only the clicked user's API keys and manages their UI", {
         return route.abort();
       }
       if (!url.pathname.startsWith("/api/")) return route.continue();
+      if (request.method() === "GET" && url.pathname === "/api/v1/auth/oidc/status") return route.fulfill({ json: { enabled: false, signed_in: false } });
 
       const method = request.method();
       const path = url.pathname;

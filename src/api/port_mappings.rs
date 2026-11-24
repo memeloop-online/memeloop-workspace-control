@@ -14,7 +14,7 @@ use uuid::Uuid;
 
 use crate::{
     auth::Permission,
-    storage::{IdempotencyDecision, NewJob, PortMapping, StorageError},
+    storage::{IdempotencyDecision, PortMapping, StorageError},
 };
 
 use super::{
@@ -166,7 +166,6 @@ pub(super) async fn create(
                 now,
             )
             .await?;
-        enqueue_reconcile(&state, workspace.id, workspace.generation, now).await?;
         state
             .database
             .record_audit(
@@ -246,6 +245,7 @@ pub(super) async fn update(
             "the template-owned desktop port mapping cannot be edited by users",
         ));
     }
+    let now = unix_timestamp()?;
     let mapping = state
         .database
         .update_port_mapping(
@@ -254,12 +254,9 @@ pub(super) async fn update(
             request.internal_port,
             request.display_name.as_deref(),
             request.subdomain.as_deref(),
+            now,
         )
         .await?;
-    let now = unix_timestamp()?;
-    if current.internal_port != mapping.internal_port || current.subdomain != mapping.subdomain {
-        enqueue_reconcile(&state, workspace.id, workspace.generation, now).await?;
-    }
     state
         .database
         .record_audit(
@@ -360,12 +357,11 @@ pub(super) async fn delete(
     let now = unix_timestamp()?;
     if !state
         .database
-        .delete_port_mapping(workspace_id, mapping_id)
+        .delete_port_mapping(workspace_id, mapping_id, now)
         .await?
     {
         return Err(StorageError::PortMappingNotFound.into());
     }
-    enqueue_reconcile(&state, workspace.id, workspace.generation, now).await?;
     state
         .database
         .record_audit(
@@ -398,27 +394,6 @@ fn mapping_domain(state: &AppState) -> Result<&str, ApiError> {
         .port_mapping_public_domain
         .as_deref()
         .ok_or(ApiError::KubernetesUnavailable)
-}
-
-async fn enqueue_reconcile(
-    state: &AppState,
-    workspace_id: Uuid,
-    generation: u64,
-    now: i64,
-) -> Result<(), ApiError> {
-    state
-        .database
-        .enqueue_job(
-            NewJob {
-                kind: "reconcile_workspace".to_owned(),
-                workspace_id: Some(workspace_id),
-                payload: serde_json::json!({"generation": generation}),
-                available_at: now,
-            },
-            now,
-        )
-        .await?;
-    Ok(())
 }
 
 pub(super) fn response(

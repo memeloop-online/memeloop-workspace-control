@@ -282,7 +282,7 @@ async fn browser_access_tickets_are_scoped_and_consumed_once() {
 
     assert!(
         database
-            .delete_port_mapping(workspace.id, mapping.id)
+            .delete_port_mapping(workspace.id, mapping.id, now)
             .await
             .unwrap()
     );

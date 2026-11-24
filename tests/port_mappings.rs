@@ -388,7 +388,7 @@ async fn deleting_port_mapping_revokes_its_tickets_and_sessions() {
 
     assert!(
         database
-            .delete_port_mapping(workspace_id, mapping.id)
+            .delete_port_mapping(workspace_id, mapping.id, 150)
             .await
             .unwrap()
     );
@@ -417,7 +417,7 @@ async fn deleting_port_mapping_revokes_its_tickets_and_sessions() {
     ));
     assert!(
         !database
-            .delete_port_mapping(workspace_id, mapping.id)
+            .delete_port_mapping(workspace_id, mapping.id, 150)
             .await
             .unwrap()
     );
@@ -483,7 +483,7 @@ async fn updating_port_mapping_preserves_identity_and_revokes_credentials_only_f
         .unwrap();
     let name = "中文".repeat(40);
     let renamed = database
-        .update_port_mapping(workspace_id, original.id, 3000, Some(&name), None)
+        .update_port_mapping(workspace_id, original.id, 3000, Some(&name), None, 150)
         .await
         .unwrap();
     assert_eq!(renamed.id, original.id);
@@ -496,7 +496,7 @@ async fn updating_port_mapping_preserves_identity_and_revokes_credentials_only_f
             .unwrap()
     );
     let changed = database
-        .update_port_mapping(workspace_id, original.id, 4000, None, None)
+        .update_port_mapping(workspace_id, original.id, 4000, None, None, 150)
         .await
         .unwrap();
     assert_eq!(changed.id, original.id);
@@ -564,7 +564,7 @@ async fn conflicting_port_update_rolls_back_revocation_and_keeps_both_mappings()
         .unwrap();
     assert!(matches!(
         database
-            .update_port_mapping(workspace_id, original.id, 4000, Some("changed"), None)
+            .update_port_mapping(workspace_id, original.id, 4000, Some("changed"), None, 150)
             .await,
         Err(StorageError::PortMappingPortConflict)
     ));
@@ -612,13 +612,13 @@ async fn port_mapping_update_is_workspace_scoped_and_validates_new_values() {
         .unwrap();
     assert!(matches!(
         database
-            .update_port_mapping(Uuid::now_v7(), original.id, 4000, None, None)
+            .update_port_mapping(Uuid::now_v7(), original.id, 4000, None, None, 150)
             .await,
         Err(StorageError::PortMappingNotFound)
     ));
     assert!(matches!(
         database
-            .update_port_mapping(workspace_id, original.id, 3389, None, None)
+            .update_port_mapping(workspace_id, original.id, 3389, None, None, 150)
             .await,
         Err(StorageError::InvalidPortMappingPort)
     ));
@@ -629,7 +629,8 @@ async fn port_mapping_update_is_workspace_scoped_and_validates_new_values() {
                 original.id,
                 4000,
                 Some(&"中".repeat(81)),
-                None
+                None,
+                150,
             )
             .await,
         Err(StorageError::InvalidPortMappingDisplayName)
@@ -734,7 +735,14 @@ async fn exercise_subdomain_ownership(
         .await
         .unwrap();
     let renamed = database
-        .update_port_mapping(workspace_id, mapping.id, 3000, None, Some("new-preview"))
+        .update_port_mapping(
+            workspace_id,
+            mapping.id,
+            3000,
+            None,
+            Some("new-preview"),
+            150,
+        )
         .await
         .unwrap();
     assert_eq!(renamed.id, mapping.id);
@@ -799,7 +807,7 @@ async fn exercise_subdomain_ownership(
         .unwrap();
     assert_eq!(old_label_reused.subdomain, "preview");
     database
-        .delete_port_mapping(workspace_id, old_label_reused.id)
+        .delete_port_mapping(workspace_id, old_label_reused.id, 150)
         .await
         .unwrap();
     assert!(matches!(
@@ -840,7 +848,8 @@ async fn exercise_subdomain_ownership(
                 mapping.id,
                 3000,
                 Some("should roll back"),
-                Some("preview")
+                Some("preview"),
+                150,
             )
             .await,
         Err(StorageError::PortMappingSubdomainConflict)
@@ -920,7 +929,14 @@ async fn subdomains_are_normalized_validated_and_generated_short() {
         .unwrap();
     assert_ne!(generated.subdomain, other.subdomain);
     let unchanged = database
-        .update_port_mapping(workspace, generated.id, 3000, Some("display edit"), None)
+        .update_port_mapping(
+            workspace,
+            generated.id,
+            3000,
+            Some("display edit"),
+            None,
+            150,
+        )
         .await
         .unwrap();
     assert_eq!(unchanged.subdomain, generated.subdomain);
@@ -970,7 +986,14 @@ async fn subdomains_are_normalized_validated_and_generated_short() {
     assert_eq!(accepted.subdomain, longest);
     assert!(matches!(
         database
-            .update_port_mapping(workspace, accepted.id, 5000, None, Some(&"a".repeat(62)))
+            .update_port_mapping(
+                workspace,
+                accepted.id,
+                5000,
+                None,
+                Some(&"a".repeat(62)),
+                150
+            )
             .await,
         Err(StorageError::InvalidPortMappingSubdomain)
     ));

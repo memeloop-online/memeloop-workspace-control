@@ -215,6 +215,7 @@ fn string_field<'a>(object: &'a Map<String, Value>, key: &str) -> Option<&'a str
 const IMPORT_ORDER: &[&str] = &[
     "users",
     "user_api_keys",
+    "oidc_identities",
     "plugin_packages",
     "plugin_assets",
     "plugin_catalog_metadata",
@@ -249,6 +250,9 @@ const IMPORT_ORDER: &[&str] = &[
 const IMPORT_DESTINATION_DATA_TABLES: &[&str] = &[
     "users",
     "user_api_keys",
+    "oidc_identities",
+    "oidc_sessions",
+    "oidc_flows",
     "organizations",
     "organization_memberships",
     "organization_quotas",
@@ -296,6 +300,10 @@ const EXPORT_QUERIES: &[(&str, &str)] = &[
     (
         "user_api_keys",
         "SELECT json_object('id', id, 'installation_id', installation_id, 'user_id', user_id, 'name', name, 'token_prefix', token_prefix, 'token_hash', token_hash, 'token', token, 'last_used_at', last_used_at, 'created_at', created_at, 'revoked_at', revoked_at, 'scopes_json', scopes_json, 'expires_at', expires_at, 'allowed_template_ids_json', allowed_template_ids_json) item FROM user_api_keys WHERE installation_id = ?1 ORDER BY user_id, created_at, id",
+    ),
+    (
+        "oidc_identities",
+        "SELECT json_object('id', id, 'installation_id', installation_id, 'issuer', issuer, 'subject', subject, 'user_id', user_id, 'scopes_json', scopes_json, 'created_at', created_at) item FROM oidc_identities WHERE installation_id = ?1 ORDER BY id",
     ),
     (
         "organizations",

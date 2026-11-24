@@ -32,6 +32,15 @@ controlPlane:
   # is provisioned from node-local storage.
   nodeSelector: {}
 
+# Optional OpenID Connect for the browser. Register the exact callback
+# `<origin>/api/v1/auth/oidc/callback` on the confidential IdP client.
+oidc:
+  origin: ""
+  issuer: ""
+  clientId: ""
+  clientSecretName: ""
+  clientSecretKey: client-secret
+
 workspace:
   storageClassName: ""
   # Required CSI class for temporary build/cache storage. Each workspace uses one

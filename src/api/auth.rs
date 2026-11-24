@@ -1,27 +1,48 @@
 use std::sync::Arc;
 
-use axum::{Json, extract::State, http::HeaderMap};
+use axum::{
+    Json,
+    extract::State,
+    http::{HeaderMap, header},
+};
 
 use crate::storage::Principal;
 
 use super::{ApiError, AppState};
 
+pub(super) mod oidc;
+pub(super) mod oidc_provider;
+
 pub(super) async fn principal(
     state: &AppState,
     headers: &HeaderMap,
 ) -> Result<Principal, ApiError> {
-    let authorization = headers
-        .get(axum::http::header::AUTHORIZATION)
-        .and_then(|value| value.to_str().ok())
-        .ok_or(ApiError::Unauthorized)?;
-    let token = authorization
-        .strip_prefix("Bearer ")
-        .ok_or(ApiError::Unauthorized)?;
-    state
-        .database
-        .authenticate(token)
+    optional_principal(state, headers)
         .await?
         .ok_or(ApiError::Unauthorized)
+}
+
+pub(super) fn bearer(headers: &HeaderMap) -> Result<Option<&str>, ApiError> {
+    headers
+        .get(header::AUTHORIZATION)
+        .map(|value| {
+            value
+                .to_str()
+                .ok()
+                .and_then(|value| value.strip_prefix("Bearer "))
+                .ok_or(ApiError::Unauthorized)
+        })
+        .transpose()
+}
+
+pub(super) async fn optional_principal(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<Option<Principal>, ApiError> {
+    if let Some(token) = bearer(headers)? {
+        return Ok(state.database.authenticate(token).await?);
+    }
+    oidc::principal(state, headers).await
 }
 
 #[utoipa::path(

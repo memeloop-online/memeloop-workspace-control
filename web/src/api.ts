@@ -1,3 +1,4 @@
+import { BROWSER_SESSION } from "./browserAuth.ts";
 import type {
   ApiFailure,
   ApiKeyPage,
@@ -480,7 +481,7 @@ export class ApiClient {
     init: RequestInit & { idempotent?: boolean; idempotencyKey?: string } = {},
   ): Promise<T> {
     const headers = new Headers(init.headers);
-    headers.set("Authorization", `Bearer ${this.token}`);
+    if (this.token !== BROWSER_SESSION) headers.set("Authorization", `Bearer ${this.token}`);
     if (init.body) headers.set("Content-Type", "application/json");
     if (init.idempotent) headers.set("Idempotency-Key", init.idempotencyKey ?? crypto.randomUUID());
     const response = await fetch(path, { ...init, headers });

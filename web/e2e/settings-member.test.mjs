@@ -25,6 +25,7 @@ test("ordinary member Settings cannot reveal administrator sections or request a
       const url = new URL(request.url());
       if (url.origin !== baseUrl) return route.abort();
       if (!url.pathname.startsWith("/api/")) return route.continue();
+      if (request.method() === "GET" && url.pathname === "/api/v1/auth/oidc/status") return route.fulfill({ json: { enabled: false, signed_in: false } });
       const path = url.pathname;
       const method = request.method();
       let body;
@@ -106,6 +107,7 @@ test("personal API-key settings remain available without a selected organization
       const url = new URL(request.url());
       if (url.origin !== baseUrl) return route.abort();
       if (!url.pathname.startsWith("/api/")) return route.continue();
+      if (request.method() === "GET" && url.pathname === "/api/v1/auth/oidc/status") return route.fulfill({ json: { enabled: false, signed_in: false } });
       const path = url.pathname;
       let body;
       if (request.headers().authorization !== "Bearer fixture-no-organization-token") {
