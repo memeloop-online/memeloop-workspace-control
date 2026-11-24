@@ -63,7 +63,9 @@ fi
 pod=$2
 image=docker.io/library/alpine@sha256:4bcff63911fcb4448bd4fdacec207030997caf25e9bea4045fa6c8c44de311d1
 if ! k get pod "$pod" >/dev/null 2>&1; then
-  k run "$pod" --restart=Always --image="$image" --command -- sh -ec 'echo ordinary-container-log; exec sleep 3600' >&2
+  k wait --for=create serviceaccount/default --timeout=45s >&2
+  k run "$pod" --restart=Always --image="$image" --overrides='{"spec":{"automountServiceAccountToken":false}}' \
+    --command -- sh -ec 'echo ordinary-container-log; exec sleep 3600' >&2
 fi
 k wait --for=condition=Ready "pod/$pod" --timeout=100s >&2
 k logs "$pod" | grep -Fx ordinary-container-log >&2
