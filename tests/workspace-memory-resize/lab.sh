@@ -9,6 +9,7 @@ k3s=$dir/k3s
 image=docker.io/library/mwc-memory-ci:fixture
 mkdir -p "$out" "$dir/build"
 k() { sudo "$k3s" kubectl --kubeconfig "$dir/kubeconfig" --request-timeout=8s "$@"; }
+cri() { sudo env K3S_DATA_DIR="$dir/data" "$k3s" crictl "$@"; }
 cleanup() {
   local code=$?
   if [[ -n ${heartbeat:-} ]]; then kill "$heartbeat" 2>/dev/null || true; fi
@@ -46,9 +47,10 @@ for _ in {1..60}; do
   sleep 1
 done
 k wait --for=condition=Ready node/mwc-memory-ci --timeout=120s
-sudo "$k3s" crictl --runtime-endpoint unix:///run/k3s/containerd/containerd.sock version > "$out/cri-version.txt"
+cri version > "$out/cri-version.txt"
 grep -Eq '^RuntimeVersion:[[:space:]]+v?2\.3\.2-k3s2$' "$out/cri-version.txt"
-sudo "$k3s" ctr --address /run/k3s/containerd/containerd.sock --namespace k8s.io images import "$dir/image.tar"
+sudo env K3S_DATA_DIR="$dir/data" "$k3s" ctr --address /run/k3s/containerd/containerd.sock \
+  --namespace k8s.io images import "$dir/image.tar"
 k create secret generic fixture-ssh --from-file="host=$dir/host" --from-file="authorized_keys=$dir/client.pub"
 k create -f - <<EOF
 apiVersion: v1
@@ -118,7 +120,7 @@ timeout 180 ssh -F /dev/null -o BatchMode=yes -o StrictHostKeyChecking=yes \
 heartbeat=$!
 
 container=$(jq -er '.containerID|sub("^containerd://";"")' "$out/before.json")
-pid=$(sudo "$k3s" crictl --runtime-endpoint unix:///run/k3s/containerd/containerd.sock inspect "$container" | jq -er '.info.pid')
+pid=$(cri inspect "$container" | jq -er '.info.pid')
 cgroup=$(sudo awk -F: '$1=="0"{print $3}' "/proc/$pid/cgroup")
 test "$cgroup" != /
 test -n "$cgroup"
