@@ -20,7 +20,7 @@ chmod +x "$k3s"
 
 image=docker.io/library/mwc-k3s-ci-sshd:fixture
 docker build --tag "$image" - <<'DOCKERFILE'
-FROM alpine:3.22.1
+FROM alpine:3.22.1@sha256:4bcff63911fcb4448bd4fdacec207030997caf25e9bea4045fa6c8c44de311d1
 RUN apk add --no-cache openssh-server && adduser -D mwcci && passwd -d mwcci
 CMD ["sh", "-ec", "ssh-keygen -A; exec /usr/sbin/sshd -De -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no -o AuthorizedKeysFile=/ssh/authorized_keys"]
 DOCKERFILE
@@ -30,13 +30,15 @@ cat > "$dir/k3s.yaml" <<EOF
 data-dir: $runtime_root
 write-kubeconfig: $kubeconfig
 node-name: $node
+prefer-bundled-bin: true
+flannel-backend: host-gw
 disable: [coredns, local-storage, metrics-server, servicelb, traefik]
 disable-network-policy: true
 EOF
 
 heartbeat_pid=
 k() { sudo "$k3s" kubectl --kubeconfig "$kubeconfig" "$@"; }
-cri() { sudo "$k3s" crictl "$@"; }
+cri() { sudo env K3S_DATA_DIR="$runtime_root" "$k3s" crictl "$@"; }
 cleanup() {
   local code=$?
   if [[ -n $heartbeat_pid ]]; then kill "$heartbeat_pid" 2>/dev/null || true; fi
@@ -55,7 +57,8 @@ done
 k wait --for=condition=Ready "node/$node" --timeout=120s
 cri version | tee "$dir/cri-version.txt"
 grep -Eq '^RuntimeVersion:[[:space:]]+v?2\.3\.2-k3s2$' "$dir/cri-version.txt"
-sudo "$k3s" ctr -n k8s.io images import "$dir/ssh.tar"
+sudo env K3S_DATA_DIR="$runtime_root" "$k3s" ctr --address /run/k3s/containerd/containerd.sock \
+  --namespace k8s.io images import "$dir/ssh.tar"
 k create configmap ssh --from-file="authorized_keys=$dir/client.pub"
 node_ip=$(k get node "$node" -o json | jq -er '.status.addresses[] | select(.type == "InternalIP" and (.address | contains(":") | not)).address')
 
