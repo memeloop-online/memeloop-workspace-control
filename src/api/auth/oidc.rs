@@ -16,7 +16,7 @@ use crate::{
     storage::{OidcBindingResult, Principal, hash_secret},
 };
 
-use super::oidc_provider::{Provider, ProviderError};
+use super::oidc_provider::ProviderError;
 
 const FLOW_COOKIE: &str = "__Host-mwc-oidc";
 const SESSION_COOKIE: &str = "__Host-mwc-session";
