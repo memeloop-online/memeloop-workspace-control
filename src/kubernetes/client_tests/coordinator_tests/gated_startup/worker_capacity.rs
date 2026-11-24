@@ -257,7 +257,7 @@ impl HttpState {
                 "kind":if pods {"PodList"} else {"StatefulSetList"},"metadata":{"resourceVersion":"snapshot-1"},"items":items}),
             );
         }
-        if self.write_delay_ms > 0 && matches!(method, Method::PATCH | Method::POST) {
+        if self.write_delay_ms > 0 && (method == Method::PATCH || method == Method::POST) {
             tokio::time::sleep(Duration::from_millis(self.write_delay_ms)).await;
         }
         self.mock.respond(request).await
