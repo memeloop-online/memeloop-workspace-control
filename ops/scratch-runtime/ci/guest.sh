@@ -61,6 +61,7 @@ else
 fi
 
 pod=$2
+prior_container=${3:-}
 image=docker.io/library/alpine@sha256:4bcff63911fcb4448bd4fdacec207030997caf25e9bea4045fa6c8c44de311d1
 if ! k get pod "$pod" >/dev/null 2>&1; then
   k wait --for=create serviceaccount/default --timeout=45s >&2
@@ -68,18 +69,29 @@ if ! k get pod "$pod" >/dev/null 2>&1; then
     --command -- sh -ec 'echo ordinary-container-log; exec sleep 3600' >&2
 fi
 k wait --for=condition=Ready "pod/$pod" --timeout=100s >&2
-# A Ready Pod can precede the K3s tunnel reconnect after an OS reboot.
-node=$(k get pod "$pod" -o jsonpath='{.spec.nodeName}')
-for _ in {1..35}; do
-  if [[ $(k --request-timeout=3s get --raw "/api/v1/nodes/$node/proxy/healthz" 2>/dev/null) == ok ]]; then break; fi
+# The API can retain pre-reboot Pod status after the kubelet proxy comes back.
+# Prove a newly running container and its real logs and exec, not stale Ready.
+candidate_ready=false
+for _ in {1..60}; do
+  container=$(k --request-timeout=3s get pod "$pod" -o jsonpath='{.status.containerStatuses[?(@.ready==true)].containerID}') || container=
+  if [[ -n $container && $container != "$prior_container" ]] && \
+     logs_output=$(k --request-timeout=5s logs "$pod" 2>/dev/null) && [[ $logs_output == ordinary-container-log ]] && \
+     exec_output=$(timeout 7 k --request-timeout=5s exec "$pod" -- printf ordinary-exec 2>/dev/null) && \
+     [[ $exec_output == ordinary-exec ]]; then
+    candidate_ready=true
+    break
+  fi
   sleep 1
 done
-k --request-timeout=5s get --raw "/api/v1/nodes/$node/proxy/healthz" | grep -Fx ok >&2
-k logs "$pod" | grep -Fx ordinary-container-log >&2
-test "$(k exec "$pod" -- printf ordinary-exec)" = ordinary-exec
-python3 - "$1" "$pod" "$(k get pod "$pod" -o jsonpath='{.metadata.uid}')" <<'PY'
+if [[ $candidate_ready != true ]]; then
+  k get pod "$pod" -o wide >&2 || true
+  k logs "$pod" >&2 || true
+  journalctl -u k3s.service -n 25 --no-pager >&2 || true
+  exit 1
+fi
+python3 - "$1" "$pod" "$(k get pod "$pod" -o jsonpath='{.metadata.uid}')" "$container" <<'PY'
 import json, pathlib, sys
 print(json.dumps({'boot_id':pathlib.Path('/proc/sys/kernel/random/boot_id').read_text().strip(),
-                  'mount_state':sys.argv[1],'pod':sys.argv[2],'pod_uid':sys.argv[3],
+                  'mount_state':sys.argv[1],'pod':sys.argv[2],'pod_uid':sys.argv[3],'container_id':sys.argv[4],
                   'original_log_inode_retained':True,'ordinary_log_and_exec':True}))
 PY

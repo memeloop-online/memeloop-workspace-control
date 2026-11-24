@@ -72,14 +72,15 @@ scp -q "${options[@]}" -P 22345 "$dir/k3s" "$src"/{mwc-scratch-mounts.sh,mwc-scr
   "$src/ci/guest.sh" ubuntu@127.0.0.1:mwc-ci/
 step install
 step mounted ordinary-before-reboot | tee "$dir/boot-evidence.jsonl"
+first_container=$(jq -er '.container_id' "$dir/boot-evidence.jsonl")
 second=$(reboot_guest "$first")
-step mounted ordinary-before-reboot | tee -a "$dir/boot-evidence.jsonl"
+step mounted ordinary-before-reboot "$first_container" | tee -a "$dir/boot-evidence.jsonl"
 step rollback
 third=$(reboot_guest "$second")
 step unmounted ordinary-after-rollback | tee -a "$dir/boot-evidence.jsonl"
 jq -es --arg first "$first" --arg second "$second" --arg third "$third" '
   length == 3 and map(.boot_id) == [$first,$second,$third] and
   (map(.boot_id) | unique | length) == 3 and map(.mount_state) == ["mounted","mounted","unmounted"] and
-  .[0].pod_uid == .[1].pod_uid and .[1].pod_uid != .[2].pod_uid and
+  .[0].pod_uid == .[1].pod_uid and .[0].container_id != .[1].container_id and .[1].pod_uid != .[2].pod_uid and
   all(.[]; .ordinary_log_and_exec and .original_log_inode_retained)
 ' "$dir/boot-evidence.jsonl"
