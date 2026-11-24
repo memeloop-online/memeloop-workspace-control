@@ -11,10 +11,7 @@ use crate::{
         DeleteProgress, InjectionMaterialization, KubernetesCoordinator, ReconcileError,
         ResourceBuilder, WorkspaceObservations,
     },
-    storage::{
-        ClaimedJob, Database, InjectionScopeRef, PORT_MAPPING_RECONCILE_JOB, PortMapping,
-        StorageError,
-    },
+    storage::{ClaimedJob, Database, InjectionScopeRef, PortMapping, StorageError},
     workspaces::{Workspace, WorkspaceObservation, WorkspaceState},
 };
 
@@ -171,7 +168,18 @@ impl WorkspaceReconcileHandler {
         Ok(Vec::new())
     }
 
-    async fn reconcile_routes(&self, workspace: &Workspace) -> Result<(), JobHandlerError> {
+    pub(super) async fn reconcile_port_mapping_job(
+        &self,
+        job: &ClaimedJob,
+    ) -> Result<(), JobHandlerError> {
+        let workspace_id = job.workspace_id.ok_or_else(|| {
+            JobHandlerError::Failed("port mapping job has no workspace id".to_owned())
+        })?;
+        let workspace = match self.database.get_workspace(workspace_id).await {
+            Ok(workspace) => workspace,
+            Err(StorageError::WorkspaceNotFound) => return Ok(()),
+            Err(error) => return Err(job_error(error)),
+        };
         if matches!(
             workspace.state,
             WorkspaceState::Deleting | WorkspaceState::Deleted
@@ -180,13 +188,13 @@ impl WorkspaceReconcileHandler {
         }
         // The worker already holds the workspace lease. Use the current declaration
         // so retries and rapid edits cannot replay a superseded route.
-        let mappings = self.desired_port_mappings(workspace).await?;
+        let mappings = self.desired_port_mappings(&workspace).await?;
         self.coordinator
-            .reconcile_port_mappings(workspace, &mappings)
+            .reconcile_port_mappings(&workspace, &mappings)
             .await
             .map_err(job_error)?;
         self.coordinator
-            .apply_port_mapping_metadata(workspace, &mappings)
+            .apply_port_mapping_metadata(&workspace, &mappings)
             .await
             .map_err(job_error)
     }
@@ -543,10 +551,7 @@ impl JobHandler for WorkspaceReconcileHandler {
         if job.kind == "workspace_storage_shrink" {
             return self.handle_storage_shrink(job).await;
         }
-        if !matches!(
-            job.kind.as_str(),
-            "reconcile_workspace" | PORT_MAPPING_RECONCILE_JOB
-        ) {
+        if job.kind != "reconcile_workspace" {
             return Err(JobHandlerError::Failed(format!(
                 "unsupported background job kind {}",
                 job.kind
@@ -563,10 +568,6 @@ impl JobHandler for WorkspaceReconcileHandler {
             }
             Err(error) => return Err(job_error(error)),
         };
-        if job.kind == PORT_MAPPING_RECONCILE_JOB {
-            // Keep the route-only future out of the workspace lifecycle future.
-            return Box::pin(self.reconcile_routes(&workspace)).await;
-        }
         if self
             .database
             .storage_shrink_active(workspace_id)
@@ -594,7 +595,8 @@ impl JobHandler for WorkspaceReconcileHandler {
                 .await
                 .map_err(reconcile_error);
         }
-        self.reconcile_workspace(&workspace, job).await
+        // The lifecycle itself composes several substantial Kubernetes futures.
+        Box::pin(self.reconcile_workspace(&workspace, job)).await
     }
 
     async fn on_checkpoint_deferred(&self, job_id: Uuid, now: i64) -> Result<(), StorageError> {
