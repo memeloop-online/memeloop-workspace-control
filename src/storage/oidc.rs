@@ -11,15 +11,16 @@ pub enum OidcBindingResult {
     Conflict,
 }
 
-const OWNER: &str = "SELECT u.id, u.system_admin, k.scopes_json,
+const OWNER: &str = "SELECT u.id, u.system_admin, k.scopes_json, k.id,
     CASE WHEN EXISTS (
         SELECT 1 FROM organization_memberships m
         WHERE m.installation_id = u.installation_id AND m.user_id = u.id AND m.role = 'organization_admin'
     ) THEN CAST(1 AS BIGINT) ELSE CAST(0 AS BIGINT) END
     FROM users u JOIN user_api_keys k
-    ON k.installation_id = u.installation_id AND k.user_id = u.id AND k.token_hash = u.token_hash
-    WHERE u.installation_id = $1 AND u.token_hash = $2 AND u.disabled = 0
-    AND k.revoked_at IS NULL AND k.expires_at > $3 AND k.allowed_template_ids_json IS NULL";
+    ON k.installation_id = u.installation_id AND k.user_id = u.id
+    WHERE u.installation_id = $1 AND u.disabled = 0
+    AND (k.token = $2 OR (k.token IS NULL AND k.token_hash = $3))
+    AND k.revoked_at IS NULL AND k.expires_at > $4 AND k.allowed_template_ids_json IS NULL";
 const BIND: &str = "INSERT INTO oidc_identities
     (installation_id, issuer, subject, user_id, id, scopes_json, created_at)
     VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT DO NOTHING";
@@ -54,31 +55,31 @@ const PUT_FLOW: &str = "INSERT INTO oidc_flows (installation_id, flow_hash, payl
 const TAKE_FLOW: &str = "DELETE FROM oidc_flows
     WHERE installation_id = $1 AND flow_hash = $2 AND expires_at > $3 RETURNING payload";
 
-type OwnerRow = (String, i64, String, i64);
+type OwnerRow = (String, i64, String, String, i64);
 type SessionRow = (String, String, i64, String, Option<String>, Option<String>);
 
 struct Owner {
     id: Uuid,
+    key_id: String,
     grants: Vec<ApiKeyScope>,
 }
 
 fn checked_owner(row: Option<OwnerRow>) -> Result<Option<Owner>, StorageError> {
-    let Some((id, system_admin, grants, org_admin)) = row else {
+    let Some((id, system_admin, grants, key_id, org_admin)) = row else {
         return Ok(None);
     };
     let Ok(mut grants) = serde_json::from_str::<Vec<ApiKeyScope>>(&grants) else {
         return Ok(None);
     };
-    if !ApiKeyScope::initial_key_defaults(system_admin != 0)
-        .iter()
-        .all(|scope| grants.contains(scope))
-    {
+    let ceiling = role_scopes(system_admin != 0, org_admin != 0);
+    // A restricted bearer may not convert its access to an enduring browser login.
+    if !ceiling.iter().all(|scope| grants.contains(scope)) {
         return Ok(None);
     }
-    let ceiling = role_scopes(system_admin != 0, org_admin != 0);
     grants.retain(|scope| *scope != ApiKeyScope::ManageApiKeys && ceiling.contains(scope));
     Ok(Some(Owner {
         id: Uuid::parse_str(&id)?,
+        key_id,
         grants,
     }))
 }
@@ -141,6 +142,7 @@ impl Database {
             Self::Sqlite { pool, .. } => {
                 sqlx::query_as(OWNER)
                     .bind(installation)
+                    .bind(token)
                     .bind(&token_hash)
                     .bind(now)
                     .fetch_optional(pool)
@@ -149,6 +151,7 @@ impl Database {
             Self::Postgres { pool, .. } => {
                 sqlx::query_as(OWNER)
                     .bind(installation)
+                    .bind(token)
                     .bind(&token_hash)
                     .bind(now)
                     .fetch_optional(pool)
@@ -188,107 +191,19 @@ impl Database {
         now: i64,
         bind: bool,
     ) -> Result<OidcBindingResult, StorageError> {
-        let installation = self.installation_id().as_str();
-        let token_hash = hash_token(token);
-        let action = if bind {
-            "user.oidc.bind"
-        } else {
-            "user.oidc.unbind"
+        let change = BindingChange {
+            installation: self.installation_id().as_str(),
+            token,
+            token_hash: &hash_token(token),
+            issuer,
+            subject,
+            now,
+            bind,
         };
-        let result = match self {
-            Self::Sqlite { pool, .. } => {
-                let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
-                let row = sqlx::query_as(OWNER)
-                    .bind(installation)
-                    .bind(&token_hash)
-                    .bind(now)
-                    .fetch_optional(&mut *tx)
-                    .await?;
-                let Some(owner) = checked_owner(row)? else {
-                    return Ok(OidcBindingResult::Unauthorized);
-                };
-                let user_id = owner.id.to_string();
-                let statement = if bind {
-                    sqlx::query(BIND)
-                        .bind(installation)
-                        .bind(issuer)
-                        .bind(subject)
-                        .bind(&user_id)
-                        .bind(Uuid::now_v7().to_string())
-                        .bind(serde_json::to_string(&owner.grants)?)
-                        .bind(now)
-                } else {
-                    sqlx::query(UNBIND)
-                        .bind(installation)
-                        .bind(issuer)
-                        .bind(subject)
-                        .bind(&user_id)
-                };
-                let changed = statement.execute(&mut *tx).await?.rows_affected() == 1;
-                if changed {
-                    sqlx::query(AUDIT)
-                        .bind(Uuid::now_v7().to_string())
-                        .bind(installation)
-                        .bind(&user_id)
-                        .bind(action)
-                        .bind(audit_metadata(issuer, subject))
-                        .bind(now)
-                        .execute(&mut *tx)
-                        .await?;
-                }
-                tx.commit().await?;
-                changed
-            }
-            Self::Postgres { pool, .. } => {
-                let mut tx = pool.begin().await?;
-                // API-key revocation and account changes also lock the user before writing.
-                let row = sqlx::query_as(&format!("{OWNER} FOR UPDATE OF u, k"))
-                    .bind(installation)
-                    .bind(&token_hash)
-                    .bind(now)
-                    .fetch_optional(&mut *tx)
-                    .await?;
-                let Some(owner) = checked_owner(row)? else {
-                    return Ok(OidcBindingResult::Unauthorized);
-                };
-                let user_id = owner.id.to_string();
-                let statement = if bind {
-                    sqlx::query(BIND)
-                        .bind(installation)
-                        .bind(issuer)
-                        .bind(subject)
-                        .bind(&user_id)
-                        .bind(Uuid::now_v7().to_string())
-                        .bind(serde_json::to_string(&owner.grants)?)
-                        .bind(now)
-                } else {
-                    sqlx::query(UNBIND)
-                        .bind(installation)
-                        .bind(issuer)
-                        .bind(subject)
-                        .bind(&user_id)
-                };
-                let changed = statement.execute(&mut *tx).await?.rows_affected() == 1;
-                if changed {
-                    sqlx::query(AUDIT)
-                        .bind(Uuid::now_v7().to_string())
-                        .bind(installation)
-                        .bind(&user_id)
-                        .bind(action)
-                        .bind(audit_metadata(issuer, subject))
-                        .bind(now)
-                        .execute(&mut *tx)
-                        .await?;
-                }
-                tx.commit().await?;
-                changed
-            }
-        };
-        Ok(if result {
-            OidcBindingResult::Changed
-        } else {
-            OidcBindingResult::Conflict
-        })
+        match self {
+            Self::Sqlite { pool, .. } => change_sqlite(pool, change).await,
+            Self::Postgres { pool, .. } => change_postgres(pool, change).await,
+        }
     }
 
     pub async fn oidc_create_session(
@@ -476,6 +391,152 @@ impl Database {
     }
 }
 
-fn audit_metadata(issuer: &str, subject: &str) -> String {
-    serde_json::json!({ "issuer": issuer, "subject_sha256": hash_token(subject) }).to_string()
+struct BindingChange<'a> {
+    installation: &'a str,
+    token: &'a str,
+    token_hash: &'a str,
+    issuer: &'a str,
+    subject: &'a str,
+    now: i64,
+    bind: bool,
+}
+
+fn audit_action(bind: bool) -> &'static str {
+    if bind {
+        "user.oidc.bind"
+    } else {
+        "user.oidc.unbind"
+    }
+}
+
+async fn change_sqlite(
+    pool: &sqlx::SqlitePool,
+    change: BindingChange<'_>,
+) -> Result<OidcBindingResult, StorageError> {
+    let BindingChange {
+        installation,
+        token,
+        token_hash,
+        issuer,
+        subject,
+        now,
+        bind,
+    } = change;
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
+    let row = sqlx::query_as(OWNER)
+        .bind(installation)
+        .bind(token)
+        .bind(token_hash)
+        .bind(now)
+        .fetch_optional(&mut *tx)
+        .await?;
+    let Some(owner) = checked_owner(row)? else {
+        return Ok(OidcBindingResult::Unauthorized);
+    };
+    let user_id = owner.id.to_string();
+    let statement = if bind {
+        sqlx::query(BIND)
+            .bind(installation)
+            .bind(issuer)
+            .bind(subject)
+            .bind(&user_id)
+            .bind(Uuid::now_v7().to_string())
+            .bind(serde_json::to_string(&owner.grants)?)
+            .bind(now)
+    } else {
+        sqlx::query(UNBIND)
+            .bind(installation)
+            .bind(issuer)
+            .bind(subject)
+            .bind(&user_id)
+    };
+    let changed = statement.execute(&mut *tx).await?.rows_affected() == 1;
+    if changed {
+        sqlx::query(AUDIT)
+            .bind(Uuid::now_v7().to_string())
+            .bind(installation)
+            .bind(&user_id)
+            .bind(audit_action(bind))
+            .bind(audit_metadata(issuer, subject, &owner.key_id))
+            .bind(now)
+            .execute(&mut *tx)
+            .await?;
+    }
+    tx.commit().await?;
+    Ok(if changed {
+        OidcBindingResult::Changed
+    } else {
+        OidcBindingResult::Conflict
+    })
+}
+
+async fn change_postgres(
+    pool: &sqlx::PgPool,
+    change: BindingChange<'_>,
+) -> Result<OidcBindingResult, StorageError> {
+    let BindingChange {
+        installation,
+        token,
+        token_hash,
+        issuer,
+        subject,
+        now,
+        bind,
+    } = change;
+    let mut tx = pool.begin().await?;
+    // API-key revocation and account changes also lock the user before writing.
+    let row = sqlx::query_as(&format!("{OWNER} FOR UPDATE OF u, k"))
+        .bind(installation)
+        .bind(token)
+        .bind(token_hash)
+        .bind(now)
+        .fetch_optional(&mut *tx)
+        .await?;
+    let Some(owner) = checked_owner(row)? else {
+        return Ok(OidcBindingResult::Unauthorized);
+    };
+    let user_id = owner.id.to_string();
+    let statement = if bind {
+        sqlx::query(BIND)
+            .bind(installation)
+            .bind(issuer)
+            .bind(subject)
+            .bind(&user_id)
+            .bind(Uuid::now_v7().to_string())
+            .bind(serde_json::to_string(&owner.grants)?)
+            .bind(now)
+    } else {
+        sqlx::query(UNBIND)
+            .bind(installation)
+            .bind(issuer)
+            .bind(subject)
+            .bind(&user_id)
+    };
+    let changed = statement.execute(&mut *tx).await?.rows_affected() == 1;
+    if changed {
+        sqlx::query(AUDIT)
+            .bind(Uuid::now_v7().to_string())
+            .bind(installation)
+            .bind(&user_id)
+            .bind(audit_action(bind))
+            .bind(audit_metadata(issuer, subject, &owner.key_id))
+            .bind(now)
+            .execute(&mut *tx)
+            .await?;
+    }
+    tx.commit().await?;
+    Ok(if changed {
+        OidcBindingResult::Changed
+    } else {
+        OidcBindingResult::Conflict
+    })
+}
+
+fn audit_metadata(issuer: &str, subject: &str, key_id: &str) -> String {
+    serde_json::json!({
+        "issuer": issuer,
+        "subject_sha256": hash_token(subject),
+        "api_key_id": key_id,
+    })
+    .to_string()
 }

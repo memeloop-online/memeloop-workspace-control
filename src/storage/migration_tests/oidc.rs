@@ -21,7 +21,12 @@ async fn assert_v32_upgrade_and_oidc(database: &Database) -> Option<DatabaseSnap
             false,
             [
                 ApiKeyScope::initial_key_defaults(false),
-                vec![ApiKeyScope::ManageOrganization, ApiKeyScope::ManageMembers],
+                vec![
+                    ApiKeyScope::ManageOrganization,
+                    ApiKeyScope::ManageMembers,
+                    ApiKeyScope::ManageLockedInjections,
+                    ApiKeyScope::DeleteWorkspace,
+                ],
             ]
             .concat(),
             now + 3600,
@@ -73,7 +78,7 @@ async fn assert_v32_upgrade_and_oidc(database: &Database) -> Option<DatabaseSnap
         .create_api_key(
             owner.user_id,
             "Initial key",
-            cli.api_key_scopes.clone(),
+            ApiKeyScope::initial_key_defaults(false),
             Some(now + 3600),
             None,
             now,
@@ -88,13 +93,36 @@ async fn assert_v32_upgrade_and_oidc(database: &Database) -> Option<DatabaseSnap
             .unwrap(),
         OidcBindingResult::Unauthorized,
     );
+    let allowlisted = database
+        .create_api_key(
+            owner.user_id,
+            "Allowlisted full scopes",
+            cli.api_key_scopes.clone(),
+            Some(now + 3600),
+            Some(vec![Uuid::now_v7()]),
+            now,
+        )
+        .await
+        .unwrap();
+    assert_eq!(database.oidc_owner(&allowlisted.token).await.unwrap(), None);
+    let rotated = database
+        .create_api_key(
+            owner.user_id,
+            "Rotated full account access",
+            cli.api_key_scopes.clone(),
+            Some(now + 3600),
+            None,
+            now,
+        )
+        .await
+        .unwrap();
     assert_eq!(
-        database.oidc_owner(OWNER_TOKEN).await.unwrap(),
+        database.oidc_owner(&rotated.token).await.unwrap(),
         Some(owner.user_id),
     );
     assert_eq!(
         database
-            .oidc_bind(OWNER_TOKEN, ISSUER, SUBJECT, now)
+            .oidc_bind(&rotated.token, ISSUER, SUBJECT, now)
             .await
             .unwrap(),
         OidcBindingResult::Changed,
