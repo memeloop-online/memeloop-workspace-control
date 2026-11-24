@@ -1,0 +1,26 @@
+name: Workspace memory resize lab
+
+on:
+  pull_request:
+    paths: [tests/workspace-memory-resize/**, .github/workflows/workspace-memory-resize.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  k3s:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Measure memory resize under pressure on K3s
+        run: bash tests/workspace-memory-resize/lab.sh "$RUNNER_TEMP/mwc-memory-resize"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: workspace-memory-resize-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/mwc-memory-resize/evidence/
+          if-no-files-found: error
