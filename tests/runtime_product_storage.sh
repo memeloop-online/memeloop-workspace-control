@@ -28,9 +28,10 @@ test "$(findmnt -n -o PROPAGATION --mountpoint /)" = private
 # Give this disposable namespace a shared root and state parent like a node.
 # The initial recursive-private unshare keeps these changes out of the runner.
 mount --make-shared /
-install -d -o root -g root -m 0711 "$bundle_root"
-mount --bind "$containerd_state" "$containerd_state"
+install -d -o root -g root -m 0755 "$containerd_state"
+mount -t tmpfs -o size=64m,mode=0755 tmpfs "$containerd_state"
 mount --make-shared "$containerd_state"
+install -d -o root -g root -m 0711 "$bundle_root"
 test -z "$(find "$bundle_root" -mindepth 1 -print -quit)"
 if findmnt -n --mountpoint "$bundle_root" >/dev/null; then exit 1; fi
 mount --bind "$bundle_root" "$bundle_root"
@@ -615,8 +616,8 @@ jq -n --arg host "$(readlink /proc/1/ns/mnt)" --arg harness "$(readlink "$mount_
  --arg configured "$(jq -r .mount_namespace /etc/mwc-runtime-wrapper.json)" \
  '{host:$host,harness:$harness,containerd:$containerd,k3s:$k3s,wrapper_mount_namespace:$configured}' > "$out/actual-mount-namespaces.json"
 jq -e --arg namespace "$mount_namespace" '.host!=.harness and .harness==.containerd and .harness==.k3s and .wrapper_mount_namespace==$namespace' "$out/actual-mount-namespaces.json"
-findmnt -J -o TARGET,PROPAGATION --mountpoint /var/lib/kubelet > "$out/actual-kubelet-mount-propagation.json"
-test "$(findmnt -n -o PROPAGATION --mountpoint /var/lib/kubelet)" = shared
+findmnt -J -o TARGET,PROPAGATION --target /var/lib/kubelet > "$out/actual-kubelet-mount-propagation.json"
+test "$(findmnt -n -o PROPAGATION --target /var/lib/kubelet)" = shared
 for dir in / "$containerd_state" "$bundle_root"; do
  findmnt -n -o TARGET,PROPAGATION --mountpoint "$dir"
 done > "$out/actual-bundle-mount-propagation.txt"
