@@ -832,6 +832,35 @@ for enabled in false true; do
   kube get pod -n "$namespace" "$pod" -o json > "$case_out/pod-current.json"
   jq -e --arg uid "$uid" --arg id "containerd://$main_id" '.metadata.uid==$uid and .status.phase=="Running" and all(.status.containerStatuses[];.ready) and any(.status.containerStatuses[];.name=="workspace" and .containerID==$id)' "$case_out/pod-current.json" >/dev/null
  }
+ containerd_recovered=false
+ if [ "$enabled" = true ]; then
+  # Fault only the daemon in this disposable VM. Live shims, K3s and CSI stay
+  # running; verify actual SSH/CRI execution, not just Kubernetes' cached Ready.
+  check_identity
+  jq '[.status.containerStatuses[]|{name,containerID,restartCount}]|sort_by(.name)' "$case_out/pod-current.json" > "$case_out/containers-before-daemon-loss.json"
+  root_mount_before="$(findmnt -n -M "$bundle_root/$main_id/rootfs" -o ID)"
+  test -n "$root_mount_before"
+  kill -KILL "$containerd_pid"
+  if wait "$containerd_pid"; then exit 1; else test "$?" -eq 137; fi
+  containerd_pid=''
+  ssh_product 'test "$(cat /home/user/storage-ci-home-marker)" = home-survives; printf ssh-without-containerd' > "$case_out/ssh-without-containerd.txt"
+  containerd --config "$base/containerd.toml" >> "$out/containerd.log" 2>&1 & containerd_pid=$!
+  for n in $(seq 1 60); do
+   if cri --timeout 3s info 2>/dev/null | jq -e '[.status.conditions[]|select(.type=="RuntimeReady")|.status]==[true]' >/dev/null &&
+      cri --timeout 3s inspect "$main_id" 2>/dev/null | jq -e '.status.state=="CONTAINER_RUNNING"' >/dev/null; then break; fi
+   sleep 1
+  done
+  cri --timeout 3s info | jq -e '.status.conditions | select(any(.[];.type=="RuntimeReady" and .status==true))' > "$case_out/cri-reconnected.json"
+  check_identity
+  jq '[.status.containerStatuses[]|{name,containerID,restartCount}]|sort_by(.name)' "$case_out/pod-current.json" > "$case_out/containers-after-daemon-loss.json"
+  cmp "$case_out/containers-before-daemon-loss.json" "$case_out/containers-after-daemon-loss.json"
+  test "$(findmnt -n -M "$bundle_root/$main_id/rootfs" -o ID)" = "$root_mount_before"
+  kube exec -n "$namespace" "$pod" -c workspace -- test -f /home/user/storage-ci-home-marker
+  test "$(kube exec mwc-default-runtime -- cat /tmp/mwc-sentinel)" = ordinary-runtime
+  ssh_product 'test "$(cat /home/user/storage-ci-home-marker)" = home-survives; printf ssh-after-containerd' > "$case_out/ssh-after-containerd.txt"
+  check_active_writeback after-daemon-loss "$publish" "$home_publish"
+  containerd_recovered=true
+ fi
  # Use the real application PID 1 stdout, not kubectl exec's output stream.
  kube_log_emit() { timeout 90s "$base/k3s-bin" kubectl --kubeconfig "$base/kubeconfig" exec -n "$namespace" "$pod" -c workspace -- /usr/local/bin/storage-ci-probe emit /proc/1/fd/1 "$1" "$2"; }
  summary > "$case_out/summary-before-logs.json"
@@ -980,8 +1009,8 @@ for enabled in false true; do
   > "$case_out/writeback-after-lv-delete.json"
  jq -es '.[0].scope==.[1].scope' "$case_out/writeback-before-pod.json" "$case_out/writeback-after-lv-delete.json"
  kube delete secret -n "$namespace" "$identity" --wait=true --timeout=120s
- jq -n --arg runtime "$runtime" --argjson buildkit "$enabled" --arg uid "$uid" --arg new_uid "$new_uid" --arg scratch_uid "$scratch_uid" --arg home_uid "$home_uid" --arg scratch_dm_uuid "$scratch_dm_uuid" --argjson shared_memory "$shm_capacity_json" \
-  '{accepted:true,shared_memory:$shared_memory,runtime:$runtime,buildkit:$buildkit,writeback_wrapper_owned:true,wrong_pool_rejected_without_tuning:true,writeback_peer_and_republish_readback:true,root_written_bytes:2415919104,root_fsync:true,scratch_enospc:true,logs_rotation:true,logs_follow_reopen:true,logs_previous:true,kubelet_logs_accounted:true,kubelet_scratch_accounted:true,logs_share_scratch:true,ssh_survived:true,pod_identity_preserved_under_pressure:true,old_pod_uid:$uid,new_pod_uid:$new_uid,scratch_pvc_uid:$scratch_uid,scratch_dm_uuid:$scratch_dm_uuid,home_pvc_uid:$home_uid,pvc_reused:true,node_unpublish_observed:true,pv_lv_deleted:true,crash_reboot_proven:false,all_templates_proven:false,eviction_settings_changed:false}' > "$case_out/acceptance.json"
+ jq -n --arg runtime "$runtime" --argjson buildkit "$enabled" --arg uid "$uid" --arg new_uid "$new_uid" --arg scratch_uid "$scratch_uid" --arg home_uid "$home_uid" --arg scratch_dm_uuid "$scratch_dm_uuid" --argjson shared_memory "$shm_capacity_json" --argjson containerd_recovered "$containerd_recovered" \
+  '{accepted:true,shared_memory:$shared_memory,live_shim_daemon_reconnect:$containerd_recovered,runtime:$runtime,buildkit:$buildkit,writeback_wrapper_owned:true,wrong_pool_rejected_without_tuning:true,writeback_peer_and_republish_readback:true,root_written_bytes:2415919104,root_fsync:true,scratch_enospc:true,logs_rotation:true,logs_follow_reopen:true,logs_previous:true,kubelet_logs_accounted:true,kubelet_scratch_accounted:true,logs_share_scratch:true,ssh_survived:true,pod_identity_preserved_under_pressure:true,old_pod_uid:$uid,new_pod_uid:$new_uid,scratch_pvc_uid:$scratch_uid,scratch_dm_uuid:$scratch_dm_uuid,home_pvc_uid:$home_uid,pvc_reused:true,node_unpublish_observed:true,pv_lv_deleted:true,crash_reboot_proven:false,all_templates_proven:false,eviction_settings_changed:false}' > "$case_out/acceptance.json"
  diagnostic_case=''
 done
 done
@@ -1000,7 +1029,8 @@ jq -es --arg renderer "$PRODUCT_RENDERER_SHA" --arg wrapper "$WRAPPER_SHA" --arg
  sort_by(.runtime,.buildkit) as $cases |
  if ($cases|length)==4 and ([$cases[]|[.runtime,.buildkit]]==[["mwc-native",false],["mwc-native",true],["mwc-runsc",false],["mwc-runsc",true]]) and
  ([$cases[].scratch_dm_uuid] | unique | length)==4 and
+ all($cases[]; .live_shim_daemon_reconnect==.buildkit) and
  all($cases[] | select(.runtime=="mwc-runsc"); .shared_memory.host_bytes>0 and .shared_memory.host_bytes==.shared_memory.sandbox_bytes) and
  all($cases[]; .accepted and .writeback_wrapper_owned and .wrong_pool_rejected_without_tuning and .writeback_peer_and_republish_readback and .root_written_bytes>2147483648 and .root_fsync and .scratch_enospc and .logs_rotation and .logs_follow_reopen and .logs_previous and .kubelet_logs_accounted and .kubelet_scratch_accounted and .logs_share_scratch and .ssh_survived and .pod_identity_preserved_under_pressure and .pvc_reused and .node_unpublish_observed and .pv_lv_deleted)
- then {accepted:true,renderer_sha:$renderer,wrapper_sha:$wrapper,product:$product,cases:$cases,real_csi:true,production_deployed:false,runtime_matrix_complete:true,writeback_policy:"wrapper-strict-limit",mount_layout:"shared-parent-private-bundle",canonical_log_leaf_pinned:true,default_runtime_survived:true,default_runtime_cleanup:true}
+ then {accepted:true,renderer_sha:$renderer,wrapper_sha:$wrapper,product:$product,cases:$cases,real_csi:true,production_deployed:false,runtime_matrix_complete:true,writeback_policy:"wrapper-strict-limit",mount_layout:"shared-parent-private-bundle",canonical_log_leaf_pinned:true,default_runtime_survived:true,default_runtime_cleanup:true,control_plane_daemon_restart_with_live_shims:true}
  else error("incomplete real CSI quota runtime matrix") end' "$out/"mwc-*/acceptance.json > "$out/acceptance.json"
