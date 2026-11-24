@@ -25,6 +25,14 @@ async fn pending_scratch_binds_after_consumer_and_is_reused_without_writes() {
         claim["metadata"]["name"]
     );
     assert!(scratch.get("ephemeral").is_none());
+    assert!(
+        mock.events
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|(method, path)| { !path.ends_with("-scratch") || method != "GET" }),
+        "an uncontended first create needs no lookup of its scratch claim"
+    );
     mock.events.lock().unwrap().clear();
     coordinator.reconcile(&workspace).await.unwrap();
     assert_eq!(mock.object("-scratch"), Some(claim));
@@ -107,12 +115,50 @@ async fn foreign_or_terminating_scratch_is_not_recreated_or_overwritten() {
         }
         assert_eq!(mock.object("-scratch"), Some(claim));
         assert!(mock.object("-startup-gate").is_none());
-        assert!(
-            mock.events
-                .lock()
-                .unwrap()
-                .iter()
-                .all(|(method, path)| !path.contains("/persistentvolumeclaims") || method == "GET")
-        );
+        let events = mock.events.lock().unwrap();
+        let attempts: Vec<_> = events
+            .iter()
+            .filter(|(_, path)| {
+                path.ends_with("/persistentvolumeclaims") || path.ends_with("-scratch")
+            })
+            .map(|(method, _)| method.as_str())
+            .collect();
+        assert_eq!(attempts, ["POST", "GET"]);
     }
+}
+
+#[tokio::test]
+async fn initial_creation_reuses_an_owned_claim_left_by_an_interrupted_attempt() {
+    let mut workspace = workspace(workspace_id());
+    workspace.state = WorkspaceState::Provisioning;
+    let mock = Arc::new(GateMock::default());
+    let coordinator = coordinator(mock.clone());
+    let claim = coordinator
+        .builder
+        .build(&workspace)
+        .unwrap()
+        .scratch_claim
+        .unwrap();
+    let name = claim.metadata.name.clone().unwrap();
+    let collection = format!(
+        "/api/v1/namespaces/{}/persistentvolumeclaims",
+        workspace.runtime.namespace()
+    );
+    let path = format!("{collection}/{name}");
+    let mut claim = serde_json::to_value(claim).unwrap();
+    claim["metadata"]["uid"] = json!("claim-created-by-first-attempt");
+    mock.objects
+        .lock()
+        .unwrap()
+        .insert(path.clone(), claim.clone());
+    coordinator.reconcile(&workspace).await.unwrap();
+    assert_eq!(mock.object("-scratch"), Some(claim));
+    assert!(mock.object("-startup-gate").is_some());
+    let events = mock.events.lock().unwrap();
+    let attempts: Vec<_> = events
+        .iter()
+        .filter(|(_, uri)| uri == &collection || uri == &path)
+        .map(|(method, _)| method.as_str())
+        .collect();
+    assert_eq!(attempts, ["POST", "GET"]);
 }
