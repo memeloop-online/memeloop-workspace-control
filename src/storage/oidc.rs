@@ -135,6 +135,9 @@ fn role_scopes(system_admin: bool, organization_admin: bool) -> Vec<ApiKeyScope>
 
 impl Database {
     pub async fn oidc_owner(&self, token: &str) -> Result<Option<Uuid>, StorageError> {
+        if token.len() < 32 {
+            return Ok(None);
+        }
         let now = super::migration::unix_timestamp()?;
         let token_hash = hash_token(token);
         let installation = self.installation_id().as_str();
@@ -191,6 +194,9 @@ impl Database {
         now: i64,
         bind: bool,
     ) -> Result<OidcBindingResult, StorageError> {
+        if token.len() < 32 {
+            return Ok(OidcBindingResult::Unauthorized);
+        }
         let change = BindingChange {
             installation: self.installation_id().as_str(),
             token,
