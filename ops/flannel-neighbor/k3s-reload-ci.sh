@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Run only on the disposable GitHub-hosted runner. This owns its K3s, CNI and IPAM state.
-set -euo pipefail
+set -Eeuo pipefail
+trap 'printf "K3s fixture failed at line %s\n" "$LINENO" >&2' ERR
 : "${MWC_K3S_CI_DIR:?A dedicated runner directory is required}"
 dir=$MWC_K3S_CI_DIR
 plugin=$1
@@ -115,12 +116,14 @@ pod_identity() {
   k get pod "$1" -o json | jq -cer '[.metadata.uid,.status.podIP,.status.containerStatuses[].containerID]'
 }
 containerd_pid() {
-  local pid exe
-  for pid in $(sudo pgrep -x containerd); do
-    exe=$(sudo readlink "/proc/$pid/exe") || continue
-    if [[ $exe == "$runtime_root"/data/*/bin/containerd ]]; then printf '%s\n' "$pid"; return; fi
-  done
-  return 1
+  # Follow the Linux listener actually serving the CRI. K3s can place its
+  # executable in bin/aux, and Docker's unrelated containerd is also running.
+  sudo ss -H -xlnp | awk '
+    { for (i=1;i<=NF;i++) if ($i=="/run/k3s/containerd/containerd.sock" && match($0,/pid=[0-9]+/)) {
+        print substr($0,RSTART+4,RLENGTH-4); n++
+      }
+    }
+    END { exit n!=1 }'
 }
 
 fixture peer 30222
