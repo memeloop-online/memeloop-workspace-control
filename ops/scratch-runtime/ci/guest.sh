@@ -68,6 +68,13 @@ if ! k get pod "$pod" >/dev/null 2>&1; then
     --command -- sh -ec 'echo ordinary-container-log; exec sleep 3600' >&2
 fi
 k wait --for=condition=Ready "pod/$pod" --timeout=100s >&2
+# A Ready Pod can precede the K3s tunnel reconnect after an OS reboot.
+node=$(k get pod "$pod" -o jsonpath='{.spec.nodeName}')
+for _ in {1..35}; do
+  if [[ $(k --request-timeout=3s get --raw "/api/v1/nodes/$node/proxy/healthz" 2>/dev/null) == ok ]]; then break; fi
+  sleep 1
+done
+k --request-timeout=5s get --raw "/api/v1/nodes/$node/proxy/healthz" | grep -Fx ok >&2
 k logs "$pod" | grep -Fx ordinary-container-log >&2
 test "$(k exec "$pod" -- printf ordinary-exec)" = ordinary-exec
 python3 - "$1" "$pod" "$(k get pod "$pod" -o jsonpath='{.metadata.uid}')" <<'PY'

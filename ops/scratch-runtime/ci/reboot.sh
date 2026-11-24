@@ -28,6 +28,10 @@ printf 'mwc-ci-guest %s\n' "$(cat "$dir/guest.pub")" > "$dir/known-hosts"
 } > "$dir/user-data"
 printf '%s\n' 'instance-id: mwc-runtime-boot' 'local-hostname: mwc-runtime-boot' > "$dir/meta-data"
 cloud-localds "$dir/seed.img" "$dir/user-data" "$dir/meta-data"
+if [[ -c /dev/kvm && ! -w /dev/kvm ]]; then
+  sudo chgrp "$(id -g)" /dev/kvm
+  sudo chmod g+rw /dev/kvm
+fi
 if [[ -r /dev/kvm && -w /dev/kvm ]]; then
   acceleration=(-accel kvm -cpu host)
 else
