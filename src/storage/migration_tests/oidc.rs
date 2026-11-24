@@ -1,5 +1,5 @@
 use crate::{
-    auth::{ApiKeyScope, Role},
+    auth::{ApiKeyScope, Permission, Role},
     storage::{CreateOrganization, DatabaseSnapshot, OidcBindingResult},
 };
 use uuid::Uuid;
@@ -149,17 +149,17 @@ async fn assert_v32_upgrade_and_oidc(database: &Database) -> Option<DatabaseSnap
         .unwrap();
     assert_eq!(browser.user_id, cli.user_id);
     assert_eq!(browser.memberships, cli.memberships);
-    assert!(
-        browser
-            .api_key_scopes
-            .contains(&ApiKeyScope::ManageOrganization)
+    assert_eq!(
+        browser.api_key_scopes,
+        cli.api_key_scopes
+            .iter()
+            .copied()
+            .filter(|scope| *scope != ApiKeyScope::ManageApiKeys)
+            .collect::<Vec<_>>(),
     );
-    assert!(
-        !browser
-            .api_key_scopes
-            .contains(&ApiKeyScope::DeleteWorkspace)
-    );
+    assert!(browser.allows(Permission::DeleteWorkspace, organization.id));
     assert!(!browser.may_manage_api_keys());
+    assert_oidc_role_changes(database, owner.user_id, organization.id, now).await;
     assert!(
         database
             .oidc_session_principal(SESSION, ISSUER, now + 900)
@@ -337,6 +337,75 @@ async fn assert_v32_upgrade_and_oidc(database: &Database) -> Option<DatabaseSnap
         cli
     );
     snapshot
+}
+
+async fn assert_oidc_role_changes(database: &Database, user: Uuid, organization: Uuid, now: i64) {
+    let independent_admin = database
+        .create_user_with_initial_key(
+            "independent admin",
+            "fixture-admin-api-key-that-is-not-a-real-secret",
+            true,
+            ApiKeyScope::initial_key_defaults(true),
+            now + 3600,
+            now,
+        )
+        .await
+        .unwrap();
+    database
+        .upsert_membership(
+            organization,
+            independent_admin.user_id,
+            Role::OrganizationAdmin,
+            now,
+        )
+        .await
+        .unwrap();
+    database
+        .update_user(user, None, Some(true), None)
+        .await
+        .unwrap();
+    assert!(
+        database
+            .authenticate(OWNER_TOKEN)
+            .await
+            .unwrap()
+            .unwrap()
+            .system_admin
+    );
+    let after_promotion = database
+        .oidc_session_principal(SESSION, ISSUER, now)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!after_promotion.system_admin);
+    assert!(!after_promotion.may_manage_system());
+    assert!(after_promotion.allows(Permission::DeleteWorkspace, organization));
+
+    database
+        .update_user(user, None, Some(false), None)
+        .await
+        .unwrap();
+    database
+        .upsert_membership(organization, user, Role::Member, now)
+        .await
+        .unwrap();
+    let after_demotion = database
+        .oidc_session_principal(SESSION, ISSUER, now)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(after_demotion.memberships[0].role, Role::Member);
+    assert!(after_demotion.allows(Permission::ReadWorkspace, organization));
+    assert!(!after_demotion.allows(Permission::DeleteWorkspace, organization));
+    assert!(
+        !after_demotion
+            .api_key_scopes
+            .contains(&ApiKeyScope::DeleteWorkspace)
+    );
+    database
+        .upsert_membership(organization, user, Role::OrganizationAdmin, now)
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
