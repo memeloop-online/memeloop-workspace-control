@@ -994,27 +994,46 @@ for enabled in false true; do
   ssh_product 'printf scratch-survives > /tmp/mwc-ci-shim-marker; sync /tmp/mwc-ci-shim-marker /home/user/storage-ci-home-marker'
   python3 "$GITHUB_WORKSPACE/tests/runtime-product-vm/kill-fixture-shim.py" "$bundle_root" "$old_sandbox" "$runtime" > "$case_out/shim-fault.json"
   deadline=$((SECONDS+180))
+  shim_ssh_recorded=false
   while [ "$SECONDS" -lt "$deadline" ]; do
    recovered_sandbox="$(fixture_sandbox 2>/dev/null || true)"
    if [[ "$recovered_sandbox" =~ ^[a-f0-9]{64}$ ]] && [ "$recovered_sandbox" != "$old_sandbox" ] &&
       kube --request-timeout=5s get pod -n "$namespace" "$pod" -o json > "$case_out/pod-after-shim-loss.json" &&
-      jq -e --arg uid "$new_uid" '.metadata.uid==$uid and any(.status.conditions[]?;.type=="Ready" and .status=="True")' "$case_out/pod-after-shim-loss.json" >/dev/null &&
+      jq -e --arg uid "$new_uid" '.metadata.uid==$uid' "$case_out/pod-after-shim-loss.json" >/dev/null &&
       recovered_main="$(fixture_main "$case_out/pod-after-shim-loss.json")" &&
       [[ "$recovered_main" =~ ^[a-f0-9]{64}$ ]] && [ "$recovered_main" != "$old_main" ]; then
-    shim_recovered=true
-    break
+    if [ "$shim_ssh_recorded" = false ]; then
+     address="$(jq -er '.status.podIP' "$case_out/pod-after-shim-loss.json")"
+     printf '[%s]:2222 %s\n' "$address" "$(cut -d ' ' -f 1,2 "$base/host-$case_id.pub")" > "$base/known-$case_id"
+     if kube --request-timeout=5s exec -n "$namespace" "$pod" -c workspace -- cat /run/mwc-ssh/ttyd_client_key > "$base/client-$case_id" &&
+        ssh_product 'test "$(cat /home/user/storage-ci-home-marker)" = home-survives; test "$(cat /tmp/mwc-ci-shim-marker)" = scratch-survives; printf strict-ssh-after-shim-loss' > "$case_out/strict-ssh-after-shim-loss.txt"; then
+      shim_ssh_recorded=true
+     fi
+    fi
+    if [ "$shim_ssh_recorded" = true ] &&
+       jq -e 'any(.status.conditions[]?;.type=="Ready" and .status=="True")' "$case_out/pod-after-shim-loss.json" >/dev/null; then
+     shim_recovered=true
+     break
+    fi
    fi
    sleep 2
   done
+  if [ "$shim_recovered" = false ]; then
+   kube --request-timeout=5s logs -n "$namespace" "$pod" -c buildkitd --tail=80 > "$case_out/shim-buildkit-current.txt" 2>&1 || true
+   kube --request-timeout=5s logs -n "$namespace" "$pod" -c buildkitd --previous --tail=80 > "$case_out/shim-buildkit-previous.txt" 2>&1 || true
+   kube --request-timeout=5s get events -n "$namespace" --field-selector "involvedObject.uid=$new_uid" -o json > "$case_out/shim-events.json" || true
+   # CRI may no longer expose the previous log. Keep its bounded raw file as well.
+   shopt -s nullglob
+   for buildkit_log in "$pod_log_root/${namespace}_${pod}_${new_uid}/buildkitd/"*.log; do
+    tail -c 8192 "$buildkit_log" > "$case_out/shim-buildkit-${buildkit_log##*/}"
+   done
+   shopt -u nullglob
+  fi
   test "$shim_recovered" = true
   test "$(kube get pvc -n "$namespace" "$scratch_claim" -o jsonpath='{.metadata.uid}:{.spec.volumeName}')" = "$scratch_uid:$scratch_pv"
   test "$(kube get pvc -n "$namespace" "$home_claim" -o jsonpath='{.metadata.uid}:{.spec.volumeName}')" = "$home_uid:$home_pv"
   check_active_writeback after-shim-loss "/var/lib/kubelet/pods/$new_uid/volumes/kubernetes.io~csi/$scratch_pv/mount" \
    "/var/lib/kubelet/pods/$new_uid/volumes/kubernetes.io~csi/$home_pv/mount"
-  address="$(jq -er '.status.podIP' "$case_out/pod-after-shim-loss.json")"
-  printf '[%s]:2222 %s\n' "$address" "$(cut -d ' ' -f 1,2 "$base/host-$case_id.pub")" > "$base/known-$case_id"
-  kube exec -n "$namespace" "$pod" -c workspace -- cat /run/mwc-ssh/ttyd_client_key > "$base/client-$case_id"
-  ssh_product 'test "$(cat /home/user/storage-ci-home-marker)" = home-survives; test "$(cat /tmp/mwc-ci-shim-marker)" = scratch-survives; printf strict-ssh-after-shim-loss' > "$case_out/strict-ssh-after-shim-loss.txt"
   test "$(kube exec mwc-default-runtime -- cat /tmp/mwc-sentinel)" = ordinary-runtime
   jq -n --arg previous "$old_sandbox" --arg replacement "$recovered_sandbox" --arg before "$old_main" --arg after "$recovered_main" \
    '{sandbox_before:$previous,sandbox_after:$replacement,workspace_before:$before,workspace_after:$after}' > "$case_out/shim-recovery.json"
