@@ -319,6 +319,47 @@ mod coordinator_tests {
     }
 
     #[tokio::test]
+    async fn buildkit_failure_does_not_block_a_connectable_workspace() {
+        use serde_json::json;
+        let (workspace, set, mut pod) = ready_pod_fixture();
+        let container = |name, ready| {
+            json!({
+                "name":name,"ready":ready,"restartCount":0,"image":"test","imageID":"test",
+            })
+        };
+        pod["spec"] =
+            json!({"containers":[{"name":"workspace"},{"name":"ttyd"},{"name":"buildkitd"}]});
+        pod["status"] = json!({
+            "phase":"Running",
+            "conditions":[
+                {"type":"Ready","status":"False","reason":"ContainersNotReady"},
+                {"type":"Initialized","status":"True"},
+                {"type":"PodReadyToStartContainers","status":"True"},
+            ],
+            "containerStatuses":[container("workspace",true),container("ttyd",true),container("buildkitd",false)]
+        });
+        let (ready, requests) =
+            observe_ready_fixture(&workspace, set.clone(), Some(pod.clone()), 1).await;
+        assert!(ready.unwrap());
+        assert_eq!(requests.len(), 2);
+        for (path, value) in [
+            ("/status/containerStatuses/0/ready", json!(false)),
+            ("/status/containerStatuses/1/ready", json!(false)),
+            (
+                "/status/conditions/0/reason",
+                json!("ReadinessGatesNotReady"),
+            ),
+            ("/status/conditions/1/status", json!("False")),
+            ("/status/conditions/2/status", json!("False")),
+        ] {
+            let mut blocked = pod.clone();
+            *blocked.pointer_mut(path).unwrap() = value;
+            let (ready, _) = observe_ready_fixture(&workspace, set.clone(), Some(blocked), 1).await;
+            assert!(!ready.unwrap(), "accepted blocked state: {path}");
+        }
+    }
+
+    #[tokio::test]
     async fn direct_readiness_reads_pod_before_stateful_set_response_arrives() {
         let (workspace, stateful_set, pod) = ready_pod_fixture();
         let builder =
