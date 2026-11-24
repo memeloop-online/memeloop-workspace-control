@@ -17,7 +17,7 @@ permissions:
 jobs:
   linux-bridge:
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 16
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -95,6 +95,11 @@ jobs:
           cni ADD mwc-new mwc-flannel-neighbor < "$dir/chain.json" > /dev/null
           host ip neigh get 192.0.2.10 dev mwc-testbr | grep -F "$old_mac PERMANENT"
 
+      - name: Reload the CNI chain on a running K3s node
+        env:
+          MWC_K3S_CI_DIR: ${{ runner.temp }}/mwc-k3s-ci
+        run: bash ops/flannel-neighbor/k3s-reload-ci.sh "$RUNNER_TEMP/flannel-neighbor/mwc-flannel-neighbor"
+
       - name: Record binary digest
         working-directory: ${{ runner.temp }}/flannel-neighbor
         run: sha256sum mwc-flannel-neighbor > mwc-flannel-neighbor.sha256
@@ -104,4 +109,9 @@ jobs:
           path: |
             ${{ runner.temp }}/flannel-neighbor/mwc-flannel-neighbor
             ${{ runner.temp }}/flannel-neighbor/mwc-flannel-neighbor.sha256
+          if-no-files-found: error
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: mwc-flannel-k3s-reload-${{ github.sha }}
+          path: ${{ runner.temp }}/mwc-k3s-ci/acceptance.json
           if-no-files-found: error
