@@ -266,6 +266,7 @@ export function LoginScreen(props: LoginScreenProps) {
   const classes = useStyles();
   const { sso, t } = props;
   const proofAction = sso?.proofAction;
+  const credentialLabel = t(proofAction ? "ssoAccountKey" : "token");
   return (
     <main className={classes.loginPage}>
       <Card className={classes.loginCard} size="large">
@@ -280,8 +281,8 @@ export function LoginScreen(props: LoginScreenProps) {
         />
         {sso && !proofAction && <Button type="button" appearance="primary" size="large" disabled={sso.busy || props.loading} onClick={() => sso.onStart("login")}>{t("ssoSignIn")}</Button>}
         <form className={classes.loginForm} onSubmit={props.onSubmit}>
-          <Field label={t(proofAction ? "ssoAccountKey" : "token")} required hint={t(proofAction ? "ssoProofHint" : "tokenPlaceholder")}>
-            <Input autoFocus={Boolean(proofAction) || !sso} type="password" autoComplete={proofAction ? "off" : "current-password"} minLength={32} required disabled={sso?.busy} value={props.tokenDraft} onChange={(_, data) => props.setTokenDraft(data.value)} />
+          <Field label={credentialLabel} required hint={t(proofAction ? "ssoProofHint" : "tokenPlaceholder")}>
+            <Input aria-label={credentialLabel} autoFocus={Boolean(proofAction) || !sso} type="password" autoComplete={proofAction ? "off" : "current-password"} minLength={32} required disabled={sso?.busy} value={props.tokenDraft} onChange={(_, data) => props.setTokenDraft(data.value)} />
           </Field>
           <Button type="submit" appearance={sso && !proofAction ? "secondary" : "primary"} size="large" disabled={props.loading || sso?.busy}>{t(proofAction ? (props.loading ? "ssoConfirming" : "ssoConfirm") : props.loading ? "signingIn" : sso ? "ssoSignInWithKey" : "signIn")}</Button>
         </form>
