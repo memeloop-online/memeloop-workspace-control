@@ -141,6 +141,7 @@ try {
         return route.abort();
       }
       if (!url.pathname.startsWith("/api/")) return route.continue();
+      if (request.method() === "GET" && url.pathname === "/api/v1/auth/oidc/status") return route.fulfill({ json: { enabled: false, signed_in: false } });
       const response = request.method() === "GET" ? fixture(url.pathname) : undefined;
       if (request.method() !== "GET" || (response === undefined && url.pathname !== `/api/v1/organizations/${organizationId}/quota`)) {
         unexpected.push(`${request.method()} ${url.pathname}`);

@@ -169,3 +169,6 @@ mod cpu_settings;
 
 #[path = "migration_tests/port_subdomains.rs"]
 mod port_subdomains;
+
+#[path = "migration_tests/oidc.rs"]
+mod oidc;

@@ -2,7 +2,7 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } fro
 import type { FormEvent } from "react";
 import { FluentProvider } from "@fluentui/react-components";
 import { ApiClient } from "./api";
-import { BROWSER_SESSION } from "./browserAuth.ts";
+import { BROWSER_SESSION, clearOidcResult, confirmOidc, logoutOidc, oidcResult, readOidcStatus, startOidc, type OidcAction, type OidcStatus } from "./browserAuth.ts";
 import { AppShell, EmptyOrganization, LoadingView, LoginScreen, type AppNotice, type AppView } from "./design-system/AppShell";
 import { darkTheme, lightTheme } from "./design-system/theme";
 import { WorkspacePanel } from "./WorkspacePanel";
@@ -13,6 +13,7 @@ import { queryClient, useAppStore } from "./state";
 import type { Principal } from "./types";
 
 const ERROR_NOTICE_DEDUPE_MS = 10_000;
+const NO_OIDC: OidcStatus = { enabled: false, signed_in: false };
 
 const viewTitles: Record<AppView, MessageKey> = {
   workspaces: "workspaces",
@@ -29,14 +30,17 @@ const PluginPanel = lazy(() => import("./PluginPanel").then(({ PluginPanel: comp
 const SettingsPanel = lazy(() => import("./SettingsPanel").then(({ SettingsPanel: component }) => ({ default: component })));
 
 export default function App() {
-  const browserSession = document.querySelector('meta[name="mwc-browser-sso"][content="enabled"]') !== null;
-  return <WorkspaceApp browserSession={browserSession} />;
-}
-
-function WorkspaceApp({ browserSession }: { browserSession: boolean }) {
   const { locale, setLocale, t } = useI18n();
   const storedToken = useAppStore((state) => state.token);
-  const token = browserSession ? BROWSER_SESSION : storedToken;
+  const [oidc, setOidc] = useState<OidcStatus | null>(null);
+  const [callback, setCallback] = useState(() => oidcResult(window.location.search));
+  const [proofKey, setProofKey] = useState("");
+  const [oidcBusy, setOidcBusy] = useState(false);
+  const [oidcFeedback, setOidcFeedback] = useState<{ key: MessageKey; error?: boolean } | null>(null);
+  const pendingProof = callback === "bind" || callback === "unbind" ? callback : null;
+  const proofAction = oidc?.enabled ? pendingProof : null;
+  const browserSession = !storedToken && Boolean(oidc?.signed_in);
+  const token = storedToken || (browserSession ? BROWSER_SESSION : "");
   const organizationId = useAppStore((state) => state.organizationId);
   const theme = useAppStore((state) => state.theme);
   const view = useAppStore((state) => state.view);
@@ -44,7 +48,7 @@ function WorkspaceApp({ browserSession }: { browserSession: boolean }) {
   const setOrganizationId = useAppStore((state) => state.setOrganizationId);
   const setTheme = useAppStore((state) => state.setTheme);
   const setView = useAppStore((state) => state.setView);
-  const [tokenDraft, setTokenDraft] = useState(token);
+  const [tokenDraft, setTokenDraft] = useState(storedToken);
   const [notice, setNoticeState] = useState<AppNotice | null>(null);
   const noticeSequence = useRef(0);
   const lastErrorRef = useRef<{ message: string; at: number }>({ message: "", at: 0 });
@@ -53,7 +57,17 @@ function WorkspaceApp({ browserSession }: { browserSession: boolean }) {
   const [fatal, setFatal] = useState("");
   activeTokenRef.current = token;
 
-  const logout = useCallback(() => {
+  useEffect(() => {
+    const abort = new AbortController();
+    void readOidcStatus(abort.signal).then((status) => {
+      if (!abort.signal.aborted) setOidc(status);
+    }).catch(() => {
+      if (!abort.signal.aborted) setOidc(NO_OIDC);
+    });
+    return () => abort.abort();
+  }, []);
+
+  const clearSession = useCallback(() => {
     activeTokenRef.current = "";
     queryClient.clear();
     setToken("");
@@ -61,19 +75,33 @@ function WorkspaceApp({ browserSession }: { browserSession: boolean }) {
     setView("workspaces");
     setTokenDraft("");
     setNoticeState(null);
-    if (browserSession) window.location.assign("/outpost.goauthentik.io/sign_out");
-  }, [browserSession, setOrganizationId, setToken, setView]);
+    setOidc((current) => current && ({ ...current, signed_in: false }));
+  }, [setOrganizationId, setToken, setView]);
+
+  async function logout() {
+    if (oidcBusy) return;
+    if (browserSession) {
+      setOidcBusy(true);
+      try {
+        if (!(await logoutOidc()).ok) throw new Error("oidc_logout_failed");
+      } catch {
+        reportError(t("ssoLogoutFailed"));
+        return;
+      } finally {
+        setOidcBusy(false);
+      }
+    }
+    setOidcFeedback(null);
+    clearSession();
+  }
 
   const api = useMemo(() => new ApiClient(token, () => {
     if (!token || activeTokenRef.current !== token || unauthorizedTokenRef.current === token) return;
     unauthorizedTokenRef.current = token;
-    if (browserSession) {
-      window.location.assign("/outpost.goauthentik.io/start?rd=" + encodeURIComponent(window.location.href));
-      return;
-    }
-    setFatal(t("loginInvalidToken"));
-    logout();
-  }), [browserSession, logout, t, token]);
+    if (browserSession) setOidcFeedback({ key: "ssoSessionExpired", error: true });
+    else setFatal(t("loginInvalidToken"));
+    clearSession();
+  }), [browserSession, clearSession, t, token]);
 
   const principalQuery = usePrincipalQuery(api, Boolean(token));
   const organizationsQuery = useOrganizationsQuery(api, Boolean(token));
@@ -120,6 +148,13 @@ function WorkspaceApp({ browserSession }: { browserSession: boolean }) {
     setNoticeState({ id: ++noticeSequence.current, message: value, intent: "error" });
   }, []);
 
+  useEffect(() => {
+    if (!principal || (callback !== "failed" && callback !== "unbound")) return;
+    reportError(t(callback === "unbound" ? "ssoAccountNotLinked" : "ssoFailed"));
+    clearOidcResult();
+    setCallback(null);
+  }, [callback, principal, reportError, t]);
+
   const navigate = useCallback((next: AppView) => {
     if (next === viewFromHash(window.location.hash)) {
       setView(next);
@@ -165,8 +200,8 @@ function WorkspaceApp({ browserSession }: { browserSession: boolean }) {
       if (token && principal) setFatal("");
       return;
     }
-    setFatal(isAuthenticationError(authError) ? t("loginInvalidToken") : message(authError, t("requestFailed")));
-  }, [authError, principal, t, token]);
+    setFatal(isAuthenticationError(authError) ? t(browserSession ? "ssoSessionExpired" : "loginInvalidToken") : message(authError, t("requestFailed")));
+  }, [authError, browserSession, principal, t, token]);
 
   useEffect(() => {
     if (workspacePreviewError) reportError(message(workspacePreviewError, t("requestFailed")));
@@ -198,8 +233,62 @@ function WorkspaceApp({ browserSession }: { browserSession: boolean }) {
     unauthorizedTokenRef.current = null;
     queryClient.clear();
     setToken(value);
+    if (callback) dismissProof();
     setFatal("");
     setNoticeState(null);
+  }
+
+  function dismissProof() {
+    clearOidcResult();
+    setCallback(null);
+    setProofKey("");
+    setOidcFeedback(null);
+  }
+
+  async function chooseOidc(action: OidcAction) {
+    if (oidcBusy) return;
+    setOidcFeedback(null);
+    setOidcBusy(true);
+    try {
+      await startOidc(action);
+    } catch {
+      if (principal) reportError(t("ssoFailed"));
+      else setOidcFeedback({ key: "ssoFailed", error: true });
+      setOidcBusy(false);
+    }
+  }
+
+  async function submitProof(event: FormEvent) {
+    event.preventDefault();
+    if (!proofAction || oidcBusy) return;
+    const apiKey = proofKey.trim();
+    setProofKey("");
+    if (apiKey.length < 32) return;
+    setOidcFeedback(null);
+    setOidcBusy(true);
+    try {
+      const response = await confirmOidc(proofAction, apiKey);
+      if (response.status !== 204) {
+        const key = response.status === 401 || response.status === 403 ? "ssoProofRejected" : response.status === 409 ? "ssoBindingConflict" : "ssoFailed";
+        setOidcFeedback({ key, error: true });
+        return;
+      }
+      dismissProof();
+      let remainsSignedIn = Boolean(storedToken);
+      if (proofAction === "unbind") {
+        const status = await readOidcStatus().catch(() => ({ enabled: true, signed_in: false }));
+        if (browserSession && !status.signed_in) clearSession();
+        setOidc(status);
+        remainsSignedIn ||= status.signed_in;
+      }
+      const key = proofAction === "bind" ? "ssoLinked" : "ssoUnlinked";
+      if (remainsSignedIn) setNoticeState({ id: ++noticeSequence.current, message: t(key), intent: "success" });
+      setOidcFeedback({ key });
+    } catch {
+      setOidcFeedback({ key: "ssoFailed", error: true });
+    } finally {
+      setOidcBusy(false);
+    }
   }
 
   const scopedWorkspaces = workspacePreview?.items ?? [];
@@ -211,28 +300,29 @@ function WorkspaceApp({ browserSession }: { browserSession: boolean }) {
     setOrganizationId(next);
   }
 
-  if (browserSession && (!principal || authError)) {
-    const denied = authError && (authError as { status?: number }).status === 403;
-    const text = denied ? t("ssoAccountNotLinked") : authError && !isAuthenticationError(authError) ? fatal : t("loading");
-    return (
-      <FluentProvider theme={theme === "dark" ? darkTheme : lightTheme} style={{ minHeight: "100vh" }}>
-        <LoadingView label={text || t("loading")} />
-        {denied ? <a href="/outpost.goauthentik.io/sign_out">{t("logout")}</a> : null}
-      </FluentProvider>
-    );
+  if (pendingProof && oidc === null) {
+    return <FluentProvider theme={theme === "dark" ? darkTheme : lightTheme}><LoadingView label={t("loading")} /></FluentProvider>;
   }
 
-  if (!token || !principal || authError) {
+  if (proofAction || !token || !principal || authError) {
+    const callbackError = callback === "unbound" ? "ssoAccountNotLinked" : callback === "failed" || (pendingProof && !oidc?.enabled) ? "ssoFailed" : null;
+    const errorKey = oidcFeedback ? (oidcFeedback.error ? oidcFeedback.key : null) : callbackError;
     return (
       <FluentProvider theme={theme === "dark" ? darkTheme : lightTheme} style={{ minHeight: "100vh" }}>
-        <LoginScreen locale={locale} setLocale={setLocale} themeMode={theme} onToggleTheme={() => setTheme(theme === "dark" ? "light" : "dark")} tokenDraft={tokenDraft} setTokenDraft={setTokenDraft} onSubmit={login} loading={loading} fatal={fatal} t={t} />
+        <LoginScreen
+          locale={locale} setLocale={setLocale} themeMode={theme} onToggleTheme={() => setTheme(theme === "dark" ? "light" : "dark")}
+          tokenDraft={proofAction ? proofKey : tokenDraft} setTokenDraft={proofAction ? setProofKey : setTokenDraft}
+          onSubmit={proofAction ? submitProof : login} loading={proofAction ? oidcBusy : loading}
+          fatal={errorKey ? t(errorKey) : fatal} success={oidcFeedback && !oidcFeedback.error ? t(oidcFeedback.key) : undefined}
+          sso={oidc?.enabled ? { busy: oidcBusy, proofAction, onStart: chooseOidc, onCancel: dismissProof } : undefined} t={t}
+        />
       </FluentProvider>
     );
   }
 
   return (
     <FluentProvider theme={theme === "dark" ? darkTheme : lightTheme} style={{ minHeight: "100vh" }}>
-      <AppShell view={view} onViewChange={navigate} locale={locale} setLocale={setLocale} themeMode={theme} onToggleTheme={() => setTheme(theme === "dark" ? "light" : "dark")} principal={principal} currentOrganization={currentOrganization} organizationRole={organizationRole} canOpenAdministration={canOpenAdministration} canManageGlobalState={canManageGlobalState} canManageOrganizationState={canManageOrganizationState} onLogout={logout} notice={notice} t={t}>
+      <AppShell view={view} onViewChange={navigate} locale={locale} setLocale={setLocale} themeMode={theme} onToggleTheme={() => setTheme(theme === "dark" ? "light" : "dark")} principal={principal} currentOrganization={currentOrganization} organizationRole={organizationRole} canOpenAdministration={canOpenAdministration} canManageGlobalState={canManageGlobalState} canManageOrganizationState={canManageOrganizationState} onLogout={logout} onUnlink={oidc?.enabled && !oidcBusy ? () => void chooseOidc("unbind") : undefined} notice={notice} t={t}>
         <Suspense fallback={<LoadingView label={t("loading")} />}>
           {view === "settings" || view === "administration" ? (
             <SettingsPanel api={api} principal={principal} organizations={organizations} organizationId={organizationId} onOrganizationChange={selectOrganization} onOrganizationsChanged={refreshOrganizations} onProfileChanged={(profile) => queryClient.setQueryData<Principal>(principalQueryKey(), (current) => current ? { ...current, ...profile } : current)} onError={reportError} theme={theme} onThemeChange={setTheme} />

@@ -29,7 +29,10 @@ pub(super) fn router(state: Arc<AppState>) -> Router {
             state.clone(),
             metrics::count,
         ))
-        .layer(axum::middleware::from_fn(auth::authentik::csrf))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            auth::oidc::csrf,
+        ))
         .with_state(state)
 }
 
@@ -41,6 +44,11 @@ fn system_and_identity_routes(router: ApiRouter) -> ApiRouter {
         .route("/readyz", get(ready))
         .route("/api/v1/system/info", get(system_info))
         .route("/api/v1/me", get(auth::me))
+        .route("/api/v1/auth/oidc/status", get(auth::oidc::status))
+        .route("/api/v1/auth/oidc/start", post(auth::oidc::start))
+        .route("/api/v1/auth/oidc/callback", get(auth::oidc::callback))
+        .route("/api/v1/auth/oidc/confirm", post(auth::oidc::confirm))
+        .route("/api/v1/auth/oidc/logout", post(auth::oidc::logout))
         .route(
             "/api/v1/me/profile",
             get(admin::get_profile).put(admin::update_profile),

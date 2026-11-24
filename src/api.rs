@@ -51,6 +51,7 @@ use system::{health, ready, system_info};
 pub struct AppState {
     pub(super) config: AppConfig,
     pub(super) database: Database,
+    oidc: Option<Arc<auth::oidc_provider::Provider>>,
     pub(super) cipher: Option<EnvelopeCipher>,
     internal_auth_token_hash: Option<[u8; 32]>,
     trusted_internal_network: bool,
@@ -68,6 +69,7 @@ impl AppState {
         Self {
             config,
             database,
+            oidc: None,
             cipher: None,
             internal_auth_token_hash: None,
             trusted_internal_network: false,
@@ -85,6 +87,7 @@ impl AppState {
         Self {
             config,
             database,
+            oidc: None,
             cipher: Some(cipher),
             internal_auth_token_hash: None,
             trusted_internal_network: false,
@@ -95,6 +98,22 @@ impl AppState {
             plugins,
             organization_metrics: Default::default(),
         }
+    }
+
+    pub fn configure_oidc(
+        &mut self,
+        issuer: &str,
+        client_id: &str,
+        client_secret: &str,
+        origin: &str,
+    ) -> Result<(), String> {
+        self.oidc = Some(Arc::new(auth::oidc_provider::Provider::new(
+            issuer,
+            client_id,
+            client_secret,
+            origin,
+        )?));
+        Ok(())
     }
 
     pub fn set_internal_auth_token(&mut self, token: &str) {

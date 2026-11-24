@@ -163,6 +163,7 @@ fn bypass(path: &str) -> bool {
         || path.starts_with("/api/v1/internal/")
         || path.starts_with("/api/v1/admin/")
         || path.starts_with("/api/v1/system/")
+        || path.starts_with("/api/v1/auth/oidc/")
         || path == "/api/v1/audit"
 }
 

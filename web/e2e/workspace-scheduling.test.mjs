@@ -106,6 +106,7 @@ test("workspace event log preserves native identity and distinguishes local limi
         const url = new URL(request.url());
         if (url.origin !== new URL(baseUrl).origin) { unexpected.push("external request"); return route.abort(); }
         if (!url.pathname.startsWith("/api/")) return route.continue();
+        if (request.method() === "GET" && url.pathname === "/api/v1/auth/oidc/status") return route.fulfill({ json: { enabled: false, signed_in: false } });
         const body = request.method() === "GET" ? fixture(url.pathname) : undefined;
         if (body === undefined) unexpected.push(`${request.method()} ${url.pathname}`);
         await route.fulfill({ status: body === undefined ? 501 : 200, contentType: "application/json", body: JSON.stringify(body ?? null) });
@@ -218,6 +219,7 @@ test("workspace creation always shows the run location and only submits usable l
         const url = new URL(request.url());
         if (url.origin !== new URL(baseUrl).origin) { unexpected.push("external request"); return route.abort(); }
         if (!url.pathname.startsWith("/api/")) return route.continue();
+        if (request.method() === "GET" && url.pathname === "/api/v1/auth/oidc/status") return route.fulfill({ json: { enabled: false, signed_in: false } });
         if (request.method() === "POST" && url.pathname === "/api/v1/workspaces") {
           submissions.push(request.postDataJSON());
           return route.fulfill({ status: 201, contentType: "application/json", body: JSON.stringify(workspaces[0]) });
@@ -480,6 +482,7 @@ test("workspace sorting defaults to newest, resets paging on change, and ignores
         const url = new URL(request.url());
         if (url.origin !== new URL(baseUrl).origin) { unexpected.push("external request"); return route.abort(); }
         if (!url.pathname.startsWith("/api/")) return route.continue();
+        if (request.method() === "GET" && url.pathname === "/api/v1/auth/oidc/status") return route.fulfill({ json: { enabled: false, signed_in: false } });
         if (request.method() === "GET" && url.pathname === "/api/v1/workspaces") {
           const sort = url.searchParams.get("sort");
           const cursor = url.searchParams.get("cursor");

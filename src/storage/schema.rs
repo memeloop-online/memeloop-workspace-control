@@ -1,9 +1,18 @@
-pub(super) const SCHEMA_VERSION: i64 = 32;
+pub(super) const SCHEMA_VERSION: i64 = 33;
 
 pub(super) const MIGRATION_TABLE: &str = "CREATE TABLE IF NOT EXISTS schema_migrations (version BIGINT PRIMARY KEY, applied_at BIGINT NOT NULL)";
 
-/// Complete schema for a new installation. This baseline deliberately contains
-/// only the current data model.
+// OIDC tables are also applied additively to installations at schema 32.
+pub(super) const OIDC_SCHEMA: &[&str] = &[
+    "CREATE TABLE oidc_identities (id TEXT PRIMARY KEY, installation_id TEXT NOT NULL, issuer TEXT NOT NULL, subject TEXT NOT NULL, user_id TEXT NOT NULL, scopes_json TEXT NOT NULL, created_at BIGINT NOT NULL, UNIQUE (installation_id, issuer, subject), UNIQUE (installation_id, user_id), FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE)",
+    "CREATE TABLE oidc_sessions (installation_id TEXT NOT NULL, session_hash TEXT NOT NULL, identity_id TEXT NOT NULL, expires_at BIGINT NOT NULL, PRIMARY KEY (installation_id, session_hash), FOREIGN KEY (identity_id) REFERENCES oidc_identities(id) ON DELETE CASCADE)",
+    "CREATE INDEX oidc_sessions_expiry_idx ON oidc_sessions (installation_id, expires_at)",
+    "CREATE INDEX oidc_sessions_identity_idx ON oidc_sessions (identity_id)",
+    "CREATE TABLE oidc_flows (installation_id TEXT NOT NULL, flow_hash TEXT NOT NULL, payload TEXT NOT NULL, expires_at BIGINT NOT NULL, PRIMARY KEY (installation_id, flow_hash))",
+    "CREATE INDEX oidc_flows_expiry_idx ON oidc_flows (installation_id, expires_at)",
+];
+
+/// Current core schema for a new installation, applied together with OIDC_SCHEMA.
 pub(super) const BASELINE: &[&str] = &[
     "CREATE TABLE installation_metadata (singleton INTEGER PRIMARY KEY CHECK (singleton = 1), installation_id TEXT NOT NULL)",
     "CREATE TABLE installation_runtime_settings (installation_id TEXT PRIMARY KEY, job_worker_concurrency BIGINT NOT NULL CHECK (job_worker_concurrency BETWEEN 1 AND 256), updated_at BIGINT NOT NULL, cpu_overcommit_ratio BIGINT NOT NULL DEFAULT 10 CHECK (cpu_overcommit_ratio BETWEEN 1 AND 1000))",
