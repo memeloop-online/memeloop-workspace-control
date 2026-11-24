@@ -991,6 +991,14 @@ for enabled in false true; do
   old_sandbox="$(fixture_sandbox)"
   old_main="$(fixture_main "$case_out/pod-replacement.json")"
   [[ "$old_sandbox" =~ ^[a-f0-9]{64}$ && "$old_main" =~ ^[a-f0-9]{64}$ ]]
+  old_buildkit="$(jq -er '.status.containerStatuses[] | select(.name=="buildkitd" and .ready) | .containerID | sub("^containerd://";"")' "$case_out/pod-replacement.json")"
+  [[ "$old_buildkit" =~ ^[a-f0-9]{64}$ ]]
+  buildkit_lock="/var/lib/kubelet/pods/$new_uid/volumes/kubernetes.io~csi/$scratch_pv/mount/data/build-cache/state/buildkitd.lock"
+  capture_buildkit_lock() {
+   python3 "$GITHUB_WORKSPACE/tests/runtime-product-vm/buildkit-lock-evidence.py" "$buildkit_lock" > "$case_out/shim-buildkit-lock-$1.json" 2> "$case_out/shim-buildkit-lock-$1.err" || true
+  }
+  printf '%s\n' "$old_buildkit" > "$case_out/shim-buildkit-before-container.txt"
+  capture_buildkit_lock before
   ssh_product 'printf scratch-survives > /tmp/mwc-ci-shim-marker; sync /tmp/mwc-ci-shim-marker /home/user/storage-ci-home-marker'
   python3 "$GITHUB_WORKSPACE/tests/runtime-product-vm/kill-fixture-shim.py" "$bundle_root" "$old_sandbox" "$runtime" > "$case_out/shim-fault.json"
   deadline=$((SECONDS+180))
@@ -1019,6 +1027,7 @@ for enabled in false true; do
    sleep 2
   done
   if [ "$shim_recovered" = false ]; then
+   capture_buildkit_lock after
    kube --request-timeout=5s logs -n "$namespace" "$pod" -c buildkitd --tail=80 > "$case_out/shim-buildkit-current.txt" 2>&1 || true
    kube --request-timeout=5s logs -n "$namespace" "$pod" -c buildkitd --previous --tail=80 > "$case_out/shim-buildkit-previous.txt" 2>&1 || true
    kube --request-timeout=5s get events -n "$namespace" --field-selector "involvedObject.uid=$new_uid" -o json > "$case_out/shim-events.json" || true
