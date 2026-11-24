@@ -65,13 +65,18 @@ spec:
               value: "true"
             - name: MWC_INTERNAL_LISTEN_ADDRESS
               value: "0.0.0.0:8081"
-            {{- if .Values.browserAuth.origin }}
-            - name: MWC_AUTHENTIK_ORIGIN
-              value: {{ .Values.browserAuth.origin | quote }}
-            - name: MWC_AUTHENTIK_OUTPOST
-              value: {{ required "browserAuth.outpost is required" .Values.browserAuth.outpost | quote }}
-            - name: MWC_AUTHENTIK_USERS_JSON
-              value: {{ required "browserAuth.users is required" .Values.browserAuth.users | toJson | quote }}
+            {{- if .Values.oidc.origin }}
+            - name: MWC_OIDC_ORIGIN
+              value: {{ .Values.oidc.origin | quote }}
+            - name: MWC_OIDC_ISSUER
+              value: {{ required "oidc.issuer is required" .Values.oidc.issuer | quote }}
+            - name: MWC_OIDC_CLIENT_ID
+              value: {{ required "oidc.clientId is required" .Values.oidc.clientId | quote }}
+            - name: MWC_OIDC_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ required "oidc.clientSecretName is required" .Values.oidc.clientSecretName | quote }}
+                  key: {{ .Values.oidc.clientSecretKey | quote }}
             {{- end }}
             {{- if .Values.monitoring.diagnostics.enabled }}
             - name: MWC_DIAGNOSTICS_ENABLED

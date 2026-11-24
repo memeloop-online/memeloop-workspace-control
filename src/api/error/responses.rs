@@ -5,7 +5,7 @@ pub(super) fn operational_response(error: ApiError) -> ErrorResponse {
         ApiError::Unauthorized => response(
             StatusCode::UNAUTHORIZED,
             "unauthorized",
-            "a valid Bearer token is required",
+            "authentication is required",
         ),
         ApiError::Forbidden => response(
             StatusCode::FORBIDDEN,
@@ -32,6 +32,21 @@ pub(super) fn operational_response(error: ApiError) -> ErrorResponse {
             StatusCode::CONFLICT,
             "api_key_token_unavailable",
             "the original token for this hash-only API key cannot be recovered; create a new key if needed",
+        ),
+        ApiError::IdentityProviderUnavailable => response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "identity_provider_unavailable",
+            "the identity provider is unavailable",
+        ),
+        ApiError::ExpiredIdentityFlow => response(
+            StatusCode::BAD_REQUEST,
+            "expired_identity_flow",
+            "the identity verification expired; start again",
+        ),
+        ApiError::IdentityAlreadyLinked => response(
+            StatusCode::CONFLICT,
+            "identity_link_conflict",
+            "the requested identity binding conflicts with an existing binding",
         ),
         ApiError::EncryptionUnavailable => response(
             StatusCode::SERVICE_UNAVAILABLE,

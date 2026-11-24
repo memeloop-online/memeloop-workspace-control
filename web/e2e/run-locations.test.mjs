@@ -32,6 +32,7 @@ test("system administrators manage run locations with idempotent upserts and see
       const url = new URL(request.url());
       if (url.origin !== new URL(baseUrl).origin) { unexpected.push("external request"); return route.abort(); }
       if (!url.pathname.startsWith("/api/")) return route.continue();
+      if (request.method() === "GET" && url.pathname === "/api/v1/auth/oidc/status") return route.fulfill({ json: { enabled: false, signed_in: false } });
       const path = url.pathname;
       const method = request.method();
       if (request.headers().authorization !== "Bearer fixture-admin-token") {
@@ -179,6 +180,7 @@ test("template-restricted system administrators never see or request run locatio
       const url = new URL(request.url());
       if (url.origin !== new URL(baseUrl).origin) { unexpected.push("external request"); return route.abort(); }
       if (!url.pathname.startsWith("/api/")) return route.continue();
+      if (request.method() === "GET" && url.pathname === "/api/v1/auth/oidc/status") return route.fulfill({ json: { enabled: false, signed_in: false } });
       const path = url.pathname;
       const method = request.method();
       // /api/v1/admin/node-pools deliberately has no fixture: any request for it

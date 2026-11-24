@@ -12,7 +12,7 @@ use tower::ServiceExt;
 
 use super::*;
 
-async fn test_state() -> AppState {
+pub(super) async fn test_state() -> AppState {
     let installation_id = InstallationId::from_str("test-a").unwrap();
     let database = Database::connect("sqlite::memory:", installation_id.clone())
         .await

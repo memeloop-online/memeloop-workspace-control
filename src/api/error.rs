@@ -21,6 +21,9 @@ pub enum ApiError {
     IdempotencyConflict,
     IdempotencyInProgress,
     ApiKeyTokenUnavailable,
+    IdentityProviderUnavailable,
+    ExpiredIdentityFlow,
+    IdentityAlreadyLinked,
     EncryptionUnavailable,
     WorkspaceNotConnectable,
     ProductNamespaceConflict,
@@ -77,6 +80,9 @@ impl ApiError {
             | Self::IdempotencyConflict
             | Self::IdempotencyInProgress
             | Self::ApiKeyTokenUnavailable
+            | Self::IdentityProviderUnavailable
+            | Self::ExpiredIdentityFlow
+            | Self::IdentityAlreadyLinked
             | Self::EncryptionUnavailable
             | Self::WorkspaceNotConnectable
             | Self::ProductNamespaceConflict

@@ -49,6 +49,7 @@ import {
 } from "@fluentui/react-icons";
 import { useEffect, useState, type FormEvent, type ReactElement, type ReactNode } from "react";
 import type { Locale, MessageKey } from "../i18n";
+import type { OidcAction } from "../browserAuth";
 import { BrandIcon } from "../BrandIcon";
 import { UserAvatar } from "../UserAvatar";
 import type { Organization, Principal } from "../types";
@@ -148,7 +149,7 @@ const useStyles = makeStyles({
   loginBrand: { display: "flex", alignItems: "center", gap: tokens.spacingHorizontalM },
   loginControls: { display: "flex", justifyContent: "flex-end", gap: tokens.spacingHorizontalS },
   loginForm: { display: "grid", gap: tokens.spacingVerticalL },
-  loginFooter: { display: "flex", justifyContent: "flex-end", gap: tokens.spacingHorizontalS },
+  loginFooter: { display: "grid", gap: tokens.spacingVerticalXS },
   loading: {
     minHeight: "min(56vh, 480px)",
     display: "grid",
@@ -251,11 +252,20 @@ interface LoginScreenProps {
   onSubmit: (event: FormEvent) => void;
   loading: boolean;
   fatal: string;
+  success?: string;
+  sso?: {
+    busy: boolean;
+    proofAction: "bind" | "unbind" | null;
+    onStart: (action: OidcAction) => void;
+    onCancel: () => void;
+  };
   t: Translation;
 }
 
 export function LoginScreen(props: LoginScreenProps) {
   const classes = useStyles();
+  const { sso, t } = props;
+  const proofAction = sso?.proofAction;
   return (
     <main className={classes.loginPage}>
       <Card className={classes.loginCard} size="large">
@@ -263,18 +273,24 @@ export function LoginScreen(props: LoginScreenProps) {
           header={
             <div className={classes.loginHeader}>
               <div className={classes.loginBrand}><BrandIcon size={48} /><div className={classes.brandCopy}><Body1Strong>Memeloop</Body1Strong><span className={classes.brandCaption}>Workspace Control</span></div></div>
-              <Subtitle1>{props.t("loginTitle")}</Subtitle1>
+              <Subtitle1>{t(proofAction === "bind" ? "ssoBind" : proofAction === "unbind" ? "ssoUnbind" : "loginTitle")}</Subtitle1>
             </div>
           }
           action={<div className={classes.loginControls}><LanguagePicker locale={props.locale} setLocale={props.setLocale} t={props.t} compact /><ThemeToggle themeMode={props.themeMode} onToggleTheme={props.onToggleTheme} t={props.t} /></div>}
         />
+        {sso && !proofAction && <Button type="button" appearance="primary" size="large" disabled={sso.busy || props.loading} onClick={() => sso.onStart("login")}>{t("ssoSignIn")}</Button>}
         <form className={classes.loginForm} onSubmit={props.onSubmit}>
-          <Field label={props.t("token")} required hint={props.t("tokenPlaceholder")}>
-            <Input autoFocus type="password" minLength={32} required value={props.tokenDraft} onChange={(_, data) => props.setTokenDraft(data.value)} />
+          <Field label={t(proofAction ? "ssoAccountKey" : "token")} required hint={t(proofAction ? "ssoProofHint" : "tokenPlaceholder")}>
+            <Input autoFocus={Boolean(proofAction) || !sso} type="password" autoComplete={proofAction ? "off" : "current-password"} minLength={32} required disabled={sso?.busy} value={props.tokenDraft} onChange={(_, data) => props.setTokenDraft(data.value)} />
           </Field>
-          <Button type="submit" appearance="primary" size="large" disabled={props.loading}>{props.loading ? props.t("signingIn") : props.t("signIn")}</Button>
+          <Button type="submit" appearance={sso && !proofAction ? "secondary" : "primary"} size="large" disabled={props.loading || sso?.busy}>{t(proofAction ? (props.loading ? "ssoConfirming" : "ssoConfirm") : props.loading ? "signingIn" : sso ? "ssoSignInWithKey" : "signIn")}</Button>
         </form>
-        {props.fatal && <CardFooter><MessageBar className={classes.loginError} intent="error" role="alert"><MessageBarBody>{props.fatal}</MessageBarBody></MessageBar></CardFooter>}
+        {sso && <div className={classes.loginFooter}>
+          {proofAction
+            ? <Button type="button" appearance="subtle" disabled={sso.busy} onClick={sso.onCancel}>{t("cancel")}</Button>
+            : <Button type="button" appearance="subtle" disabled={sso.busy || props.loading} onClick={() => sso.onStart("bind")}>{t("ssoBind")}</Button>}
+        </div>}
+        {(props.fatal || props.success) && <CardFooter><MessageBar className={classes.loginError} intent={props.fatal ? "error" : "success"} role={props.fatal ? "alert" : "status"}><MessageBarBody>{props.fatal || props.success}</MessageBarBody></MessageBar></CardFooter>}
       </Card>
     </main>
   );
@@ -295,6 +311,7 @@ interface AppShellProps {
   canManageGlobalState: boolean;
   canManageOrganizationState: boolean;
   onLogout: () => void;
+  onUnlink?: () => void;
   notice: AppNotice | null;
   t: Translation;
 }
@@ -338,7 +355,7 @@ export function AppShell(props: AppShellProps) {
           <div className={classes.topbarActions}>
             <div className={classes.desktopOnly}><LanguagePicker locale={props.locale} setLocale={props.setLocale} t={props.t} compact /></div>
             <ThemeToggle themeMode={props.themeMode} onToggleTheme={props.onToggleTheme} t={props.t} />
-            <UserMenu principal={props.principal} organizationRole={props.organizationRole} onSettings={() => props.onViewChange("settings")} onLogout={props.onLogout} t={props.t} classes={classes} />
+            <UserMenu principal={props.principal} organizationRole={props.organizationRole} onSettings={() => props.onViewChange("settings")} onLogout={props.onLogout} onUnlink={props.onUnlink} t={props.t} classes={classes} />
           </div>
         </header>
         <main className={classes.main}>{props.children}</main>
@@ -366,8 +383,8 @@ function NavItem({ view, current, onSelect, t }: { view: AppView; current: AppVi
   return <Button className={useStyles().navButton} appearance={view === current ? "secondary" : "subtle"} icon={viewIcons[view]} aria-current={view === current ? "page" : undefined} onClick={() => onSelect(view)}>{t(labels[view])}</Button>;
 }
 
-function UserMenu({ principal, organizationRole, onSettings, onLogout, t, classes }: { principal: Principal; organizationRole?: string; onSettings: () => void; onLogout: () => void; t: Translation; classes: ReturnType<typeof useStyles> }) {
-  return <Menu><MenuTrigger disableButtonEnhancement><Button className={classes.userTrigger} appearance="subtle" icon={<Avatar name={principal.display_name} image={{ src: principal.avatar_url ?? undefined }} />} iconPosition="before"><span className={classes.userTriggerContent}><Body1Strong className={classes.userName}>{principal.display_name}</Body1Strong><span className={classes.userRole}>{principal.system_admin ? t("systemAdmin") : organizationRole === "organization_admin" ? t("organizationAdmin") : t("organizationMember")}</span></span></Button></MenuTrigger><MenuPopover><MenuList><MenuItem icon={<PersonRegular />} onClick={onSettings}>{t("settings")}</MenuItem><MenuItem icon={<ArrowExitRegular />} onClick={onLogout}>{t("logout")}</MenuItem></MenuList></MenuPopover></Menu>;
+function UserMenu({ principal, organizationRole, onSettings, onLogout, onUnlink, t, classes }: { principal: Principal; organizationRole?: string; onSettings: () => void; onLogout: () => void; onUnlink?: () => void; t: Translation; classes: ReturnType<typeof useStyles> }) {
+  return <Menu><MenuTrigger disableButtonEnhancement><Button className={classes.userTrigger} appearance="subtle" icon={<Avatar name={principal.display_name} image={{ src: principal.avatar_url ?? undefined }} />} iconPosition="before"><span className={classes.userTriggerContent}><Body1Strong className={classes.userName}>{principal.display_name}</Body1Strong><span className={classes.userRole}>{principal.system_admin ? t("systemAdmin") : organizationRole === "organization_admin" ? t("organizationAdmin") : t("organizationMember")}</span></span></Button></MenuTrigger><MenuPopover><MenuList><MenuItem icon={<PersonRegular />} onClick={onSettings}>{t("settings")}</MenuItem>{onUnlink && <MenuItem onClick={onUnlink}>{t("ssoUnbind")}</MenuItem>}<MenuItem icon={<ArrowExitRegular />} onClick={onLogout}>{t("logout")}</MenuItem></MenuList></MenuPopover></Menu>;
 }
 
 export function LoadingView({ label }: { label: string }) {

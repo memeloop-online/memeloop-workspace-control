@@ -42,6 +42,7 @@ test("workspace settings and mapping editing retain drafts, stable addresses and
       const url = new URL(request.url());
       if (url.origin !== new URL(baseUrl).origin) { unexpected.push("external request"); return route.abort(); }
       if (!url.pathname.startsWith("/api/")) return route.continue();
+      if (request.method() === "GET" && url.pathname === "/api/v1/auth/oidc/status") return route.fulfill({ json: { enabled: false, signed_in: false } });
       const path = url.pathname;
       let body;
       let status = 200;

@@ -29,6 +29,7 @@ test("organization administrator opens only their own credential configuration",
       const url = new URL(request.url());
       if (url.origin !== baseUrl) return route.abort();
       if (!url.pathname.startsWith("/api/")) return route.continue();
+      if (request.method() === "GET" && url.pathname === "/api/v1/auth/oidc/status") return route.fulfill({ json: { enabled: false, signed_in: false } });
       const method = request.method();
       const path = url.pathname;
       let body;
