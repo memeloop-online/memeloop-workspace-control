@@ -167,6 +167,31 @@ jobs:
         env:
           MWC_TEST_POSTGRES_URL: postgresql://postgres:postgres@localhost:5432/mwc_test
           MWC_COLD_START_FIXTURE_DIR: ${{ runner.temp }}/mwc-cold-start-fixtures
+      - name: Measure reconcile worker service time at 32 and 64 slots
+        id: worker-sweep
+        if: github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          MWC_TEST_POSTGRES_URL: postgresql://postgres:postgres@localhost:5432/mwc_test
+        run: |
+          set -o pipefail
+          if [[ -n $BASE_SHA ]] && git diff --quiet "$BASE_SHA" HEAD -- \
+            src/kubernetes/client_tests/coordinator_tests/gated_startup/worker_capacity.rs; then
+            exit 0
+          fi
+          cargo test --locked --all-features --lib reconcile_worker_capacity_sweep -- --ignored --nocapture \
+            | tee "$RUNNER_TEMP/mwc-reconcile-sweep.log"
+          awk '/^MWC_WORKER_WATCH_ACCEPTANCE / {sub(/^MWC_WORKER_WATCH_ACCEPTANCE /, ""); print}' \
+            "$RUNNER_TEMP/mwc-reconcile-sweep.log" > "$RUNNER_TEMP/mwc-reconcile-sweep.jsonl"
+          jq -es 'length == 8 and all(.[]; .completed) and
+            ([.[] | [.backend,.slots,.write_delay_ms]] | unique | length)==8' "$RUNNER_TEMP/mwc-reconcile-sweep.jsonl"
+          echo 'accepted=true' >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: steps.worker-sweep.outputs.accepted == 'true'
+        with:
+          name: reconcile-worker-sweep
+          path: ${{ runner.temp }}/mwc-reconcile-sweep.jsonl
+          if-no-files-found: error
       - name: Verify workspace bootstrap survives a full Home
         run: |
           docker build -t mwc-workspace-enospc images/workspace-base
