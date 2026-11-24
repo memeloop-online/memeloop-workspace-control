@@ -123,10 +123,12 @@ impl WorkspaceReconcileHandler {
             .reconcile_with_injections(workspace, &placement, materialization, ssh_identity)
             .await
             .map_err(reconcile_error)?;
-        self.database
-            .ensure_desktop_port_mapping(workspace, unix_timestamp()?)
-            .await
-            .map_err(job_error)?;
+        Box::pin(
+            self.database
+                .ensure_desktop_port_mapping(workspace, unix_timestamp()?),
+        )
+        .await
+        .map_err(job_error)?;
         let port_mappings = self.desired_port_mappings(workspace).await?;
         self.coordinator
             .reconcile_port_mappings(workspace, &port_mappings)
@@ -562,7 +564,8 @@ impl JobHandler for WorkspaceReconcileHandler {
             Err(error) => return Err(job_error(error)),
         };
         if job.kind == PORT_MAPPING_RECONCILE_JOB {
-            return self.reconcile_routes(&workspace).await;
+            // Keep the route-only future out of the workspace lifecycle future.
+            return Box::pin(self.reconcile_routes(&workspace)).await;
         }
         if self
             .database
