@@ -150,15 +150,56 @@ impl KubernetesCoordinator {
                 workspace,
                 &names.resources.stateful_set,
             )
-            && pod.status.as_ref().is_some_and(|status| {
-                status.phase.as_deref() == Some("Running")
-                    && status.conditions.as_ref().is_some_and(|conditions| {
-                        conditions.iter().any(|condition| {
-                            condition.type_ == "Ready" && condition.status == "True"
-                        })
-                    })
-            }))
+            && workspace_connection_ready(&pod))
     }
+}
+
+pub(super) fn workspace_connection_ready(pod: &Pod) -> bool {
+    let Some(status) = &pod.status else {
+        return false;
+    };
+    if pod.metadata.deletion_timestamp.is_some() || status.phase.as_deref() != Some("Running") {
+        return false;
+    }
+    let conditions = status.conditions.as_deref().unwrap_or_default();
+    let Some(ready) = conditions
+        .iter()
+        .find(|condition| condition.type_ == "Ready")
+    else {
+        return false;
+    };
+    if ready.status == "True" {
+        return true;
+    }
+    // The SSH and terminal Services publish endpoints independently of Pod Ready.
+    // BuildKit's own probes and runtime status still report its health.
+    let (Some(spec), Some(containers)) = (&pod.spec, &status.container_statuses) else {
+        return false;
+    };
+    ready.status == "False"
+        && ready.reason.as_deref() == Some("ContainersNotReady")
+        && spec
+            .readiness_gates
+            .as_deref()
+            .unwrap_or_default()
+            .is_empty()
+        && ["Initialized", "PodReadyToStartContainers"]
+            .into_iter()
+            .all(|required| {
+                conditions
+                    .iter()
+                    .any(|condition| condition.type_ == required && condition.status == "True")
+            })
+        && ["workspace", "ttyd", "buildkitd"].into_iter().all(|name| {
+            spec.containers
+                .iter()
+                .any(|container| container.name == name)
+        })
+        && spec.containers.iter().all(|container| {
+            containers.iter().any(|status| {
+                status.name == container.name && status.ready == (container.name != "buildkitd")
+            })
+        })
 }
 
 fn observed_workspace_replicas(set: &StatefulSet, workspace: &Workspace, expected: i32) -> bool {

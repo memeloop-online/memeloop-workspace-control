@@ -199,6 +199,35 @@ fn pod_ready_fallback_requires_current_controller_revision_and_generation() {
 }
 
 #[test]
+fn connected_pod_wakes_the_worker_even_when_buildkit_is_in_backoff() {
+    let job = job();
+    let mut state = ready_state(&job);
+    state.sets.get_mut(&job.workspace_id).unwrap().ready = 0;
+    assert!(state.register(job.clone(), 101).is_empty());
+    let name = format!("w-{}", workspace_short_id_for(job.workspace_id));
+    let view = |name, ready| json!({"name":name,"ready":ready,"restartCount":0,"image":"test","imageID":"test"});
+    let pod: Pod = serde_json::from_value(json!({
+        "metadata":{"name":format!("{name}-0"),"namespace":WORKSPACE_NAMESPACE,"uid":"pod-a",
+            "labels":{(OWNER_INSTALLATION_LABEL):"test",(WORKSPACE_ID_LABEL):job.workspace_id.to_string(),
+                "controller-revision-hash":"revision-a"},
+            "annotations":{(GENERATION):"7"},
+            "ownerReferences":[{"controller":true,"apiVersion":"apps/v1","kind":"StatefulSet","name":name,"uid":"set-a"}]},
+        "spec":{"containers":[{"name":"workspace"},{"name":"ttyd"},{"name":"buildkitd"}]},
+        "status":{"phase":"Running","conditions":[
+            {"type":"Ready","status":"False","reason":"ContainersNotReady"},
+            {"type":"Initialized","status":"True"},{"type":"PodReadyToStartContainers","status":"True"}],
+            "containerStatuses":[view("workspace",true),view("ttyd",true),view("buildkitd",false)]},
+    })).unwrap();
+    Pod::update(&mut state, pod, "test", false);
+    assert!(state.runtime_ready(job.workspace_id));
+    let wake = state
+        .refresh_workspace(job.workspace_id, 102)
+        .pop()
+        .unwrap();
+    assert_eq!(wake.job.id, job.id);
+}
+
+#[test]
 fn cache_rejects_other_installation_namespace_and_noncanonical_object_names() {
     let job = job();
     let name = format!("w-{}", workspace_short_id_for(job.workspace_id));

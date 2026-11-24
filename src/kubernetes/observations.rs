@@ -21,7 +21,7 @@ use serde::de::DeserializeOwned;
 use tokio::sync::{Notify, watch};
 use uuid::Uuid;
 
-use super::{OWNER_INSTALLATION_LABEL, WORKSPACE_ID_LABEL};
+use super::{OWNER_INSTALLATION_LABEL, WORKSPACE_ID_LABEL, client::workspace_connection_ready};
 use crate::{
     config::InstallationId,
     storage::{Database, ParkedWorkspaceJob, StorageError},
@@ -1063,6 +1063,7 @@ impl ObservedResource for Pod {
             }
             return;
         }
+        let ready = workspace_connection_ready(&object);
         let Some(uid) = object.metadata.uid else {
             return;
         };
@@ -1106,15 +1107,7 @@ impl ObservedResource for Pod {
                     .as_ref()
                     .and_then(|labels| labels.get("controller-revision-hash"))
                     .cloned(),
-                ready: object.metadata.deletion_timestamp.is_none()
-                    && object.status.is_some_and(|status| {
-                        status.phase.as_deref() == Some("Running")
-                            && status.conditions.is_some_and(|conditions| {
-                                conditions.iter().any(|condition| {
-                                    condition.type_ == "Ready" && condition.status == "True"
-                                })
-                            })
-                    }),
+                ready,
             },
         );
     }
