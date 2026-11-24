@@ -208,10 +208,19 @@ impl GateMock {
                 let name = body["metadata"]["name"].as_str().unwrap().to_owned();
                 body["metadata"]["uid"] = json!(format!("{name}-uid"));
                 let object_path = format!("{path}/{name}");
-                self.objects
-                    .lock()
-                    .unwrap()
-                    .insert(object_path.clone(), body.clone());
+                {
+                    let mut objects = self.objects.lock().unwrap();
+                    let std::collections::btree_map::Entry::Vacant(entry) =
+                        objects.entry(object_path.clone())
+                    else {
+                        return json_response(
+                            StatusCode::CONFLICT,
+                            json!({"apiVersion":"v1","kind":"Status","status":"Failure",
+                                "code":409,"reason":"AlreadyExists","message":"claim already exists"}),
+                        );
+                    };
+                    entry.insert(body.clone());
+                }
                 self.writes
                     .lock()
                     .unwrap()

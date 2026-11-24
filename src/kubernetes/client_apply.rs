@@ -203,10 +203,11 @@ impl KubernetesCoordinator {
         Ok(())
     }
 
-    pub(super) async fn apply_scratch_claim(
+    async fn apply_scratch_claim(
         &self,
         workspace: &Workspace,
         desired: Option<&PersistentVolumeClaim>,
+        create_first: bool,
     ) -> Result<(), ReconcileError> {
         let Some(desired) = desired else {
             return Ok(());
@@ -220,15 +221,34 @@ impl KubernetesCoordinator {
             self.client.clone(),
             workspace.runtime.namespace(),
         );
-        if let Some(existing) = observe_request(
+        let params = PostParams::default();
+        let create = || {
+            observe_request(
+                workspace.id,
+                "PersistentVolumeClaim",
+                name,
+                "create",
+                claims.create(&params, desired),
+            )
+        };
+        if create_first {
+            // Atomic creation establishes absence without a separate read. Only a
+            // name collision needs an ownership check before using the claim.
+            match create().await {
+                Ok(_) => return Ok(()),
+                Err(kube::Error::Api(error)) if error.code == 409 => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
+        let existing = observe_request(
             workspace.id,
             "PersistentVolumeClaim",
             name,
             "get_metadata",
             claims.get_metadata_opt(name),
         )
-        .await?
-        {
+        .await?;
+        if let Some(existing) = existing {
             self.builder
                 .verify_delete_ownership(&existing.metadata, workspace.id)?;
             return if existing.metadata.deletion_timestamp.is_some() {
@@ -238,15 +258,10 @@ impl KubernetesCoordinator {
                 Ok(())
             };
         }
-        match observe_request(
-            workspace.id,
-            "PersistentVolumeClaim",
-            name,
-            "create",
-            claims.create(&PostParams::default(), desired),
-        )
-        .await
-        {
+        if create_first {
+            return Err(ReconcileError::ScratchVolumeRecreationPending);
+        }
+        match create().await {
             Ok(_) => Ok(()),
             Err(kube::Error::Api(error)) if error.code == 409 => {
                 Err(ReconcileError::ScratchVolumeRecreationPending)

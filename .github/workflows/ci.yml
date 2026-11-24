@@ -176,7 +176,8 @@ jobs:
         run: |
           set -o pipefail
           if [[ -n $BASE_SHA ]] && git diff --quiet "$BASE_SHA" HEAD -- \
-            src/kubernetes/client_tests/coordinator_tests/gated_startup/worker_capacity.rs; then
+            src/kubernetes/client_tests/coordinator_tests/gated_startup/worker_capacity.rs \
+            src/kubernetes/client_apply.rs src/kubernetes/client_apply/startup_gate.rs; then
             exit 0
           fi
           cargo test --locked --all-features --lib reconcile_worker_capacity_sweep -- --ignored --nocapture \
