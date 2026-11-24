@@ -126,6 +126,11 @@ test("workspace settings and mapping editing retain drafts, stable addresses and
 
     await page.getByRole("group", { name: "stopped-workspace", exact: true }).getByRole("button", { name: messages.portMappings, exact: true }).click();
     dialog = page.getByRole("dialog");
+    await dialog.getByText("stopped-workspace", { exact: true }).waitFor();
+    assert.equal(await dialog.getByLabel(messages.internalPort, { exact: true }).count(), 0);
+    assert.equal(await dialog.getByRole("button", { name: messages.addMapping, exact: true }).count(), 0);
+    assert.equal(await dialog.getByText("MWC_PORT_MAPPINGS_FILE", { exact: true }).isVisible(), false);
+    await dialog.getByText(messages.portMappingAgentHintTitle, { exact: true }).click();
     await dialog.getByText("MWC_PORT_MAPPINGS_FILE", { exact: true }).waitFor();
     await dialog.getByText("MWC_PORT_MAPPINGS_JSON", { exact: true }).waitFor();
     await dialog.getByText('cat "$MWC_PORT_MAPPINGS_FILE"', { exact: true }).waitFor();
@@ -182,10 +187,21 @@ test("workspace settings and mapping editing retain drafts, stable addresses and
 
     await page.getByRole("group", { name: "支付工作区", exact: true }).getByRole("button", { name: messages.portMappings, exact: true }).click();
     dialog = page.getByRole("dialog");
-    await dialog.getByText('cat "$MWC_PORT_MAPPINGS_FILE"', { exact: true }).waitFor();
+    await dialog.getByText("支付工作区", { exact: true }).waitFor();
+    assert.equal(await dialog.getByLabel(messages.internalPort, { exact: true }).count(), 0);
+    const add = dialog.getByRole("button", { name: messages.addMapping, exact: true });
+    await add.click();
+    await dialog.getByLabel(messages.internalPort, { exact: true }).fill("3999");
+    const beforeCancel = writes.length;
+    await dialog.getByRole("button", { name: messages.cancel, exact: true }).click();
+    assert.equal(writes.length, beforeCancel);
+    assert.equal(await dialog.getByLabel(messages.internalPort, { exact: true }).count(), 0);
+    await add.click();
+    assert.equal(await dialog.getByLabel(messages.internalPort, { exact: true }).inputValue(), "");
     await dialog.getByLabel(messages.internalPort, { exact: true }).fill("5000");
     await Promise.all([page.waitForResponse((response) => response.url().endsWith("/port-mappings") && response.request().method() === "POST" && response.status() === 200), dialog.getByRole("button", { name: messages.addMapping, exact: true }).click()]);
     await dialog.getByText("https://p-1a2b3c4d.example.test", { exact: true }).waitFor();
+    assert.equal(await dialog.getByLabel(messages.internalPort, { exact: true }).count(), 0);
     const createWrite = writes[writes.length - 1];
     assert.equal(createWrite.input.internal_port, 5000);
     assert.equal("subdomain" in createWrite.input, false);

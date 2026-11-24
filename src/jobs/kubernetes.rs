@@ -11,7 +11,7 @@ use crate::{
         DeleteProgress, InjectionMaterialization, KubernetesCoordinator, ReconcileError,
         ResourceBuilder, WorkspaceObservations,
     },
-    storage::{ClaimedJob, Database, InjectionScopeRef, StorageError},
+    storage::{ClaimedJob, Database, InjectionScopeRef, PortMapping, StorageError},
     workspaces::{Workspace, WorkspaceObservation, WorkspaceState},
 };
 
@@ -120,24 +120,13 @@ impl WorkspaceReconcileHandler {
             .reconcile_with_injections(workspace, &placement, materialization, ssh_identity)
             .await
             .map_err(reconcile_error)?;
-        self.database
-            .ensure_desktop_port_mapping(workspace, unix_timestamp()?)
-            .await
-            .map_err(job_error)?;
-        let port_mappings = if matches!(
-            workspace.state,
-            WorkspaceState::Provisioning
-                | WorkspaceState::Starting
-                | WorkspaceState::Restarting
-                | WorkspaceState::Ready
-        ) {
+        Box::pin(
             self.database
-                .list_port_mappings(workspace.id)
-                .await
-                .map_err(job_error)?
-        } else {
-            Vec::new()
-        };
+                .ensure_desktop_port_mapping(workspace, unix_timestamp()?),
+        )
+        .await
+        .map_err(job_error)?;
+        let port_mappings = self.desired_port_mappings(workspace).await?;
         self.coordinator
             .reconcile_port_mappings(workspace, &port_mappings)
             .await
@@ -157,6 +146,57 @@ impl WorkspaceReconcileHandler {
         // must never mark a healthy workspace failed.
         metadata.map_err(|error| JobHandlerError::Pending(error.to_string()))?;
         observation.map_err(|error| checkpoint_error(error, job, workspace, Some(reconciled_at)))
+    }
+
+    async fn desired_port_mappings(
+        &self,
+        workspace: &Workspace,
+    ) -> Result<Vec<PortMapping>, JobHandlerError> {
+        if matches!(
+            workspace.state,
+            WorkspaceState::Provisioning
+                | WorkspaceState::Starting
+                | WorkspaceState::Restarting
+                | WorkspaceState::Ready
+        ) {
+            return self
+                .database
+                .list_port_mappings(workspace.id)
+                .await
+                .map_err(job_error);
+        }
+        Ok(Vec::new())
+    }
+
+    pub(super) async fn reconcile_port_mapping_job(
+        &self,
+        job: &ClaimedJob,
+    ) -> Result<(), JobHandlerError> {
+        let workspace_id = job.workspace_id.ok_or_else(|| {
+            JobHandlerError::Failed("port mapping job has no workspace id".to_owned())
+        })?;
+        let workspace = match self.database.get_workspace(workspace_id).await {
+            Ok(workspace) => workspace,
+            Err(StorageError::WorkspaceNotFound) => return Ok(()),
+            Err(error) => return Err(job_error(error)),
+        };
+        if matches!(
+            workspace.state,
+            WorkspaceState::Deleting | WorkspaceState::Deleted
+        ) {
+            return Ok(());
+        }
+        // The worker already holds the workspace lease. Use the current declaration
+        // so retries and rapid edits cannot replay a superseded route.
+        let mappings = self.desired_port_mappings(&workspace).await?;
+        self.coordinator
+            .reconcile_port_mappings(&workspace, &mappings)
+            .await
+            .map_err(job_error)?;
+        self.coordinator
+            .apply_port_mapping_metadata(&workspace, &mappings)
+            .await
+            .map_err(job_error)
     }
 
     async fn observe_workspace(&self, workspace: &Workspace) -> Result<(), JobHandlerError> {
@@ -555,7 +595,8 @@ impl JobHandler for WorkspaceReconcileHandler {
                 .await
                 .map_err(reconcile_error);
         }
-        self.reconcile_workspace(&workspace, job).await
+        // The lifecycle itself composes several substantial Kubernetes futures.
+        Box::pin(self.reconcile_workspace(&workspace, job)).await
     }
 
     async fn on_checkpoint_deferred(&self, job_id: Uuid, now: i64) -> Result<(), StorageError> {
