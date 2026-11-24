@@ -460,7 +460,6 @@ mkdir -p "$base/gvisor" "$base/runsc-state"
 copy_input gvisor.tar.bz2 \
  e22638939473759a8602e80f2b96a9b67e4afcdf58f2c51db52b1a8e9031ea45 "$base/gvisor.tar.bz2"
 tar -xjf "$base/gvisor.tar.bz2" -C "$base/gvisor"
-export PATH="$base/gvisor:$PATH"
 "$base/gvisor/runsc" --version | tee "$out/runsc-version.txt"
 grep -Fx 'runsc version release-20261116.0' "$out/runsc-version.txt"
 test -x "$base/gvisor/containerd-shim-runsc-v1"
@@ -560,6 +559,7 @@ state = '$containerd_state'
       SystemdCgroup = true
   [plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.mwc-runsc]
     runtime_type = 'io.containerd.runsc.v1'
+    runtime_path = '$base/gvisor/containerd-shim-runsc-v1'
     [plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.mwc-runsc.options]
       ConfigPath = '$base/runsc.toml'
 TOML
@@ -754,8 +754,11 @@ for enabled in false true; do
  jq -e --arg uid "$uid" '.metadata.uid==$uid' "$case_out/pod-initial.json"
  shm_capacity_json=null
  if [ "$runtime" = mwc-runsc ]; then
-  sandbox_id="$(cri pods --namespace "$namespace" --name "^$pod$" -q)"
+  sandbox_id="$(cri pods --namespace "$namespace" --name "^$pod$" --state ready --label "io.kubernetes.pod.uid=$uid" -q)"
   [[ "$sandbox_id" =~ ^[a-f0-9]{64}$ ]]
+  sandbox_shim="$(cat "$bundle_root/$sandbox_id/shim-binary-path")"
+  test "$sandbox_shim" = "$base/gvisor/containerd-shim-runsc-v1"
+  printf '%s\n' "$sandbox_shim" > "$case_out/sandbox-shim-path.txt"
   shm_host="$containerd_state/io.containerd.grpc.v1.cri/sandboxes/$sandbox_id/shm"
   read -r host_blocks host_block_size < <(stat -f -c '%b %S' "$shm_host")
   read -r sandbox_blocks sandbox_block_size < <(kube exec -n "$namespace" "$pod" -c workspace -- stat -f -c '%b %S' /dev/shm)
