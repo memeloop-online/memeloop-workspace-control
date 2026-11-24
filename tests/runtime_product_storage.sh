@@ -11,14 +11,13 @@ copy_input() {
 : "${RUNNER_TEMP:?}"
 : "${GITHUB_WORKSPACE:?}"
 base=/var/lib/mwc-product-storage-ci
-pod_log_root="$base/pod-logs"
+containerd_state="$base/containerd-state"
+bundle_root="$containerd_state/io.containerd.runtime.v2.task/k8s.io"
+pod_log_root=/var/log/pods
 out="$GITHUB_WORKSPACE/artifacts"
 fixtures="$RUNNER_TEMP/product-storage-fixtures"
 namespace=memeloop-workspace-control
 mkdir -p "$base" "$out" "$base/state/mwc-native" "$base/state/mwc-runsc"
-# The hosted VM's /var/log can be group-writable, which the runtime correctly
-# rejects. Keep kubelet and wrapper logs under the same trusted, dedicated root.
-install -d -o root -g root -m 0755 "$pod_log_root"
 chmod 0700 "$base/state" "$base/state/"*
 exec > >(tee "$out/product-csi.log") 2>&1
 # The whole harness, both daemons, their shims, and the wrapper share this
@@ -26,6 +25,39 @@ exec > >(tee "$out/product-csi.log") 2>&1
 mount_namespace="/proc/$$/ns/mnt"
 test "$(readlink "$mount_namespace")" != "$(readlink /proc/1/ns/mnt)"
 test "$(findmnt -n -o PROPAGATION --mountpoint /)" = private
+# Give this disposable namespace a shared root and state parent like a node.
+# The initial recursive-private unshare keeps these changes out of the runner.
+mount --make-shared /
+install -d -o root -g root -m 0711 "$bundle_root"
+mount --bind "$containerd_state" "$containerd_state"
+mount --make-shared "$containerd_state"
+test -z "$(find "$bundle_root" -mindepth 1 -print -quit)"
+if findmnt -n --mountpoint "$bundle_root" >/dev/null; then exit 1; fi
+mount --bind "$bundle_root" "$bundle_root"
+mount --make-private "$bundle_root"
+# Model the canonical path on a node with group-writable /var/log without
+# touching the runner's log directory or changing the kubelet's log location.
+install -d -o root -g "$(id -g nobody)" -m 0775 "$base/node-logs"
+install -d -o root -g root -m 0750 "$base/node-logs/pods"
+mount --bind "$base/node-logs" /var/log
+log_inode="$(stat -c %d:%i "$pod_log_root")"
+printf '%s\n' original-log-directory > "$pod_log_root/existing-marker"
+mount --bind "$pod_log_root" "$pod_log_root"
+test "$(stat -c %d:%i "$pod_log_root")" = "$log_inode"
+runuser -u nobody -- python3 - <<'PY'
+import errno
+import os
+
+os.mkdir('/var/log/rename-probe')  # Confirm the parent really is group-writable.
+try:
+    os.rename('/var/log/pods', '/var/log/rename-probe/pods')
+except OSError as error:
+    if error.errno != errno.EBUSY:
+        raise
+else:
+    raise RuntimeError('canonical log mount was renamed')
+os.rmdir('/var/log/rename-probe')
+PY
 k3s_pid=''; containerd_pid=''; loops=(); diagnostic_case=''; diagnostic_monitor_pid=''
 runtime_config=''; restore_config=''
 kube() { KUBECONFIG="$base/kubeconfig" "$base/k3s-bin" kubectl "$@"; }
@@ -503,7 +535,7 @@ cp "$base/runsc.toml" "$out/runsc-shim-config.toml"
 cat > "$base/containerd.toml" <<TOML
 version = 3
 root = '$base/containerd-root'
-state = '$base/containerd-state'
+state = '$containerd_state'
 [grpc]
   address = '$base/containerd.sock'
 [plugins.'io.containerd.cri.v1.images']
@@ -566,13 +598,9 @@ test "$(df -B1 --output=avail "$base" | tail -n1)" -ge 30000000000
 # Keep actual production limits and security contexts. Ubuntu's VM policy must
 # permit the existing unprivileged RootlessKit user namespace, as main CI does.
 if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then sysctl -w kernel.apparmor_restrict_unprivileged_userns=0; fi
-# k3s merges this partial KubeletConfiguration with its own defaults. Only the
-# log location changes; pressure thresholds and log rotation retain defaults.
-jq -n --arg logs "$pod_log_root" '{apiVersion:"kubelet.config.k8s.io/v1beta1",kind:"KubeletConfiguration",podLogsDir:$logs}' > "$base/kubelet-log-config.json"
-stat -c '%U:%G %a %n' / /var /var/lib "$base" "$pod_log_root" > "$out/pod-log-root-permissions.txt"
+stat -c '%u:%g %a %n' / /var /var/log "$pod_log_root" > "$out/pod-log-root-permissions.txt"
 K3S_DATA_DIR="$base/k3s" "$base/k3s-bin" server --data-dir "$base/k3s" --write-kubeconfig "$base/kubeconfig" \
  --node-name mwc-product-ci --container-runtime-endpoint "unix://$base/containerd.sock" \
- --kubelet-arg="config=$base/kubelet-log-config.json" \
  --disable traefik,servicelb,local-storage,metrics-server --disable-helm-controller \
  > "$out/k3s.log" 2>&1 & k3s_pid=$!
 for n in $(seq 1 150); do
@@ -581,8 +609,6 @@ for n in $(seq 1 150); do
  sleep 1
 done
 kube wait --for=condition=Ready node/mwc-product-ci --timeout=120s
-# Kubelet makes only its own root shared for the CSI node plugin's bidirectional
-# mounts. The containerd bundle tree stays on the private root in this namespace.
 jq -n --arg host "$(readlink /proc/1/ns/mnt)" --arg harness "$(readlink "$mount_namespace")" \
  --arg containerd "$(readlink "/proc/$containerd_pid/ns/mnt")" --arg k3s "$(readlink "/proc/$k3s_pid/ns/mnt")" \
  --arg configured "$(jq -r .mount_namespace /etc/mwc-runtime-wrapper.json)" \
@@ -590,7 +616,12 @@ jq -n --arg host "$(readlink /proc/1/ns/mnt)" --arg harness "$(readlink "$mount_
 jq -e --arg namespace "$mount_namespace" '.host!=.harness and .harness==.containerd and .harness==.k3s and .wrapper_mount_namespace==$namespace' "$out/actual-mount-namespaces.json"
 findmnt -J -o TARGET,PROPAGATION --mountpoint /var/lib/kubelet > "$out/actual-kubelet-mount-propagation.json"
 test "$(findmnt -n -o PROPAGATION --mountpoint /var/lib/kubelet)" = shared
-test "$(findmnt -n -o PROPAGATION --target "$base/containerd-state")" = private
+for dir in / "$containerd_state" "$bundle_root"; do
+ findmnt -n -o TARGET,PROPAGATION --mountpoint "$dir"
+done > "$out/actual-bundle-mount-propagation.txt"
+test "$(findmnt -n -o PROPAGATION --mountpoint /)" = shared
+test "$(findmnt -n -o PROPAGATION --mountpoint "$containerd_state")" = shared
+test "$(findmnt -n -o PROPAGATION --mountpoint "$bundle_root")" = private
 kube get --raw /api/v1/nodes/mwc-product-ci/proxy/configz | jq '.kubeletconfig | {podLogsDir,evictionHard,evictionMinimumReclaim,containerLogMaxSize,containerLogMaxFiles}' > "$out/actual-kubelet-log-config.json"
 jq -e --arg logs "$pod_log_root" '.podLogsDir==$logs' "$out/actual-kubelet-log-config.json"
 kube apply -f - <<'YAML'
@@ -631,6 +662,30 @@ storageClasses:
 YAML
 KUBECONFIG="$base/kubeconfig" "$base/linux-amd64/helm" install topolvm "$base/topolvm.tgz" -n topolvm-system --create-namespace -f "$base/topolvm-values.yaml" --wait --timeout 5m
 kube get storageclasses,csidrivers,csinodes -o json > "$out/actual-csi-installation.json"
+
+# An ordinary, unwrapped workload must survive the whole CSI matrix in the
+# same containerd. Its own overlay and pod logs still use node storage.
+kube apply -f - <<YAML
+apiVersion: v1
+kind: Pod
+metadata: {name: mwc-default-runtime}
+spec:
+  automountServiceAccountToken: false
+  containers:
+    - name: sentinel
+      image: $workspace_image
+      imagePullPolicy: Never
+      command: ["sh", "-ec", "printf ordinary-runtime > /tmp/mwc-sentinel; exec sleep 3600"]
+YAML
+kube wait --for=condition=Ready pod/mwc-default-runtime --timeout=120s
+default_id="$(kube get pod mwc-default-runtime -o json | jq -er 'select(.spec.runtimeClassName==null) | .status.containerStatuses[0].containerID | sub("^containerd://"; "") | select(test("^[a-f0-9]{64}$"))')"
+default_uid="$(kube get pod mwc-default-runtime -o jsonpath='{.metadata.uid}')"
+default_rootfs="$bundle_root/$default_id/rootfs"
+default_logs="$pod_log_root/default_mwc-default-runtime_$default_uid"
+findmnt -n -o TARGET,FSTYPE,PROPAGATION --mountpoint "$default_rootfs" > "$out/default-runtime-rootfs.txt"
+test "$(findmnt -n -o FSTYPE,PROPAGATION --mountpoint "$default_rootfs" | xargs)" = 'overlay private'
+test -d "$default_logs" && test ! -L "$default_logs"
+test "$(kube exec mwc-default-runtime -- cat /tmp/mwc-sentinel)" = ordinary-runtime
 
 for runtime in mwc-native mwc-runsc; do
 for enabled in false true; do
@@ -911,11 +966,21 @@ for enabled in false true; do
  diagnostic_case=''
 done
 done
+test "$(kube get pod mwc-default-runtime -o jsonpath='{.metadata.uid}:{.status.containerStatuses[0].containerID}:{.status.containerStatuses[0].restartCount}')" = "$default_uid:containerd://$default_id:0"
+test "$(kube exec mwc-default-runtime -- cat /tmp/mwc-sentinel)" = ordinary-runtime
+test "$(cat "$pod_log_root/existing-marker")" = original-log-directory
+test "$(stat -c %d:%i "$pod_log_root")" = "$log_inode"
+kube delete pod mwc-default-runtime --wait=true --timeout=120s
+for n in $(seq 1 30); do
+ if ! findmnt -n --mountpoint "$default_rootfs" >/dev/null; then break; fi
+ sleep 1
+done
+if findmnt -n --mountpoint "$default_rootfs" >/dev/null; then exit 1; fi
 snapshot
 jq -es --arg renderer "$PRODUCT_RENDERER_SHA" --arg wrapper "$WRAPPER_SHA" --arg product "$(jq -r '.pod.spec.containers[]|select(.name=="workspace")|.image' "$fixtures/mwc-native-buildkit-false.json")" '
  sort_by(.runtime,.buildkit) as $cases |
  if ($cases|length)==4 and ([$cases[]|[.runtime,.buildkit]]==[["mwc-native",false],["mwc-native",true],["mwc-runsc",false],["mwc-runsc",true]]) and
  ([$cases[].scratch_dm_uuid] | unique | length)==4 and
  all($cases[]; .accepted and .writeback_wrapper_owned and .wrong_pool_rejected_without_tuning and .writeback_peer_and_republish_readback and .root_written_bytes>2147483648 and .root_fsync and .scratch_enospc and .logs_rotation and .logs_follow_reopen and .logs_previous and .kubelet_logs_accounted and .kubelet_scratch_accounted and .logs_share_scratch and .ssh_survived and .pod_identity_preserved_under_pressure and .pvc_reused and .node_unpublish_observed and .pv_lv_deleted)
- then {accepted:true,renderer_sha:$renderer,wrapper_sha:$wrapper,product:$product,cases:$cases,real_csi:true,production_deployed:false,runtime_matrix_complete:true,writeback_policy:"wrapper-strict-limit"}
+ then {accepted:true,renderer_sha:$renderer,wrapper_sha:$wrapper,product:$product,cases:$cases,real_csi:true,production_deployed:false,runtime_matrix_complete:true,writeback_policy:"wrapper-strict-limit",mount_layout:"shared-parent-private-bundle",canonical_log_leaf_pinned:true,default_runtime_survived:true,default_runtime_cleanup:true}
  else error("incomplete real CSI quota runtime matrix") end' "$out/"mwc-*/acceptance.json > "$out/acceptance.json"
