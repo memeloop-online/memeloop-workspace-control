@@ -6,6 +6,11 @@ use crate::{auth::Role, storage::StorageError};
 use super::UserSummary;
 use super::organization_locks::lock_organization_membership_writes_postgres;
 
+const REVOKE_OIDC_SESSIONS: &str =
+    "DELETE FROM oidc_sessions WHERE installation_id = $1 AND identity_id IN (
+        SELECT id FROM oidc_identities WHERE installation_id = $1 AND user_id = $2
+    )";
+
 pub(super) fn escape_like_pattern(value: &str) -> String {
     let mut escaped = String::with_capacity(value.len());
     for character in value.chars() {
@@ -66,6 +71,13 @@ pub(super) async fn update_user_sqlite(
         next_disabled,
     )
     .await?;
+    if !current.disabled && next_disabled {
+        sqlx::query(REVOKE_OIDC_SESSIONS)
+            .bind(installation_id)
+            .bind(user_id.to_string())
+            .execute(&mut *tx)
+            .await?;
+    }
     tx.commit().await?;
     Ok(updated_user_summary(
         current,
@@ -91,13 +103,6 @@ async fn persist_user_update_sqlite(
         .bind(user_id.to_string())
         .execute(&mut **tx)
         .await?;
-    if disabled {
-        sqlx::query("DELETE FROM oidc_sessions WHERE installation_id = ?1 AND identity_id IN (SELECT id FROM oidc_identities WHERE installation_id = ?1 AND user_id = ?2)")
-            .bind(installation_id)
-            .bind(user_id.to_string())
-            .execute(&mut **tx)
-            .await?;
-    }
     Ok(())
 }
 
@@ -173,6 +178,13 @@ pub(super) async fn update_user_postgres(
         next_disabled,
     )
     .await?;
+    if !current.disabled && next_disabled {
+        sqlx::query(REVOKE_OIDC_SESSIONS)
+            .bind(installation_id)
+            .bind(user_id.to_string())
+            .execute(&mut *tx)
+            .await?;
+    }
     tx.commit().await?;
     Ok(updated_user_summary(
         current,
@@ -198,13 +210,6 @@ async fn persist_user_update_postgres(
         .bind(user_id.to_string())
         .execute(&mut **tx)
         .await?;
-    if disabled {
-        sqlx::query("DELETE FROM oidc_sessions WHERE installation_id = $1 AND identity_id IN (SELECT id FROM oidc_identities WHERE installation_id = $1 AND user_id = $2)")
-            .bind(installation_id)
-            .bind(user_id.to_string())
-            .execute(&mut **tx)
-            .await?;
-    }
     Ok(())
 }
 
