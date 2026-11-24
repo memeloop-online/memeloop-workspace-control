@@ -325,8 +325,8 @@ async fn seed(database: &Database, workspaces: usize) -> f64 {
         .await
         .unwrap();
     let quota = QuotaResources {
-        cpu_millis: 100_000,
-        memory_mib: 100_000,
+        cpu_millis: 256_000,
+        memory_mib: 256_000,
         gpu_count: 0,
         disk_gib: 10_000,
         temporary_storage_gib: 10_000,
