@@ -59,6 +59,7 @@ cri version | tee "$dir/cri-version.txt"
 grep -Eq '^RuntimeVersion:[[:space:]]+v?2\.3\.2-k3s2$' "$dir/cri-version.txt"
 sudo env K3S_DATA_DIR="$runtime_root" "$k3s" ctr --address /run/k3s/containerd/containerd.sock \
   --namespace k8s.io images import "$dir/ssh.tar"
+k create serviceaccount ssh-fixture
 k create configmap ssh --from-file="authorized_keys=$dir/client.pub"
 node_ip=$(k get node "$node" -o json | jq -er '.status.addresses[] | select(.type == "InternalIP" and (.address | contains(":") | not)).address')
 
@@ -66,7 +67,8 @@ fixture() {
   local name=$1 port=${2:-}
   jq -n --arg name "$name" --arg image "$image" '
     {apiVersion:"v1", kind:"Pod", metadata:{name:$name,labels:{fixture:$name}},
-     spec:{containers:[{name:"ssh",image:$image,imagePullPolicy:"Never",
+     spec:{serviceAccountName:"ssh-fixture",automountServiceAccountToken:false,
+           containers:[{name:"ssh",image:$image,imagePullPolicy:"Never",
             ports:[{containerPort:22}],volumeMounts:[{name:"ssh",mountPath:"/ssh",readOnly:true}]}],
            volumes:[{name:"ssh",configMap:{name:"ssh"}}]}}' | k create -f -
   if [[ -n $port ]]; then
