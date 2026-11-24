@@ -23,6 +23,7 @@ mod leases;
 mod metrics_store;
 mod migration;
 mod node_pool_store;
+mod oidc;
 mod plugin_package_store;
 mod plugin_store;
 mod port_mappings;
@@ -65,6 +66,7 @@ pub use injection_store::{InjectionScopeRef, StoredInjectionSummary};
 pub use job_types::{ClaimedJob, NewJob, ParkedWorkspaceJob, ParkedWorkspaceJobsPage};
 pub use metrics_store::{JobCounts, UserWorkspaceMetrics, WorkspaceMetrics};
 pub use node_pool_store::{AvailableNodePool, NodePool, PutNodePool};
+pub use oidc::OidcBindingResult;
 pub use plugin_package_store::{
     ConfirmPluginInstall, CreatePluginUiSession, PluginAssetBlob, PluginInstallInspection,
     PluginPackageRecord, PluginUiSession, StorePluginInspection,

@@ -30,7 +30,7 @@ async fn migrate_sqlite(pool: &SqlitePool, applied_at: i64) -> Result<(), Storag
         .fetch_one(&mut *transaction)
         .await?;
     match version {
-        Some(schema::SCHEMA_VERSION) => {}
+        Some(schema::SCHEMA_VERSION) | Some(32) => {}
         Some(31) => {
             sqlx::query(
                 "ALTER TABLE workspace_port_mappings ADD COLUMN subdomain TEXT NOT NULL DEFAULT ''",
@@ -46,23 +46,23 @@ async fn migrate_sqlite(pool: &SqlitePool, applied_at: i64) -> Result<(), Storag
                 .execute(&mut *transaction).await?;
             sqlx::query("INSERT INTO workspace_port_subdomain_claims (subdomain, installation_id, workspace_id) SELECT subdomain, installation_id, workspace_id FROM workspace_port_mappings")
                 .execute(&mut *transaction).await?;
-            sqlx::query("INSERT INTO schema_migrations (version, applied_at) VALUES (?1, ?2)")
-                .bind(schema::SCHEMA_VERSION)
-                .bind(applied_at)
-                .execute(&mut *transaction)
-                .await?;
         }
         None if has_application_tables == 0 => {
             for statement in schema::BASELINE {
                 sqlx::query(statement).execute(&mut *transaction).await?;
             }
-            sqlx::query("INSERT INTO schema_migrations (version, applied_at) VALUES (?1, ?2)")
-                .bind(schema::SCHEMA_VERSION)
-                .bind(applied_at)
-                .execute(&mut *transaction)
-                .await?;
         }
         _ => return Err(StorageError::UnsupportedDatabaseVersion),
+    }
+    if version != Some(schema::SCHEMA_VERSION) {
+        for statement in schema::OIDC_SCHEMA {
+            sqlx::query(statement).execute(&mut *transaction).await?;
+        }
+        sqlx::query("INSERT INTO schema_migrations (version, applied_at) VALUES (?1, ?2)")
+            .bind(schema::SCHEMA_VERSION)
+            .bind(applied_at)
+            .execute(&mut *transaction)
+            .await?;
     }
     transaction.commit().await?;
     Ok(())
@@ -92,7 +92,7 @@ async fn migrate_postgres(
         .fetch_one(&mut *transaction)
         .await?;
     match version {
-        Some(schema::SCHEMA_VERSION) => {}
+        Some(schema::SCHEMA_VERSION) | Some(32) => {}
         Some(31) => {
             sqlx::query("ALTER TABLE workspace_port_mappings ADD COLUMN subdomain TEXT")
                 .execute(&mut *transaction)
@@ -109,29 +109,29 @@ async fn migrate_postgres(
                 .execute(&mut *transaction).await?;
             sqlx::query("INSERT INTO workspace_port_subdomain_claims (subdomain, installation_id, workspace_id) SELECT subdomain, installation_id, workspace_id FROM workspace_port_mappings")
                 .execute(&mut *transaction).await?;
-            sqlx::query("INSERT INTO schema_migrations (version, applied_at) VALUES ($1, $2)")
-                .bind(schema::SCHEMA_VERSION)
-                .bind(applied_at)
-                .execute(&mut *transaction)
-                .await?;
         }
         None if has_application_tables == 0 => {
             for statement in schema::BASELINE {
                 sqlx::query(statement).execute(&mut *transaction).await?;
             }
-            sqlx::query("INSERT INTO schema_migrations (version, applied_at) VALUES ($1, $2)")
-                .bind(schema::SCHEMA_VERSION)
-                .bind(applied_at)
-                .execute(&mut *transaction)
-                .await?;
         }
         _ => return Err(StorageError::UnsupportedDatabaseVersion),
+    }
+    if version != Some(schema::SCHEMA_VERSION) {
+        for statement in schema::OIDC_SCHEMA {
+            sqlx::query(statement).execute(&mut *transaction).await?;
+        }
+        sqlx::query("INSERT INTO schema_migrations (version, applied_at) VALUES ($1, $2)")
+            .bind(schema::SCHEMA_VERSION)
+            .bind(applied_at)
+            .execute(&mut *transaction)
+            .await?;
     }
     transaction.commit().await?;
     Ok(())
 }
 
-fn unix_timestamp() -> Result<i64, StorageError> {
+pub(super) fn unix_timestamp() -> Result<i64, StorageError> {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| i64::try_from(duration.as_secs()).map_err(|_| StorageError::Clock))

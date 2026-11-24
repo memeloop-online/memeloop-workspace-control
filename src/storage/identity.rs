@@ -231,65 +231,6 @@ impl Database {
         })
     }
 
-    pub async fn browser_principal(
-        &self,
-        user_id: Uuid,
-    ) -> Result<Option<Principal>, StorageError> {
-        let (display_name, system_admin, memberships) = match self {
-            Self::Sqlite {
-                pool,
-                installation_id,
-            } => {
-                let Some((name, admin)) = sqlx::query_as::<_, (String, i64)>(
-                    "SELECT display_name, system_admin FROM users WHERE installation_id = ?1 AND id = ?2 AND disabled = 0",
-                ).bind(installation_id.as_str()).bind(user_id.to_string()).fetch_optional(pool).await? else {
-                    return Ok(None);
-                };
-                (
-                    name,
-                    admin != 0,
-                    backend::sqlite_memberships(pool, installation_id.as_str(), user_id).await?,
-                )
-            }
-            Self::Postgres {
-                pool,
-                installation_id,
-            } => {
-                let Some((name, admin)) = sqlx::query_as::<_, (String, i64)>(
-                    "SELECT display_name, system_admin FROM users WHERE installation_id = $1 AND id = $2 AND disabled = 0",
-                ).bind(installation_id.as_str()).bind(user_id.to_string()).fetch_optional(pool).await? else {
-                    return Ok(None);
-                };
-                (
-                    name,
-                    admin != 0,
-                    backend::postgres_memberships(pool, installation_id.as_str(), user_id).await?,
-                )
-            }
-        };
-        let org_admin = memberships
-            .iter()
-            .any(|m| m.role == Role::OrganizationAdmin);
-        let mut scopes = ApiKeyScope::initial_key_defaults(system_admin);
-        if org_admin && !system_admin {
-            scopes.extend([
-                ApiKeyScope::ManageOrganization,
-                ApiKeyScope::ManageMembers,
-                ApiKeyScope::ManageLockedInjections,
-                ApiKeyScope::DeleteWorkspace,
-            ]);
-        }
-        Ok(Some(Principal {
-            user_id,
-            display_name,
-            system_admin,
-            memberships,
-            api_key_scopes: scopes,
-            api_key_expires_at: None,
-            allowed_template_ids: None,
-        }))
-    }
-
     pub async fn authenticate(&self, token: &str) -> Result<Option<Principal>, StorageError> {
         if token.len() < 32 {
             return Ok(None);

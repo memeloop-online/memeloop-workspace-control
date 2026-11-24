@@ -91,6 +91,13 @@ async fn persist_user_update_sqlite(
         .bind(user_id.to_string())
         .execute(&mut **tx)
         .await?;
+    if disabled {
+        sqlx::query("DELETE FROM oidc_sessions WHERE installation_id = ?1 AND identity_id IN (SELECT id FROM oidc_identities WHERE installation_id = ?1 AND user_id = ?2)")
+            .bind(installation_id)
+            .bind(user_id.to_string())
+            .execute(&mut **tx)
+            .await?;
+    }
     Ok(())
 }
 
@@ -191,6 +198,13 @@ async fn persist_user_update_postgres(
         .bind(user_id.to_string())
         .execute(&mut **tx)
         .await?;
+    if disabled {
+        sqlx::query("DELETE FROM oidc_sessions WHERE installation_id = $1 AND identity_id IN (SELECT id FROM oidc_identities WHERE installation_id = $1 AND user_id = $2)")
+            .bind(installation_id)
+            .bind(user_id.to_string())
+            .execute(&mut **tx)
+            .await?;
+    }
     Ok(())
 }
 
