@@ -10,11 +10,14 @@ use std::fmt;
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
+use sqlx::{PgConnection, SqliteConnection};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
 use super::{Database, StorageError};
 use crate::{templates::is_platform_reserved_port, workspaces::Workspace};
+
+pub(crate) const PORT_MAPPING_RECONCILE_JOB: &str = "reconcile_port_mappings";
 
 /// HTTP ports which a workspace is allowed to publish through the authenticated
 /// gateway.  Port 80 is deliberately allowed: it is a *container* port behind
@@ -78,7 +81,7 @@ impl Database {
         let Some(desktop) = workspace.template.desktop.as_ref() else {
             return Ok(None);
         };
-        self.create_port_mapping(
+        self.insert_port_mapping(
             workspace.organization_id,
             workspace.id,
             desktop.internal_port,
@@ -86,6 +89,7 @@ impl Database {
             None,
             workspace.owner_id,
             now,
+            false,
         )
         .await
         .map(Some)
@@ -104,6 +108,31 @@ impl Database {
         subdomain: Option<&str>,
         created_by: Uuid,
         created_at: i64,
+    ) -> Result<PortMapping, StorageError> {
+        self.insert_port_mapping(
+            organization_id,
+            workspace_id,
+            internal_port,
+            display_name,
+            subdomain,
+            created_by,
+            created_at,
+            true,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn insert_port_mapping(
+        &self,
+        organization_id: Uuid,
+        workspace_id: Uuid,
+        internal_port: u16,
+        display_name: Option<&str>,
+        subdomain: Option<&str>,
+        created_by: Uuid,
+        created_at: i64,
+        reconcile: bool,
     ) -> Result<PortMapping, StorageError> {
         validate_http_port(internal_port)?;
         let display_name = validate_display_name(display_name)?;
@@ -129,7 +158,14 @@ impl Database {
                             .bind(workspace_id.to_string()).bind(i64::from(internal_port)).bind(&display_name)
                             .bind(&subdomain).bind(created_by.to_string()).bind(created_at).execute(&mut *tx).await
                             .map_err(subdomain_write_error)?.rows_affected();
-                        if rows == 0 { tx.rollback().await?; } else { tx.commit().await?; }
+                        if rows == 0 {
+                            tx.rollback().await?;
+                        } else {
+                            if reconcile {
+                                enqueue_routes_sqlite(&mut tx, installation_id.as_str(), workspace_id, created_at).await?;
+                            }
+                            tx.commit().await?;
+                        }
                     }
                     Self::Postgres { pool, installation_id } => {
                         let mut tx = pool.begin().await?;
@@ -142,7 +178,14 @@ impl Database {
                             .bind(workspace_id.to_string()).bind(i64::from(internal_port)).bind(&display_name)
                             .bind(&subdomain).bind(created_by.to_string()).bind(created_at).execute(&mut *tx).await
                             .map_err(subdomain_write_error)?.rows_affected();
-                        if rows == 0 { tx.rollback().await?; } else { tx.commit().await?; }
+                        if rows == 0 {
+                            tx.rollback().await?;
+                        } else {
+                            if reconcile {
+                                enqueue_routes_postgres(&mut tx, installation_id.as_str(), workspace_id, created_at).await?;
+                            }
+                            tx.commit().await?;
+                        }
                     }
                 }
                 Ok(())
@@ -183,6 +226,7 @@ impl Database {
         internal_port: u16,
         display_name: Option<&str>,
         subdomain: Option<&str>,
+        now: i64,
     ) -> Result<PortMapping, StorageError> {
         validate_http_port(internal_port)?;
         let display_name = validate_display_name(display_name)?;
@@ -209,8 +253,10 @@ impl Database {
                     let changed = sqlx::query("UPDATE workspace_port_mappings SET internal_port = ?1, display_name = ?2, subdomain = COALESCE(?3, subdomain) WHERE installation_id = ?4 AND workspace_id = ?5 AND id = ?6 RETURNING id, organization_id, workspace_id, internal_port, display_name, subdomain, created_by, created_at")
                         .bind(i64::from(internal_port)).bind(&display_name).bind(&subdomain).bind(installation_id.as_str())
                         .bind(workspace_id.to_string()).bind(mapping_id.to_string()).fetch_optional(&mut *tx).await?;
+                    let saved = decode(changed.ok_or(StorageError::PortMappingNotFound)?)?;
+                    enqueue_routes_sqlite(&mut tx, installation_id.as_str(), workspace_id, now).await?;
                     tx.commit().await?;
-                    decode(changed.ok_or(StorageError::PortMappingNotFound)?)
+                    Ok(saved)
                 }
                 Self::Postgres { pool, installation_id } => {
                     let mut tx = pool.begin().await?;
@@ -232,8 +278,10 @@ impl Database {
                     let changed = sqlx::query("UPDATE workspace_port_mappings SET internal_port = $1, display_name = $2, subdomain = COALESCE($3, subdomain) WHERE installation_id = $4 AND workspace_id = $5 AND id = $6 RETURNING id, organization_id, workspace_id, internal_port, display_name, subdomain, created_by, created_at")
                         .bind(i64::from(internal_port)).bind(&display_name).bind(&subdomain).bind(installation_id.as_str())
                         .bind(workspace_id.to_string()).bind(mapping_id.to_string()).fetch_optional(&mut *tx).await?;
+                    let saved = decode(changed.ok_or(StorageError::PortMappingNotFound)?)?;
+                    enqueue_routes_postgres(&mut tx, installation_id.as_str(), workspace_id, now).await?;
                     tx.commit().await?;
-                    decode(changed.ok_or(StorageError::PortMappingNotFound)?)
+                    Ok(saved)
                 }
             }
         }.await;
@@ -299,10 +347,39 @@ impl Database {
         &self,
         workspace_id: Uuid,
         mapping_id: Uuid,
+        now: i64,
     ) -> Result<bool, StorageError> {
         let deleted = match self {
-            Self::Sqlite { pool, installation_id } => sqlx::query("DELETE FROM workspace_port_mappings WHERE installation_id = ?1 AND workspace_id = ?2 AND id = ?3").bind(installation_id.as_str()).bind(workspace_id.to_string()).bind(mapping_id.to_string()).execute(pool).await?.rows_affected() == 1,
-            Self::Postgres { pool, installation_id } => sqlx::query("DELETE FROM workspace_port_mappings WHERE installation_id = $1 AND workspace_id = $2 AND id = $3").bind(installation_id.as_str()).bind(workspace_id.to_string()).bind(mapping_id.to_string()).execute(pool).await?.rows_affected() == 1,
+            Self::Sqlite {
+                pool,
+                installation_id,
+            } => {
+                let mut tx = pool.begin().await?;
+                let deleted = sqlx::query("DELETE FROM workspace_port_mappings WHERE installation_id = ?1 AND workspace_id = ?2 AND id = ?3")
+                    .bind(installation_id.as_str()).bind(workspace_id.to_string()).bind(mapping_id.to_string())
+                    .execute(&mut *tx).await?.rows_affected() == 1;
+                if deleted {
+                    enqueue_routes_sqlite(&mut tx, installation_id.as_str(), workspace_id, now)
+                        .await?;
+                }
+                tx.commit().await?;
+                deleted
+            }
+            Self::Postgres {
+                pool,
+                installation_id,
+            } => {
+                let mut tx = pool.begin().await?;
+                let deleted = sqlx::query("DELETE FROM workspace_port_mappings WHERE installation_id = $1 AND workspace_id = $2 AND id = $3")
+                    .bind(installation_id.as_str()).bind(workspace_id.to_string()).bind(mapping_id.to_string())
+                    .execute(&mut *tx).await?.rows_affected() == 1;
+                if deleted {
+                    enqueue_routes_postgres(&mut tx, installation_id.as_str(), workspace_id, now)
+                        .await?;
+                }
+                tx.commit().await?;
+                deleted
+            }
         };
         Ok(deleted)
     }
@@ -459,6 +536,43 @@ impl Database {
             Self::Postgres { pool, installation_id } => decode(sqlx::query("SELECT id, organization_id, workspace_id, internal_port, display_name, subdomain, created_by, created_at FROM workspace_port_mappings WHERE installation_id = $1 AND workspace_id = $2 AND internal_port = $3").bind(installation_id.as_str()).bind(workspace_id.to_string()).bind(i64::from(internal_port)).fetch_optional(pool).await?.ok_or(StorageError::PortMappingNotFound)?),
         }
     }
+}
+
+// The route job is durable in the same transaction as the declaration. It reads
+// the latest mappings after acquiring the workspace lease, so no payload snapshot
+// or stale-generation replay can restore a deleted route.
+async fn enqueue_routes_sqlite(
+    connection: &mut SqliteConnection,
+    installation: &str,
+    workspace_id: Uuid,
+    now: i64,
+) -> Result<(), StorageError> {
+    sqlx::query("INSERT INTO jobs (id, installation_id, kind, workspace_id, payload_json, status, available_at, lease_owner, lease_expires_at, attempts, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, '{}', 'pending', ?5, NULL, NULL, 0, ?5, ?5)")
+        .bind(Uuid::now_v7().to_string())
+        .bind(installation)
+        .bind(PORT_MAPPING_RECONCILE_JOB)
+        .bind(workspace_id.to_string())
+        .bind(now)
+        .execute(connection)
+        .await?;
+    Ok(())
+}
+
+async fn enqueue_routes_postgres(
+    connection: &mut PgConnection,
+    installation: &str,
+    workspace_id: Uuid,
+    now: i64,
+) -> Result<(), StorageError> {
+    sqlx::query("INSERT INTO jobs (id, installation_id, kind, workspace_id, payload_json, status, available_at, lease_owner, lease_expires_at, attempts, created_at, updated_at) VALUES ($1, $2, $3, $4, '{}', 'pending', $5, NULL, NULL, 0, $5, $5)")
+        .bind(Uuid::now_v7().to_string())
+        .bind(installation)
+        .bind(PORT_MAPPING_RECONCILE_JOB)
+        .bind(workspace_id.to_string())
+        .bind(now)
+        .execute(connection)
+        .await?;
+    Ok(())
 }
 
 fn decode<R: sqlx::Row>(row: R) -> Result<PortMapping, StorageError>

@@ -93,7 +93,7 @@ export function WorkspaceCard({ api, item, runtime, nodePools, busyAction, onAct
           {canConnect && running && item.ssh_connection && <WorkspaceConnectionDialog connection={item.ssh_connection} shortId={workspace.short_id} hostKey={item.workspace_host_key} />}
           {canConnect && running && <Tooltip content={t("webShellClipboardHelp")} relationship="description"><Button appearance="primary" icon={<WindowConsoleRegular />} onClick={() => void onOpenShell(workspace.id)}>{t("webShell")}</Button></Tooltip>}
           {canConnect && running && item.desktop?.status === "ready" && item.desktop.https_url && <Button appearance="outline" icon={<DesktopRegular />} disabled={openingDesktop} onClick={() => void openDesktop(api, workspace.id, item.desktop!.mapping_id, setOpeningDesktop, onError, t)}>{openingDesktop ? t("desktopOpening") : t("openDesktop")}</Button>}
-          {canConnect && (running || stopped) && <WorkspacePortMappings api={api} workspaceId={workspace.id} workspaceState={workspace.state} onError={onError} />}
+          {canConnect && (running || stopped) && <WorkspacePortMappings api={api} workspaceId={workspace.id} workspaceName={workspace.name} workspaceState={workspace.state} onError={onError} />}
           {canChangeState && running && <Button appearance="subtle" icon={<StopRegular />} onClick={() => onAction(item, "stop")}>{t("stop")}</Button>}
           {canChangeState && running && <Button appearance="subtle" icon={<ArrowClockwiseRegular />} onClick={() => onAction(item, "restart")}>{t("restart")}</Button>}
           {canChangeState && (workspace.state === "stopped" || workspace.state === "failed") && <Button appearance="primary" icon={<PlayRegular />} onClick={() => onAction(item, "start")}>{t("start")}</Button>}

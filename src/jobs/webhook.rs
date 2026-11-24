@@ -97,6 +97,12 @@ impl ControlPlaneJobHandler {
 impl JobHandler for ControlPlaneJobHandler {
     async fn handle(&self, job: &ClaimedJob) -> Result<(), JobHandlerError> {
         match job.kind.as_str() {
+            crate::storage::PORT_MAPPING_RECONCILE_JOB => {
+                let workspace = self.workspace.as_ref().ok_or_else(|| {
+                    JobHandlerError::Failed("Kubernetes coordination is disabled".to_owned())
+                })?;
+                Box::pin(workspace.reconcile_port_mapping_job(job)).await
+            }
             "reconcile_workspace" | "workspace_storage_shrink" => {
                 self.workspace
                     .as_ref()
