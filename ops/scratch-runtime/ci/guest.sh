@@ -76,7 +76,7 @@ for _ in {1..60}; do
   container=$(k --request-timeout=3s get pod "$pod" -o jsonpath='{.status.containerStatuses[?(@.ready==true)].containerID}') || container=
   if [[ -n $container && $container != "$prior_container" ]] && \
      logs_output=$(k --request-timeout=5s logs "$pod" 2>/dev/null) && [[ $logs_output == ordinary-container-log ]] && \
-     exec_output=$(timeout 7 k --request-timeout=5s exec "$pod" -- printf ordinary-exec 2>/dev/null) && \
+     exec_output=$(timeout 7 k3s kubectl --request-timeout=5s exec "$pod" -- printf ordinary-exec 2>/dev/null) && \
      [[ $exec_output == ordinary-exec ]]; then
     candidate_ready=true
     break
