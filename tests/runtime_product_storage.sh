@@ -979,6 +979,46 @@ for enabled in false true; do
  printf '[%s]:2222 %s\n' "$address" "$(cut -d ' ' -f 1,2 "$base/host-$case_id.pub")" > "$base/known-$case_id"
  kube exec -n "$namespace" "$pod" -c workspace -- cat /run/mwc-ssh/ttyd_client_key > "$base/client-$case_id"
  ssh_product 'test "$(cat /home/user/storage-ci-home-marker)" = home-survives; printf strict-ssh-new-pod-ok' > "$case_out/strict-ssh-replacement.txt"
+ shim_recovered=false
+ if [ "$enabled" = true ]; then
+  # Unlike a daemon restart, this destroys the sandbox's own task service.
+  fixture_sandbox() {
+   cri --timeout 5s pods --namespace "$namespace" --name "^$pod$" --state ready --label "io.kubernetes.pod.uid=$new_uid" -q
+  }
+  fixture_main() {
+   jq -er '.status.containerStatuses[] | select(.name=="workspace" and .ready) | .containerID | sub("^containerd://";"")' "$1"
+  }
+  old_sandbox="$(fixture_sandbox)"
+  old_main="$(fixture_main "$case_out/pod-replacement.json")"
+  [[ "$old_sandbox" =~ ^[a-f0-9]{64}$ && "$old_main" =~ ^[a-f0-9]{64}$ ]]
+  ssh_product 'printf scratch-survives > /tmp/mwc-ci-shim-marker; sync /tmp/mwc-ci-shim-marker /home/user/storage-ci-home-marker'
+  python3 "$GITHUB_WORKSPACE/tests/runtime-product-vm/kill-fixture-shim.py" "$bundle_root" "$old_sandbox" "$runtime" > "$case_out/shim-fault.json"
+  deadline=$((SECONDS+180))
+  while [ "$SECONDS" -lt "$deadline" ]; do
+   recovered_sandbox="$(fixture_sandbox 2>/dev/null || true)"
+   if [[ "$recovered_sandbox" =~ ^[a-f0-9]{64}$ ]] && [ "$recovered_sandbox" != "$old_sandbox" ] &&
+      kube --request-timeout=5s get pod -n "$namespace" "$pod" -o json > "$case_out/pod-after-shim-loss.json" &&
+      jq -e --arg uid "$new_uid" '.metadata.uid==$uid and any(.status.conditions[]?;.type=="Ready" and .status=="True")' "$case_out/pod-after-shim-loss.json" >/dev/null &&
+      recovered_main="$(fixture_main "$case_out/pod-after-shim-loss.json")" &&
+      [[ "$recovered_main" =~ ^[a-f0-9]{64}$ ]] && [ "$recovered_main" != "$old_main" ]; then
+    shim_recovered=true
+    break
+   fi
+   sleep 2
+  done
+  test "$shim_recovered" = true
+  test "$(kube get pvc -n "$namespace" "$scratch_claim" -o jsonpath='{.metadata.uid}:{.spec.volumeName}')" = "$scratch_uid:$scratch_pv"
+  test "$(kube get pvc -n "$namespace" "$home_claim" -o jsonpath='{.metadata.uid}:{.spec.volumeName}')" = "$home_uid:$home_pv"
+  check_active_writeback after-shim-loss "/var/lib/kubelet/pods/$new_uid/volumes/kubernetes.io~csi/$scratch_pv/mount" \
+   "/var/lib/kubelet/pods/$new_uid/volumes/kubernetes.io~csi/$home_pv/mount"
+  address="$(jq -er '.status.podIP' "$case_out/pod-after-shim-loss.json")"
+  printf '[%s]:2222 %s\n' "$address" "$(cut -d ' ' -f 1,2 "$base/host-$case_id.pub")" > "$base/known-$case_id"
+  kube exec -n "$namespace" "$pod" -c workspace -- cat /run/mwc-ssh/ttyd_client_key > "$base/client-$case_id"
+  ssh_product 'test "$(cat /home/user/storage-ci-home-marker)" = home-survives; test "$(cat /tmp/mwc-ci-shim-marker)" = scratch-survives; printf strict-ssh-after-shim-loss' > "$case_out/strict-ssh-after-shim-loss.txt"
+  test "$(kube exec mwc-default-runtime -- cat /tmp/mwc-sentinel)" = ordinary-runtime
+  jq -n --arg previous "$old_sandbox" --arg replacement "$recovered_sandbox" --arg before "$old_main" --arg after "$recovered_main" \
+   '{sandbox_before:$previous,sandbox_after:$replacement,workspace_before:$before,workspace_after:$after}' > "$case_out/shim-recovery.json"
+ fi
  # Real kubelet + CSI own unpublish; no fixture umount/vol_data manipulation.
  kube delete statefulset -n "$namespace" "${pod%-0}" --wait=true --timeout=120s
  kube wait -n "$namespace" --for=delete "pod/$pod" --timeout=180s
@@ -987,6 +1027,11 @@ for enabled in false true; do
   sleep 1
  done
  if findmnt -rn -o TARGET | grep -F -e "/var/lib/kubelet/pods/$new_uid/" -e "/var/lib/kubelet/pods/$uid/"; then exit 1; fi
+ if [ "$shim_recovered" = true ]; then
+  for recovered_task in "$old_sandbox" "$old_main"; do
+   if findmnt -rn -o TARGET | grep -F "$bundle_root/$recovered_task/" >/dev/null; then exit 1; fi
+  done
+ fi
  handles="$(jq -r '.items[].spec.csi.volumeHandle' "$case_out/actual-pvs.json")"
  kube delete pvc -n "$namespace" "$home_claim" "$scratch_claim" --wait=true --timeout=120s
  kube wait --for=delete "pv/$home_pv" "pv/$scratch_pv" --timeout=180s
@@ -1009,8 +1054,8 @@ for enabled in false true; do
   > "$case_out/writeback-after-lv-delete.json"
  jq -es '.[0].scope==.[1].scope' "$case_out/writeback-before-pod.json" "$case_out/writeback-after-lv-delete.json"
  kube delete secret -n "$namespace" "$identity" --wait=true --timeout=120s
- jq -n --arg runtime "$runtime" --argjson buildkit "$enabled" --arg uid "$uid" --arg new_uid "$new_uid" --arg scratch_uid "$scratch_uid" --arg home_uid "$home_uid" --arg scratch_dm_uuid "$scratch_dm_uuid" --argjson shared_memory "$shm_capacity_json" --argjson containerd_recovered "$containerd_recovered" \
-  '{accepted:true,shared_memory:$shared_memory,live_shim_daemon_reconnect:$containerd_recovered,runtime:$runtime,buildkit:$buildkit,writeback_wrapper_owned:true,wrong_pool_rejected_without_tuning:true,writeback_peer_and_republish_readback:true,root_written_bytes:2415919104,root_fsync:true,scratch_enospc:true,logs_rotation:true,logs_follow_reopen:true,logs_previous:true,kubelet_logs_accounted:true,kubelet_scratch_accounted:true,logs_share_scratch:true,ssh_survived:true,pod_identity_preserved_under_pressure:true,old_pod_uid:$uid,new_pod_uid:$new_uid,scratch_pvc_uid:$scratch_uid,scratch_dm_uuid:$scratch_dm_uuid,home_pvc_uid:$home_uid,pvc_reused:true,node_unpublish_observed:true,pv_lv_deleted:true,crash_reboot_proven:false,all_templates_proven:false,eviction_settings_changed:false}' > "$case_out/acceptance.json"
+ jq -n --arg runtime "$runtime" --argjson buildkit "$enabled" --arg uid "$uid" --arg new_uid "$new_uid" --arg scratch_uid "$scratch_uid" --arg home_uid "$home_uid" --arg scratch_dm_uuid "$scratch_dm_uuid" --argjson shared_memory "$shm_capacity_json" --argjson containerd_recovered "$containerd_recovered" --argjson shim_recovered "$shim_recovered" \
+  '{accepted:true,shared_memory:$shared_memory,live_shim_daemon_reconnect:$containerd_recovered,sandbox_shim_crash_recovered:$shim_recovered,runtime:$runtime,buildkit:$buildkit,writeback_wrapper_owned:true,wrong_pool_rejected_without_tuning:true,writeback_peer_and_republish_readback:true,root_written_bytes:2415919104,root_fsync:true,scratch_enospc:true,logs_rotation:true,logs_follow_reopen:true,logs_previous:true,kubelet_logs_accounted:true,kubelet_scratch_accounted:true,logs_share_scratch:true,ssh_survived:true,pod_identity_preserved_under_pressure:true,old_pod_uid:$uid,new_pod_uid:$new_uid,scratch_pvc_uid:$scratch_uid,scratch_dm_uuid:$scratch_dm_uuid,home_pvc_uid:$home_uid,pvc_reused:true,node_unpublish_observed:true,pv_lv_deleted:true,crash_reboot_proven:false,all_templates_proven:false,eviction_settings_changed:false}' > "$case_out/acceptance.json"
  diagnostic_case=''
 done
 done
@@ -1030,6 +1075,7 @@ jq -es --arg renderer "$PRODUCT_RENDERER_SHA" --arg wrapper "$WRAPPER_SHA" --arg
  if ($cases|length)==4 and ([$cases[]|[.runtime,.buildkit]]==[["mwc-native",false],["mwc-native",true],["mwc-runsc",false],["mwc-runsc",true]]) and
  ([$cases[].scratch_dm_uuid] | unique | length)==4 and
  all($cases[]; .live_shim_daemon_reconnect==.buildkit) and
+ all($cases[]; .sandbox_shim_crash_recovered==.buildkit) and
  all($cases[] | select(.runtime=="mwc-runsc"); .shared_memory.host_bytes>0 and .shared_memory.host_bytes==.shared_memory.sandbox_bytes) and
  all($cases[]; .accepted and .writeback_wrapper_owned and .wrong_pool_rejected_without_tuning and .writeback_peer_and_republish_readback and .root_written_bytes>2147483648 and .root_fsync and .scratch_enospc and .logs_rotation and .logs_follow_reopen and .logs_previous and .kubelet_logs_accounted and .kubelet_scratch_accounted and .logs_share_scratch and .ssh_survived and .pod_identity_preserved_under_pressure and .pvc_reused and .node_unpublish_observed and .pv_lv_deleted)
  then {accepted:true,renderer_sha:$renderer,wrapper_sha:$wrapper,product:$product,cases:$cases,real_csi:true,production_deployed:false,runtime_matrix_complete:true,writeback_policy:"wrapper-strict-limit",mount_layout:"shared-parent-private-bundle",canonical_log_leaf_pinned:true,default_runtime_survived:true,default_runtime_cleanup:true,control_plane_daemon_restart_with_live_shims:true}
