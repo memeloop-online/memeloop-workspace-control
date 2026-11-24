@@ -48,17 +48,12 @@ pub(super) fn container(enabled: bool, image: &str, cpu_request_millis: u64) -> 
     if !enabled {
         return None;
     }
-    let probe = Probe {
-        exec: Some(ExecAction {
-            command: Some(vec![
-                "buildctl".to_owned(),
-                "debug".to_owned(),
-                "workers".to_owned(),
-            ]),
-        }),
-        initial_delay_seconds: Some(1),
-        period_seconds: Some(2),
-        ..Probe::default()
+    let workers = ExecAction {
+        command: Some(vec![
+            "buildctl".to_owned(),
+            "debug".to_owned(),
+            "workers".to_owned(),
+        ]),
     };
     Some(Container {
         name: "buildkitd".to_owned(),
@@ -74,11 +69,20 @@ pub(super) fn container(enabled: bool, image: &str, cpu_request_millis: u64) -> 
             env("XDG_RUNTIME_DIR", "/var/lib/mwc-buildkit/runtime"),
             env("BUILDKIT_HOST", ENDPOINT),
         ]),
-        readiness_probe: Some(probe.clone()),
+        // Wait for a usable worker at startup. Once it has started, a slow build should not
+        // make the whole workspace lose readiness while SSH and the terminal still work.
+        startup_probe: Some(Probe {
+            exec: Some(workers.clone()),
+            period_seconds: Some(2),
+            timeout_seconds: Some(3),
+            failure_threshold: Some(30),
+            ..Probe::default()
+        }),
         liveness_probe: Some(Probe {
-            initial_delay_seconds: Some(10),
+            exec: Some(workers),
             period_seconds: Some(30),
-            ..probe
+            timeout_seconds: Some(5),
+            ..Probe::default()
         }),
         resources: Some(ResourceRequirements {
             requests: Some(quantities(

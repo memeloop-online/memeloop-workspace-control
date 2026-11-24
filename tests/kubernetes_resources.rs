@@ -1820,6 +1820,30 @@ fn temporary_storage_uses_one_workspace_owned_claim_and_isolated_subpaths() {
 }
 
 #[test]
+fn buildkit_checks_workers_before_start_without_repeatedly_withdrawing_workspace_readiness() {
+    let mut workspace = workspace(WorkspaceState::Ready);
+    workspace.template.buildkit = true;
+    let resources = builder().build(&workspace).unwrap();
+    let pod = resources.stateful_set.spec.unwrap().template.spec.unwrap();
+    let buildkit = pod
+        .containers
+        .iter()
+        .find(|container| container.name == "buildkitd")
+        .unwrap();
+
+    let startup = buildkit.startup_probe.as_ref().unwrap();
+    assert_eq!(
+        startup.exec.as_ref().unwrap().command.as_deref().unwrap(),
+        ["buildctl", "debug", "workers"]
+    );
+    assert!(buildkit.readiness_probe.is_none());
+    let liveness = buildkit.liveness_probe.as_ref().unwrap();
+    assert_eq!(liveness.exec, startup.exec);
+    assert!(liveness.period_seconds > startup.period_seconds);
+    assert!(liveness.timeout_seconds > Some(1));
+}
+
+#[test]
 fn buildkit_image_declared_volume_uses_the_existing_scratch_cache() {
     let mut workspace = workspace(WorkspaceState::Ready);
     workspace.template.buildkit = true;
