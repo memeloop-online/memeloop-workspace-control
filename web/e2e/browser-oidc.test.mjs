@@ -116,7 +116,8 @@ test("single sign-on links with a separate proof, uses a cookie, and keeps API k
     await menuItem("ssoUnbind").click();
     await proofInput.fill(proofKey);
     await button("ssoConfirm").click();
-    await page.getByText(messages.ssoUnlinked).waitFor();
+    await page.getByLabel(messages.ssoUnlinked, { exact: true })
+      .getByText(messages.ssoUnlinked, { exact: true }).waitFor({ state: "visible" });
     assert.equal(await page.evaluate(() => sessionStorage.getItem("mwc.api-token")), bearerKey, "proof does not replace the signed-in key");
     assert.ok(events.filter(({ type }) => type === "start" || type === "provider").every(({ auth }) => auth === undefined));
     assert.ok(events.filter(({ type }) => type === "confirm").every(({ search }) => search === ""));
