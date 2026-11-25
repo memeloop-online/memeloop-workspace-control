@@ -12,7 +12,7 @@ mod scheduling;
 pub use scheduling::SchedulingBlocker;
 pub(crate) use scheduling::scheduling_blockers;
 mod details;
-pub(crate) use details::event_details;
+use details::event_details;
 pub use details::{
     RuntimeContainer, RuntimeDiagnostic, RuntimeEventDetails, RuntimePressureResource,
 };
@@ -226,7 +226,7 @@ fn normalized_incident(event: &Event) -> Option<NewWorkspaceRuntimeIncident> {
 
 /// The missing approval marker is intentional during a new workspace's input writes.
 /// Match only this Pod's exact marker; other missing ConfigMaps remain real mount failures.
-pub(crate) fn startup_gate_pending(event: &Event) -> bool {
+fn startup_gate_pending(event: &Event) -> bool {
     let Some(short_id) = workspace_short_id(event) else {
         return false;
     };
@@ -241,8 +241,8 @@ pub(crate) fn startup_gate_pending(event: &Event) -> bool {
 }
 
 /// A series' latest timestamp changes on every recurrence and must not be
-/// part of the persisted incident key, including observations from API reads.
-pub(crate) fn event_start(event: &Event) -> Option<i64> {
+/// used as the first observation time.
+fn event_start(event: &Event) -> Option<i64> {
     event
         .event_time
         .as_ref()
@@ -263,10 +263,7 @@ pub(crate) fn event_start(event: &Event) -> Option<i64> {
 }
 
 /// Classify in memory; never return the sensitive source message to callers.
-pub(crate) fn runtime_event_category(
-    reason: Option<&str>,
-    message: Option<&str>,
-) -> RuntimeEventCategory {
+fn runtime_event_category(reason: Option<&str>, message: Option<&str>) -> RuntimeEventCategory {
     let reason = reason.unwrap_or_default().to_ascii_lowercase();
     let message = message.unwrap_or_default().to_ascii_lowercase();
     let contains = |needle: &str| reason.contains(needle) || message.contains(needle);

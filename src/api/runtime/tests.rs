@@ -62,30 +62,54 @@ fn pvc_observation_uses_explicit_storage_role() {
 
 #[test]
 fn runtime_history_replays_complete_details_after_kubernetes_event_expiry() {
-    let source: k8s_openapi::api::core::v1::Event = serde_json::from_value(serde_json::json!({
-        "metadata": {"uid":"90000000-0000-4000-8000-000000000001"},
-        "involvedObject": {"uid":"80000000-0000-4000-8000-000000000001", "fieldPath":"spec.containers{workspace}"},
-        "reason":"Evicted", "message":"Container workspace exceeded its local ephemeral storage limit \"2Gi\". ",
-        "eventTime":"2026-09-15T12:30:00Z", "count":4
-    })).unwrap();
-    let mut sync_source = source.clone();
-    sync_source.reason = Some("FailedSync".into());
-    sync_source.message = Some("private kubelet sync diagnostic".into());
-    for source in [source, sync_source] {
-        let event = pod_event(source).unwrap();
-        let incident = new_runtime_incident(&event).unwrap();
+    use crate::runtime_incidents::{RuntimeContainer, RuntimeDiagnostic, RuntimeEventDetails};
+
+    let pod_uid = "80000000-0000-4000-8000-000000000001".parse().unwrap();
+    let at = "2026-09-15T12:30:00Z"
+        .parse::<k8s_openapi::jiff::Timestamp>()
+        .unwrap()
+        .as_second();
+    let diagnostic = RuntimeDiagnostic::ContainerLocalEphemeralLimit {
+        container: RuntimeContainer::Workspace,
+        limit_bytes: 2 * 1024 * 1024 * 1024,
+    };
+    for (reason, category, diagnostic) in [
+        (
+            "Evicted",
+            RuntimeEventCategory::EphemeralStorage,
+            Some(diagnostic),
+        ),
+        ("FailedSync", RuntimeEventCategory::Other, None),
+    ] {
         let stored = WorkspaceRuntimeIncident {
-            id: incident.id,
-            details: incident.details,
+            id: Uuid::now_v7().to_string(),
+            details: RuntimeEventDetails {
+                pod_uid: Some(pod_uid),
+                reason: Some(reason.into()),
+                diagnostic: diagnostic.clone(),
+                ..Default::default()
+            },
             workspace_id: Uuid::now_v7(),
-            last_observed_at: incident.last_observed_at,
-            category: incident.category,
-            observed_at: incident.observed_at,
-            count: incident.count,
+            category,
+            observed_at: at,
+            last_observed_at: at + 60,
+            count: 4,
         };
-        // No live Events remain: history itself supplies the known reason,
-        // Pod identity and parsed facts, including informative Other warnings.
-        assert_eq!(merge_current_events(vec![stored], &[]), vec![event]);
+        let events = merge_current_events(vec![stored], &[]);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].details.reason.as_deref(), Some(reason));
+        assert_eq!(events[0].details.pod_uid, Some(pod_uid));
+        assert_eq!(events[0].details.diagnostic, diagnostic);
+        assert_eq!(events[0].category, category);
+        assert_eq!(
+            events[0].observed_at.as_deref(),
+            Some("2026-09-15T12:30:00Z")
+        );
+        assert_eq!(
+            events[0].last_observed_at.as_deref(),
+            Some("2026-09-15T12:31:00Z")
+        );
+        assert_eq!(events[0].count, Some(4));
     }
 }
 
@@ -163,8 +187,8 @@ fn same_source_uses_latest_facts_without_decreasing_count_or_changing_start() {
     assert_eq!(events[0].count, Some(7));
     assert_eq!(events[0].details, expected_details);
     assert_eq!(
-        new_runtime_incident(&events[0]).unwrap().observed_at,
-        historical.observed_at
+        events[0].observed_at,
+        pod_event_from_incident(historical).observed_at
     );
 }
 

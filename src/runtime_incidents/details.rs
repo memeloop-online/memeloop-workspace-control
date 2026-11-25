@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
-use super::{SchedulingBlocker, safe_reason, scheduling_blockers, startup_gate_pending};
+use super::{SchedulingBlocker, safe_reason, scheduling_blockers};
 use crate::storage::RuntimeEventCategory;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
@@ -74,8 +74,7 @@ pub enum RuntimePressureResource {
     Pids,
 }
 
-pub(crate) fn event_details(event: &Event) -> RuntimeEventDetails {
-    let startup_pending = startup_gate_pending(event);
+pub(super) fn event_details(event: &Event) -> RuntimeEventDetails {
     let field = event.involved_object.field_path.as_deref();
     let container = field
         .and_then(|field| {
@@ -96,12 +95,7 @@ pub(crate) fn event_details(event: &Event) -> RuntimeEventDetails {
             .uid
             .as_deref()
             .and_then(|uid| uid.parse().ok()),
-        reason: if startup_pending {
-            Some("ContainerCreating")
-        } else {
-            safe_reason(event.reason.as_deref())
-        }
-        .map(str::to_owned),
+        reason: safe_reason(event.reason.as_deref()).map(str::to_owned),
         container,
         scheduling_blockers: if event.reason.as_deref() == Some("FailedScheduling") {
             scheduling_blockers(event.message.as_deref())

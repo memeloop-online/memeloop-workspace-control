@@ -19,25 +19,19 @@ pub(super) struct WorkspaceRuntimeDetails {
     pub(super) node_name: Option<String>,
     pub(super) pods: Vec<PodRuntime>,
     pub(super) metrics: Vec<PodMetric>,
-    pub(super) events: Vec<PodEvent>,
+    pub(super) scheduling_events: Vec<PodEvent>,
 }
 
 pub(super) async fn fetch_workspace_runtime_details(
     client: &Client,
     namespace: &str,
-    names: &crate::workspace_runtime::WorkspaceRuntimeNames,
     selector: &str,
     workspace: &Workspace,
     show_runtime: bool,
     installation_id: &str,
 ) -> Result<WorkspaceRuntimeDetails, ApiError> {
     let pods_api = Api::<Pod>::namespaced(client.clone(), namespace);
-    let events_api = Api::<Event>::namespaced(client.clone(), namespace);
     let params = ListParams::default().labels(selector);
-    let event_params = ListParams::default().fields(&format!(
-        "involvedObject.kind=Pod,involvedObject.name={},type=Warning",
-        names.resources.pod_ordinal_zero(),
-    ));
     let storage = async {
         let claims = Api::<PersistentVolumeClaim>::namespaced(client.clone(), namespace)
             .list(&params)
@@ -54,9 +48,8 @@ pub(super) async fn fetch_workspace_runtime_details(
         }
         Ok::<_, ApiError>(identities)
     };
-    let (pod_list, event_list, storage_pvcs, metric_result) = tokio::join!(
+    let (pod_list, storage_pvcs, metric_result) = tokio::join!(
         pods_api.list(&params),
-        events_api.list(&event_params),
         storage,
         tokio::time::timeout(
             std::time::Duration::from_secs(3),
@@ -64,7 +57,6 @@ pub(super) async fn fetch_workspace_runtime_details(
         ),
     );
     let pod_list = pod_list.map_err(ApiError::Kubernetes)?;
-    let event_list = event_list.map_err(ApiError::Kubernetes)?;
     let storage_pvcs = storage_pvcs?;
     let active_pod_names = active_pod_names(&pod_list.items);
     let pods = if show_runtime {
@@ -78,15 +70,15 @@ pub(super) async fn fetch_workspace_runtime_details(
         Vec::new()
     };
 
-    let mut events = warning_events(event_list.items);
-    if show_runtime {
-        for event in pod_list.items.iter().filter_map(pod_scheduling_event) {
-            if !events.iter().any(|existing| existing.id == event.id) {
-                events.push(event);
-            }
-        }
-        newest_events(&mut events, 50);
-    }
+    let scheduling_events = if show_runtime {
+        pod_list
+            .items
+            .iter()
+            .filter_map(pod_scheduling_event)
+            .collect()
+    } else {
+        Vec::new()
+    };
 
     let metric_result = metric_result
         .map_err(|error| error.to_string())
@@ -117,7 +109,7 @@ pub(super) async fn fetch_workspace_runtime_details(
             .flatten(),
         pods,
         metrics,
-        events,
+        scheduling_events,
     })
 }
 
@@ -199,20 +191,6 @@ fn storage_pvc_identities(
     identities
 }
 
-fn warning_events(events: Vec<Event>) -> Vec<PodEvent> {
-    let mut events = events
-        .into_iter()
-        .filter(|event| {
-            event.type_.as_deref() == Some("Warning")
-                && !crate::runtime_incidents::startup_gate_pending(event)
-        })
-        .filter_map(pod_event)
-        .filter(|event| event.details.is_informative(event.category))
-        .collect::<Vec<_>>();
-    newest_events(&mut events, 50);
-    events
-}
-
 pub(super) fn scratch_backing_from_pods(pods: &[Pod]) -> StorageBacking {
     let Some(volume) = pods.iter().find_map(|pod| {
         pod.spec
@@ -272,7 +250,7 @@ mod tests {
             created_at: 1,
             updated_at: 1,
         };
-        let barrier = Arc::new(tokio::sync::Barrier::new(4));
+        let barrier = Arc::new(tokio::sync::Barrier::new(3));
         let paths = Arc::new(std::sync::Mutex::new(Vec::new()));
         let service = tower::service_fn({
             let paths = paths.clone();
@@ -284,7 +262,6 @@ mod tests {
                     paths.lock().unwrap().push(path.clone());
                     let (version, kind) = match path.as_str() {
                         "/api/v1/namespaces/workspaces/pods" => ("v1", "PodList"),
-                        "/api/v1/namespaces/workspaces/events" => ("v1", "EventList"),
                         "/api/v1/namespaces/workspaces/persistentvolumeclaims" => {
                             ("v1", "PersistentVolumeClaimList")
                         }
@@ -297,7 +274,7 @@ mod tests {
                         other => panic!("unexpected runtime request: {other}"),
                     };
                     let body = if kind == "PersistentVolumeClaim" {
-                        assert_eq!(paths.lock().unwrap().len(), 5);
+                        assert_eq!(paths.lock().unwrap().len(), 4);
                         serde_json::json!({
                             "apiVersion": version, "kind": kind,
                             "metadata": {"namespace":"workspaces", "name":"adopted-home", "uid":"home-uid"},
@@ -305,7 +282,20 @@ mod tests {
                         })
                     } else {
                         barrier.wait().await;
-                        serde_json::json!({"apiVersion":version,"kind":kind,"metadata":{},"items":[]})
+                        let items = if kind == "PodList" {
+                            serde_json::json!([{
+                                "metadata": {"name": "workspace-0", "uid": "80000000-0000-4000-8000-000000000001"},
+                                "spec": {"containers": []},
+                                "status": {"phase": "Pending", "conditions": [{
+                                    "type": "PodScheduled", "status": "False", "reason": "Unschedulable",
+                                    "lastTransitionTime": "2026-10-18T12:14:00Z",
+                                    "message": "0/9 nodes are available: 9 Insufficient cpu"
+                                }]}
+                            }])
+                        } else {
+                            serde_json::json!([])
+                        };
+                        serde_json::json!({"apiVersion":version,"kind":kind,"metadata":{},"items":items})
                     };
                     Ok::<_, std::convert::Infallible>(axum::http::Response::new(
                         axum::body::Body::from(body.to_string()),
@@ -313,19 +303,11 @@ mod tests {
                 }
             }
         });
-        let installation = "test".parse().unwrap();
-        let names = crate::workspace_runtime::WorkspaceRuntimeNames::for_workspace(
-            &installation,
-            &workspace.runtime,
-            &workspace.short_id,
-        )
-        .unwrap();
         let details = tokio::time::timeout(
             std::time::Duration::from_secs(2),
             fetch_workspace_runtime_details(
                 &Client::new(service, "default"),
                 "workspaces",
-                &names,
                 "workspace.memeloop.dev/owner-installation=test",
                 &workspace,
                 true,
@@ -341,7 +323,12 @@ mod tests {
             Some(("workspaces".into(), "adopted-home".into()))
         );
         assert!(details.storage_pvcs.temporary.is_none());
-        assert_eq!(paths.lock().unwrap().len(), 5);
+        assert_eq!(details.scheduling_events.len(), 1);
+        assert_eq!(
+            details.scheduling_events[0].details.scheduling_blockers,
+            vec![crate::runtime_incidents::SchedulingBlocker::CpuCapacity]
+        );
+        assert_eq!(paths.lock().unwrap().len(), 4);
     }
 
     #[test]
@@ -444,32 +431,5 @@ mod tests {
             None
         );
         assert_eq!(requests.lock().unwrap().len(), 1);
-    }
-
-    #[test]
-    fn details_only_forward_warning_events_for_persistence() {
-        let normal = Event {
-            metadata: ObjectMeta {
-                uid: Some("b8ac1a24-5da0-4f53-bb76-7c2b92dce026".into()),
-                ..ObjectMeta::default()
-            },
-            type_: Some("Normal".into()),
-            reason: Some("SuccessfulAttachVolume".into()),
-            message: Some("AttachVolume succeeded for workspace-scratch".into()),
-            ..Event::default()
-        };
-        let warning = Event {
-            metadata: ObjectMeta {
-                uid: Some("49d98da1-b26a-4cb2-b7a9-c848d5bb6484".into()),
-                ..ObjectMeta::default()
-            },
-            type_: Some("Warning".into()),
-            reason: Some("Evicted".into()),
-            message: Some("The node was low on resource: ephemeral-storage.".into()),
-            ..Event::default()
-        };
-        let events = warning_events(vec![normal, Event::default(), warning]);
-        assert_eq!(events.len(), 1);
-        assert_eq!(events[0].category, RuntimeEventCategory::EphemeralStorage);
     }
 }
