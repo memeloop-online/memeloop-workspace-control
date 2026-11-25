@@ -9,7 +9,7 @@ use kube::{
 };
 
 use super::{
-    KubernetesCoordinator, ReconcileError, current_workspace_pod, observed_workspace_replicas,
+    KubernetesCoordinator, ReconcileError, current_workspace_pod, observed_workspace_generation,
 };
 use crate::{
     workspace_runtime::WorkspaceResourceNames,
@@ -58,8 +58,8 @@ impl KubernetesCoordinator {
         };
         self.builder
             .verify_delete_ownership(&set.metadata, workspace.id)?;
-        if !observed_workspace_replicas(&set, workspace, 1)
-            || !current_workspace_pod(&set, &pod, workspace, &names.stateful_set)
+        if observed_workspace_generation(&set, 1) != Some(workspace.generation)
+            || !current_workspace_pod(&set, &pod, workspace.generation, &names.stateful_set)
         {
             return Ok(());
         }

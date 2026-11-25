@@ -92,7 +92,20 @@ impl KubernetesCoordinator {
         apply::observe_runtime_stage(
             workspace,
             phase,
-            Box::pin(self.has_observed_replicas_inner(workspace, expected)),
+            Box::pin(self.has_observed_replicas_inner(workspace, expected, false)),
+        )
+        .await
+    }
+
+    /// Health of the workload currently running, independent of an unapplied edit.
+    pub(crate) async fn has_running_workspace_connection(
+        &self,
+        workspace: &Workspace,
+    ) -> Result<bool, ReconcileError> {
+        apply::observe_runtime_stage(
+            workspace,
+            "observe_running_workspace_connection",
+            Box::pin(self.has_observed_replicas_inner(workspace, 1, true)),
         )
         .await
     }
@@ -101,6 +114,7 @@ impl KubernetesCoordinator {
         &self,
         workspace: &Workspace,
         expected: i32,
+        observe_applied_generation: bool,
     ) -> Result<bool, ReconcileError> {
         let namespace_name = workspace.runtime.namespace();
         let names = self.builder.runtime_names(workspace)?;
@@ -129,7 +143,13 @@ impl KubernetesCoordinator {
         };
         self.builder
             .verify_delete_ownership(&stateful_set.metadata, workspace.id)?;
-        if !observed_workspace_replicas(&stateful_set, workspace, expected) {
+        let Some(applied_generation) = observed_workspace_generation(&stateful_set, expected)
+        else {
+            return Ok(false);
+        };
+        if applied_generation > workspace.generation
+            || (!observe_applied_generation && applied_generation != workspace.generation)
+        {
             return Ok(false);
         }
         if expected == 0 {
@@ -147,7 +167,7 @@ impl KubernetesCoordinator {
             && current_workspace_pod(
                 &stateful_set,
                 &pod,
-                workspace,
+                applied_generation,
                 &names.resources.stateful_set,
             )
             && workspace_connection_ready(&pod))
@@ -202,29 +222,25 @@ pub(super) fn workspace_connection_ready(pod: &Pod) -> bool {
         })
 }
 
-fn observed_workspace_replicas(set: &StatefulSet, workspace: &Workspace, expected: i32) -> bool {
-    let (Some(spec), Some(status)) = (set.spec.as_ref(), set.status.as_ref()) else {
-        return false;
-    };
-    spec.replicas == Some(expected)
-        && set.metadata.deletion_timestamp.is_none()
-        && set.metadata.generation.is_some()
-        && status.observed_generation.is_some()
-        && status.observed_generation >= set.metadata.generation
-        && spec.template.metadata.as_ref().is_some_and(|metadata| {
-            metadata.annotations.as_ref().is_some_and(|annotations| {
-                annotations.get("workspace.memeloop.dev/generation")
-                    == Some(&workspace.generation.to_string())
-            })
-        })
+fn observed_workspace_generation(set: &StatefulSet, expected: i32) -> Option<u64> {
+    let (spec, status) = (set.spec.as_ref()?, set.status.as_ref()?);
+    if spec.replicas != Some(expected)
+        || set.metadata.deletion_timestamp.is_some()
+        || status.observed_generation? < set.metadata.generation?
+    {
+        return None;
+    }
+    spec.template
+        .metadata
+        .as_ref()?
+        .annotations
+        .as_ref()?
+        .get("workspace.memeloop.dev/generation")?
+        .parse()
+        .ok()
 }
 
-fn current_workspace_pod(
-    set: &StatefulSet,
-    pod: &Pod,
-    workspace: &Workspace,
-    set_name: &str,
-) -> bool {
+fn current_workspace_pod(set: &StatefulSet, pod: &Pod, generation: u64, set_name: &str) -> bool {
     let (Some(uid), Some(revision)) = (
         set.metadata.uid.as_deref(),
         set.status
@@ -235,7 +251,7 @@ fn current_workspace_pod(
     };
     pod.metadata.uid.is_some()
         && pod.metadata.deletion_timestamp.is_none()
-        && !restart_generation_is_stale(pod, workspace.generation)
+        && !restart_generation_is_stale(pod, generation)
         && pod
             .metadata
             .owner_references
