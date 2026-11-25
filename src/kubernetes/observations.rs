@@ -1011,10 +1011,10 @@ impl ObservedResource for StatefulSet {
             }
             return;
         }
+        let retained_memory_revision = retained_memory_revision(&object).map(str::to_owned);
         let Some(uid) = object.metadata.uid else {
             return;
         };
-        let retained_memory_revision = retained_memory_revision(&object).map(str::to_owned);
         let Some(spec) = object.spec else {
             return;
         };
