@@ -83,8 +83,15 @@ case $1 in
   seed)
     image=$(jq -er .workspace_image "$src/public-input-identity.json")
     test "$(jq -er '.pod.spec.containers[]|select(.name=="workspace").image' "$fixture")" = "$image"
-    k3s ctr -n k8s.io images import "$src/workspace-image.tar" >&2
-    test "$(k3s crictl inspecti "$image" | jq -er .status.id)" = "$(jq -er .workspace_config_digest "$src/public-input-identity.json")"
+    k3s ctr -n k8s.io images import --platform linux/amd64 "$src/workspace-image.tar" >&2
+    k3s ctr -n k8s.io images ls -q | grep -Fx "$image" >&2
+    # containerd's content import and CRI's image-event index are separate.
+    # The renderer names this local image, so wait for that exact CRI tag.
+    for _ in {1..30}; do
+      if k3s crictl inspecti "$image" > "$state/workspace-image.json" 2>/dev/null; then break; fi
+      sleep 1
+    done
+    test "$(jq -er .status.id "$state/workspace-image.json")" = "$(jq -er .workspace_config_digest "$src/public-input-identity.json")"
     rm "$src/workspace-image.tar"
     tar -xf "$src/helm.tgz" -C "$state"
     KUBECONFIG=/etc/rancher/k3s/k3s.yaml "$state/linux-amd64/helm" install topolvm "$src/topolvm.tgz" \
