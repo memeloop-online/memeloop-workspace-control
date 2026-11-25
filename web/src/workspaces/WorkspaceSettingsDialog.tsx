@@ -62,8 +62,8 @@ function draftFor(item: WorkspaceResponse): Draft {
 }
 
 /**
- * Edits a workspace name always, and compute/temporary storage only while it
- * is stopped. Settings and temporary storage save separately: each response
+ * Edits workspace settings. An eligible memory increase can apply while
+ * running. Settings and temporary storage save separately: each response
  * carries the newest generation, so a later save never uses a stale
  * precondition, and a failed storage save cannot undo a saved rename.
  */
@@ -78,6 +78,10 @@ export function WorkspaceSettingsDialog({ api, item, canChangeState, canManageTe
   const [savingStorage, setSavingStorage] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [storageNotice, setStorageNotice] = useState<string | null>(null);
+  const [memoryObservation, setMemoryObservation] = useState<{ id: string; generation: number; applied: number | null; failed: boolean } | null>(null);
+  const liveResizeEligible = item?.workspace.state === "ready" && item.live_memory_resize_supported === true;
+  const requestedMemory = item?.workspace.resources.memory_mib ?? 0;
+  const settingsGeneration = item?.workspace.generation ?? 0;
 
   useEffect(() => {
     if (!item) return;
@@ -86,6 +90,29 @@ export function WorkspaceSettingsDialog({ api, item, canChangeState, canManageTe
     setError(null);
     setStorageNotice(null);
   }, [workspaceId]);
+
+  useEffect(() => {
+    if (!workspaceId || !liveResizeEligible || !canChangeState) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = Date.now() + 190_000;
+    const load = async () => {
+      try {
+        const observation = await api.workspaceRuntime(workspaceId);
+        if (cancelled) return;
+        const applied = observation.pods.find((pod) => pod.ready && pod.phase === "Running")?.containers
+          ?.find((container) => container.name === "workspace")?.applied_memory_mib ?? null;
+        const failed = Boolean(observation.memory_resize_failure) && applied !== requestedMemory;
+        setMemoryObservation({ id: workspaceId, generation: settingsGeneration, applied, failed });
+        if (failed || applied === requestedMemory) return;
+      } catch {
+        // Retry without claiming the saved limit has taken effect.
+      }
+      if (!cancelled && Date.now() < deadline) timer = setTimeout(() => void load(), 3_000);
+    };
+    void load();
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [api, canChangeState, workspaceId, liveResizeEligible, requestedMemory, settingsGeneration]);
 
   if (!item) return null;
   const workspace = item.workspace;
@@ -97,12 +124,19 @@ export function WorkspaceSettingsDialog({ api, item, canChangeState, canManageTe
   const cpu = Number(draft.cpu);
   const memory = Number(draft.memory);
   const gpu = Number(draft.gpu);
+  const currentMemory = memoryObservation?.id === workspaceId && memoryObservation.generation === settingsGeneration ? memoryObservation : null;
+  const appliedMemory = currentMemory?.applied ?? null;
+  const resizeFailure = currentMemory?.failed ?? false;
   const cpuValid = Number.isInteger(cpu) && cpu >= workspace.pod_requests.cpu_millis;
-  const memoryValid = Number.isInteger(memory) && memory >= workspace.pod_requests.memory_mib;
+  const memoryValid = Number.isInteger(memory) && memory >= workspace.pod_requests.memory_mib
+    && (!liveResizeEligible || memory >= requestedMemory);
+  const memoryIncreaseInvalid = liveResizeEligible && !stopped && Number.isInteger(memory) && memory < requestedMemory;
   const gpuValid = Number.isInteger(gpu) && gpu >= 0;
   const settingsChanged = draft.name.trim() !== workspace.name
-    || (stopped && (cpu !== workspace.resources.cpu_millis || memory !== workspace.resources.memory_mib || gpu !== workspace.resources.gpu_count));
-  const settingsValid = (stopped || workspace.state === "ready") && !nameInvalid && (!stopped || (cpuValid && memoryValid && gpuValid));
+    || (stopped && (cpu !== workspace.resources.cpu_millis || memory !== requestedMemory || gpu !== workspace.resources.gpu_count))
+    || (liveResizeEligible && !stopped && Number.isInteger(memory) && memory !== requestedMemory);
+  const settingsValid = (stopped || workspace.state === "ready") && !nameInvalid
+    && (stopped ? cpuValid && memoryValid && gpuValid : !liveResizeEligible || memoryValid);
   const currentTemporary = workspace.storage_policy.temporary_storage_gib;
   const temporary = Number(draft.temporaryStorage);
   const temporaryValid = Number.isInteger(temporary) && temporary >= 1 && temporary <= 2048;
@@ -116,7 +150,7 @@ export function WorkspaceSettingsDialog({ api, item, canChangeState, canManageTe
       const updated = await api.updateWorkspaceSettings(workspace.id, {
         name: draft.name.trim(),
         cpu_millis: stopped ? cpu : workspace.resources.cpu_millis,
-        memory_mib: stopped ? memory : workspace.resources.memory_mib,
+        memory_mib: stopped || liveResizeEligible ? memory : workspace.resources.memory_mib,
         gpu_count: stopped ? gpu : workspace.resources.gpu_count,
         expected_generation: generation.current,
       });
@@ -160,18 +194,28 @@ export function WorkspaceSettingsDialog({ api, item, canChangeState, canManageTe
             </section>
             <section className={styles.dialogSection} aria-label={t("workspaceComputeSettings")}>
               <Text weight="semibold">{t("workspaceComputeSettings")}</Text>
-              {!stopped && <Caption1 className={styles.summaryLabel}>{t("workspaceSettingsComputeNeedsStop")}</Caption1>}
+              {!stopped && !liveResizeEligible && <Caption1 className={styles.summaryLabel}>{t("workspaceSettingsComputeNeedsStop")}</Caption1>}
+              {liveResizeEligible && <Caption1 className={styles.summaryLabel}>{t("workspaceSettingsMemoryLiveResizeHint")}</Caption1>}
               <div className={styles.formGrid}>
                 <Field label={t("workspaceCpuMillis")} validationState={stopped && !cpuValid ? "error" : undefined} validationMessage={stopped && !cpuValid ? t("workspaceSettingsCpuMin", { value: workspace.pod_requests.cpu_millis }) : undefined}>
                   <Input type="number" min={workspace.pod_requests.cpu_millis} step={1} value={draft.cpu} disabled={!stopped || !canChangeState || busy} onChange={(_, data) => setDraft((current) => ({ ...current, cpu: data.value }))} contentAfter="m" />
                 </Field>
-                <Field label={t("workspaceMemoryMiB")} validationState={stopped && !memoryValid ? "error" : undefined} validationMessage={stopped && !memoryValid ? t("workspaceSettingsMemoryMin", { value: workspace.pod_requests.memory_mib }) : undefined}>
-                  <Input type="number" min={workspace.pod_requests.memory_mib} step={1} value={draft.memory} disabled={!stopped || !canChangeState || busy} onChange={(_, data) => setDraft((current) => ({ ...current, memory: data.value }))} contentAfter="MiB" />
+                <Field label={t("workspaceMemoryMiB")} validationState={(stopped && !memoryValid) || memoryIncreaseInvalid ? "error" : undefined} validationMessage={stopped && !memoryValid ? t("workspaceSettingsMemoryMin", { value: workspace.pod_requests.memory_mib }) : memoryIncreaseInvalid ? t("workspaceSettingsMemoryIncreaseMin", { value: requestedMemory }) : undefined}>
+                  <Input type="number" min={stopped ? workspace.pod_requests.memory_mib : liveResizeEligible ? requestedMemory : workspace.pod_requests.memory_mib} step={1} value={draft.memory} disabled={(!stopped && !liveResizeEligible) || !canChangeState || busy} onChange={(_, data) => setDraft((current) => ({ ...current, memory: data.value }))} contentAfter="MiB" />
                 </Field>
                 <Field label={t("workspaceGpuCount")} validationState={stopped && !gpuValid ? "error" : undefined} validationMessage={stopped && !gpuValid ? t("workspaceSettingsGpuInvalid") : undefined}>
                   <Input type="number" min={0} step={1} value={draft.gpu} disabled={!stopped || !canChangeState || busy} onChange={(_, data) => setDraft((current) => ({ ...current, gpu: data.value }))} />
                 </Field>
               </div>
+              {liveResizeEligible && canChangeState && <Caption1 className={styles.summaryLabel} aria-live="polite">
+                {resizeFailure
+                  ? t("workspaceSettingsMemoryResizeFailed")
+                  : appliedMemory === null
+                    ? t("workspaceSettingsMemoryUnconfirmed", { requested: requestedMemory })
+                  : appliedMemory !== requestedMemory
+                    ? t("workspaceSettingsMemoryResizePending", { requested: requestedMemory, applied: appliedMemory })
+                    : t("workspaceSettingsMemoryApplied", { value: appliedMemory })}
+              </Caption1>}
               <Caption1 className={styles.summaryLabel}>{t("workspaceSettingsComputeHelp", { cpu: workspace.pod_requests.cpu_millis, memory: workspace.pod_requests.memory_mib })}</Caption1>
             </section>
             <section className={styles.dialogSection} aria-label={t("workspaceStorageSettings")}>

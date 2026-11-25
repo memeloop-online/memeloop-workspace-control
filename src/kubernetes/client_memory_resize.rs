@@ -18,7 +18,7 @@ use crate::workspaces::Workspace;
 // under OnDelete. Record the exact live revision that this resize preserves.
 const RETAINED_REVISION: &str = "workspace.memeloop.dev/memory-resize-retained-revision";
 
-pub(super) fn retained_memory_revision(set: &StatefulSet) -> Option<&str> {
+pub(in crate::kubernetes) fn retained_memory_revision(set: &StatefulSet) -> Option<&str> {
     if set
         .spec
         .as_ref()?

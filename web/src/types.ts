@@ -319,6 +319,7 @@ export interface Workspace {
 export interface WorkspaceResponse {
   workspace: Workspace;
   namespace: string;
+  live_memory_resize_supported?: boolean;
   ssh_connection: WorkspaceSshConnection | null;
   ssh_host: string | null;
   ssh_port: number | null;
@@ -366,6 +367,7 @@ export interface WorkspaceRuntime {
   metrics_available: boolean;
   /** The Kubernetes node hosting the active workspace Pod, when scheduled. */
   node_name: string | null;
+  memory_resize_failure?: string | null;
   pods: WorkspaceRuntimePod[];
   metrics: { pod: string; container: string; cpu: string | null; memory: string | null }[];
   events: WorkspaceRuntimeEvent[];
@@ -406,6 +408,7 @@ export interface WorkspaceContainerState {
   state: string;
   reason: string | null;
   exit_code: number | null;
+  applied_memory_mib?: number | null;
 }
 
 export interface WorkspaceRuntimeEvent {
