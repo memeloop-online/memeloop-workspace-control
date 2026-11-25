@@ -11,7 +11,7 @@ use uuid::Uuid;
 
 use crate::events::NewEvent;
 
-use super::{Database, StorageError};
+use super::{Database, StorageError, workspace_store::template_filter_sql};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct EventRecord {
@@ -128,17 +128,84 @@ impl Database {
         after: Option<Uuid>,
         limit: u32,
     ) -> Result<Vec<EventRecord>, StorageError> {
+        self.list_scoped_events(organization_id, after, limit, None)
+            .await
+    }
+
+    pub async fn list_scoped_events(
+        &self,
+        organization_id: Uuid,
+        after: Option<Uuid>,
+        limit: u32,
+        allowed_template_ids: Option<&[Uuid]>,
+    ) -> Result<Vec<EventRecord>, StorageError> {
         let limit = i64::from(limit.clamp(1, 1_000));
         let after = after.map(|id| id.to_string()).unwrap_or_default();
         match self {
-            Self::Sqlite { pool, installation_id } => sqlx::query("SELECT id, organization_id, workspace_id, kind, payload_json, created_at FROM events WHERE installation_id = ?1 AND organization_id = ?2 AND id > ?3 ORDER BY id LIMIT ?4")
-                .bind(installation_id.as_str()).bind(organization_id.to_string()).bind(after).bind(limit)
-                .fetch_all(pool).await?.into_iter().map(decode_sqlite).collect(),
-            Self::Postgres { pool, installation_id } => sqlx::query("SELECT id, organization_id, workspace_id, kind, payload_json, created_at FROM events WHERE installation_id = $1 AND organization_id = $2 AND id > $3 ORDER BY id LIMIT $4")
-                .bind(installation_id.as_str()).bind(organization_id.to_string()).bind(after).bind(limit)
-                .fetch_all(pool).await?.into_iter().map(decode_postgres).collect(),
+            Self::Sqlite {
+                pool,
+                installation_id,
+            } => {
+                let sql = event_page_sql("?1", "?2", "?3", "?4", '?', allowed_template_ids);
+                let mut query = sqlx::query(&sql)
+                    .bind(installation_id.as_str())
+                    .bind(organization_id.to_string())
+                    .bind(&after)
+                    .bind(limit);
+                for id in allowed_template_ids.unwrap_or_default() {
+                    query = query.bind(id.to_string());
+                }
+                query
+                    .fetch_all(pool)
+                    .await?
+                    .into_iter()
+                    .map(decode_sqlite)
+                    .collect()
+            }
+            Self::Postgres {
+                pool,
+                installation_id,
+            } => {
+                let sql = event_page_sql("$1", "$2", "$3", "$4", '$', allowed_template_ids);
+                let mut query = sqlx::query(&sql)
+                    .bind(installation_id.as_str())
+                    .bind(organization_id.to_string())
+                    .bind(&after)
+                    .bind(limit);
+                for id in allowed_template_ids.unwrap_or_default() {
+                    query = query.bind(id.to_string());
+                }
+                query
+                    .fetch_all(pool)
+                    .await?
+                    .into_iter()
+                    .map(decode_postgres)
+                    .collect()
+            }
         }
     }
+}
+
+fn event_page_sql(
+    installation: &str,
+    organization: &str,
+    after: &str,
+    limit: &str,
+    placeholder: char,
+    allowed_template_ids: Option<&[Uuid]>,
+) -> String {
+    let visible_workspace = allowed_template_ids.map_or_else(String::new, |ids| {
+        let templates = template_filter_sql(Some(ids), placeholder, 5);
+        format!(
+            " AND workspace_id IN (SELECT id FROM workspaces WHERE installation_id = {installation} \
+             AND organization_id = {organization}{templates})"
+        )
+    });
+    format!(
+        "SELECT id, organization_id, workspace_id, kind, payload_json, created_at FROM events \
+         WHERE installation_id = {installation} AND organization_id = {organization} \
+         AND id > {after}{visible_workspace} ORDER BY id LIMIT {limit}"
+    )
 }
 
 fn decode_sqlite(row: SqliteRow) -> Result<EventRecord, StorageError> {

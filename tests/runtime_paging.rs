@@ -9,6 +9,7 @@ use axum::{
     body::Body,
     http::{Method, Request, StatusCode},
 };
+use futures::StreamExt;
 use http_body_util::BodyExt;
 use memeloop_workspace_control::{
     api::{AppState, router},
@@ -1088,7 +1089,7 @@ async fn workspace_list_and_organization_usage_honor_template_scope() {
         )
         .await
         .unwrap();
-    seeded_workspace(
+    let visible = seeded_workspace(
         &database,
         organization_id,
         admin_id,
@@ -1097,7 +1098,7 @@ async fn workspace_list_and_organization_usage_honor_template_scope() {
         12,
     )
     .await;
-    seeded_workspace(
+    let hidden = seeded_workspace(
         &database,
         organization_id,
         admin_id,
@@ -1250,6 +1251,43 @@ async fn workspace_list_and_organization_usage_honor_template_scope() {
     assert_eq!(filtered["summary"]["total_count"], 0);
     assert_eq!(filtered["summary"]["requested"]["disk_gib"], 0);
     assert_eq!(filtered["summary"]["state_counts"], json!({}));
+
+    // Reconnecting from this cursor skips unrelated workspace events and
+    // still delivers the next event for an allowed workspace immediately.
+    let mut event_ids = Vec::new();
+    for workspace_id in [Some(visible), Some(hidden), None, Some(visible)] {
+        let event = database
+            .append_event(
+                memeloop_workspace_control::events::NewEvent {
+                    organization_id,
+                    workspace_id,
+                    kind: "workspace.state_changed".into(),
+                    payload: json!({"fixture": true}),
+                },
+                15,
+            )
+            .await
+            .unwrap();
+        event_ids.push(event.id);
+    }
+    let stream = app
+        .oneshot(
+            Request::get(format!("/api/v1/events?organization_id={organization_id}"))
+                .header("Authorization", format!("Bearer {}", restricted_key.token))
+                .header("Last-Event-ID", event_ids[0].to_string())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(stream.status(), StatusCode::OK);
+    let mut stream = stream.into_body().into_data_stream();
+    let frame = tokio::time::timeout(std::time::Duration::from_secs(2), stream.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert!(String::from_utf8_lossy(&frame).contains(&format!("id: {}", event_ids[3])));
 }
 
 #[tokio::test]
@@ -1399,7 +1437,7 @@ async fn postgres_workspace_page_summary_matches_the_filtered_collection() {
         )
         .await
         .unwrap();
-    seeded_workspace(
+    let hidden = seeded_workspace(
         &database,
         organization_id,
         admin.user_id,
@@ -1476,6 +1514,27 @@ async fn postgres_workspace_page_summary_matches_the_filtered_collection() {
     assert_eq!(no_templates.total_count, 0);
     assert_eq!(no_templates.requested, QuotaResources::default());
     assert!(no_templates.state_counts.is_empty());
+
+    let scoped_events = database
+        .list_scoped_events(organization_id, None, 20, Some(&[template_id]))
+        .await
+        .unwrap();
+    let all_events = database
+        .list_events(organization_id, None, 20)
+        .await
+        .unwrap();
+    assert!(
+        all_events
+            .iter()
+            .any(|event| event.workspace_id == Some(hidden))
+    );
+    assert!(!scoped_events.is_empty());
+    assert_eq!(all_events.len() - scoped_events.len(), 1);
+    assert!(
+        scoped_events
+            .iter()
+            .all(|event| event.workspace_id != Some(hidden))
+    );
 
     let summary = database
         .workspace_usage_summary(organization_id, Some(&[template_id]))

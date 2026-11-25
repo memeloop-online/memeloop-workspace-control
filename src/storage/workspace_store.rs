@@ -89,6 +89,24 @@ pub struct WorkspacePage {
     pub state_counts: BTreeMap<String, u64>,
 }
 
+pub(super) fn template_filter_sql(
+    allowed_template_ids: Option<&[Uuid]>,
+    placeholder: char,
+    first: usize,
+) -> String {
+    let Some(ids) = allowed_template_ids else {
+        return String::new();
+    };
+    if ids.is_empty() {
+        return " AND 1 = 0".to_owned();
+    }
+    let placeholders = (first..first + ids.len())
+        .map(|index| format!("{placeholder}{index}"))
+        .collect::<Vec<_>>()
+        .join(",");
+    format!(" AND template_id IN ({placeholders})")
+}
+
 impl Database {
     /// Returns the aggregate for the complete visible organization scope without loading
     /// individual workspace records. `None` permits every template; `Some([])` permits none.

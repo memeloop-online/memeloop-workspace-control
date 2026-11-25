@@ -5,7 +5,7 @@ use uuid::Uuid;
 
 use crate::quota::QuotaResources;
 
-use super::{Database, StorageError};
+use super::{Database, StorageError, template_filter_sql};
 
 /// Organization-wide requested capacity and lifecycle counts.
 ///
@@ -108,24 +108,6 @@ fn usage_filter_sql(
     format!(
         "installation_id = {installation} AND organization_id = {organization} AND state <> 'deleted'{templates}"
     )
-}
-
-pub(super) fn template_filter_sql(
-    allowed_template_ids: Option<&[Uuid]>,
-    placeholder: char,
-    first: usize,
-) -> String {
-    let Some(ids) = allowed_template_ids else {
-        return String::new();
-    };
-    if ids.is_empty() {
-        return " AND 1 = 0".to_owned();
-    }
-    let placeholders = (first..first + ids.len())
-        .map(|index| format!("{placeholder}{index}"))
-        .collect::<Vec<_>>()
-        .join(",");
-    format!(" AND template_id IN ({placeholders})")
 }
 
 fn decode_usage_summary<R: Row>(rows: Vec<R>) -> Result<WorkspaceUsageSummary, StorageError>
