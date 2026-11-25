@@ -687,7 +687,14 @@ async fn workspace_sort_keeps_equal_creation_times_stable_across_pages() {
     }
 
     let first = database
-        .list_workspaces_page(organization_id, Some(1), None, None, WorkspaceSort::Newest)
+        .list_workspaces_page(
+            organization_id,
+            Some(1),
+            None,
+            None,
+            WorkspaceSort::Newest,
+            None,
+        )
         .await
         .unwrap();
     let cursor = first.next_cursor.unwrap();
@@ -1052,7 +1059,7 @@ async fn organization_usage_summary_requires_workspace_read_access() {
 }
 
 #[tokio::test]
-async fn organization_usage_summary_is_organization_wide_and_template_scoped() {
+async fn workspace_list_and_organization_usage_honor_template_scope() {
     let (app, database, admin_id) = test_app().await;
     let (organization_id, allowed_template_id) =
         seeded_organization(&database, admin_id, "HTTP usage summary", 10).await;
@@ -1151,6 +1158,7 @@ async fn organization_usage_summary_is_organization_wide_and_template_scoped() {
         .await
         .unwrap();
     let restricted = app
+        .clone()
         .oneshot(request(
             Method::GET,
             &format!("/api/v1/organizations/{organization_id}/usage-summary"),
@@ -1184,6 +1192,64 @@ async fn organization_usage_summary_is_organization_wide_and_template_scoped() {
         restricted["coverage"]["template_label_coverage"],
         "incomplete"
     );
+
+    seeded_workspace(
+        &database,
+        organization_id,
+        admin_id,
+        allowed_template_id,
+        "usage-allowed-newest",
+        14,
+    )
+    .await;
+    let list_path = format!("/api/v1/workspaces?organization_id={organization_id}&limit=1");
+    let get_page = |query: String| {
+        app.clone().oneshot(request(
+            Method::GET,
+            &query,
+            Some(&restricted_key.token),
+            None,
+            None,
+        ))
+    };
+    let (status, first) = body(get_page(list_path.clone()).await.unwrap()).await;
+    assert_eq!(status, StatusCode::OK);
+    let first: Value = serde_json::from_slice(&first).unwrap();
+    assert_eq!(first["items"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        first["items"][0]["workspace"]["name"],
+        "usage-allowed-newest"
+    );
+    assert_eq!(first["summary"]["total_count"], 2);
+    assert_eq!(first["summary"]["requested"]["cpu_millis"], 2_000);
+    assert_eq!(first["summary"]["state_counts"], json!({"provisioning": 2}));
+
+    let cursor = first["next_cursor"].as_str().unwrap();
+    let (status, second) = body(
+        get_page(format!("{list_path}&cursor={cursor}"))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let second: Value = serde_json::from_slice(&second).unwrap();
+    assert_eq!(second["items"].as_array().unwrap().len(), 1);
+    assert_eq!(second["items"][0]["workspace"]["name"], "usage-allowed");
+    assert_eq!(second["summary"], first["summary"]);
+    assert!(second["next_cursor"].is_null());
+
+    let (status, filtered) = body(
+        get_page(format!("{list_path}&search=usage-other"))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let filtered: Value = serde_json::from_slice(&filtered).unwrap();
+    assert_eq!(filtered["items"], json!([]));
+    assert_eq!(filtered["summary"]["total_count"], 0);
+    assert_eq!(filtered["summary"]["requested"]["disk_gib"], 0);
+    assert_eq!(filtered["summary"]["state_counts"], json!({}));
 }
 
 #[tokio::test]
@@ -1308,6 +1374,41 @@ async fn postgres_workspace_page_summary_matches_the_filtered_collection() {
         .await;
     }
 
+    let hidden_template = database
+        .create_workspace_template(
+            CreateWorkspaceTemplate {
+                organization_id: Some(organization_id),
+                yaml: WorkspaceTemplateDocument::new(
+                    "Other PostgreSQL template",
+                    WorkspaceTemplateSpec::standard(
+                        "registry.example/workspace:1",
+                        AccessMode::Internal,
+                        Resources {
+                            cpu_millis: 300,
+                            memory_mib: 512,
+                            gpu_count: 0,
+                            disk_gib: 5,
+                        },
+                    ),
+                )
+                .to_yaml()
+                .unwrap(),
+            },
+            true,
+            11,
+        )
+        .await
+        .unwrap();
+    seeded_workspace(
+        &database,
+        organization_id,
+        admin.user_id,
+        hidden_template.id,
+        "alpha-other-template",
+        40,
+    )
+    .await;
+
     let page = database
         .list_workspaces_page(
             organization_id,
@@ -1315,6 +1416,7 @@ async fn postgres_workspace_page_summary_matches_the_filtered_collection() {
             None,
             Some("alpha"),
             WorkspaceSort::Newest,
+            Some(&[template_id]),
         )
         .await
         .unwrap();
@@ -1340,6 +1442,7 @@ async fn postgres_workspace_page_summary_matches_the_filtered_collection() {
             None,
             Some("alpha"),
             WorkspaceSort::Oldest,
+            Some(&[template_id]),
         )
         .await
         .unwrap();
@@ -1351,11 +1454,28 @@ async fn postgres_workspace_page_summary_matches_the_filtered_collection() {
             oldest.next_cursor.as_deref(),
             Some("alpha"),
             WorkspaceSort::Oldest,
+            Some(&[template_id]),
         )
         .await
         .unwrap();
     assert_eq!(following.items[0].name, "alpha-second");
     assert!(following.next_cursor.is_none());
+
+    let no_templates = database
+        .list_workspaces_page(
+            organization_id,
+            Some(1),
+            None,
+            None,
+            WorkspaceSort::Newest,
+            Some(&[]),
+        )
+        .await
+        .unwrap();
+    assert!(no_templates.items.is_empty());
+    assert_eq!(no_templates.total_count, 0);
+    assert_eq!(no_templates.requested, QuotaResources::default());
+    assert!(no_templates.state_counts.is_empty());
 
     let summary = database
         .workspace_usage_summary(organization_id, Some(&[template_id]))

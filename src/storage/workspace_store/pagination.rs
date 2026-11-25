@@ -2,7 +2,7 @@ use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use super::summary::{workspace_filter_sql, workspace_page_summary};
+use super::summary::{template_filter_sql, workspace_filter_sql, workspace_page_summary};
 use super::{WorkspacePage, decode_postgres, decode_sqlite, row};
 use crate::storage::{Database, StorageError};
 
@@ -29,6 +29,7 @@ impl Database {
         cursor: Option<&str>,
         search: Option<&str>,
         sort: WorkspaceSort,
+        allowed_template_ids: Option<&[Uuid]>,
     ) -> Result<WorkspacePage, StorageError> {
         let limit = i64::from(limit.unwrap_or(50).clamp(1, 200));
         let cursor = cursor
@@ -48,14 +49,21 @@ impl Database {
         // truth as reconciliation. Escape LIKE metacharacters so user input remains literal.
         let search = search.unwrap_or("").trim().to_lowercase();
         let pattern = format!("%{}%", escape_like_pattern(&search));
-        let summary = workspace_page_summary(self, organization_id, &search, &pattern).await?;
+        let summary = workspace_page_summary(
+            self,
+            organization_id,
+            &search,
+            &pattern,
+            allowed_template_ids,
+        )
+        .await?;
         let filter = workspace_filter_sql("{install}", "{organization}", "{search}", "{pattern}");
         let (comparison, direction) = match sort {
             WorkspaceSort::Newest => ("<", "DESC"),
             WorkspaceSort::Oldest => (">", "ASC"),
         };
         let sql = format!(
-            "SELECT {} FROM workspaces WHERE {filter} \
+            "SELECT {} FROM workspaces WHERE {filter}{{templates}} \
              AND ({{cursor_created}} IS NULL OR created_at {comparison} {{cursor_created}} OR (created_at = {{cursor_created}} AND id {comparison} {{cursor_id}})) \
              ORDER BY created_at {direction}, id {direction} LIMIT {{limit}}",
             row::WORKSPACE_COLUMNS
@@ -64,51 +72,71 @@ impl Database {
             Self::Sqlite {
                 pool,
                 installation_id,
-            } => sqlx::query(
-                &sql.replace("{install}", "?1")
+            } => {
+                let sql = sql
+                    .replace("{install}", "?1")
                     .replace("{organization}", "?2")
                     .replace("{search}", "?3")
                     .replace("{pattern}", "?4")
                     .replace("{cursor_created}", "?5")
                     .replace("{cursor_id}", "?6")
-                    .replace("{limit}", "?7"),
-            )
-            .bind(installation_id.as_str())
-            .bind(organization_id.to_string())
-            .bind(search)
-            .bind(&pattern)
-            .bind(cursor.as_ref().map(|c| c.created_at))
-            .bind(cursor.as_ref().map(|c| c.id.to_string()))
-            .bind(limit + 1)
-            .fetch_all(pool)
-            .await?
-            .into_iter()
-            .map(|row| decode_sqlite(row, installation_id))
-            .collect::<Result<Vec<_>, _>>()?,
+                    .replace("{limit}", "?7")
+                    .replace(
+                        "{templates}",
+                        &template_filter_sql(allowed_template_ids, '?', 8),
+                    );
+                let mut query = sqlx::query(&sql)
+                    .bind(installation_id.as_str())
+                    .bind(organization_id.to_string())
+                    .bind(&search)
+                    .bind(&pattern)
+                    .bind(cursor.as_ref().map(|c| c.created_at))
+                    .bind(cursor.as_ref().map(|c| c.id.to_string()))
+                    .bind(limit + 1);
+                for id in allowed_template_ids.unwrap_or_default() {
+                    query = query.bind(id.to_string());
+                }
+                query
+                    .fetch_all(pool)
+                    .await?
+                    .into_iter()
+                    .map(|row| decode_sqlite(row, installation_id))
+                    .collect::<Result<Vec<_>, _>>()?
+            }
             Self::Postgres {
                 pool,
                 installation_id,
-            } => sqlx::query(
-                &sql.replace("{install}", "$1")
+            } => {
+                let sql = sql
+                    .replace("{install}", "$1")
                     .replace("{organization}", "$2")
                     .replace("{search}", "$3")
                     .replace("{pattern}", "$4")
                     .replace("{cursor_created}", "$5")
                     .replace("{cursor_id}", "$6")
-                    .replace("{limit}", "$7"),
-            )
-            .bind(installation_id.as_str())
-            .bind(organization_id.to_string())
-            .bind(search)
-            .bind(&pattern)
-            .bind(cursor.as_ref().map(|c| c.created_at))
-            .bind(cursor.as_ref().map(|c| c.id.to_string()))
-            .bind(limit + 1)
-            .fetch_all(pool)
-            .await?
-            .into_iter()
-            .map(|row| decode_postgres(row, installation_id))
-            .collect::<Result<Vec<_>, _>>()?,
+                    .replace("{limit}", "$7")
+                    .replace(
+                        "{templates}",
+                        &template_filter_sql(allowed_template_ids, '$', 8),
+                    );
+                let mut query = sqlx::query(&sql)
+                    .bind(installation_id.as_str())
+                    .bind(organization_id.to_string())
+                    .bind(&search)
+                    .bind(&pattern)
+                    .bind(cursor.as_ref().map(|c| c.created_at))
+                    .bind(cursor.as_ref().map(|c| c.id.to_string()))
+                    .bind(limit + 1);
+                for id in allowed_template_ids.unwrap_or_default() {
+                    query = query.bind(id.to_string());
+                }
+                query
+                    .fetch_all(pool)
+                    .await?
+                    .into_iter()
+                    .map(|row| decode_postgres(row, installation_id))
+                    .collect::<Result<Vec<_>, _>>()?
+            }
         };
         let mut items = rows;
         let next_cursor = if items.len() > limit as usize {

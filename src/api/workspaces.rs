@@ -247,6 +247,7 @@ pub(super) async fn list(
             query.cursor.as_deref(),
             query.search.as_deref(),
             query.sort.unwrap_or_default(),
+            actor.allowed_template_ids.as_deref(),
         )
         .await?;
     let responses = futures::future::try_join_all(workspaces.items.into_iter().map(|workspace| {
