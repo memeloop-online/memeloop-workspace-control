@@ -73,13 +73,16 @@ impl WorkspaceReconcileHandler {
                 return Ok(());
             }
             let now = unix_timestamp()?;
-            return self.observe_workspace(workspace).await.map_err(|error| {
-                let error = match error {
-                    JobHandlerError::Failed(message) => JobHandlerError::Pending(message),
-                    error => error,
-                };
-                checkpoint_error(error, job, workspace, Some(now))
-            });
+            return self
+                .observe_workspace(workspace, true)
+                .await
+                .map_err(|error| {
+                    let error = match error {
+                        JobHandlerError::Failed(message) => JobHandlerError::Pending(message),
+                        error => error,
+                    };
+                    checkpoint_error(error, job, workspace, Some(now))
+                });
         }
 
         if workspace.state == WorkspaceState::Deleted {
@@ -91,7 +94,7 @@ impl WorkspaceReconcileHandler {
 
         if startup_checkpoint_matches(workspace, job, unix_timestamp()?) {
             return self
-                .observe_workspace(workspace)
+                .observe_workspace(workspace, false)
                 .await
                 .map_err(|error| checkpoint_error(error, job, workspace, None));
         }
@@ -136,7 +139,7 @@ impl WorkspaceReconcileHandler {
         // Public mapping discovery is refreshed alongside observation, so a slow
         // ConfigMap write cannot postpone recording an already-ready workspace.
         let (observation, metadata) = tokio::join!(
-            Box::pin(self.observe_workspace(workspace)),
+            Box::pin(self.observe_workspace(workspace, false)),
             Box::pin(
                 self.coordinator
                     .apply_port_mapping_metadata(workspace, &port_mappings)
@@ -199,16 +202,18 @@ impl WorkspaceReconcileHandler {
             .map_err(job_error)
     }
 
-    async fn observe_workspace(&self, workspace: &Workspace) -> Result<(), JobHandlerError> {
+    async fn observe_workspace(
+        &self,
+        workspace: &Workspace,
+        runtime_observation: bool,
+    ) -> Result<(), JobHandlerError> {
         match workspace.state {
             WorkspaceState::Provisioning
             | WorkspaceState::Starting
             | WorkspaceState::Restarting => {
                 if !self
-                    .coordinator
-                    .has_observed_replicas(workspace, 1)
-                    .await
-                    .map_err(job_error)?
+                    .has_workspace_connection(workspace, runtime_observation)
+                    .await?
                 {
                     self.coordinator
                         .recover_scratch_scheduling(workspace)
@@ -223,8 +228,7 @@ impl WorkspaceReconcileHandler {
             }
             WorkspaceState::Ready => {
                 if !self
-                    .coordinator
-                    .has_observed_replicas(workspace, 1)
+                    .has_workspace_connection(workspace, runtime_observation)
                     .await
                     .map_err(|error| JobHandlerError::Pending(error.to_string()))?
                 {
@@ -265,6 +269,21 @@ impl WorkspaceReconcileHandler {
             WorkspaceState::Deleting | WorkspaceState::Deleted => unreachable!(),
         }
         Ok(())
+    }
+
+    async fn has_workspace_connection(
+        &self,
+        workspace: &Workspace,
+        runtime_observation: bool,
+    ) -> Result<bool, JobHandlerError> {
+        if runtime_observation {
+            self.coordinator
+                .has_running_workspace_connection(workspace)
+                .await
+        } else {
+            self.coordinator.has_observed_replicas(workspace, 1).await
+        }
+        .map_err(job_error)
     }
 
     async fn reconcile_deletion(&self, workspace: &Workspace) -> Result<(), JobHandlerError> {

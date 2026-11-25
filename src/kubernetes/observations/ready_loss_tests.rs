@@ -7,7 +7,10 @@ use crate::{
     quota::Resources,
     storage::{ClaimedJob, CreateOrganization, CreateWorkspace, CreateWorkspaceTemplate},
     templates::{WorkspaceTemplateDocument, WorkspaceTemplateSpec},
-    workspaces::{AccessMode, Workspace, WorkspaceAction, WorkspaceObservation, WorkspaceState},
+    workspaces::{
+        AccessMode, Workspace, WorkspaceAction, WorkspaceHomeVolumeBinding, WorkspaceObservation,
+        WorkspaceState,
+    },
 };
 use axum::{
     body::Body,
@@ -747,6 +750,84 @@ async fn sqlite_ready_loss_recovers_without_reapplying_or_changing_generation() 
             .unwrap(),
     )
     .await;
+}
+
+#[tokio::test]
+async fn runtime_health_recovers_the_applied_generation_after_live_home_adoption() {
+    let database = Database::connect("sqlite::memory:", INSTALLATION.parse().unwrap())
+        .await
+        .unwrap();
+    let workspace = seed(&database, false).await;
+    let runtime = Arc::new(Runtime::new(&workspace, &builder()));
+    let desired = database
+        .bind_workspace_home_volume(
+            workspace.id,
+            &WorkspaceHomeVolumeBinding {
+                namespace: WORKSPACE_NAMESPACE.to_owned(),
+                claim_name: "existing-home".to_owned(),
+                claim_uid: "existing-home-uid".to_owned(),
+                capacity_gib: 20,
+            },
+            workspace.generation,
+            workspace.owner_id,
+            unix_now(),
+            true,
+        )
+        .await
+        .unwrap();
+    assert_eq!(desired.generation, workspace.generation + 1);
+    let coordinator = KubernetesCoordinator::new(runtime.client(), builder());
+    let observer = WorkspaceObservations::new(database.clone(), INSTALLATION.parse().unwrap());
+    let worker = worker(&database, &observer, &runtime);
+    let set_ready = || {
+        runtime.pod.lock().unwrap().as_mut().unwrap()["status"] =
+            json!({"phase":"Running","conditions":[{"type":"Ready","status":"True"}]});
+    };
+    set_ready();
+    assert!(
+        !coordinator
+            .has_observed_replicas(&desired, 1)
+            .await
+            .unwrap()
+    );
+    assert!(
+        database
+            .enqueue_ready_workspace_observation(workspace.id, unix_now())
+            .await
+            .unwrap()
+    );
+    assert!(worker.run_once(unix_now()).await.unwrap());
+    assert_eq!(
+        database.get_workspace(workspace.id).await.unwrap().state,
+        WorkspaceState::Ready
+    );
+    assert_eq!(database.job_counts().await.unwrap().pending, 0);
+
+    runtime.pod.lock().unwrap().as_mut().unwrap()["status"] = json!({"phase":"Pending"});
+    assert!(
+        database
+            .enqueue_ready_workspace_observation(workspace.id, unix_now())
+            .await
+            .unwrap()
+    );
+    assert!(worker.run_once(unix_now()).await.unwrap());
+    assert_eq!(
+        database.get_workspace(workspace.id).await.unwrap().state,
+        WorkspaceState::Starting
+    );
+    let parked = database
+        .list_parked_workspace_jobs(None, 256, unix_now())
+        .await
+        .unwrap();
+    assert_eq!(parked.jobs.len(), 1);
+
+    set_ready();
+    assert!(worker.run_once(parked.jobs[0].until).await.unwrap());
+    let recovered = database.get_workspace(workspace.id).await.unwrap();
+    assert_eq!(recovered.state, WorkspaceState::Ready);
+    assert_eq!(recovered.generation, desired.generation);
+    assert_eq!(database.job_counts().await.unwrap().pending, 0);
+    assert!(runtime.deletes.lock().unwrap().is_empty());
 }
 
 #[tokio::test]
