@@ -61,12 +61,16 @@ pub struct AppState {
     jump_host_public_key: Option<crate::storage::WorkspaceSshPublicIdentity>,
     pub(super) plugins: PluginRuntime,
     organization_metrics: runtime::organization_metrics::OrganizationMetricsCache,
+    storage_metrics: runtime::storage_metrics::StorageMetricsCache,
 }
 
 impl AppState {
     pub fn new(config: AppConfig, database: Database) -> Self {
         let plugins = PluginRuntime::disabled(database.clone());
         Self {
+            storage_metrics: runtime::storage_metrics::StorageMetricsCache::new(
+                config.prometheus_url.is_some(),
+            ),
             config,
             database,
             oidc: None,
@@ -85,6 +89,9 @@ impl AppState {
     pub fn with_cipher(config: AppConfig, database: Database, cipher: EnvelopeCipher) -> Self {
         let plugins = PluginRuntime::disabled(database.clone());
         Self {
+            storage_metrics: runtime::storage_metrics::StorageMetricsCache::new(
+                config.prometheus_url.is_some(),
+            ),
             config,
             database,
             oidc: None,
@@ -148,6 +155,19 @@ impl AppState {
 
     pub fn observability(&self) -> Observability {
         self.observability.clone()
+    }
+
+    pub fn spawn_storage_metrics(
+        &self,
+        shutdown: tokio::sync::watch::Receiver<bool>,
+    ) -> Option<tokio::task::JoinHandle<()>> {
+        let url = self.config.prometheus_url.clone()?;
+        self.kubernetes_client.as_ref()?;
+        Some(tokio::spawn(self.storage_metrics.clone().collect(
+            url,
+            self.observability(),
+            shutdown,
+        )))
     }
 
     fn verify_internal_auth_token(&self, token: &str) -> bool {
