@@ -105,6 +105,93 @@ fn scratch_capacity_does_not_inflate_local_ephemeral_storage_limits() {
 }
 
 #[test]
+fn only_explicit_quota_handlers_move_container_budgets_to_scratch() {
+    for runtime in [
+        None,
+        Some("runc"),
+        Some("runsc"),
+        Some("mwc-storage-ci"),
+        Some("mwc-native-other"),
+        Some("mwc-native"),
+        Some("mwc-runsc"),
+    ] {
+        for buildkit in [false, true] {
+            let mut template = template();
+            template.runtime_class_name = runtime.map(str::to_owned);
+            template.buildkit = buildkit;
+            let pod = WorkspacePod::from_template(&template);
+            let quota = matches!(runtime, Some("mwc-native" | "mwc-runsc"));
+            let limits = pod.resource_limits();
+            let ephemeral = (!quota).then(|| Quantity("2048Mi".to_owned()));
+            assert_eq!(limits.get("ephemeral-storage"), ephemeral.as_ref());
+            assert_eq!(limits.get("cpu"), Some(&Quantity("1000m".to_owned())));
+            assert_eq!(limits.get("memory"), Some(&Quantity("1024Mi".to_owned())));
+            assert_eq!(
+                pod.resource_requests().get("ephemeral-storage"),
+                Some(&Quantity("512Mi".to_owned()))
+            );
+            let mut containers = vec![
+                pod.workspace_container(
+                    &template.image,
+                    ResourceRequirements {
+                        limits: Some(limits),
+                        ..ResourceRequirements::default()
+                    },
+                    &resource_names(),
+                ),
+                pod.workspace_scratch_init_container(&template.image),
+            ];
+            containers.extend(pod.buildkit_container("buildkit"));
+            containers.extend(pod.buildkit_bootstrap_container("buildkit"));
+            for container in containers {
+                for mount in container
+                    .volume_mounts
+                    .iter()
+                    .flatten()
+                    .filter(|mount| mount.name == "workspace-scratch")
+                {
+                    let path = mount.sub_path.as_deref().unwrap_or("");
+                    assert_eq!(path == "data" || path.starts_with("data/"), quota);
+                }
+                if quota {
+                    assert!(
+                        !container
+                            .resources
+                            .as_ref()
+                            .and_then(|r| r.limits.as_ref())
+                            .is_some_and(|limits| limits.contains_key("ephemeral-storage"))
+                    );
+                } else if container.name == "buildkitd" {
+                    assert_eq!(
+                        container
+                            .resources
+                            .as_ref()
+                            .unwrap()
+                            .limits
+                            .as_ref()
+                            .unwrap()
+                            .get("ephemeral-storage"),
+                        Some(&Quantity("1Gi".to_owned()))
+                    );
+                } else if container.name == "buildkit-bootstrap" {
+                    assert_eq!(
+                        container
+                            .resources
+                            .as_ref()
+                            .unwrap()
+                            .limits
+                            .as_ref()
+                            .unwrap()
+                            .get("ephemeral-storage"),
+                        Some(&Quantity("128Mi".to_owned()))
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn scratch_init_prepares_only_enabled_top_level_subpaths() {
     let mut template = template();
     template.buildkit = false;
