@@ -282,12 +282,15 @@ async fn runtime_routes_do_not_wait_for_stalled_disk_telemetry() {
                 started.notify_one();
                 unblock.notified().await;
                 let now = unix_timestamp();
-                axum::Json(json!({"status":"success","data":{"resultType":"matrix","result":
-                    ["used", "capacity", "available"].into_iter().zip(["9","10","1"]).map(|(kind, value)| json!({
+                let result = ["used", "capacity", "available"]
+                    .into_iter()
+                    .zip(["9", "10", "1"])
+                    .map(|(kind, value)| json!({
                         "metric": {"__name__": format!("kubelet_volume_stats_{kind}_bytes"), "namespace": WORKSPACE_NAMESPACE, "persistentvolumeclaim":"test-home"},
-                        "values": [[now,value]],
-                    })).collect::<Vec<_>>()
-                }}))
+                        "values": [[now, value]],
+                    }))
+                    .collect::<Vec<_>>();
+                axum::Json(json!({"status":"success","data":{"resultType":"matrix","result": result}}))
             }
         }
     }));

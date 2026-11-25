@@ -62,7 +62,7 @@ fn snapshots_report_actual_sample_time_and_drop_precreation_values() {
     };
     assert_eq!(snapshot.volumes.len(), 1);
     let current = identity("pvc-a", 990);
-    let reading = |identity, now| {
+    let reading = |identity: &StorageIdentity, now| {
         snapshot.telemetry(Some(identity), 200, StorageBacking::PersistentVolume, now)
     };
     let exact = reading(&current, 1_100);
