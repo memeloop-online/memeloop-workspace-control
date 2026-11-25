@@ -59,7 +59,7 @@ Templates define a class of workspaces. Key fields of `spec`:
 | `access_mode` | How users reach the workspace. |
 | `resources` / `pod_requests` | CPU, memory, GPU, and disk allocation. |
 | `workspace_user` / `workspace_home` | In-container user and home path. |
-| `buildkit` | Enable an in-workspace BuildKit daemon for image builds. |
+| `buildkit` | Enable an in-workspace BuildKit daemon for image builds. It starts alongside SSH and reports its own health. |
 | `storage_policy.temporary_storage_gib` | Total temporary-storage capacity. |
 | `cluster_access` | Whether the workspace receives Kubernetes API credentials. |
 | `egress_policy` | `unrestricted` or `internet_only` network egress. |

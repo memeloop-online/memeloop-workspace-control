@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use k8s_openapi::{
     api::core::v1::{
-        AppArmorProfile, Capabilities, Container, EnvVar, ExecAction, Probe, ResourceRequirements,
+        AppArmorProfile, Container, EnvVar, ExecAction, Probe, ResourceRequirements,
         SeccompProfile, SecurityContext, VolumeMount,
     },
     apimachinery::pkg::api::resource::Quantity,
@@ -11,34 +11,6 @@ use k8s_openapi::{
 pub(super) const ENDPOINT: &str = "tcp://127.0.0.1:1234";
 pub(super) const SCRATCH_VOLUME: &str = "workspace-scratch";
 pub(super) const CACHE_SUB_PATH: &str = "build-cache";
-
-pub(super) fn bootstrap_container(
-    enabled: bool,
-    image: &str,
-    cpu_request_millis: u64,
-) -> Option<Container> {
-    enabled.then(|| Container {
-        name: "buildkit-bootstrap".to_owned(),
-        image: Some(image.to_owned()),
-        command: Some(vec!["sh".to_owned(), "-c".to_owned()]),
-        args: Some(vec![setup_script().to_owned()]),
-        resources: Some(ResourceRequirements {
-            requests: Some(quantities(
-                &format!("{cpu_request_millis}m"),
-                "16Mi",
-                "32Mi",
-            )),
-            limits: Some(quantities("100m", "128Mi", "128Mi")),
-            ..ResourceRequirements::default()
-        }),
-        volume_mounts: Some(vec![
-            cache_mount("/var/lib/mwc-buildkit", CACHE_SUB_PATH),
-            cache_mount("/home/user/.local/share/buildkit", CACHE_SUB_PATH),
-        ]),
-        security_context: Some(non_root_security_context(false, false)),
-        ..Container::default()
-    })
-}
 
 fn buildkit_tmp_mount() -> VolumeMount {
     cache_mount("/tmp", "build-cache/tmp")
@@ -58,12 +30,10 @@ pub(super) fn container(enabled: bool, image: &str, cpu_request_millis: u64) -> 
     Some(Container {
         name: "buildkitd".to_owned(),
         image: Some(image.to_owned()),
-        // Keep the rootless image entrypoint. It starts buildkitd through RootlessKit and creates
-        // the user namespace required by the OCI worker.
-        args: Some(vec![
-            "--config".to_owned(),
-            "/var/lib/mwc-buildkit/config/buildkitd.toml".to_owned(),
-        ]),
+        // Prepare the build cache and client alongside SSH, then enter the same
+        // RootlessKit user namespace as the pinned image's default entrypoint.
+        command: Some(vec!["sh".to_owned(), "-c".to_owned()]),
+        args: Some(vec![start_script().to_owned()]),
         env: Some(vec![
             env("TMPDIR", "/var/lib/mwc-buildkit/tmp"),
             env("XDG_RUNTIME_DIR", "/var/lib/mwc-buildkit/runtime"),
@@ -99,7 +69,7 @@ pub(super) fn container(enabled: bool, image: &str, cpu_request_millis: u64) -> 
             cache_mount("/home/user/.local/share/buildkit", CACHE_SUB_PATH),
             buildkit_tmp_mount(),
         ]),
-        security_context: Some(non_root_security_context(true, true)),
+        security_context: Some(security_context()),
         ..Container::default()
     })
 }
@@ -133,45 +103,40 @@ fn env(name: &str, value: &str) -> EnvVar {
     }
 }
 
-fn non_root_security_context(
-    allow_privilege_escalation: bool,
-    unconfined: bool,
-) -> SecurityContext {
+fn security_context() -> SecurityContext {
     SecurityContext {
         run_as_user: Some(1000),
         run_as_group: Some(1000),
         run_as_non_root: Some(true),
         privileged: Some(false),
-        allow_privilege_escalation: Some(allow_privilege_escalation),
+        allow_privilege_escalation: Some(true),
         read_only_root_filesystem: Some(true),
-        capabilities: (!allow_privilege_escalation).then(|| Capabilities {
-            drop: Some(vec!["ALL".to_owned()]),
-            ..Capabilities::default()
-        }),
-        app_armor_profile: unconfined.then(|| AppArmorProfile {
+        app_armor_profile: Some(AppArmorProfile {
             type_: "Unconfined".to_owned(),
-            ..AppArmorProfile::default()
         }),
         seccomp_profile: Some(SeccompProfile {
-            type_: if unconfined {
-                "Unconfined".to_owned()
-            } else {
-                "RuntimeDefault".to_owned()
-            },
+            type_: "Unconfined".to_owned(),
             ..SeccompProfile::default()
         }),
         ..SecurityContext::default()
     }
 }
 
-fn setup_script() -> &'static str {
+fn start_script() -> &'static str {
     r#"set -eu
 mkdir -p /var/lib/mwc-buildkit/bin /var/lib/mwc-buildkit/config \
   /var/lib/mwc-buildkit/runtime /var/lib/mwc-buildkit/state /var/lib/mwc-buildkit/tmp
 chmod 0700 /var/lib/mwc-buildkit/runtime
-cp /usr/bin/buildctl /var/lib/mwc-buildkit/bin/buildctl
-chmod 0555 /var/lib/mwc-buildkit/bin/buildctl
-cat > /var/lib/mwc-buildkit/config/buildkitd.toml <<'CONFIG'
+# Publish the complete client in one rename. A BuildKit restart may occur
+# while a workspace session is already using the previous executable.
+client=$(mktemp /var/lib/mwc-buildkit/bin/.buildctl.XXXXXX)
+config=
+trap 'rm -f -- "$client" "$config"' EXIT
+cp /usr/bin/buildctl "$client"
+chmod 0555 "$client"
+mv -fT -- "$client" /var/lib/mwc-buildkit/bin/buildctl
+config=$(mktemp /var/lib/mwc-buildkit/config/.buildkitd.XXXXXX)
+cat > "$config" <<'CONFIG'
 root = "/var/lib/mwc-buildkit/state"
 [grpc]
   address = ["tcp://127.0.0.1:1234"]
@@ -190,5 +155,7 @@ root = "/var/lib/mwc-buildkit/state"
 [worker.containerd]
   enabled = false
 CONFIG
+mv -fT -- "$config" /var/lib/mwc-buildkit/config/buildkitd.toml
+exec /usr/bin/rootlesskit /usr/bin/buildkitd --config /var/lib/mwc-buildkit/config/buildkitd.toml
 "#
 }

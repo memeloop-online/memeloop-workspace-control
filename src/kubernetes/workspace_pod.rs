@@ -216,11 +216,6 @@ impl<'a> WorkspacePod<'a> {
             .map(|container| self.scratch_runtime_container(container))
     }
 
-    pub fn buildkit_bootstrap_container(&self, image: &str) -> Option<Container> {
-        buildkit::bootstrap_container(self.has_buildkit(), image, self.cpu_request_millis(10))
-            .map(|container| self.scratch_runtime_container(container))
-    }
-
     pub fn pod_security_context(&self) -> Option<k8s_openapi::api::core::v1::PodSecurityContext> {
         None
     }
@@ -395,6 +390,7 @@ prepare_directory "$scratch_root/workspace-cache" "$MWC_WORKSPACE_USER" "$worksp
 prepare_directory "$scratch_root/codex-session-scratch" "$MWC_WORKSPACE_USER" "$workspace_group"
 if [ "$MWC_BUILDKIT_ENABLED" = true ]; then
     prepare_directory "$scratch_root/build-cache" 1000 1000
+    prepare_directory "$scratch_root/build-cache/tmp" 1000 1000
 fi
 "#
 }

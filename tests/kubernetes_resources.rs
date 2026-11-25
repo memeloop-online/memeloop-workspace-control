@@ -1395,7 +1395,7 @@ fn workspace_main_prepares_cold_layout_without_bootstrap_init() {
         );
         assert_eq!(main.args.as_deref(), Some(["serve".to_owned()].as_slice()));
         let expected = if buildkit {
-            vec!["workspace-scratch-init", "buildkit-bootstrap"]
+            vec!["workspace-scratch-init"]
         } else {
             vec![]
         };
@@ -1530,24 +1530,15 @@ fn node_template_reuses_the_existing_image_with_platform_bootstrap() {
         "Unconfined"
     );
     let init_containers = pod.init_containers.as_ref().unwrap();
-    assert_eq!(init_containers.len(), 2);
+    assert_eq!(init_containers.len(), 1);
     assert_eq!(init_containers[0].name, "workspace-scratch-init");
-    assert_eq!(init_containers[1].name, "buildkit-bootstrap");
-    assert!(
-        init_containers[1].args.as_ref().unwrap()[0]
-            .contains("cp /usr/bin/buildctl /var/lib/mwc-buildkit/bin/buildctl")
-    );
-    assert!(buildkit.command.is_none());
     assert_eq!(
-        buildkit.args.as_deref(),
-        Some(
-            [
-                "--config".to_owned(),
-                "/var/lib/mwc-buildkit/config/buildkitd.toml".to_owned()
-            ]
-            .as_slice()
-        )
+        buildkit.command.as_ref().unwrap(),
+        &["sh".to_owned(), "-c".to_owned()]
     );
+    let buildkit_start = &buildkit.args.as_ref().unwrap()[0];
+    assert!(buildkit_start.contains("cp /usr/bin/buildctl"));
+    assert!(buildkit_start.contains("exec /usr/bin/rootlesskit /usr/bin/buildkitd"));
     assert!(
         resources.workspace_config.data.as_ref().unwrap()["sshd_config"]
             .contains("AllowUsers user")
@@ -1705,7 +1696,7 @@ fn temporary_storage_uses_one_workspace_owned_claim_and_isolated_subpaths() {
             .iter()
             .map(|container| container.name.as_str())
             .collect::<Vec<_>>(),
-        ["workspace-scratch-init", "buildkit-bootstrap"]
+        ["workspace-scratch-init"]
     );
     let scratch_init = &init_containers[0];
     let scratch_init_mount = &scratch_init.volume_mounts.as_ref().unwrap()[0];
@@ -1857,25 +1848,22 @@ fn buildkit_image_declared_volume_uses_the_existing_scratch_cache() {
         .spec
         .unwrap();
 
-    for name in ["buildkit-bootstrap", "buildkitd"] {
-        let container = pod
-            .containers
+    let buildkit = pod
+        .containers
+        .iter()
+        .find(|container| container.name == "buildkitd")
+        .unwrap();
+    let mounts = buildkit.volume_mounts.as_ref().unwrap();
+    for path in ["/var/lib/mwc-buildkit", "/home/user/.local/share/buildkit"] {
+        let matching = mounts
             .iter()
-            .chain(pod.init_containers.iter().flatten())
-            .find(|container| container.name == name)
-            .unwrap();
-        let mounts = container.volume_mounts.as_ref().unwrap();
-        for path in ["/var/lib/mwc-buildkit", "/home/user/.local/share/buildkit"] {
-            let matching = mounts
-                .iter()
-                .filter(|mount| mount.mount_path == path)
-                .collect::<Vec<_>>();
-            assert_eq!(matching.len(), 1, "{name}: {path}");
-            let mount = matching[0];
-            assert_eq!(mount.name, "workspace-scratch");
-            assert_eq!(mount.sub_path.as_deref(), Some("build-cache"));
-            assert_eq!(mount.read_only, Some(false));
-        }
+            .filter(|mount| mount.mount_path == path)
+            .collect::<Vec<_>>();
+        assert_eq!(matching.len(), 1, "{path}");
+        let mount = matching[0];
+        assert_eq!(mount.name, "workspace-scratch");
+        assert_eq!(mount.sub_path.as_deref(), Some("build-cache"));
+        assert_eq!(mount.read_only, Some(false));
     }
 }
 

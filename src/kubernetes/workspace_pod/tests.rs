@@ -142,7 +142,6 @@ fn only_explicit_quota_handlers_move_container_budgets_to_scratch() {
                 pod.workspace_scratch_init_container(&template.image),
             ];
             containers.extend(pod.buildkit_container("buildkit"));
-            containers.extend(pod.buildkit_bootstrap_container("buildkit"));
             for container in containers {
                 for mount in container
                     .volume_mounts
@@ -173,18 +172,6 @@ fn only_explicit_quota_handlers_move_container_budgets_to_scratch() {
                             .get("ephemeral-storage"),
                         Some(&Quantity("1Gi".to_owned()))
                     );
-                } else if container.name == "buildkit-bootstrap" {
-                    assert_eq!(
-                        container
-                            .resources
-                            .as_ref()
-                            .unwrap()
-                            .limits
-                            .as_ref()
-                            .unwrap()
-                            .get("ephemeral-storage"),
-                        Some(&Quantity("128Mi".to_owned()))
-                    );
                 }
             }
         }
@@ -212,6 +199,7 @@ fn scratch_init_prepares_only_enabled_top_level_subpaths() {
     assert!(script.contains("codex-session-scratch"));
     assert!(script.contains("if [ \"$MWC_BUILDKIT_ENABLED\" = true ]"));
     assert!(script.contains("prepare_directory \"$scratch_root/build-cache\" 1000 1000"));
+    assert!(script.contains("prepare_directory \"$scratch_root/build-cache/tmp\" 1000 1000"));
     assert!(!script.contains("chown -R"));
 }
 
