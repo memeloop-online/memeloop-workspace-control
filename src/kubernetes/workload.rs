@@ -103,11 +103,11 @@ fn pod_spec(
     names: &WorkspaceResourceNames,
     placement: &ResolvedPlacement,
 ) -> PodSpec {
-    let init_containers = workspace
-        .template
-        .buildkit
-        .then(|| vec![pod.workspace_scratch_init_container(&workspace.template.image)])
-        .unwrap_or_default();
+    let init_containers = if workspace.template.buildkit {
+        vec![pod.workspace_scratch_init_container(&workspace.template.image)]
+    } else {
+        Vec::new()
+    };
     let cluster_access = workspace.template.cluster_access;
     PodSpec {
         automount_service_account_token: Some(cluster_access),
