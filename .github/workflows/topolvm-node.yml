@@ -1,0 +1,66 @@
+name: TopoLVM independent node operations
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/topolvm-node.yml
+      - images/topolvm-node/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  node:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      TOPOLVM_SHA: 2d0c5174afb93856d9fc5105e7c04ed50b65628f
+      TOPOLVM_IMAGE: ghcr.io/topolvm/topolvm-with-sidecar@sha256:70548dbe0c6addcccf79a557f29e95db2e6dc2cba2102988c91f30086004d0fc
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: topolvm/topolvm
+          ref: ${{ env.TOPOLVM_SHA }}
+          path: topolvm-source
+          persist-credentials: false
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5
+        with:
+          go-version-file: topolvm-source/go.mod
+          cache: false
+      - name: Compare same-volume serialization and independent operations
+        working-directory: topolvm-source
+        run: |
+          test "$(git rev-parse HEAD)" = "$TOPOLVM_SHA"
+          git apply --check "$GITHUB_WORKSPACE/images/topolvm-node/independent-operations.patch"
+          git apply "$GITHUB_WORKSPACE/images/topolvm-node/independent-operations.patch"
+          test -z "$(gofmt -l internal/driver/node.go internal/driver/node_test.go)"
+          go test -race -count=1 ./internal/driver
+          mkdir -p "$RUNNER_TEMP/topolvm-node"
+          CGO_ENABLED=0 go build -buildvcs=false -trimpath \
+            -ldflags '-w -s -X github.com/topolvm/topolvm.Version=0.41.1-mwc-independent-volumes' \
+            -o "$RUNNER_TEMP/topolvm-node/topolvm-node" ./cmd/topolvm-node
+      - name: Verify the overlay replaces only the node executable
+        run: |
+          out="$RUNNER_TEMP/topolvm-node"
+          cp images/topolvm-node/Dockerfile "$out/"
+          docker build --pull --build-arg "BASE_IMAGE=$TOPOLVM_IMAGE" -t topolvm-node-ci "$out"
+          docker run --rm --entrypoint /topolvm-node topolvm-node-ci --version | grep -F 0.41.1-mwc-independent-volumes
+          other_binaries() {
+            docker run --rm --entrypoint /bin/sh "$1" -ec \
+              'sha256sum /hypertopolvm /topolvm-controller /topolvm-scheduler /lvmd /csi-provisioner /csi-node-driver-registrar /csi-resizer /csi-snapshotter /livenessprobe'
+          }
+          other_binaries "$TOPOLVM_IMAGE" > "$out/base.txt"
+          other_binaries topolvm-node-ci > "$out/candidate.txt"
+          diff -u "$out/base.txt" "$out/candidate.txt"
+          (cd "$out" && sha256sum topolvm-node > SHA256SUMS)
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: topolvm-node-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/topolvm-node/topolvm-node
+            ${{ runner.temp }}/topolvm-node/SHA256SUMS
+          if-no-files-found: error

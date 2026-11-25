@@ -1,0 +1,169 @@
+diff --git a/internal/driver/node.go b/internal/driver/node.go
+index 254db4d..64d7c36 100644
+--- a/internal/driver/node.go
++++ b/internal/driver/node.go
+@@ -8,7 +8,6 @@ import (
+ 	"os"
+ 	"path/filepath"
+ 	"strings"
+-	"sync"
+ 
+ 	"github.com/container-storage-interface/spec/lib/go/csi"
+ 	"github.com/topolvm/topolvm"
+@@ -39,6 +38,8 @@ func NewNodeServer(nodeName string, vgServiceClient proto.VGServiceClient, lvSer
+ 	}
+ 
+ 	return &nodeServer{
++		volumes: NewLockWithID(),
++		targets: NewLockWithID(),
+ 		server: &nodeServerNoLocked{
+ 			nodeName:     nodeName,
+ 			client:       vgServiceClient,
+@@ -56,37 +57,47 @@ func NewNodeServer(nodeName string, vgServiceClient proto.VGServiceClient, lvSer
+ type nodeServer struct {
+ 	csi.UnimplementedNodeServer
+ 
+-	// This protects concurrent nodeServerNoLocked method calls.
+-	// We use a global lock because it assumes that each method does not take a long time,
+-	// and we scare about wired behaviors from concurrent device or filesystem operations.
+-	mu     sync.Mutex
+-	server *nodeServerNoLocked
++	// Serialize requests that share an LV or a mount point. Independent
++	// volumes and targets can be prepared concurrently on the same node.
++	volumes *LockByID
++	targets *LockByID
++	server  csi.NodeServer
++}
++
++func (s *nodeServer) lock(volumeID, path string) func() {
++	path = filepath.Clean(path)
++	s.volumes.LockByID(volumeID)
++	s.targets.LockByID(path)
++	return func() {
++		s.targets.UnlockByID(path)
++		s.volumes.UnlockByID(volumeID)
++	}
+ }
+ 
+ func (s *nodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublishVolumeRequest) (*csi.NodePublishVolumeResponse, error) {
+-	s.mu.Lock()
+-	defer s.mu.Unlock()
++	unlock := s.lock(req.GetVolumeId(), req.GetTargetPath())
++	defer unlock()
+ 
+ 	return s.server.NodePublishVolume(ctx, req)
+ }
+ 
+ func (s *nodeServer) NodeUnpublishVolume(ctx context.Context, req *csi.NodeUnpublishVolumeRequest) (*csi.NodeUnpublishVolumeResponse, error) {
+-	s.mu.Lock()
+-	defer s.mu.Unlock()
++	unlock := s.lock(req.GetVolumeId(), req.GetTargetPath())
++	defer unlock()
+ 
+ 	return s.server.NodeUnpublishVolume(ctx, req)
+ }
+ 
+ func (s *nodeServer) NodeGetVolumeStats(ctx context.Context, req *csi.NodeGetVolumeStatsRequest) (*csi.NodeGetVolumeStatsResponse, error) {
+-	s.mu.Lock()
+-	defer s.mu.Unlock()
++	unlock := s.lock(req.GetVolumeId(), req.GetVolumePath())
++	defer unlock()
+ 
+ 	return s.server.NodeGetVolumeStats(ctx, req)
+ }
+ 
+ func (s *nodeServer) NodeExpandVolume(ctx context.Context, req *csi.NodeExpandVolumeRequest) (*csi.NodeExpandVolumeResponse, error) {
+-	s.mu.Lock()
+-	defer s.mu.Unlock()
++	unlock := s.lock(req.GetVolumeId(), req.GetVolumePath())
++	defer unlock()
+ 
+ 	return s.server.NodeExpandVolume(ctx, req)
+ }
+diff --git a/internal/driver/node_test.go b/internal/driver/node_test.go
+index 6fec517..77fa525 100644
+--- a/internal/driver/node_test.go
++++ b/internal/driver/node_test.go
+@@ -1,11 +1,82 @@
+ package driver
+ 
+ import (
++	"context"
++	"sync"
+ 	"testing"
++	"time"
+ 
+ 	"github.com/container-storage-interface/spec/lib/go/csi"
+ )
+ 
++type blockingNodeFixture struct {
++	csi.UnimplementedNodeServer
++	started chan string
++	release <-chan struct{}
++}
++
++func (f blockingNodeFixture) NodePublishVolume(_ context.Context, req *csi.NodePublishVolumeRequest) (*csi.NodePublishVolumeResponse, error) {
++	f.started <- req.GetTargetPath()
++	if req.GetTargetPath() == "/home" {
++		<-f.release
++	}
++	return &csi.NodePublishVolumeResponse{}, nil
++}
++
++func (f blockingNodeFixture) NodeUnpublishVolume(_ context.Context, req *csi.NodeUnpublishVolumeRequest) (*csi.NodeUnpublishVolumeResponse, error) {
++	f.started <- req.GetTargetPath()
++	return &csi.NodeUnpublishVolumeResponse{}, nil
++}
++
++func TestIndependentNodeVolumesCanMountTogether(t *testing.T) {
++	started := make(chan string, 4)
++	release := make(chan struct{})
++	open := sync.OnceFunc(func() { close(release) })
++	defer open()
++	server := &nodeServer{
++		volumes: NewLockWithID(),
++		targets: NewLockWithID(),
++		server:  blockingNodeFixture{started: started, release: release},
++	}
++	ctx := context.Background()
++	publish := func(id, path string) {
++		_, _ = server.NodePublishVolume(ctx, &csi.NodePublishVolumeRequest{VolumeId: id, TargetPath: path})
++	}
++	unpublish := func(id, path string) {
++		_, _ = server.NodeUnpublishVolume(ctx, &csi.NodeUnpublishVolumeRequest{VolumeId: id, TargetPath: path})
++	}
++	next := func() string {
++		t.Helper()
++		select {
++		case path := <-started:
++			return path
++		case <-time.After(2 * time.Second):
++			t.Fatal("no node RPC reached the driver")
++			return ""
++		}
++	}
++	go publish("home", "/home")
++	if got := next(); got != "/home" {
++		t.Fatalf("first target = %q; want /home", got)
++	}
++	go unpublish("home", "/previous-home")
++	go publish("different-volume", "/./home")
++	go publish("scratch", "/scratch")
++	if got := next(); got != "/scratch" {
++		t.Fatalf("independent scratch mount was not first; entered %q", got)
++	}
++	select {
++	case got := <-started:
++		t.Fatalf("overlapping volume or target reached the driver before Home completed: %q", got)
++	case <-time.After(50 * time.Millisecond):
++	}
++	open()
++	a, b := next(), next()
++	if !((a == "/previous-home" && b == "/./home") || (b == "/previous-home" && a == "/./home")) {
++		t.Fatalf("pending requests did not complete: %q, %q", a, b)
++	}
++}
++
+ func TestMakeMountOptions(t *testing.T) {
+ 	_, err := makeMountOptions(true, &csi.VolumeCapability_MountVolume{
+ 		MountFlags: []string{"rw"},
