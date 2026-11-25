@@ -531,8 +531,7 @@ impl KubernetesCoordinator {
         }
         if matches!(
             workspace.state,
-            crate::workspaces::WorkspaceState::Starting
-                | crate::workspaces::WorkspaceState::Restarting
+            WorkspaceState::Starting | WorkspaceState::Restarting
         ) {
             let pods = Api::<Pod>::namespaced(self.client.clone(), namespace_name);
             let pod_name = names.pod_ordinal_zero();
