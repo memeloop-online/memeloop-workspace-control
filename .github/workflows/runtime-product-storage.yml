@@ -12,6 +12,8 @@ permissions:
   packages: read
 env:
   WRAPPER_SHA: 9e25c9ec773845a7cf84312ca03ae4326866f3e3
+  CONTAINERD_BASE_SHA: 7e04eb8fad2b9597d04c8109b67476ab9270bc22
+  CONTAINERD_CLEANUP_SHA: e49a475d4a87d25513febbc2e625ddf0f1f447e0
 jobs:
   build-inputs:
     name: Compile and verify CSI inputs
@@ -67,6 +69,28 @@ jobs:
           (cd "$bin" && sha256sum mwc-runtime-wrapper mwc-runsc-wrapper > "$release/SHA256SUMS")
           jq -n --arg sha "$WRAPPER_SHA" --arg run "$GITHUB_RUN_ID" --arg attempt "$GITHUB_RUN_ATTEMPT" \
             '{source_sha:$sha,run_id:$run,run_attempt:$attempt,platform:"linux/amd64",variants:["native","runsc"]}' > "$release/artifact-identity.json"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: k3s-io/containerd
+          ref: ${{ env.CONTAINERD_BASE_SHA }}
+          path: ci-containerd-source
+          persist-credentials: false
+      - name: Build the K3s Containerd daemon with the upstream cleanup patch (CI only)
+        working-directory: ci-containerd-source
+        env:
+          CGO_ENABLED: '0'
+        run: |
+          test "$(git rev-parse HEAD)" = "$CONTAINERD_BASE_SHA"
+          test -z "$(git status --porcelain)"
+          patch="$RUNNER_TEMP/containerd-shim-cleanup.patch"
+          curl --fail --silent --show-error --location --retry 3 --max-time 60 \
+            "https://github.com/containerd/containerd/commit/$CONTAINERD_CLEANUP_SHA.patch" -o "$patch"
+          printf '%s  %s\n' 77a03be9caa231cb6e69f6393217083f70df5778048ec808fbe59e2e10d1539e "$patch" | sha256sum -c -
+          git apply --include=core/runtime/v2/shim_manager.go "$patch"
+          test "$(git diff --name-only)" = core/runtime/v2/shim_manager.go
+          git diff --check
+          make VERSION=v2.3.2-k3s2-shim-cleanup REVISION="$CONTAINERD_BASE_SHA+$CONTAINERD_CLEANUP_SHA" bin/containerd
+          install -m 0755 bin/containerd "$RUNNER_TEMP/product-storage-bin/containerd-shim-cleanup"
       - name: Build exact renderer fixtures and probe (CI only)
         run: |
           mkdir -p artifacts "$RUNNER_TEMP/product-storage-fixtures" "$RUNNER_TEMP/product-storage-bin"

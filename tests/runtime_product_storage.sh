@@ -449,9 +449,10 @@ copy_input k3s \
 chmod 0755 "$base/k3s-bin"
 K3S_DATA_DIR="$base/k3s" "$base/k3s-bin" ctr version --help >/dev/null
 export PATH="$base/k3s/data/current/bin:$PATH"
-containerd --version | tee "$out/containerd-version.txt"
+containerd_daemon="$RUNNER_TEMP/product-storage-bin/containerd-shim-cleanup"
+"$containerd_daemon" --version | tee "$out/containerd-version.txt"
 runc --version | tee "$out/runc-version.txt"
-grep -F 'v2.3.2-k3s2' "$out/containerd-version.txt"
+grep -F 'v2.3.2-k3s2-shim-cleanup 7e04eb8fad2b9597d04c8109b67476ab9270bc22+e49a475d4a87d25513febbc2e625ddf0f1f447e0' "$out/containerd-version.txt"
 grep -Fx 'runc version 1.4.2' "$out/runc-version.txt"
 uname -a > "$out/kernel.txt"
 install -m 0755 "$RUNNER_TEMP/product-storage-bin/mwc-runtime-wrapper" "$base/mwc-runtime-wrapper"
@@ -563,7 +564,7 @@ state = '$containerd_state'
     [plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.mwc-runsc.options]
       ConfigPath = '$base/runsc.toml'
 TOML
-containerd --config "$base/containerd.toml" > "$out/containerd.log" 2>&1 & containerd_pid=$!
+"$containerd_daemon" --config "$base/containerd.toml" > "$out/containerd.log" 2>&1 & containerd_pid=$!
 for n in $(seq 1 60); do if cri info > "$out/cri-info.json" 2>/dev/null; then break; fi; sleep 1; done
 cri info > "$out/cri-info.json"
 # Imports and kubelet use one real containerd content store.
@@ -690,9 +691,9 @@ findmnt -n -o FS-OPTIONS --mountpoint "$default_rootfs" | grep -F "upperdir=$bas
 test -d "$default_logs" && test ! -L "$default_logs"
 test "$(kube exec mwc-default-runtime -- cat /tmp/mwc-sentinel)" = ordinary-runtime
 
-# Run the same rootless BuildKit and init commands under stock runc before the
-# candidate. A positive orphan here rules out the storage wrapper and CSI as
-# necessary causes. A negative control does not prove which difference matters.
+# The earlier stock daemon reproduced the orphan with this same stock runc
+# workload. The patched daemon must release the old lock and recover workers
+# before the wrapped TopoLVM matrix is allowed to run.
 stock_out="$out/stock-runc-buildkit-shim"
 stock_pod=mwc-stock-buildkit-shim
 mkdir "$stock_out"
@@ -740,6 +741,8 @@ jq -n --argjson workers "$stock_recovered" --slurpfile before "$stock_out/lock-b
  {stock_runc:true,stock_empty_dir:true,same_pod_with_new_sandbox:true,workers_recovered:$workers,
   previous_buildkit_still_holds_lock:($before[0]==$after[0])}
 ' > "$stock_out/result.json"
+jq -e '.workers_recovered and (.previous_buildkit_still_holds_lock|not)' "$stock_out/result.json"
+jq -e --arg id "$stock_container" 'all(.holders[]; all(.cgroup[]; endswith("/cri-containerd-"+$id+".scope")|not))' "$stock_out/lock-after.json"
 kube delete pod "$stock_pod" --wait=true --timeout=120s
 
 for runtime in mwc-native mwc-runsc; do
@@ -896,7 +899,7 @@ for enabled in false true; do
   if wait "$containerd_pid"; then exit 1; else test "$?" -eq 137; fi
   containerd_pid=''
   ssh_product 'test "$(cat /home/user/storage-ci-home-marker)" = home-survives; printf ssh-without-containerd' > "$case_out/ssh-without-containerd.txt"
-  containerd --config "$base/containerd.toml" >> "$out/containerd.log" 2>&1 & containerd_pid=$!
+  "$containerd_daemon" --config "$base/containerd.toml" >> "$out/containerd.log" 2>&1 & containerd_pid=$!
   for n in $(seq 1 60); do
    if cri --timeout 3s info 2>/dev/null | jq -e '[.status.conditions[]|select(.type=="RuntimeReady")|.status]==[true]' >/dev/null &&
       cri --timeout 3s inspect "$main_id" 2>/dev/null | jq -e '.status.state=="CONTAINER_RUNNING"' >/dev/null; then break; fi
@@ -1091,6 +1094,8 @@ for enabled in false true; do
    shopt -u nullglob
   fi
   test "$shim_recovered" = true
+  capture_buildkit_lock after
+  jq -e --arg id "$old_buildkit" 'all(.holders[]; all(.cgroup[]; endswith("/cri-containerd-"+$id+".scope")|not))' "$case_out/shim-buildkit-lock-after.json"
   test "$(kube get pvc -n "$namespace" "$scratch_claim" -o jsonpath='{.metadata.uid}:{.spec.volumeName}')" = "$scratch_uid:$scratch_pv"
   test "$(kube get pvc -n "$namespace" "$home_claim" -o jsonpath='{.metadata.uid}:{.spec.volumeName}')" = "$home_uid:$home_pv"
   check_active_writeback after-shim-loss "/var/lib/kubelet/pods/$new_uid/volumes/kubernetes.io~csi/$scratch_pv/mount" \
