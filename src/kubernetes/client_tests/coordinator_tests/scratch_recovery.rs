@@ -28,8 +28,10 @@ fn stalled_scratch(
         set["spec"]["template"]["spec"]["initContainers"]
             .as_array()
             .unwrap()
-            .len(),
-        2
+            .iter()
+            .map(|container| container["name"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["workspace-scratch-init"]
     );
     let names = builder.runtime_names(&workspace).unwrap().resources;
     let home_name = names.data_pvc_ordinal_zero();
