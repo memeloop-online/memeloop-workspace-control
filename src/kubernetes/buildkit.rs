@@ -113,6 +113,7 @@ fn security_context() -> SecurityContext {
         read_only_root_filesystem: Some(true),
         app_armor_profile: Some(AppArmorProfile {
             type_: "Unconfined".to_owned(),
+            ..AppArmorProfile::default()
         }),
         seccomp_profile: Some(SeccompProfile {
             type_: "Unconfined".to_owned(),
