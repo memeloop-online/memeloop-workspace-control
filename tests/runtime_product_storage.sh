@@ -690,6 +690,58 @@ findmnt -n -o FS-OPTIONS --mountpoint "$default_rootfs" | grep -F "upperdir=$bas
 test -d "$default_logs" && test ! -L "$default_logs"
 test "$(kube exec mwc-default-runtime -- cat /tmp/mwc-sentinel)" = ordinary-runtime
 
+# Run the same rootless BuildKit and init commands under stock runc before the
+# candidate. A positive orphan here rules out the storage wrapper and CSI as
+# necessary causes. A negative control does not prove which difference matters.
+stock_out="$out/stock-runc-buildkit-shim"
+stock_pod=mwc-stock-buildkit-shim
+mkdir "$stock_out"
+jq --arg name "$stock_pod" '
+ .pod as $product |
+ {apiVersion:"v1",kind:"Pod",metadata:{name:$name},spec:{
+  automountServiceAccountToken:false,securityContext:$product.spec.securityContext,
+  volumes:[{name:"workspace-scratch",emptyDir:{}}],
+  initContainers:[$product.spec.initContainers[]|select(.name=="workspace-scratch-init" or .name=="buildkit-bootstrap")],
+  containers:[$product.spec.containers[]|select(.name=="buildkitd")]
+ }}
+' "$fixtures/mwc-native-buildkit-true.json" | kube apply -f -
+kube wait --for=condition=Ready "pod/$stock_pod" --timeout=180s
+kube get pod "$stock_pod" -o json > "$stock_out/pod-before.json"
+stock_uid="$(jq -er '.metadata.uid' "$stock_out/pod-before.json")"
+stock_container="$(jq -er '.status.containerStatuses[0].containerID|sub("^containerd://";"")' "$stock_out/pod-before.json")"
+stock_sandbox="$(cri --timeout 5s pods --namespace default --name "^$stock_pod$" --state ready --label "io.kubernetes.pod.uid=$stock_uid" -q)"
+[[ "$stock_sandbox" =~ ^[a-f0-9]{64}$ && "$stock_container" =~ ^[a-f0-9]{64}$ ]]
+stock_lock="/var/lib/kubelet/pods/$stock_uid/volumes/kubernetes.io~empty-dir/workspace-scratch/data/build-cache/state/buildkitd.lock"
+capture_stock_lock() {
+ python3 "$GITHUB_WORKSPACE/tests/runtime-product-vm/buildkit-lock-evidence.py" "$stock_lock" > "$stock_out/lock-$1.json"
+}
+capture_stock_lock before
+jq -e --arg id "$stock_container" '[.holders[]|select(.command=="buildkitd" and any(.cgroup[];endswith("/cri-containerd-"+$id+".scope")))]|length==1' "$stock_out/lock-before.json"
+python3 "$GITHUB_WORKSPACE/tests/runtime-product-vm/kill-fixture-shim.py" "$bundle_root" "$stock_sandbox" runc > "$stock_out/fault.json"
+stock_recovered=false
+stock_new=""
+stock_deadline=$((SECONDS+65))
+while [ "$SECONDS" -lt "$stock_deadline" ]; do
+ stock_current="$(cri --timeout 5s pods --namespace default --name "^$stock_pod$" --state ready --label "io.kubernetes.pod.uid=$stock_uid" -q 2>/dev/null || true)"
+ if [[ "$stock_current" =~ ^[a-f0-9]{64}$ && "$stock_current" != "$stock_sandbox" ]]; then
+  stock_new="$stock_current"
+  if kube --request-timeout=5s exec "$stock_pod" -c buildkitd -- buildctl debug workers > "$stock_out/workers-after.txt" 2>/dev/null; then
+   stock_recovered=true
+   break
+  fi
+ fi
+ sleep 2
+done
+[[ "$stock_new" =~ ^[a-f0-9]{64}$ ]]
+capture_stock_lock after
+kube get pod "$stock_pod" -o json > "$stock_out/pod-after.json"
+jq -e --arg uid "$stock_uid" '.metadata.uid==$uid and .spec.runtimeClassName==null' "$stock_out/pod-after.json"
+jq -n --argjson workers "$stock_recovered" --slurpfile before "$stock_out/lock-before.json" --slurpfile after "$stock_out/lock-after.json" '
+ {stock_runc:true,stock_empty_dir:true,same_pod_with_new_sandbox:true,workers_recovered:$workers,
+  previous_buildkit_still_holds_lock:($before[0]==$after[0])}
+' > "$stock_out/result.json"
+kube delete pod "$stock_pod" --wait=true --timeout=120s
+
 for runtime in mwc-native mwc-runsc; do
 for enabled in false true; do
  case_id="$runtime-buildkit-$enabled"

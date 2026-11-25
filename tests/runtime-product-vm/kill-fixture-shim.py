@@ -30,7 +30,11 @@ assert len(pids) == 1, f"expected one shim listener, found {len(pids)}"
 proc = pathlib.Path("/proc", str(pid))
 descriptor = os.pidfd_open(pid)
 try:
-    expected = {"mwc-native": "containerd-shim-runc-v2", "mwc-runsc": "containerd-shim-runsc-v1"}[runtime]
+    expected = {
+        "runc": "containerd-shim-runc-v2",
+        "mwc-native": "containerd-shim-runc-v2",
+        "mwc-runsc": "containerd-shim-runsc-v1",
+    }[runtime]
     assert pathlib.Path(os.readlink(proc / "exe")).name == expected
     args = (proc / "cmdline").read_bytes().decode().split("\0")
     assert args[args.index("-namespace") + 1] == "k8s.io"
