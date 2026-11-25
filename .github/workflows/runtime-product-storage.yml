@@ -29,6 +29,7 @@ jobs:
         run: |
           bash -n tests/runtime_product_storage.sh
           bash -n tests/runtime-product-vm/prepare-public-inputs.sh
+          bash -n tests/runtime-product-vm/workspace-reboot-guest.sh
           python3 -m py_compile tests/runtime_product_storage_bdi.py
       - uses: dtolnay/rust-toolchain@1.98.0
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
@@ -125,7 +126,7 @@ jobs:
       - name: Prepare disposable real CSI node
         run: |
           sudo apt-get update
-          sudo apt-get install -y lvm2 thin-provisioning-tools xfsprogs jq openssh-client bzip2 curl conntrack socat ethtool ebtables iptables kmod
+          sudo apt-get install -y lvm2 thin-provisioning-tools xfsprogs jq openssh-client bzip2 curl conntrack socat ethtool ebtables iptables kmod qemu-system-x86 qemu-utils cloud-image-utils
           # The runner contains several SDKs unused by this isolated VM experiment.
           sudo rm -rf /usr/local/lib/android /opt/ghc /usr/share/dotnet
           df -B1 / | tee artifacts/runner-capacity-before.txt
@@ -136,6 +137,17 @@ jobs:
         run: |
           bash tests/runtime-product-vm/prepare-public-inputs.sh "$RUNNER_TEMP/product-storage-inputs"
           echo "MWC_PRODUCT_STORAGE_INPUTS=$RUNNER_TEMP/product-storage-inputs" >> "$GITHUB_ENV"
+      - name: Boot a real workspace again with both original PVCs
+        run: |
+          proof="$RUNNER_TEMP/workspace-node-reboot"
+          mkdir -p artifacts/workspace-node-reboot
+          status=0
+          bash ops/scratch-runtime/ci/reboot.sh "$proof" workspace || status=$?
+          for file in boot-evidence.jsonl k3s-guest.log workspace-before.json workspace-after.json workspace-reclaimed.json; do
+            if [[ -f "$proof/$file" ]]; then cp "$proof/$file" artifacts/workspace-node-reboot/; fi
+          done
+          rm -f "$proof/"{noble.img,home.raw,scratch.raw}
+          exit "$status"
       - name: Actual Rust product and TopoLVM lifecycle
         run: |
           status=0

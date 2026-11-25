@@ -642,27 +642,7 @@ copy_input helm.tgz \
 tar -xzf "$base/helm.tgz" -C "$base"
 copy_input topolvm.tgz \
  4b6c070da0b38f098c9ef6b6a38ef4e2dfff52adecedc280ad92bfab408f90ee "$base/topolvm.tgz"
-cat > "$base/topolvm-values.yaml" <<'YAML'
-cert-manager: {enabled: false}
-webhook:
-  certManager: false
-  podMutatingWebhook: {enabled: false}
-scheduler: {enabled: false}
-controller: {replicaCount: 1}
-image:
-  repository: ghcr.io/topolvm/topolvm-with-sidecar
-  reference: 0.41.1@sha256:70548dbe0c6addcccf79a557f29e95db2e6dc2cba2102988c91f30086004d0fc
-lvmd:
-  deviceClasses:
-    - {name: mwc-ci-home, volume-group: mwc-ci-home, type: thin, spare-gb: 0, thin-pool: {name: pool, overprovision-ratio: 2.0}}
-    - {name: mwc-ci-scratch, volume-group: mwc-ci-scratch, type: thin, default: true, spare-gb: 0, thin-pool: {name: pool, overprovision-ratio: 2.0}}
-storageClasses:
-  - name: mwc-ci-home
-    storageClass: {fsType: xfs, reclaimPolicy: Delete, volumeBindingMode: WaitForFirstConsumer, additionalParameters: {topolvm.io/device-class: mwc-ci-home}}
-  - name: mwc-ci-scratch
-    storageClass: {fsType: xfs, reclaimPolicy: Delete, volumeBindingMode: WaitForFirstConsumer, additionalParameters: {topolvm.io/device-class: mwc-ci-scratch}}
-YAML
-KUBECONFIG="$base/kubeconfig" "$base/linux-amd64/helm" install topolvm "$base/topolvm.tgz" -n topolvm-system --create-namespace -f "$base/topolvm-values.yaml" --wait --timeout 5m
+KUBECONFIG="$base/kubeconfig" "$base/linux-amd64/helm" install topolvm "$base/topolvm.tgz" -n topolvm-system --create-namespace -f "$GITHUB_WORKSPACE/tests/runtime-product-vm/topolvm-values.yaml" --wait --timeout 5m
 kube get storageclasses,csidrivers,csinodes -o json > "$out/actual-csi-installation.json"
 
 # An ordinary, unwrapped workload must survive the whole CSI matrix in the

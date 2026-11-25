@@ -5,6 +5,7 @@ test "${GITHUB_ACTIONS:-}" = true
 test "${RUNNER_ENVIRONMENT:-}" = github-hosted
 umask 077
 dir=$1
+mode=${2:-ordinary}
 mkdir -p "$dir"
 src=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 fetch() {
@@ -15,7 +16,21 @@ fetch noble.img 'https://cloud-images.ubuntu.com/releases/24.04/release-20261017
   04e8f2461a16a44e78a370284471f29616cdd9baf1893df25807b71f985b6c94
 fetch k3s 'https://github.com/k3s-io/k3s/releases/download/v1.36.2%2Bk3s1/k3s' \
   65a55ec56c24eab44383086166ec620a491952b7e23941a49ddca6e8a4c4b4de
-qemu-img resize "$dir/noble.img" 16G
+disk_args=()
+case "$mode" in
+  ordinary) disk_size=16G; cpus=2; memory=4096 ;;
+  workspace)
+    disk_size=24G; cpus=3; memory=5120
+    truncate -s 14G "$dir/home.raw"
+    truncate -s 7G "$dir/scratch.raw"
+    disk_args=(-drive "file=$dir/home.raw,format=raw,if=none,id=home,cache=none"
+      -device virtio-blk-pci,drive=home,serial=mwc-ci-home
+      -drive "file=$dir/scratch.raw,format=raw,if=none,id=scratch,cache=none"
+      -device virtio-blk-pci,drive=scratch,serial=mwc-ci-scratch)
+    ;;
+  *) exit 2 ;;
+esac
+qemu-img resize "$dir/noble.img" "$disk_size"
 ssh-keygen -q -t ed25519 -N '' -f "$dir/client"
 ssh-keygen -q -t ed25519 -N '' -f "$dir/guest"
 printf 'mwc-ci-guest %s\n' "$(cat "$dir/guest.pub")" > "$dir/known-hosts"
@@ -37,11 +52,20 @@ if [[ -r /dev/kvm && -w /dev/kvm ]]; then
 else
   acceleration=(-accel tcg,thread=multi -cpu max)
 fi
-qemu-system-x86_64 "${acceleration[@]}" -display none -smp 2 -m 4096 \
+qemu-system-x86_64 "${acceleration[@]}" -display none -smp "$cpus" -m "$memory" \
   -drive "file=$dir/noble.img,format=qcow2,if=virtio" -drive "file=$dir/seed.img,format=raw,if=virtio,readonly=on" \
+  "${disk_args[@]}" \
   -nic user,model=virtio,hostfwd=tcp:127.0.0.1:22345-:22 -serial "file:$dir/k3s-guest.log" &
 vm_pid=$!
-cleanup() { kill "$vm_pid" 2>/dev/null || true; wait "$vm_pid" 2>/dev/null || true; }
+cleanup() {
+  local status=$?
+  if [[ $status != 0 && $mode == workspace ]]; then
+    timeout 20s ssh "${options[@]}" -p 22345 ubuntu@127.0.0.1 \
+      sudo bash /home/ubuntu/mwc-ci/workspace-reboot-guest.sh diagnostics || true
+  fi
+  kill "$vm_pid" 2>/dev/null || true
+  wait "$vm_pid" 2>/dev/null || true
+}
 trap cleanup EXIT
 
 options=(-o BatchMode=yes -o StrictHostKeyChecking=yes -o "UserKnownHostsFile=$dir/known-hosts"
@@ -61,6 +85,7 @@ boot_id() {
   return 1
 }
 step() { guest sudo bash /home/ubuntu/mwc-ci/guest.sh "$@"; }
+workspace_step() { guest sudo bash /home/ubuntu/mwc-ci/workspace-reboot-guest.sh "$@"; }
 reboot_guest() {
   guest sudo systemd-run --quiet --on-active=2s /usr/bin/systemctl reboot --no-wall
   boot_id "$1"
@@ -70,11 +95,34 @@ first=$(boot_id)
 guest 'cloud-init status --wait && mkdir -m 0755 ~/mwc-ci'
 scp -q "${options[@]}" -P 22345 "$dir/k3s" "$src"/{mwc-scratch-mounts.sh,mwc-scratch-mounts.service,30-mwc-scratch-mounts.conf} \
   "$src/ci/guest.sh" ubuntu@127.0.0.1:mwc-ci/
+if [[ $mode == workspace ]]; then
+  fixture="$RUNNER_TEMP/product-storage-fixtures/mwc-native-buildkit-true.json"
+  vm_tests="$GITHUB_WORKSPACE/tests/runtime-product-vm"
+  (cd "$MWC_PRODUCT_STORAGE_INPUTS" && sha256sum -c SHA256SUMS)
+  scp -q "${options[@]}" -P 22345 "$vm_tests/"{workspace-reboot-guest.sh,topolvm-values.yaml} "$fixture" \
+    "$RUNNER_TEMP/product-storage-bin/mwc-runtime-wrapper" \
+    "$MWC_PRODUCT_STORAGE_INPUTS/"{helm.tgz,topolvm.tgz,workspace-image.tar} \
+    "$MWC_PRODUCT_STORAGE_INPUTS/registry/public-input-identity.json" ubuntu@127.0.0.1:mwc-ci/
+  workspace_step install
+fi
 step install
 step mounted ordinary-before-reboot | tee "$dir/boot-evidence.jsonl"
 first_container=$(jq -er '.container_id' "$dir/boot-evidence.jsonl")
+if [[ $mode == workspace ]]; then
+  workspace_step seed >&2
+  workspace_step observe > "$dir/workspace-before.json"
+fi
 second=$(reboot_guest "$first")
 step mounted ordinary-before-reboot "$first_container" | tee -a "$dir/boot-evidence.jsonl"
+if [[ $mode == workspace ]]; then
+  workspace_step observe "$(jq -er .container_id "$dir/workspace-before.json")" > "$dir/workspace-after.json"
+  jq -es --arg first "$first" --arg second "$second" '
+    length == 2 and map(.boot_id) == [$first,$second] and .[0].pod_uid == .[1].pod_uid and
+    .[0].container_id != .[1].container_id and .[0].volumes == .[1].volumes and
+    all(.[]; .strict_ssh and .buildkit and (.volumes|length)==2)
+  ' "$dir/workspace-before.json" "$dir/workspace-after.json"
+  workspace_step reclaim > "$dir/workspace-reclaimed.json"
+fi
 step rollback
 third=$(reboot_guest "$second")
 step unmounted ordinary-after-rollback | tee -a "$dir/boot-evidence.jsonl"
