@@ -12,7 +12,7 @@ use super::{
     FIELD_MANAGER, KubernetesCoordinator, ReconcileError, current_workspace_pod,
     home_volume_capacity_bytes, observed_workspace_generation, workspace_connection_ready,
 };
-use crate::workspaces::Workspace;
+use crate::workspaces::{Workspace, WorkspaceState};
 
 // StatefulSet CurrentRevision can stay at the first revision indefinitely
 // under OnDelete. Record the exact live revision that this resize preserves.
@@ -71,26 +71,11 @@ impl KubernetesCoordinator {
         {
             return Ok(MemoryResize::Pending);
         }
-        let Some((pod_uid, pod_version, revision)) = pod
+        let Some(revision) = pod
             .metadata
-            .uid
+            .labels
             .as_ref()
-            .zip(pod.metadata.resource_version.as_ref())
-            .zip(
-                pod.metadata
-                    .labels
-                    .as_ref()
-                    .and_then(|labels| labels.get("controller-revision-hash")),
-            )
-            .map(|((uid, version), revision)| (uid, version, revision))
-        else {
-            return Ok(MemoryResize::Rejected("runtime_changed"));
-        };
-        let Some((set_uid, set_version)) = set
-            .metadata
-            .uid
-            .as_ref()
-            .zip(set.metadata.resource_version.as_ref())
+            .and_then(|labels| labels.get("controller-revision-hash"))
         else {
             return Ok(MemoryResize::Rejected("runtime_changed"));
         };
@@ -118,7 +103,9 @@ impl KubernetesCoordinator {
             return Ok(MemoryResize::Rejected("runtime_changed"));
         }
 
-        let patch = pod_resize_patch(pod_uid, pod_version, &limit);
+        let Some(patch) = pod_resize_patch(&pod, &limit) else {
+            return Ok(MemoryResize::Rejected("runtime_changed"));
+        };
         let params = PatchParams::apply(FIELD_MANAGER);
         if wanted < target {
             // The actual endpoint checks feature availability, authorization,
@@ -140,17 +127,9 @@ impl KubernetesCoordinator {
         if replacement < target {
             // Save the next Pod's resources first; OnDelete prevents the
             // StatefulSet controller from recreating this running Pod.
-            let patch = Patch::Strategic(json!({
-                "metadata": {
-                    "uid": set_uid,
-                    "resourceVersion": set_version,
-                    "annotations": {(RETAINED_REVISION): revision},
-                },
-                "spec": {
-                    "updateStrategy": {"type": "OnDelete", "rollingUpdate": null},
-                    "template": {"spec": {"containers": [workspace_memory_patch(&limit)]}},
-                },
-            }));
+            let Some(patch) = statefulset_memory_patch(&set, &limit, Some(revision)) else {
+                return Ok(MemoryResize::Rejected("runtime_changed"));
+            };
             if let Err(error) = sets.patch(&names.stateful_set, &params, &patch).await {
                 return resize_api_error(error, false, false);
             }
@@ -168,15 +147,82 @@ impl KubernetesCoordinator {
     }
 }
 
-pub(super) fn workspace_memory_patch(limit: &str) -> Value {
+pub(super) fn keep_resize_strategy(
+    state: WorkspaceState,
+    desired: &mut StatefulSet,
+    existing: &StatefulSet,
+) -> Result<(), ReconcileError> {
+    if retained_memory_revision(existing).is_none() {
+        return Ok(());
+    }
+    let (Some(desired), Some(current)) = (&mut desired.spec, &existing.spec) else {
+        return Err(ReconcileError::MissingPodTemplateMetadata);
+    };
+    // Explicit start/restart already replaces stale Pods using the new template.
+    // A Ready reconcile leaves the running and replacement revisions intact.
+    desired.update_strategy = current.update_strategy.clone();
+    if state == WorkspaceState::Ready {
+        desired.template.clone_from(&current.template);
+        if let Some(metadata) = &mut desired.template.metadata {
+            metadata.creation_timestamp = None;
+        }
+    }
+    Ok(())
+}
+
+pub(super) async fn sync_offline_memory_limit(
+    sets: &Api<StatefulSet>,
+    name: &str,
+    state: WorkspaceState,
+    desired: &StatefulSet,
+    existing: Option<&StatefulSet>,
+) -> Result<(), ReconcileError> {
+    if let Some(existing) = existing.filter(|set| retained_memory_revision(set).is_some())
+        && state != WorkspaceState::Ready
+        && let Some((current, limit)) =
+            statefulset_workspace_limit(existing).zip(statefulset_workspace_limit(desired))
+        && home_volume_capacity_bytes(current) != home_volume_capacity_bytes(limit)
+        && let Some(patch) = statefulset_memory_patch(existing, limit, None)
+    {
+        // The strategic patch owns the limit separately from SSA. Update
+        // that field first so an offline edit can be applied at the same value.
+        sets.patch(name, &PatchParams::apply(FIELD_MANAGER), &patch)
+            .await?;
+    }
+    Ok(())
+}
+
+fn statefulset_memory_patch(
+    set: &StatefulSet,
+    limit: &str,
+    revision: Option<&str>,
+) -> Option<Patch<Value>> {
+    let mut patch = json!({
+        "metadata": {
+            "uid": set.metadata.uid.as_deref()?,
+            "resourceVersion": set.metadata.resource_version.as_deref()?,
+        },
+        "spec": {"template":{"spec":{"containers":[workspace_memory_patch(limit)]}}},
+    });
+    if let Some(revision) = revision {
+        patch["metadata"]["annotations"] = json!({(RETAINED_REVISION): revision});
+        patch["spec"]["updateStrategy"] = json!({"type": "OnDelete", "rollingUpdate": null});
+    }
+    Some(Patch::Strategic(patch))
+}
+
+fn workspace_memory_patch(limit: &str) -> Value {
     json!({"name": "workspace", "resources": {"limits": {"memory": limit}}})
 }
 
-fn pod_resize_patch(uid: &str, version: &str, limit: &str) -> Patch<Value> {
-    Patch::Strategic(json!({
-        "metadata": {"uid": uid, "resourceVersion": version},
+fn pod_resize_patch(pod: &Pod, limit: &str) -> Option<Patch<Value>> {
+    Some(Patch::Strategic(json!({
+        "metadata": {
+            "uid": pod.metadata.uid.as_deref()?,
+            "resourceVersion": pod.metadata.resource_version.as_deref()?,
+        },
         "spec": {"containers": [workspace_memory_patch(limit)]},
-    }))
+    })))
 }
 
 fn memory_quantity(resources: &ResourceRequirements) -> Option<&str> {
@@ -187,7 +233,7 @@ fn memory_limit(resources: &ResourceRequirements) -> Option<u64> {
     home_volume_capacity_bytes(memory_quantity(resources)?)
 }
 
-pub(super) fn statefulset_workspace_limit(set: &StatefulSet) -> Option<&str> {
+fn statefulset_workspace_limit(set: &StatefulSet) -> Option<&str> {
     let container = set
         .spec
         .as_ref()?

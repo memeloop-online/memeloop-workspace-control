@@ -16,8 +16,8 @@ use uuid::Uuid;
 use super::super::{DesiredResources, InjectionMaterialization};
 use super::{
     FIELD_MANAGER, KubernetesCoordinator, ReconcileError,
-    memory_resize::{statefulset_workspace_limit, workspace_memory_patch},
-    restart_generation_is_stale, retained_memory_revision, verify_existing,
+    memory_resize::{keep_resize_strategy, sync_offline_memory_limit},
+    restart_generation_is_stale, verify_existing,
 };
 
 #[path = "client_apply/envoy_filter.rs"]
@@ -473,45 +473,18 @@ impl KubernetesCoordinator {
             if existing.metadata.deletion_timestamp.is_some() {
                 return Err(ReconcileError::StatefulSetRecreationPending);
             }
-            if retained_memory_revision(existing).is_some() {
-                let (Some(desired), Some(current)) = (&mut stateful_set.spec, &existing.spec)
-                else {
-                    return Err(ReconcileError::MissingPodTemplateMetadata);
-                };
-                // The opt-in resize switched this workspace to OnDelete. Explicit
-                // start/restart already replaces stale Pods using the new template.
-                // A Ready reconcile must leave the running and replacement revisions intact.
-                desired.update_strategy = current.update_strategy.clone();
-                if workspace.state == WorkspaceState::Ready {
-                    desired.template.clone_from(&current.template);
-                    if let Some(metadata) = &mut desired.template.metadata {
-                        metadata.creation_timestamp = None;
-                    }
-                }
-            }
+            keep_resize_strategy(workspace.state, &mut stateful_set, existing)?;
             preserve_claim_storage_classes(&mut stateful_set, existing);
         }
         self.verify_home_volume_binding(workspace).await?;
-        if let Some(existing) = existing.filter(|set| retained_memory_revision(set).is_some())
-            && workspace.state != WorkspaceState::Ready
-            && let Some((current, limit)) = statefulset_workspace_limit(existing)
-                .zip(statefulset_workspace_limit(&stateful_set))
-            && super::home_volume_capacity_bytes(current)
-                != super::home_volume_capacity_bytes(limit)
-        {
-            // The strategic patch owns the limit separately from SSA. Update
-            // that field first so an offline edit can be applied at the same value.
-            let patch = Patch::Strategic(serde_json::json!({
-                "metadata": {
-                    "uid": existing.metadata.uid,
-                    "resourceVersion": existing.metadata.resource_version,
-                },
-                "spec": {"template":{"spec":{"containers":[workspace_memory_patch(limit)]}}},
-            }));
-            stateful_sets
-                .patch(&names.stateful_set, &apply, &patch)
-                .await?;
-        }
+        sync_offline_memory_limit(
+            &stateful_sets,
+            &names.stateful_set,
+            workspace.state,
+            &stateful_set,
+            existing,
+        )
+        .await?;
         let stateful_set_result = observe_apply_stage(
             workspace,
             "stateful_set",
