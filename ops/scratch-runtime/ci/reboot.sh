@@ -52,8 +52,12 @@ if [[ -r /dev/kvm && -w /dev/kvm ]]; then
 else
   acceleration=(-accel tcg,thread=multi -cpu max)
 fi
+printf 'Starting %s guest with %s, %s vCPUs, %s MiB RAM\n' "$mode" "${acceleration[1]}" "$cpus" "$memory"
+# Explicit devices can be enumerated ahead of implicit virtio drives. Always
+# boot the OS disk rather than a newly attached empty CSI disk or the seed.
 qemu-system-x86_64 "${acceleration[@]}" -display none -smp "$cpus" -m "$memory" \
-  -drive "file=$dir/noble.img,format=qcow2,if=virtio" -drive "file=$dir/seed.img,format=raw,if=virtio,readonly=on" \
+  -drive "file=$dir/noble.img,format=qcow2,if=none,id=os" -device virtio-blk-pci,drive=os,bootindex=1 \
+  -drive "file=$dir/seed.img,format=raw,if=virtio,readonly=on" \
   "${disk_args[@]}" \
   -nic user,model=virtio,hostfwd=tcp:127.0.0.1:22345-:22 -serial "file:$dir/k3s-guest.log" &
 vm_pid=$!
