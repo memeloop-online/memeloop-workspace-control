@@ -127,6 +127,7 @@ if [[ $mode == workspace ]]; then
       (.cri_version | test("^v?2[.]3[.]2-k3s2-shim-cleanup$")))
   ' "$dir/workspace-before.json" "$dir/workspace-after.json"
   workspace_step reclaim > "$dir/workspace-reclaimed.json"
+  workspace_step restore-daemon
 fi
 step rollback
 third=$(reboot_guest "$second")

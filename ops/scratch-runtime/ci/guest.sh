@@ -20,8 +20,7 @@ After=network-online.target
 Type=notify
 KillMode=process
 Delegate=yes
-Environment=MWC_PREFER_BUNDLED_BIN=true
-ExecStart=/usr/local/bin/k3s server --prefer-bundled-bin=${MWC_PREFER_BUNDLED_BIN} --disable=traefik,servicelb,metrics-server,local-storage,coredns
+ExecStart=/usr/local/bin/k3s server --prefer-bundled-bin --disable=traefik,servicelb,metrics-server,local-storage,coredns
 
 [Install]
 WantedBy=multi-user.target
@@ -32,7 +31,7 @@ UNIT
     ;;
   rollback)
     k3s kubectl delete pod ordinary-before-reboot --ignore-not-found --timeout=60s
-    rm -f /etc/systemd/system/k3s.service.d/{30-mwc-scratch-mounts,31-mwc-storage-ci-daemon}.conf
+    rm -f /etc/systemd/system/k3s.service.d/30-mwc-scratch-mounts.conf
     exit
     ;;
   mounted|unmounted) ;;

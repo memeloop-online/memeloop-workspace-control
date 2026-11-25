@@ -22,19 +22,17 @@ if [[ $1 == install ]]; then
   # The wrapper intentionally rejects symlinks on trusted paths. Resolve the
   # bundled runc's versioned path before K3s starts the integrated containerd.
   k3s ctr version --help >/dev/null
-  runc=$(realpath -e /var/lib/rancher/k3s/data/current/bin/runc)
+  bin=$(realpath -e /var/lib/rancher/k3s/data/current/bin)
+  runc=$(realpath -e "$bin/runc")
   "$runc" --version | grep -Fx 'runc version 1.4.2' >&2
-  # K3s puts bin before PATH, and bin/aux after PATH when opting out of
-  # bundled preference. Override only the daemon, leaving other tools bundled.
-  test ! -x "${runc%/*}/containerd"
-  test -x "${runc%/*}/aux/containerd"
-  install -Dm 0755 "$src/containerd-shim-cleanup" /usr/local/libexec/mwc-storage-ci/containerd
-  install -d -m 0755 /etc/systemd/system/k3s.service.d
-  cat > /etc/systemd/system/k3s.service.d/31-mwc-storage-ci-daemon.conf <<'UNIT'
-[Service]
-Environment=MWC_PREFER_BUNDLED_BIN=false
-Environment=PATH=/usr/local/libexec/mwc-storage-ci:/usr/sbin:/usr/bin:/sbin:/bin
-UNIT
+  # The guest uses --prefer-bundled-bin. Restore the original directory
+  # entry on rollback, including if it is a symlink to a multicall binary.
+  daemon="$bin/containerd"
+  if [[ ! -x $daemon ]]; then daemon="$bin/aux/containerd"; fi
+  test -x "$daemon"
+  mv -T "$daemon" "$daemon.mwc-ci-original"
+  install -m 0755 "$src/containerd-shim-cleanup" "$daemon"
+  printf '%s\n' "$daemon" > "$state/daemon-path"
   for kind in home scratch; do
     disk="/dev/disk/by-id/virtio-mwc-ci-$kind"
     if [[ $kind == home ]]; then size=12G; else size=6G; fi
@@ -69,6 +67,12 @@ TOML
     printf '%s\n' 'kernel.apparmor_restrict_unprivileged_userns=0' > /etc/sysctl.d/90-mwc-ci-rootless.conf
     sysctl -p /etc/sysctl.d/90-mwc-ci-rootless.conf >&2
   fi
+  exit
+fi
+
+if [[ $1 == restore-daemon ]]; then
+  daemon=$(<"$state/daemon-path")
+  mv -fT "$daemon.mwc-ci-original" "$daemon"
   exit
 fi
 
