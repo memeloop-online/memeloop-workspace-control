@@ -1,0 +1,33 @@
+name: Scratch runtime cold boot
+
+on:
+  pull_request:
+    paths: ['ops/scratch-runtime/**', '.github/workflows/scratch-runtime-boot.yml']
+  push:
+    branches: [main]
+    paths: ['ops/scratch-runtime/**', '.github/workflows/scratch-runtime-boot.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  k3s-guest:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 22
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y qemu-system-x86 qemu-utils cloud-image-utils
+          for script in ops/scratch-runtime/*.sh ops/scratch-runtime/ci/*.sh; do bash -n "$script"; done
+          bash ops/scratch-runtime/ci/reboot.sh "$RUNNER_TEMP/scratch-runtime-boot"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: scratch-runtime-cold-boot-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/scratch-runtime-boot/boot-evidence.jsonl
+            ${{ runner.temp }}/scratch-runtime-boot/k3s-guest.log
+          if-no-files-found: ignore

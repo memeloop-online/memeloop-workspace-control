@@ -1,0 +1,10 @@
+[Unit]
+Description=Prepare MWC containerd task and log mounts before K3s
+After=local-fs.target
+Before=k3s.service k3s-agent.service
+RequiresMountsFor=/var/log
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/libexec/mwc-scratch-mounts.sh
