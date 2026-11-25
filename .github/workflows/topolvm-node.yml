@@ -1,0 +1,156 @@
+name: TopoLVM independent node operations
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/topolvm-node.yml
+      - images/topolvm-node/**
+      - tests/topolvm-node/**
+      - tests/runtime-product-vm/topolvm-values.yaml
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/topolvm-node.yml
+      - images/topolvm-node/**
+      - tests/topolvm-node/**
+      - tests/runtime-product-vm/topolvm-values.yaml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  node:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      TOPOLVM_SHA: 2d0c5174afb93856d9fc5105e7c04ed50b65628f
+      TOPOLVM_IMAGE: ghcr.io/topolvm/topolvm-with-sidecar@sha256:70548dbe0c6addcccf79a557f29e95db2e6dc2cba2102988c91f30086004d0fc
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: topolvm/topolvm
+          ref: ${{ env.TOPOLVM_SHA }}
+          path: topolvm-source
+          persist-credentials: false
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5
+        with:
+          go-version-file: topolvm-source/go.mod
+          cache: false
+      - name: Compare same-volume serialization and independent operations
+        working-directory: topolvm-source
+        run: |
+          test "$(git rev-parse HEAD)" = "$TOPOLVM_SHA"
+          git apply --check "$GITHUB_WORKSPACE/images/topolvm-node/independent-operations.patch"
+          git apply "$GITHUB_WORKSPACE/images/topolvm-node/independent-operations.patch"
+          test -z "$(gofmt -l internal/driver/node.go internal/driver/node_test.go)"
+          go test -race -count=1 ./internal/driver
+          mkdir -p "$RUNNER_TEMP/topolvm-node"
+          CGO_ENABLED=0 go build -buildvcs=false -trimpath \
+            -ldflags '-w -s -X github.com/topolvm/topolvm.Version=0.41.1-mwc-independent-volumes' \
+            -o "$RUNNER_TEMP/topolvm-node/topolvm-node" ./cmd/topolvm-node
+      - name: Verify the overlay replaces only the node executable
+        run: |
+          out="$RUNNER_TEMP/topolvm-node"
+          cp images/topolvm-node/Dockerfile "$out/"
+          candidate=localhost/topolvm-node-ci:patched
+          docker build --pull --build-arg "BASE_IMAGE=$TOPOLVM_IMAGE" -t "$candidate" "$out"
+          docker run --rm --entrypoint /topolvm-node "$candidate" --version | grep -F 0.41.1-mwc-independent-volumes
+          other_binaries() {
+            docker run --rm --entrypoint /bin/sh "$1" -ec \
+              'sha256sum /hypertopolvm /topolvm-controller /topolvm-scheduler /lvmd /csi-provisioner /csi-node-driver-registrar /csi-resizer /csi-snapshotter /livenessprobe'
+          }
+          other_binaries "$TOPOLVM_IMAGE" > "$out/base.txt"
+          other_binaries "$candidate" > "$out/candidate.txt"
+          diff -u "$out/base.txt" "$out/candidate.txt"
+          (cd "$out" && sha256sum topolvm-node > SHA256SUMS)
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: topolvm-node-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/topolvm-node/topolvm-node
+            ${{ runner.temp }}/topolvm-node/SHA256SUMS
+          if-no-files-found: error
+      - name: Prepare the disposable K3s node
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends lvm2 thin-provisioning-tools xfsprogs
+          bash -n tests/topolvm-node/measure-publish.sh
+          sudo modprobe dm_thin_pool
+          docker pull docker.io/library/alpine@sha256:4bcff63911fcb4448bd4fdacec207030997caf25e9bea4045fa6c8c44de311d1
+          docker save -o "$RUNNER_TEMP/topolvm-node-images.tar" localhost/topolvm-node-ci:patched \
+            docker.io/library/alpine@sha256:4bcff63911fcb4448bd4fdacec207030997caf25e9bea4045fa6c8c44de311d1
+      - name: Compare warm starts using real LVM thin disks
+        run: |
+          proof="$RUNNER_TEMP/topolvm-node-measure"
+          status=0
+          sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT unshare --mount --propagation private \
+            bash tests/topolvm-node/measure-publish.sh "$proof" || status=$?
+          sudo chown -R "$(id -u):$(id -g)" "$proof"/evidence
+          exit "$status"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: topolvm-live-publish-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/topolvm-node-measure/evidence
+          if-no-files-found: ignore
+      - name: Preserve the tested image for main-branch publication
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          out="$RUNNER_TEMP/tested"
+          mkdir -p "$out"
+          image=localhost/topolvm-node-ci:patched
+          docker image inspect "$image" --format '{{.Id}}' > "$out/config-digest.txt"
+          docker save "$image" | gzip -1 > "$out/topolvm-node.tar.gz"
+          (cd "$out" && sha256sum config-digest.txt topolvm-node.tar.gz > SHA256SUMS)
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        with:
+          name: tested-topolvm-node-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/tested
+          retention-days: 1
+          if-no-files-found: error
+
+  publish:
+    needs: node
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+      attestations: write
+      artifact-metadata: write
+      id-token: write
+    env:
+      IMAGE: ghcr.io/${{ github.repository }}-topolvm-node
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: tested-topolvm-node-${{ github.sha }}-${{ github.run_attempt }}
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish the tested image
+        id: push
+        run: |
+          sha256sum -c SHA256SUMS
+          docker load -i topolvm-node.tar.gz
+          local_image=localhost/topolvm-node-ci:patched
+          test "$(docker image inspect "$local_image" --format '{{.Id}}')" = "$(cat config-digest.txt)"
+          tag="$IMAGE:sha-$GITHUB_SHA"
+          docker tag "$local_image" "$tag"
+          docker push "$tag"
+          ref="$(docker image inspect "$tag" --format '{{range .RepoDigests}}{{println .}}{{end}}' | awk -v repo="$IMAGE" 'index($0, repo "@")==1')"
+          digest=${ref#*@}
+          [[ "$digest" =~ ^sha256:[a-f0-9]{64}$ ]]
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
