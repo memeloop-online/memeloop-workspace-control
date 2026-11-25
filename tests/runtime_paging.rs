@@ -506,6 +506,34 @@ async fn workspace_runtime_ids_are_scoped_to_the_requested_organization() {
         json!([])
     );
 
+    let limited = database
+        .create_api_key(
+            member.user_id,
+            "Runtime template access",
+            vec![memeloop_workspace_control::auth::ApiKeyScope::ReadWorkspace],
+            Some(key_now + 24 * 60 * 60),
+            Some(Vec::new()),
+            key_now,
+        )
+        .await
+        .unwrap();
+    let restricted_response = app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            &format!("/api/v1/workspace-runtimes?organization_id={own_organization_id}&workspace_ids={own_workspace_id}"),
+            Some(&limited.token),
+            None,
+            None,
+        ))
+        .await
+        .unwrap();
+    let (status, contents) = body(restricted_response).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        serde_json::from_slice::<Value>(&contents).unwrap(),
+        json!([])
+    );
     let cross_organization_query = app
         .oneshot(request(
             Method::GET,

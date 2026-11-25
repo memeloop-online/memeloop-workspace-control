@@ -121,20 +121,25 @@ impl StorageMetricsCache {
         let url = query_url(base_url);
         let mut tick = tokio::time::interval(REFRESH_INTERVAL);
         tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
-        while !*shutdown.borrow() {
-            tokio::select! {
-                _ = shutdown.changed() => break,
-                _ = tick.tick() => {}
-            }
-            tokio::select! {
-                _ = shutdown.changed() => break,
-                result = fetch(&client, &url, &observability) => match result {
+        let refresh = async {
+            loop {
+                tick.tick().await;
+                match fetch(&client, &url, &observability).await {
                     Ok(volumes) => {
-                        self.0.send_replace(Arc::new(StorageMetricBatch { enabled: true, volumes }));
+                        self.0.send_replace(Arc::new(StorageMetricBatch {
+                            enabled: true,
+                            volumes,
+                        }));
                     }
-                    Err(error) => tracing::debug!(%error, "Prometheus PVC telemetry could not be refreshed"),
+                    Err(error) => {
+                        tracing::debug!(%error, "Prometheus PVC telemetry could not be refreshed")
+                    }
                 }
             }
+        };
+        tokio::select! {
+            _ = shutdown.wait_for(|shutdown| *shutdown) => {}
+            _ = refresh => {}
         }
     }
 }
