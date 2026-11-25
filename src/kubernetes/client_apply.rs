@@ -15,8 +15,9 @@ use uuid::Uuid;
 
 use super::super::{DesiredResources, InjectionMaterialization};
 use super::{
-    FIELD_MANAGER, KubernetesCoordinator, ReconcileError, restart_generation_is_stale,
-    retained_memory_revision, verify_existing,
+    FIELD_MANAGER, KubernetesCoordinator, ReconcileError,
+    memory_resize::{statefulset_workspace_limit, workspace_memory_patch},
+    restart_generation_is_stale, retained_memory_revision, verify_existing,
 };
 
 #[path = "client_apply/envoy_filter.rs"]
@@ -491,6 +492,26 @@ impl KubernetesCoordinator {
             preserve_claim_storage_classes(&mut stateful_set, existing);
         }
         self.verify_home_volume_binding(workspace).await?;
+        if let Some(existing) = existing.filter(|set| retained_memory_revision(set).is_some())
+            && workspace.state != WorkspaceState::Ready
+            && let Some((current, limit)) = statefulset_workspace_limit(existing)
+                .zip(statefulset_workspace_limit(&stateful_set))
+            && super::home_volume_capacity_bytes(current)
+                != super::home_volume_capacity_bytes(limit)
+        {
+            // The strategic patch owns the limit separately from SSA. Update
+            // that field first so an offline edit can be applied at the same value.
+            let patch = Patch::Strategic(serde_json::json!({
+                "metadata": {
+                    "uid": existing.metadata.uid,
+                    "resourceVersion": existing.metadata.resource_version,
+                },
+                "spec": {"template":{"spec":{"containers":[workspace_memory_patch(limit)]}}},
+            }));
+            stateful_sets
+                .patch(&names.stateful_set, &apply, &patch)
+                .await?;
+        }
         let stateful_set_result = observe_apply_stage(
             workspace,
             "stateful_set",

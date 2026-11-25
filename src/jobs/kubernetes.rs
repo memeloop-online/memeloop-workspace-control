@@ -165,13 +165,10 @@ impl WorkspaceReconcileHandler {
             return Ok(());
         }
         let now = unix_timestamp()?;
-        let result = if workspace.state == WorkspaceState::Ready {
-            self.coordinator.increase_workspace_memory(workspace).await
-        } else {
-            // A runtime observation can temporarily move an unchanged
-            // workspace to Starting during a spontaneous Pod replacement.
-            Ok(MemoryResize::Pending)
-        };
+        // A runtime observation can temporarily move an unchanged workspace
+        // to Starting. The coordinator still waits for the owned Pod to be
+        // connectable before writing; a deliberate Start has a newer generation.
+        let result = self.coordinator.increase_workspace_memory(workspace).await;
         let failure = match result {
             Ok(MemoryResize::Applied) => None,
             Ok(MemoryResize::Rejected(reason)) => Some(reason),

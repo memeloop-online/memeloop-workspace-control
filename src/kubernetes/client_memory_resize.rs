@@ -94,16 +94,7 @@ impl KubernetesCoordinator {
         else {
             return Ok(MemoryResize::Rejected("runtime_changed"));
         };
-        let Some(set_container) = set
-            .spec
-            .as_ref()
-            .and_then(|spec| spec.template.spec.as_ref())
-            .and_then(|spec| {
-                spec.containers
-                    .iter()
-                    .find(|container| container.name == "workspace")
-            })
-        else {
+        let Some(set_limit) = statefulset_workspace_limit(&set) else {
             return Ok(MemoryResize::Rejected("runtime_changed"));
         };
         let Some(container) = pod.spec.as_ref().and_then(|spec| {
@@ -114,7 +105,7 @@ impl KubernetesCoordinator {
             return Ok(MemoryResize::Rejected("runtime_changed"));
         };
         let Some((wanted, replacement)) =
-            container_limit(container).zip(container_limit(set_container))
+            container_limit(container).zip(home_volume_capacity_bytes(set_limit))
         else {
             return Ok(MemoryResize::Rejected("runtime_changed"));
         };
@@ -177,7 +168,7 @@ impl KubernetesCoordinator {
     }
 }
 
-fn workspace_memory_patch(limit: &str) -> Value {
+pub(super) fn workspace_memory_patch(limit: &str) -> Value {
     json!({"name": "workspace", "resources": {"limits": {"memory": limit}}})
 }
 
@@ -188,8 +179,25 @@ fn pod_resize_patch(uid: &str, version: &str, limit: &str) -> Patch<Value> {
     }))
 }
 
+fn memory_quantity(resources: &ResourceRequirements) -> Option<&str> {
+    Some(resources.limits.as_ref()?.get("memory")?.0.as_str())
+}
+
 fn memory_limit(resources: &ResourceRequirements) -> Option<u64> {
-    home_volume_capacity_bytes(&resources.limits.as_ref()?.get("memory")?.0)
+    home_volume_capacity_bytes(memory_quantity(resources)?)
+}
+
+pub(super) fn statefulset_workspace_limit(set: &StatefulSet) -> Option<&str> {
+    let container = set
+        .spec
+        .as_ref()?
+        .template
+        .spec
+        .as_ref()?
+        .containers
+        .iter()
+        .find(|container| container.name == "workspace")?;
+    memory_quantity(container.resources.as_ref()?)
 }
 
 fn container_limit(container: &Container) -> Option<u64> {
