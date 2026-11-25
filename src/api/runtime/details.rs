@@ -6,12 +6,6 @@ pub(super) struct WorkspaceStoragePvcIdentities {
     pub(super) temporary: Option<StorageIdentity>,
 }
 
-impl WorkspaceStoragePvcIdentities {
-    pub(super) fn identities(&self) -> impl Iterator<Item = StorageIdentity> + '_ {
-        self.persistent.iter().chain(self.temporary.iter()).cloned()
-    }
-}
-
 pub(super) struct WorkspaceRuntimeDetails {
     pub(super) storage_pvcs: WorkspaceStoragePvcIdentities,
     pub(super) scratch_backing: StorageBacking,
@@ -153,7 +147,7 @@ pub(super) fn listed_bound_home_identity(
                     .and_then(|status| status.phase.as_deref())
                     == Some("Bound")
         })
-        .map(|_| (binding.namespace.clone(), binding.claim_name.clone()))
+        .and_then(StorageIdentity::from_claim)
 }
 
 fn storage_pvc_identities(
@@ -173,18 +167,14 @@ fn storage_pvc_identities(
         {
             continue;
         }
-        let Some(namespace) = pvc.metadata.namespace else {
-            continue;
-        };
-        let Some(name) = pvc.metadata.name else {
-            continue;
-        };
         match labels
             .and_then(|labels| labels.get(STORAGE_ROLE_LABEL))
             .map(String::as_str)
         {
-            Some(STORAGE_ROLE_HOME) => identities.persistent = Some((namespace, name)),
-            Some(STORAGE_ROLE_TEMPORARY) => identities.temporary = Some((namespace, name)),
+            Some(STORAGE_ROLE_HOME) => identities.persistent = StorageIdentity::from_claim(&pvc),
+            Some(STORAGE_ROLE_TEMPORARY) => {
+                identities.temporary = StorageIdentity::from_claim(&pvc)
+            }
             _ => {}
         }
     }
@@ -320,7 +310,14 @@ mod tests {
         assert!(details.metrics_available);
         assert_eq!(
             details.storage_pvcs.persistent,
-            Some(("workspaces".into(), "adopted-home".into()))
+            StorageIdentity::from_claim(&PersistentVolumeClaim {
+                metadata: ObjectMeta {
+                    namespace: Some("workspaces".into()),
+                    name: Some("adopted-home".into()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            })
         );
         assert!(details.storage_pvcs.temporary.is_none());
         assert_eq!(details.scheduling_events.len(), 1);
@@ -356,7 +353,7 @@ mod tests {
         retained.metadata.name = Some("old-home".into());
         assert_eq!(
             listed_bound_home_identity(&[retained, claim.clone()], &binding),
-            Some((binding.namespace.clone(), binding.claim_name.clone()))
+            StorageIdentity::from_claim(&claim)
         );
         let mut replaced = claim.clone();
         replaced.metadata.uid = Some("replacement-uid".into());
@@ -409,7 +406,7 @@ mod tests {
             }
         });
         let client = Client::new(service, "default");
-        let expected = Some((binding.namespace.clone(), binding.claim_name.clone()));
+        let expected = StorageIdentity::from_claim(&claim);
         assert_eq!(
             bound_home_identity(&client, &[], &binding).await.unwrap(),
             expected

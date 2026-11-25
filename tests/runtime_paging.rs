@@ -37,6 +37,11 @@ fn unix_timestamp() -> i64 {
 }
 
 async fn test_app() -> (Router, Database, Uuid) {
+    let (state, database, user) = test_state(None).await;
+    (router(Arc::new(state)), database, user)
+}
+
+async fn test_state(prometheus_url: Option<url::Url>) -> (AppState, Database, Uuid) {
     let key_now = unix_timestamp();
     let installation_id = "api-test".parse().unwrap();
     let database = Database::connect("sqlite::memory:", installation_id)
@@ -68,15 +73,15 @@ async fn test_app() -> (Router, Database, Uuid) {
         internal_ssh_host: None,
         web_shell_public_origin: None,
         port_mapping_public_domain: None,
-        prometheus_url: None,
+        prometheus_url,
         plugin_dir: None,
     };
     (
-        router(Arc::new(AppState::with_cipher(
+        AppState::with_cipher(
             config,
             database.clone(),
             EnvelopeCipher::from_base64("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=").unwrap(),
-        ))),
+        ),
         database,
         admin.user_id,
     )
@@ -250,6 +255,164 @@ async fn workspace_runtime_query_ids_are_rejected_before_kubernetes() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn runtime_routes_do_not_wait_for_stalled_disk_telemetry() {
+    use memeloop_workspace_control::workspace_runtime::WORKSPACE_NAMESPACE;
+    use tokio::{
+        net::TcpListener,
+        sync::{Notify, watch},
+        time::{Duration, timeout},
+    };
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/prometheus", listener.local_addr().unwrap())
+        .parse()
+        .unwrap();
+    let (started, unblock) = (Arc::new(Notify::new()), Arc::new(Notify::new()));
+    let prometheus = Router::new().route("/prometheus/api/v1/query", axum::routing::get({
+        let started = started.clone();
+        let unblock = unblock.clone();
+        move |axum::extract::Query(params): axum::extract::Query<std::collections::BTreeMap<String, String>>| {
+            let (started, unblock) = (started.clone(), unblock.clone());
+            async move {
+                assert!(params["query"].contains(&format!(r#"namespace="{WORKSPACE_NAMESPACE}""#)));
+                assert!(params["query"].ends_with("[2m]"));
+                started.notify_one();
+                unblock.notified().await;
+                let now = unix_timestamp();
+                axum::Json(json!({"status":"success","data":{"resultType":"matrix","result":
+                    ["used", "capacity", "available"].into_iter().zip(["9","10","1"]).map(|(kind, value)| json!({
+                        "metric": {"__name__": format!("kubelet_volume_stats_{kind}_bytes"), "namespace": WORKSPACE_NAMESPACE, "persistentvolumeclaim":"test-home"},
+                        "values": [[now,value]],
+                    })).collect::<Vec<_>>()
+                }}))
+            }
+        }
+    }));
+    let server = tokio::spawn(async move { axum::serve(listener, prometheus).await.unwrap() });
+    let (mut state, database, admin_id) = test_state(Some(url)).await;
+    let (organization_id, template_id) =
+        seeded_organization(&database, admin_id, "Runtime storage metrics", 10).await;
+    let id = seeded_workspace(
+        &database,
+        organization_id,
+        admin_id,
+        template_id,
+        "telemetry",
+        20,
+    )
+    .await;
+    let kube = tower::service_fn(move |request: Request<kube::client::Body>| async move {
+        let path = request.uri().path();
+        let (api_version, kind, items) = match path.rsplit('/').next() {
+            Some("persistentvolumeclaims") => (
+                "v1",
+                "PersistentVolumeClaimList",
+                json!([{
+                    "metadata": {
+                        "name":"test-home", "namespace": WORKSPACE_NAMESPACE, "creationTimestamp":"2026-01-01T00:00:00Z",
+                        "labels": {
+                            "workspace.memeloop.dev/owner-installation":"api-test",
+                            "workspace.memeloop.dev/workspace-id":id,
+                            "workspace.memeloop.dev/storage-role":"home"
+                        }
+                    },
+                    "status": {"phase":"Bound"}
+                }]),
+            ),
+            Some("pods") if path.starts_with("/apis/metrics.k8s.io/") => {
+                ("metrics.k8s.io/v1beta1", "PodMetricsList", json!([]))
+            }
+            Some("pods") => (
+                "v1",
+                "PodList",
+                json!([{
+                    "metadata": {
+                        "name":"test-0", "uid":"90000000-0000-4000-8000-000000000001",
+                        "labels": {"workspace.memeloop.dev/workspace-id":id}
+                    },
+                    "status": {"phase":"Pending","conditions":[{
+                        "type":"PodScheduled","status":"False","reason":"Unschedulable",
+                        "lastTransitionTime":"2026-01-01T00:00:00Z","message":"0/1 nodes are available: 1 Insufficient cpu"
+                    }]}
+                }]),
+            ),
+            _ => panic!("unexpected runtime Kubernetes request {path}"),
+        };
+        Ok::<_, std::convert::Infallible>(axum::http::Response::new(Body::from(
+            json!({"apiVersion":api_version,"kind":kind,"metadata":{},"items":items}).to_string(),
+        )))
+    });
+    state.set_kubernetes_client(kube::Client::new(kube, "default"));
+    let (stop, shutdown) = watch::channel(false);
+    let collector = state.spawn_storage_metrics(shutdown).unwrap();
+    let app = router(Arc::new(state));
+    let detail = format!("/api/v1/workspaces/{id}/runtime");
+    let batch =
+        format!("/api/v1/workspace-runtimes?organization_id={organization_id}&workspace_ids={id}");
+    let fetch_runtime = |uri: String, batched: bool| {
+        let app = app.clone();
+        async move {
+            let reply = app
+                .oneshot(request(Method::GET, &uri, Some(ADMIN_TOKEN), None, None))
+                .await
+                .unwrap();
+            let (code, bytes) = body(reply).await;
+            assert_eq!(code, StatusCode::OK);
+            let value: Value = serde_json::from_slice(&bytes).unwrap();
+            if batched {
+                value[0]["runtime"].clone()
+            } else {
+                value
+            }
+        }
+    };
+    timeout(Duration::from_secs(2), started.notified())
+        .await
+        .unwrap();
+    for runtime in timeout(Duration::from_secs(1), async {
+        let (first, second) = tokio::join!(
+            fetch_runtime(detail.clone(), false),
+            fetch_runtime(batch.clone(), true)
+        );
+        [first, second]
+    })
+    .await
+    .expect("runtime routes must respond before the storage backend is released")
+    {
+        assert_eq!(runtime["persistent_storage"]["coverage"], "unavailable");
+        assert_eq!(
+            runtime["persistent_storage"]["configured_bytes"],
+            20_u64 << 30
+        );
+        assert_eq!(runtime["pods"][0]["phase"], "Pending");
+        assert_eq!(
+            runtime["events"][0]["details"]["scheduling_blockers"][0],
+            "cpu_capacity"
+        );
+    }
+    unblock.notify_one();
+    timeout(Duration::from_secs(2), async {
+        loop {
+            let runtime = fetch_runtime(detail.clone(), false).await;
+            if runtime["persistent_storage"]["coverage"] == "exact" {
+                assert_eq!(runtime["persistent_storage"]["used_bytes"], 9);
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("storage metrics should appear after the collector receives a sample");
+    assert_eq!(
+        fetch_runtime(batch, true).await["persistent_storage"]["used_bytes"],
+        9
+    );
+    stop.send(true).unwrap();
+    collector.await.unwrap();
+    server.abort();
 }
 
 #[tokio::test]

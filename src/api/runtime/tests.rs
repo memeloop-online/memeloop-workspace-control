@@ -45,17 +45,14 @@ fn pvc_observation_uses_explicit_storage_role() {
     ]);
     let storage = observed.get(&workspace_id).unwrap();
     assert_eq!(
-        storage.persistent.as_ref(),
-        Some(&(
-            "workspaces".to_owned(),
-            "workspace-data-w-example-0".to_owned()
-        ))
+        storage.persistent,
+        StorageIdentity::from_claim(&pvc("workspace-data-w-example-0", STORAGE_ROLE_HOME))
     );
     assert_eq!(
-        storage.temporary.as_ref(),
-        Some(&(
-            "workspaces".to_owned(),
-            "w-example-0-workspace-scratch".to_owned()
+        storage.temporary,
+        StorageIdentity::from_claim(&pvc(
+            "w-example-0-workspace-scratch",
+            STORAGE_ROLE_TEMPORARY
         ))
     );
 }

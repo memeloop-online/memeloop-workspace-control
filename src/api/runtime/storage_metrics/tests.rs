@@ -1,94 +1,87 @@
 use super::*;
 
-#[test]
-fn parses_vector_and_rejects_wrong_pvc() {
-    let pvc = "workspace-data-w-workspace-0";
-    let identities = BTreeSet::from([("shared".to_owned(), pvc.to_owned())]);
-    let body = br#"{"status":"success","data":{"resultType":"vector","result":[{"metric":{"namespace":"shared","persistentvolumeclaim":"workspace-data-w-workspace-0"},"value":[1787980000,"1073741824"]}]}}"#;
-    let samples = parse_response(body, &identities).unwrap();
-    assert_eq!(
-        samples[&("shared".to_owned(), pvc.to_owned())].value,
-        1_073_741_824
-    );
-    let wrong = body
-        .windows(pvc.len())
-        .position(|window| window == pvc.as_bytes())
-        .map(|index| {
-            let mut wrong = body.to_vec();
-            wrong.splice(index..index + pvc.len(), b"other-volume".iter().copied());
-            wrong
-        })
-        .unwrap();
-    assert!(matches!(
-        parse_response(&wrong, &identities),
-        Err(StorageMetricError::InvalidResponse)
-    ));
+fn identity(name: &str, created_at: i64) -> StorageIdentity {
+    StorageIdentity {
+        key: (WORKSPACE_NAMESPACE.to_owned(), name.to_owned()),
+        created_at: Some(created_at),
+    }
+}
+
+fn sample_body() -> String {
+    serde_json::json!({
+        "status": "success",
+        "data": {
+            "resultType": "matrix",
+            "result": [
+                {
+                    "metric": {
+                        "__name__": METRICS[0], "namespace": WORKSPACE_NAMESPACE,
+                        "persistentvolumeclaim": "pvc-a", "instance": "old"
+                    },
+                    "values": [[1_000.0, "50"], [1_005.0, "NaN"]]
+                },
+                {
+                    "metric": {
+                        "__name__": METRICS[0], "namespace": WORKSPACE_NAMESPACE,
+                        "persistentvolumeclaim": "pvc-a", "instance": "new"
+                    },
+                    "values": [[1_015.0, "90"]]
+                },
+                {
+                    "metric": {
+                        "__name__": METRICS[1], "namespace": WORKSPACE_NAMESPACE,
+                        "persistentvolumeclaim": "pvc-a"
+                    },
+                    "values": [[1_010.0, "100"]]
+                },
+                {
+                    "metric": {
+                        "__name__": METRICS[2], "namespace": WORKSPACE_NAMESPACE,
+                        "persistentvolumeclaim": "pvc-a"
+                    },
+                    "values": [[1_012.0, "10"]]
+                },
+                {
+                    "metric": {
+                        "__name__": METRICS[0], "namespace": "outside-workspace-namespace",
+                        "persistentvolumeclaim": "pvc-a"
+                    },
+                    "values": [[1_020.0, "100000"]]
+                }
+            ]
+        }
+    })
+    .to_string()
 }
 
 #[test]
-fn query_enumerates_exact_namespace_and_pvc_pairs() {
-    let identities = BTreeSet::from([
-        ("shared".to_owned(), "workspace-data-w-one-0".to_owned()),
-        ("shared".to_owned(), "workspace-data-w-two-0".to_owned()),
-    ]);
-    assert_eq!(
-        metric_query("used", &identities),
-        "used{namespace=\"shared\",persistentvolumeclaim=\"workspace-data-w-one-0\"} or used{namespace=\"shared\",persistentvolumeclaim=\"workspace-data-w-two-0\"}"
-    );
-    assert_eq!(promql_label_value("a\\\"\nb"), "a\\\\\\\"\\nb");
-}
-
-#[test]
-fn telemetry_reports_exact_stale_and_unavailable_coverage() {
-    let sample = Sample {
-        value: 100,
-        observed_at: 1_000,
+fn snapshots_report_actual_sample_time_and_drop_precreation_values() {
+    let snapshot = StorageMetricBatch {
+        enabled: true,
+        volumes: parse_response(sample_body().as_bytes()).unwrap(),
     };
-    let values = StorageMetricBatch {
-        status: StorageTelemetryCoverage::Exact,
-        used: BTreeMap::from([(("shared".to_owned(), "pvc-a".to_owned()), sample)]),
-        capacity: BTreeMap::from([(("shared".to_owned(), "pvc-a".to_owned()), sample)]),
-        available: BTreeMap::from([(("shared".to_owned(), "pvc-a".to_owned()), sample)]),
+    assert_eq!(snapshot.volumes.len(), 1);
+    let current = identity("pvc-a", 990);
+    let reading = |identity, now| {
+        snapshot.telemetry(Some(identity), 200, StorageBacking::PersistentVolume, now)
     };
-    assert!(matches!(
-        values
-            .telemetry(
-                Some(&("shared".to_owned(), "pvc-a".to_owned())),
-                200,
-                StorageBacking::PersistentVolume,
-                1_100,
-            )
-            .coverage,
-        StorageTelemetryCoverage::Exact
-    ));
-    assert!(matches!(
-        values
-            .telemetry(
-                Some(&("shared".to_owned(), "pvc-a".to_owned())),
-                200,
-                StorageBacking::PersistentVolume,
-                2_000,
-            )
-            .coverage,
-        StorageTelemetryCoverage::Stale
-    ));
-    assert!(matches!(
-        values
-            .telemetry(None, 200, StorageBacking::EphemeralVolume, 1_100)
-            .coverage,
-        StorageTelemetryCoverage::Unavailable
-    ));
-    assert!(matches!(
-        values
-            .telemetry(
-                Some(&("shared".to_owned(), "pvc-a".to_owned())),
-                200,
-                StorageBacking::PersistentVolume,
-                1_100,
-            )
-            .pressure,
-        Some(StoragePressure::Critical)
-    ));
+    let exact = reading(&current, 1_100);
+    assert!(matches!(exact.coverage, StorageTelemetryCoverage::Exact));
+    assert_eq!(exact.observed_at, Some(1_010));
+    assert_eq!(exact.used_bytes, Some(90));
+    assert!(matches!(exact.pressure, Some(StoragePressure::Critical)));
+    let stale = reading(&current, 2_000);
+    assert!(matches!(stale.coverage, StorageTelemetryCoverage::Stale));
+    assert_eq!(stale.used_bytes, Some(90));
+    for claim in [identity("pvc-unknown", 980), identity("pvc-a", 1_010)] {
+        let unavailable = reading(&claim, 1_100);
+        assert!(matches!(
+            unavailable.coverage,
+            StorageTelemetryCoverage::Unavailable
+        ));
+        assert_eq!(unavailable.configured_bytes, 200);
+        assert_eq!(unavailable.used_bytes, None);
+    }
 }
 
 #[test]

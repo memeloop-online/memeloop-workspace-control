@@ -1,20 +1,26 @@
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    time::Duration,
-};
+use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
+use k8s_openapi::api::core::v1::PersistentVolumeClaim;
 use reqwest::{Client, Url, redirect::Policy};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use tokio::{sync::watch, time::MissedTickBehavior};
 use utoipa::ToSchema;
 
-use crate::observability::{Observability, UpstreamKind};
+use crate::{
+    observability::{Observability, UpstreamKind},
+    workspace_runtime::WORKSPACE_NAMESPACE,
+};
 
+const REFRESH_INTERVAL: Duration = Duration::from_secs(30);
 const QUERY_TIMEOUT: Duration = Duration::from_secs(3);
-const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
-const MAX_SAMPLES: usize = 1_000;
+const MAX_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
 const STALE_AFTER_SECONDS: i64 = 5 * 60;
-const MAX_IDENTITIES: usize = 100;
+const METRICS: [&str; 3] = [
+    "kubelet_volume_stats_used_bytes",
+    "kubelet_volume_stats_capacity_bytes",
+    "kubelet_volume_stats_available_bytes",
+];
 const WARNING_PERCENT: f64 = 80.0;
 const CRITICAL_PERCENT: f64 = 90.0;
 
@@ -77,11 +83,65 @@ impl StorageTelemetry {
     }
 }
 
+#[derive(Clone)]
+pub(in crate::api) struct StorageMetricsCache(watch::Sender<Arc<StorageMetricBatch>>);
+
+impl StorageMetricsCache {
+    pub(in crate::api) fn new(enabled: bool) -> Self {
+        Self(
+            watch::channel(Arc::new(StorageMetricBatch {
+                enabled,
+                volumes: BTreeMap::new(),
+            }))
+            .0,
+        )
+    }
+
+    pub(super) fn snapshot(&self) -> Arc<StorageMetricBatch> {
+        self.0.borrow().clone()
+    }
+
+    pub(in crate::api) async fn collect(
+        self,
+        base_url: Url,
+        observability: Observability,
+        mut shutdown: watch::Receiver<bool>,
+    ) {
+        let client = match Client::builder()
+            .timeout(QUERY_TIMEOUT)
+            .redirect(Policy::none())
+            .build()
+        {
+            Ok(client) => client,
+            Err(error) => {
+                tracing::warn!(%error, "Could not initialize the Prometheus storage collector");
+                return;
+            }
+        };
+        let url = query_url(base_url);
+        let mut tick = tokio::time::interval(REFRESH_INTERVAL);
+        tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
+        while !*shutdown.borrow() {
+            tokio::select! {
+                _ = shutdown.changed() => break,
+                _ = tick.tick() => {}
+            }
+            tokio::select! {
+                _ = shutdown.changed() => break,
+                result = fetch(&client, &url, &observability) => match result {
+                    Ok(volumes) => {
+                        self.0.send_replace(Arc::new(StorageMetricBatch { enabled: true, volumes }));
+                    }
+                    Err(error) => tracing::debug!(%error, "Prometheus PVC telemetry could not be refreshed"),
+                }
+            }
+        }
+    }
+}
+
 pub(super) struct StorageMetricBatch {
-    status: StorageTelemetryCoverage,
-    used: MetricMap,
-    capacity: MetricMap,
-    available: MetricMap,
+    enabled: bool,
+    volumes: VolumeMetrics,
 }
 
 impl StorageMetricBatch {
@@ -92,21 +152,20 @@ impl StorageMetricBatch {
         backing: StorageBacking,
         now: i64,
     ) -> StorageTelemetry {
-        if !matches!(self.status, StorageTelemetryCoverage::Exact) {
-            return StorageTelemetry::unavailable(configured_bytes, self.status, backing);
-        }
-        let Some(key) = identity else {
+        if !self.enabled {
             return StorageTelemetry::unavailable(
                 configured_bytes,
-                StorageTelemetryCoverage::Unavailable,
+                StorageTelemetryCoverage::Disabled,
                 backing,
             );
-        };
-        let (Some(used), Some(capacity), Some(available)) = (
-            self.used.get(key),
-            self.capacity.get(key),
-            self.available.get(key),
-        ) else {
+        }
+        let Some((identity, &[Some(used), Some(capacity), Some(available)])) =
+            identity.and_then(|identity| {
+                self.volumes
+                    .get(&identity.key)
+                    .map(|samples| (identity, samples))
+            })
+        else {
             return StorageTelemetry::unavailable(
                 configured_bytes,
                 StorageTelemetryCoverage::Unavailable,
@@ -117,11 +176,18 @@ impl StorageMetricBatch {
             .observed_at
             .min(capacity.observed_at)
             .min(available.observed_at);
-        let used_percent = if capacity.value == 0 {
-            None
-        } else {
-            Some((used.value as f64 / capacity.value as f64 * 100.0).clamp(0.0, 100.0))
-        };
+        if identity
+            .created_at
+            .is_some_and(|created_at| observed_at <= created_at)
+        {
+            return StorageTelemetry::unavailable(
+                configured_bytes,
+                StorageTelemetryCoverage::Unavailable,
+                backing,
+            );
+        }
+        let used_percent = (capacity.value != 0)
+            .then(|| (used.value as f64 / capacity.value as f64 * 100.0).clamp(0.0, 100.0));
         StorageTelemetry {
             configured_bytes,
             coverage: if now.saturating_sub(observed_at) > STALE_AFTER_SECONDS {
@@ -156,17 +222,32 @@ struct Sample {
     observed_at: i64,
 }
 
-pub(super) type StorageIdentity = (String, String);
-type MetricMap = BTreeMap<StorageIdentity, Sample>;
-
-struct FetchedMetrics {
-    used: MetricMap,
-    capacity: MetricMap,
-    available: MetricMap,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct StorageIdentity {
+    key: (String, String),
+    created_at: Option<i64>,
 }
 
+impl StorageIdentity {
+    pub(super) fn from_claim(claim: &PersistentVolumeClaim) -> Option<Self> {
+        Some(Self {
+            key: (
+                claim.metadata.namespace.clone()?,
+                claim.metadata.name.clone()?,
+            ),
+            created_at: claim
+                .metadata
+                .creation_timestamp
+                .as_ref()
+                .map(|time| time.0.as_second()),
+        })
+    }
+}
+
+type VolumeMetrics = BTreeMap<(String, String), [Option<Sample>; 3]>;
+
 #[derive(Debug, Error)]
-pub(super) enum StorageMetricError {
+enum StorageMetricError {
     #[error("Prometheus request failed: {0}")]
     Request(#[from] reqwest::Error),
     #[error("Prometheus returned HTTP {0}")]
@@ -175,124 +256,26 @@ pub(super) enum StorageMetricError {
     ResponseTooLarge,
     #[error("Prometheus response is invalid")]
     InvalidResponse,
-    #[error("too many PVC identities were requested")]
-    TooManyIdentities,
 }
 
-pub(super) async fn fetch(
-    base_url: Option<&Url>,
-    identities: &[StorageIdentity],
-    observability: &Observability,
-) -> StorageMetricBatch {
-    let Some(base_url) = base_url else {
-        return empty_batch(StorageTelemetryCoverage::Disabled);
-    };
-    if identities.is_empty() {
-        return empty_batch(StorageTelemetryCoverage::Unavailable);
-    }
-    match fetch_configured(base_url, identities, observability).await {
-        Ok(metrics) => StorageMetricBatch {
-            status: StorageTelemetryCoverage::Exact,
-            used: metrics.used,
-            capacity: metrics.capacity,
-            available: metrics.available,
-        },
-        Err(error) => {
-            tracing::debug!(%error, "Prometheus PVC telemetry is unavailable");
-            empty_batch(StorageTelemetryCoverage::Unavailable)
-        }
-    }
-}
-
-fn empty_batch(status: StorageTelemetryCoverage) -> StorageMetricBatch {
-    StorageMetricBatch {
-        status,
-        used: MetricMap::new(),
-        capacity: MetricMap::new(),
-        available: MetricMap::new(),
-    }
-}
-
-async fn fetch_configured(
-    base_url: &Url,
-    identities: &[StorageIdentity],
-    observability: &Observability,
-) -> Result<FetchedMetrics, StorageMetricError> {
-    let identities = identities.iter().cloned().collect::<BTreeSet<_>>();
-    if identities.len() > MAX_IDENTITIES {
-        return Err(StorageMetricError::TooManyIdentities);
-    }
-    let client = Client::builder()
-        .timeout(QUERY_TIMEOUT)
-        .redirect(Policy::none())
-        .build()?;
-    let used_query = metric_query("kubelet_volume_stats_used_bytes", &identities);
-    let capacity_query = metric_query("kubelet_volume_stats_capacity_bytes", &identities);
-    let available_query = metric_query("kubelet_volume_stats_available_bytes", &identities);
-    let (used, capacity, available) = tokio::try_join!(
-        query(&client, base_url, &used_query, &identities, observability),
-        query(
-            &client,
-            base_url,
-            &capacity_query,
-            &identities,
-            observability
-        ),
-        query(
-            &client,
-            base_url,
-            &available_query,
-            &identities,
-            observability
-        ),
-    )?;
-    Ok(FetchedMetrics {
-        used,
-        capacity,
-        available,
-    })
-}
-
-fn metric_query(metric: &str, identities: &BTreeSet<StorageIdentity>) -> String {
-    identities
-        .iter()
-        .map(|(namespace, pvc)| {
-            format!(
-                "{metric}{{namespace=\"{}\",persistentvolumeclaim=\"{}\"}}",
-                promql_label_value(namespace),
-                promql_label_value(pvc),
-            )
-        })
-        .collect::<Vec<_>>()
-        .join(" or ")
-}
-
-fn promql_label_value(value: &str) -> String {
-    let mut escaped = String::with_capacity(value.len());
-    for character in value.chars() {
-        match character {
-            '\\' => escaped.push_str("\\\\"),
-            '"' => escaped.push_str("\\\""),
-            '\n' => escaped.push_str("\\n"),
-            _ => escaped.push(character),
-        }
-    }
-    escaped
-}
-
-async fn query(
-    client: &Client,
-    base_url: &Url,
-    expression: &str,
-    identities: &BTreeSet<StorageIdentity>,
-    observability: &Observability,
-) -> Result<MetricMap, StorageMetricError> {
-    let request = observability.begin_upstream(UpstreamKind::Prometheus);
-    let mut url = base_url.clone();
+fn query_url(mut url: Url) -> Url {
     let path = format!("{}/api/v1/query", url.path().trim_end_matches('/'));
     url.set_path(&path);
-    url.query_pairs_mut().append_pair("query", expression);
-    let mut response = client.get(url).send().await?;
+    // Range vectors report actual sample timestamps, unlike instant vectors.
+    let query = format!(
+        r#"{{__name__=~"kubelet_volume_stats_(used|capacity|available)_bytes",namespace="{WORKSPACE_NAMESPACE}"}}[2m]"#
+    );
+    url.query_pairs_mut().append_pair("query", &query);
+    url
+}
+
+async fn fetch(
+    client: &Client,
+    url: &Url,
+    observability: &Observability,
+) -> Result<VolumeMetrics, StorageMetricError> {
+    let request = observability.begin_upstream(UpstreamKind::Prometheus);
+    let mut response = client.get(url.clone()).send().await?;
     if !response.status().is_success() {
         return Err(StorageMetricError::Http(response.status()));
     }
@@ -303,7 +286,7 @@ async fn query(
         }
         body.extend_from_slice(&chunk);
     }
-    let parsed = parse_response(&body, identities)?;
+    let parsed = parse_response(&body)?;
     request.success();
     Ok(parsed)
 }
@@ -315,67 +298,64 @@ struct QueryResponse {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct QueryData {
-    #[serde(rename = "resultType")]
     result_type: String,
-    result: Vec<QuerySample>,
+    result: Vec<QuerySamples>,
 }
 
 #[derive(Deserialize)]
-struct QuerySample {
+struct QuerySamples {
     metric: QueryLabels,
-    value: (f64, String),
+    values: Vec<(f64, String)>,
 }
 
 #[derive(Deserialize)]
 struct QueryLabels {
+    #[serde(rename = "__name__")]
+    name: String,
     namespace: String,
     persistentvolumeclaim: String,
 }
 
-fn parse_response(
-    body: &[u8],
-    identities: &BTreeSet<StorageIdentity>,
-) -> Result<MetricMap, StorageMetricError> {
+fn parse_response(body: &[u8]) -> Result<VolumeMetrics, StorageMetricError> {
     let response: QueryResponse =
         serde_json::from_slice(body).map_err(|_| StorageMetricError::InvalidResponse)?;
-    if response.status != "success"
-        || response.data.result_type != "vector"
-        || response.data.result.len() > MAX_SAMPLES
-    {
+    if response.status != "success" || response.data.result_type != "matrix" {
         return Err(StorageMetricError::InvalidResponse);
     }
-    let mut samples = BTreeMap::new();
+    let mut volumes = VolumeMetrics::new();
     for item in response.data.result {
-        let identity = (item.metric.namespace, item.metric.persistentvolumeclaim);
-        if !identities.contains(&identity)
-            || !item.value.0.is_finite()
-            || item.value.0 < 0.0
-            || item.value.0 > i64::MAX as f64
-        {
-            return Err(StorageMetricError::InvalidResponse);
-        }
-        let value = item
-            .value
-            .1
-            .parse::<f64>()
-            .ok()
-            .filter(|value| value.is_finite() && *value >= 0.0 && *value <= u64::MAX as f64)
-            .ok_or(StorageMetricError::InvalidResponse)?;
-        let sample = Sample {
-            value: value.round() as u64,
-            observed_at: item.value.0.floor() as i64,
+        let labels = item.metric;
+        let Some(metric) = METRICS.iter().position(|name| *name == labels.name) else {
+            continue;
         };
-        samples
-            .entry(identity)
-            .and_modify(|existing: &mut Sample| {
-                if sample.observed_at > existing.observed_at {
-                    *existing = sample;
+        if labels.namespace != WORKSPACE_NAMESPACE {
+            continue;
+        }
+        let observation = &mut volumes
+            .entry((labels.namespace, labels.persistentvolumeclaim))
+            .or_default()[metric];
+        for (timestamp, value) in item.values {
+            let Some(value) = value
+                .parse::<f64>()
+                .ok()
+                .filter(|value| (0.0..=u64::MAX as f64).contains(value))
+            else {
+                continue;
+            };
+            if (0.0..=i64::MAX as f64).contains(&timestamp) {
+                let observed_at = timestamp.floor() as i64;
+                if observation.is_none_or(|old| observed_at >= old.observed_at) {
+                    *observation = Some(Sample {
+                        value: value.round() as u64,
+                        observed_at,
+                    });
                 }
-            })
-            .or_insert(sample);
+            }
+        }
     }
-    Ok(samples)
+    Ok(volumes)
 }
 
 #[cfg(test)]

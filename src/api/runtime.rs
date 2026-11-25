@@ -32,7 +32,7 @@ mod memory_metrics;
 pub(super) mod organization_metrics;
 mod pod_views;
 mod startup;
-mod storage_metrics;
+pub(super) mod storage_metrics;
 
 use details::{
     WorkspaceStoragePvcIdentities, fetch_workspace_runtime_details, scratch_backing_from_pods,
@@ -45,7 +45,7 @@ use pod_views::{
 pub(super) use storage_metrics::{
     StorageBacking, StoragePressure, StorageTelemetry, StorageTelemetryCoverage,
 };
-use storage_metrics::{StorageIdentity, StorageMetricBatch, fetch as fetch_storage_metrics};
+use storage_metrics::{StorageIdentity, StorageMetricBatch};
 
 pub(super) const STORAGE_ROLE_HOME: &str = "home";
 pub(super) const STORAGE_ROLE_TEMPORARY: &str = "temporary";
@@ -139,10 +139,11 @@ pub(super) async fn list(
         return Err(ApiError::Forbidden);
     }
     let workspace_ids = parse_workspace_ids(&query.workspace_ids)?;
-    let workspaces = state
+    let mut workspaces = state
         .database
         .list_workspaces_by_ids(query.organization_id, &workspace_ids)
         .await?;
+    workspaces.retain(|workspace| actor.may_access_workspace_template(workspace.template_id));
     if workspaces.is_empty() {
         return Ok(Json(Vec::new()));
     }
@@ -153,17 +154,7 @@ pub(super) async fn list(
     let selector = runtime_selector(&state.config.installation_id, &workspaces);
     let kubernetes_runtime =
         fetch_kubernetes_runtime(&state.observability, client, &selector, &workspaces).await?;
-    let storage_identities = kubernetes_runtime
-        .storage_pvcs
-        .values()
-        .flat_map(WorkspaceStoragePvcIdentities::identities)
-        .collect::<Vec<_>>();
-    let storage_metrics = fetch_storage_metrics(
-        state.config.prometheus_url.as_ref(),
-        &storage_identities,
-        &state.observability,
-    )
-    .await;
+    let storage_metrics = state.storage_metrics.snapshot();
     let observed_now = unix_timestamp();
     let workspace_ids = workspaces
         .iter()
@@ -311,12 +302,6 @@ fn index_storage_pvcs(pvcs: Vec<PersistentVolumeClaim>) -> WorkspaceStoragePvcMa
         let Some(workspace_id) = object_workspace_id(&pvc.metadata.labels) else {
             continue;
         };
-        let Some(name) = pvc.metadata.name else {
-            continue;
-        };
-        let Some(namespace) = pvc.metadata.namespace else {
-            continue;
-        };
         let role = pvc
             .metadata
             .labels
@@ -325,8 +310,8 @@ fn index_storage_pvcs(pvcs: Vec<PersistentVolumeClaim>) -> WorkspaceStoragePvcMa
             .map(String::as_str);
         let entry = identities.entry(workspace_id).or_default();
         match role {
-            Some(STORAGE_ROLE_HOME) => entry.persistent = Some((namespace, name)),
-            Some(STORAGE_ROLE_TEMPORARY) => entry.temporary = Some((namespace, name)),
+            Some(STORAGE_ROLE_HOME) => entry.persistent = StorageIdentity::from_claim(&pvc),
+            Some(STORAGE_ROLE_TEMPORARY) => entry.temporary = StorageIdentity::from_claim(&pvc),
             _ => {}
         }
     }
@@ -460,12 +445,7 @@ pub(super) async fn get(
     );
     let details = details?;
     kubernetes_request.success();
-    let storage_metrics = fetch_storage_metrics(
-        state.config.prometheus_url.as_ref(),
-        &details.storage_pvcs.identities().collect::<Vec<_>>(),
-        &state.observability,
-    )
-    .await;
+    let storage_metrics = state.storage_metrics.snapshot();
     let mut incidents = incidents?;
     let response = WorkspaceRuntimeResponse {
         allocated: workspace.template.resources,
