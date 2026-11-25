@@ -25,7 +25,40 @@ fn ready_set() -> SetView {
         updated: 1,
         current_revision: Some("revision-a".into()),
         update_revision: Some("revision-a".into()),
+        retained_memory_revision: None,
     }
+}
+
+#[test]
+fn running_workload_accepts_only_the_revision_retained_for_resize() {
+    let job = job();
+    let mut state = State::default();
+    let mut set = ready_set();
+    set.observed = false;
+    set.retained_memory_revision = Some("revision-a".into());
+    set.update_revision = Some("revision-b".into());
+    state.sets.insert(job.workspace_id, set);
+    state.pods.insert(
+        job.workspace_id,
+        PodView {
+            uid: "pod-a".into(),
+            generation: 7,
+            owner_uid: "set-a".into(),
+            revision: Some("revision-a".into()),
+            ready: true,
+        },
+    );
+    assert!(state.runtime_ready(job.workspace_id));
+    assert!(state.candidate(job.workspace_id, 7, 1).is_none());
+    let set = state.sets.get_mut(&job.workspace_id).unwrap();
+    set.observed = true;
+    assert!(state.runtime_ready(job.workspace_id));
+    assert!(state.candidate(job.workspace_id, 7, 1).is_none());
+    state.pods.get_mut(&job.workspace_id).unwrap().revision = Some("revision-b".into());
+    assert!(state.runtime_ready(job.workspace_id));
+    assert!(state.candidate(job.workspace_id, 7, 1).is_some());
+    state.pods.get_mut(&job.workspace_id).unwrap().revision = Some("unrelated-revision".into());
+    assert!(!state.runtime_ready(job.workspace_id));
 }
 
 fn ready_state(job: &ParkedWorkspaceJob) -> State {

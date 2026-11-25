@@ -63,6 +63,10 @@ spec:
               value: {{ ternary "1" (.Values.replicaCount | toString) (eq .Values.mode "sqlite") | quote }}
             - name: MWC_KUBERNETES_ENABLED
               value: "true"
+            {{- if .Values.workspace.liveMemoryResize }}
+            - name: MWC_WORKSPACE_LIVE_MEMORY_RESIZE
+              value: "true"
+            {{- end }}
             - name: MWC_INTERNAL_LISTEN_ADDRESS
               value: "0.0.0.0:8081"
             {{- if .Values.oidc.origin }}

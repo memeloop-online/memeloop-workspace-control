@@ -55,6 +55,8 @@ pub(super) struct CreateWorkspaceQuery {
 pub(super) struct WorkspaceResponse {
     pub workspace: Workspace,
     pub namespace: String,
+    /// The installation accepts requests to increase a running workspace's memory limit.
+    pub live_memory_resize_supported: bool,
     pub ssh_connection: Option<WorkspaceSshConnection>,
     pub ssh_host: Option<String>,
     pub ssh_port: Option<u16>,

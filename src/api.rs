@@ -57,6 +57,7 @@ pub struct AppState {
     trusted_internal_network: bool,
     pub(super) observability: Observability,
     diagnostics_enabled: bool,
+    workspace_live_memory_resize: bool,
     kubernetes_client: Option<kube::Client>,
     jump_host_public_key: Option<crate::storage::WorkspaceSshPublicIdentity>,
     pub(super) plugins: PluginRuntime,
@@ -79,6 +80,7 @@ impl AppState {
             trusted_internal_network: false,
             observability: Observability::default(),
             diagnostics_enabled: false,
+            workspace_live_memory_resize: false,
             kubernetes_client: None,
             jump_host_public_key: None,
             plugins,
@@ -100,6 +102,7 @@ impl AppState {
             trusted_internal_network: false,
             observability: Observability::default(),
             diagnostics_enabled: false,
+            workspace_live_memory_resize: false,
             kubernetes_client: None,
             jump_host_public_key: None,
             plugins,
@@ -151,6 +154,14 @@ impl AppState {
 
     pub fn enable_diagnostics(&mut self) {
         self.diagnostics_enabled = true;
+    }
+
+    pub fn enable_workspace_live_memory_resize(&mut self) {
+        self.workspace_live_memory_resize = true;
+    }
+
+    fn workspace_live_memory_resize_supported(&self) -> bool {
+        self.workspace_live_memory_resize && self.kubernetes_client.is_some()
     }
 
     pub fn observability(&self) -> Observability {

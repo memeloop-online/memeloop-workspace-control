@@ -2,21 +2,26 @@ use uuid::Uuid;
 
 use crate::{
     crypto::EnvelopeCipher,
+    events::NewEvent,
     injections::{
         InjectionScope, InjectionSelection, filter_injection_refs, resolve_injections,
         select_injections,
     },
     jobs::{JobHandler, JobHandlerError},
     kubernetes::{
-        DeleteProgress, InjectionMaterialization, KubernetesCoordinator, ReconcileError,
-        ResourceBuilder, WorkspaceObservations,
+        DeleteProgress, InjectionMaterialization, KubernetesCoordinator, MemoryResize,
+        ReconcileError, ResourceBuilder, WorkspaceObservations,
     },
-    storage::{ClaimedJob, Database, InjectionScopeRef, PortMapping, StorageError},
+    storage::{
+        ClaimedJob, Database, InjectionScopeRef, LIVE_MEMORY_INCREASE, PortMapping, StorageError,
+    },
     workspaces::{Workspace, WorkspaceObservation, WorkspaceState},
 };
 
 #[path = "storage_shrink.rs"]
 mod storage_shrink;
+
+const MEMORY_RESIZE_DEADLINE_SECONDS: i64 = 180;
 
 pub struct WorkspaceReconcileHandler {
     database: Database,
@@ -139,7 +144,7 @@ impl WorkspaceReconcileHandler {
         // Public mapping discovery is refreshed alongside observation, so a slow
         // ConfigMap write cannot postpone recording an already-ready workspace.
         let (observation, metadata) = tokio::join!(
-            Box::pin(self.observe_workspace(workspace, false)),
+            Box::pin(self.observe_workspace(workspace, workspace.state == WorkspaceState::Ready)),
             Box::pin(
                 self.coordinator
                     .apply_port_mapping_metadata(workspace, &port_mappings)
@@ -149,6 +154,86 @@ impl WorkspaceReconcileHandler {
         // must never mark a healthy workspace failed.
         metadata.map_err(|error| JobHandlerError::Pending(error.to_string()))?;
         observation.map_err(|error| checkpoint_error(error, job, workspace, Some(reconciled_at)))
+    }
+
+    async fn resize_memory_for_job(
+        &self,
+        workspace: &Workspace,
+        job: &ClaimedJob,
+    ) -> Result<(), JobHandlerError> {
+        if !memory_resize_is_current(workspace, job) {
+            return Ok(());
+        }
+        let now = unix_timestamp()?;
+        // A runtime observation can temporarily move an unchanged workspace
+        // to Starting. The coordinator still waits for the owned Pod to be
+        // connectable before writing; a deliberate Start has a newer generation.
+        let result = self.coordinator.increase_workspace_memory(workspace).await;
+        let failure = match result {
+            Ok(MemoryResize::Applied) => None,
+            Ok(MemoryResize::Rejected(reason)) => Some(reason),
+            Ok(MemoryResize::Pending)
+                if job.payload["requested_at"]
+                    .as_i64()
+                    .is_some_and(|requested| {
+                        now.saturating_sub(requested) < MEMORY_RESIZE_DEADLINE_SECONDS
+                    }) =>
+            {
+                return Err(JobHandlerError::Pending(
+                    "waiting for the workspace memory limit to take effect".to_owned(),
+                ));
+            }
+            Ok(MemoryResize::Pending) => Some("timed_out"),
+            Err(_) => {
+                return Err(job_error(
+                    "Kubernetes could not process the workspace memory resize",
+                ));
+            }
+        };
+        self.record_memory_resize_result(job, failure, now)
+            .await
+            .map_err(job_error)
+    }
+
+    async fn record_memory_resize_result(
+        &self,
+        job: &ClaimedJob,
+        failure: Option<&str>,
+        now: i64,
+    ) -> Result<(), StorageError> {
+        let Some(workspace_id) = job.workspace_id else {
+            return Ok(());
+        };
+        let workspace = match self.database.get_workspace(workspace_id).await {
+            Ok(workspace) => workspace,
+            Err(StorageError::WorkspaceNotFound) => return Ok(()),
+            Err(error) => return Err(error),
+        };
+        if !memory_resize_is_current(&workspace, job) {
+            return Ok(());
+        }
+        let mut payload = serde_json::json!({
+            "generation": workspace.generation,
+            "memory_mib": workspace.template.resources.memory_mib,
+        });
+        let kind = if let Some(reason) = failure {
+            payload["reason"] = reason.into();
+            "workspace.memory_resize_failed"
+        } else {
+            "workspace.memory_resize_applied"
+        };
+        self.database
+            .append_event(
+                NewEvent {
+                    organization_id: workspace.organization_id,
+                    workspace_id: Some(workspace.id),
+                    kind: kind.to_owned(),
+                    payload,
+                },
+                now,
+            )
+            .await?;
+        Ok(())
     }
 
     async fn desired_port_mappings(
@@ -545,6 +630,14 @@ fn startup_checkpoint_matches(workspace: &Workspace, job: &ClaimedJob, now: i64)
             .is_some_and(|at| (0..60).contains(&now.saturating_sub(at)))
 }
 
+fn memory_resize_is_current(workspace: &Workspace, job: &ClaimedJob) -> bool {
+    job.payload["generation"].as_u64() == Some(workspace.generation)
+        && matches!(
+            workspace.state,
+            WorkspaceState::Ready | WorkspaceState::Starting
+        )
+}
+
 fn checkpoint_error(
     error: JobHandlerError,
     job: &ClaimedJob,
@@ -595,6 +688,29 @@ impl JobHandler for WorkspaceReconcileHandler {
         {
             return Ok(());
         }
+        let reason = job.payload["reason"].as_str();
+        if reason == Some(LIVE_MEMORY_INCREASE) {
+            return Box::pin(self.resize_memory_for_job(&workspace, job)).await;
+        }
+        // A queued startup/configuration reconcile can survive its original
+        // generation. Once Ready, it must not apply a newer memory edit as a
+        // normal rollout before the dedicated job reaches the workspace.
+        if matches!(
+            workspace.state,
+            WorkspaceState::Ready | WorkspaceState::Starting
+        ) && job.payload["generation"]
+            .as_u64()
+            .is_some_and(|generation| generation != workspace.generation)
+            && reason != Some("injection_changed")
+            && job.payload["runtime_observation"].as_bool() != Some(true)
+            && self
+                .database
+                .has_live_memory_increase(workspace.id, workspace.generation)
+                .await
+                .map_err(job_error)?
+        {
+            return Ok(());
+        }
         if job
             .payload
             .get("reason")
@@ -628,6 +744,13 @@ impl JobHandler for WorkspaceReconcileHandler {
     async fn on_terminal_failure(&self, job: &ClaimedJob, now: i64) -> Result<(), StorageError> {
         if job.kind == "workspace_storage_shrink" {
             return self.storage_shrink_terminal_failure(job, now).await;
+        }
+        if job.kind == "reconcile_workspace"
+            && job.payload["reason"].as_str() == Some(LIVE_MEMORY_INCREASE)
+        {
+            return self
+                .record_memory_resize_result(job, Some("runtime_changed"), now)
+                .await;
         }
         if job.kind != "reconcile_workspace"
             || job

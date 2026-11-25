@@ -21,7 +21,10 @@ use serde::de::DeserializeOwned;
 use tokio::sync::{Notify, watch};
 use uuid::Uuid;
 
-use super::{OWNER_INSTALLATION_LABEL, WORKSPACE_ID_LABEL, client::workspace_connection_ready};
+use super::{
+    OWNER_INSTALLATION_LABEL, WORKSPACE_ID_LABEL,
+    client::{retained_memory_revision, workspace_connection_ready},
+};
 use crate::{
     config::InstallationId,
     storage::{Database, ParkedWorkspaceJob, StorageError},
@@ -139,6 +142,7 @@ struct SetView {
     updated: i32,
     current_revision: Option<String>,
     update_revision: Option<String>,
+    retained_memory_revision: Option<String>,
 }
 
 #[derive(Clone)]
@@ -666,12 +670,16 @@ impl State {
         let Some(pod) = self.pods.get(&id) else {
             return false;
         };
+        if set.desired != 1 || set.terminating {
+            return false;
+        }
+        let retained =
+            set.retained_memory_revision.is_some() && pod.revision == set.retained_memory_revision;
         pod.ready
             && pod.generation == set.generation
             && pod.owner_uid == set.uid
-            && pod.revision.is_some()
-            && pod.revision == set.update_revision
-            && self.candidate(id, set.generation, 1).is_some()
+            && (retained
+                || (set.observed && pod.revision.is_some() && pod.revision == set.update_revision))
     }
 
     fn next_ticket(&mut self) -> u64 {
@@ -1003,6 +1011,7 @@ impl ObservedResource for StatefulSet {
             }
             return;
         }
+        let retained_memory_revision = retained_memory_revision(&object).map(str::to_owned);
         let Some(uid) = object.metadata.uid else {
             return;
         };
@@ -1037,6 +1046,7 @@ impl ObservedResource for StatefulSet {
                 updated: status.updated_replicas.unwrap_or_default(),
                 current_revision: status.current_revision,
                 update_revision: status.update_revision,
+                retained_memory_revision,
             },
         );
     }

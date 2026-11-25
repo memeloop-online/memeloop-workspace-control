@@ -30,6 +30,18 @@ Workspaces support four actions, in the console or through
 Workspace state changes are streamed to clients over the SSE endpoint
 `GET /api/v1/events`.
 
+### Increase memory while a workspace is running
+
+On installations with in-place Pod resize enabled, open **Edit parameters** to
+raise the memory limit of a Ready workspace. Saving schedules the change; the
+dialog shows the limit the kubelet has actually applied. The memory request
+stays the same. Lowering the limit or changing CPU or GPU still requires a
+stopped workspace.
+
+Operators can enable `workspace.liveMemoryResize` in Helm after verifying the
+cluster and container runtime support `pods/resize`. A rejected request is shown
+as a failed live change; MWC does not restart the workspace to apply it.
+
 ## Storage shrink
 
 For capacity reductions that preserve Home and CSI scratch contents, see

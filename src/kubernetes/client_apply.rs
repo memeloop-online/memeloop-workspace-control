@@ -1,4 +1,4 @@
-use crate::workspaces::Workspace;
+use crate::workspaces::{Workspace, WorkspaceState};
 use k8s_openapi::api::{
     apps::v1::StatefulSet,
     core::v1::{ConfigMap, Namespace, PersistentVolumeClaim, Pod, Secret, Service, ServiceAccount},
@@ -15,8 +15,9 @@ use uuid::Uuid;
 
 use super::super::{DesiredResources, InjectionMaterialization};
 use super::{
-    FIELD_MANAGER, KubernetesCoordinator, ReconcileError, restart_generation_is_stale,
-    verify_existing,
+    FIELD_MANAGER, KubernetesCoordinator, ReconcileError,
+    memory_resize::{keep_resize_strategy, sync_offline_memory_limit},
+    restart_generation_is_stale, verify_existing,
 };
 
 #[path = "client_apply/envoy_filter.rs"]
@@ -472,9 +473,18 @@ impl KubernetesCoordinator {
             if existing.metadata.deletion_timestamp.is_some() {
                 return Err(ReconcileError::StatefulSetRecreationPending);
             }
+            keep_resize_strategy(workspace.state, &mut stateful_set, existing)?;
             preserve_claim_storage_classes(&mut stateful_set, existing);
         }
         self.verify_home_volume_binding(workspace).await?;
+        sync_offline_memory_limit(
+            &stateful_sets,
+            &names.stateful_set,
+            workspace.state,
+            &stateful_set,
+            existing,
+        )
+        .await?;
         let stateful_set_result = observe_apply_stage(
             workspace,
             "stateful_set",
@@ -521,8 +531,7 @@ impl KubernetesCoordinator {
         }
         if matches!(
             workspace.state,
-            crate::workspaces::WorkspaceState::Starting
-                | crate::workspaces::WorkspaceState::Restarting
+            WorkspaceState::Starting | WorkspaceState::Restarting
         ) {
             let pods = Api::<Pod>::namespaced(self.client.clone(), namespace_name);
             let pod_name = names.pod_ordinal_zero();

@@ -132,6 +132,40 @@ impl Database {
             .await
     }
 
+    pub(crate) async fn workspace_memory_resize_failure(
+        &self,
+        workspace_id: Uuid,
+        generation: u64,
+    ) -> Result<Option<String>, StorageError> {
+        let generation = i64::try_from(generation).map_err(|_| StorageError::InvalidWorkspace)?;
+        let payload: Option<String> = match self {
+            Self::Sqlite { pool, installation_id } => sqlx::query_scalar(
+                "SELECT payload_json FROM events WHERE installation_id = ?1 AND workspace_id = ?2 AND kind IN ('workspace.memory_resize_failed', 'workspace.memory_resize_applied') AND json_extract(payload_json, '$.generation') = ?3 ORDER BY id DESC LIMIT 1",
+            )
+            .bind(installation_id.as_str())
+            .bind(workspace_id.to_string())
+            .bind(generation)
+            .fetch_optional(pool)
+            .await?,
+            Self::Postgres { pool, installation_id } => sqlx::query_scalar(
+                "SELECT payload_json FROM events WHERE installation_id = $1 AND workspace_id = $2 AND kind IN ('workspace.memory_resize_failed', 'workspace.memory_resize_applied') AND payload_json::jsonb -> 'generation' = to_jsonb($3::bigint) ORDER BY id DESC LIMIT 1",
+            )
+            .bind(installation_id.as_str())
+            .bind(workspace_id.to_string())
+            .bind(generation)
+            .fetch_optional(pool)
+            .await?,
+        };
+        let outcome: serde_json::Value = payload
+            .map(|payload| serde_json::from_str(&payload))
+            .transpose()?
+            .unwrap_or_default();
+        Ok(outcome
+            .get("reason")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned))
+    }
+
     pub async fn list_scoped_events(
         &self,
         organization_id: Uuid,

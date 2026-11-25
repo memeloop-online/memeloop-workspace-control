@@ -58,6 +58,8 @@ pub(super) struct WorkspaceRuntimeResponse {
     metrics_available: bool,
     /// The node hosting the workspace's active Pod, when it has been scheduled.
     node_name: Option<String>,
+    /// Last failure for the current requested memory limit; populated on the workspace detail endpoint.
+    memory_resize_failure: Option<String>,
     pods: Vec<PodRuntime>,
     metrics: Vec<PodMetric>,
     events: Vec<PodEvent>,
@@ -382,6 +384,7 @@ fn build_runtime_entries(
                     ),
                     metrics_available: kubernetes.metrics_available,
                     node_name,
+                    memory_resize_failure: None,
                     pods,
                     metrics,
                     events: merge_current_events(
@@ -430,7 +433,7 @@ pub(super) async fn get(
     let observed_now = unix_timestamp();
     let workspace_ids = [workspace_id];
     let installation_id = state.config.installation_id.to_string();
-    let (details, incidents) = tokio::join!(
+    let (details, incidents, memory_resize_failure) = tokio::join!(
         fetch_workspace_runtime_details(
             &client,
             namespace,
@@ -442,6 +445,16 @@ pub(super) async fn get(
         state
             .database
             .list_workspace_runtime_incidents(&workspace_ids, observed_now, 50),
+        async {
+            if show_runtime && state.workspace_live_memory_resize_supported() {
+                state
+                    .database
+                    .workspace_memory_resize_failure(workspace_id, workspace.generation)
+                    .await
+            } else {
+                Ok(None)
+            }
+        },
     );
     let details = details?;
     kubernetes_request.success();
@@ -467,6 +480,7 @@ pub(super) async fn get(
         ),
         metrics_available: details.metrics_available,
         node_name: details.node_name,
+        memory_resize_failure: memory_resize_failure?,
         pods: details.pods,
         metrics: details.metrics,
         events: merge_current_events(

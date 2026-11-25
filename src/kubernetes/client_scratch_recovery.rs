@@ -58,8 +58,8 @@ impl KubernetesCoordinator {
         };
         self.builder
             .verify_delete_ownership(&set.metadata, workspace.id)?;
-        if observed_workspace_generation(&set, 1) != Some(workspace.generation)
-            || !current_workspace_pod(&set, &pod, workspace.generation, &names.stateful_set)
+        if observed_workspace_generation(&set, 1, false) != Some(workspace.generation)
+            || !current_workspace_pod(&set, &pod, workspace.generation, &names.stateful_set, None)
         {
             return Ok(());
         }

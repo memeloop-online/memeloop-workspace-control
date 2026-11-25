@@ -23,6 +23,7 @@ mod workload;
 mod workspace_pod;
 
 pub use builder::{BuildError, DesiredResources, ResourceBuilder};
+pub(crate) use client::MemoryResize;
 pub(crate) use client::storage_shrink_image;
 pub use client::{
     DeleteProgress, KubernetesCoordinator, ReconcileError, home_volume_capacity_bytes,
