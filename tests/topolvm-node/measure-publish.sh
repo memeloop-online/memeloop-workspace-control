@@ -79,8 +79,8 @@ KUBECONFIG="$base/kubeconfig" "$base/linux-amd64/helm" install topolvm "$base/to
 k create namespace "$ns"
 w create serviceaccount fixture
 
-sample() {
-  local name=$1 uid pvc pv handle role i
+create_fixture() {
+  local name=$1 role
   local dir="$evidence/$name"
   mkdir "$dir"
   date -u +%FT%T.%NZ > "$dir/request.txt"
@@ -96,8 +96,13 @@ sample() {
   w wait --for=condition=Ready "pod/$name" --timeout=100s
   date -u +%FT%T.%NZ > "$dir/ready.txt"
   w get pod "$name" -o json > "$dir/pod.json"
-  uid=$(jq -er .metadata.uid "$dir/pod.json")
   w exec "$name" -- sh -euc 'for v in home scratch; do printf "%s" "$v" > "/mnt/$v/check"; done; sync; test "$(cat /mnt/home/check)" = home; test "$(cat /mnt/scratch/check)" = scratch'
+}
+
+inspect_fixture() {
+  local name=$1 uid pvc pv handle role
+  local dir="$evidence/$name"
+  uid=$(jq -er .metadata.uid "$dir/pod.json")
   : > "$dir/volume-ids.tsv"
   for role in home scratch; do
     pvc=$(w get pvc "$name-$role" -o json)
@@ -108,6 +113,12 @@ sample() {
     printf '%s\t%s\t%s\n' "$role" "$pv" "$handle" >> "$dir/volume-ids.tsv"
   done
   k -n topolvm-system logs daemonset/topolvm-node -c topolvm-node --timestamps | awk -v uid="$uid" 'index($0, uid) && /NodePublishVolume/' > "$dir/publish.log"
+}
+
+reclaim_fixture() {
+  local name=$1 uid pv handle role i
+  local dir="$evidence/$name"
+  uid=$(jq -er .metadata.uid "$dir/pod.json")
   w delete pod "$name" --timeout=90s
   w delete pvc "$name-home" "$name-scratch" --timeout=90s
   while IFS=$'\t' read -r role pv handle; do
@@ -121,10 +132,22 @@ sample() {
   if findmnt -rno TARGET | awk -v uid="$uid" 'index($0, uid) {found=1} END {exit !found}'; then return 1; fi
 }
 
+verify_peer() {
+  local name=storage-peer expected
+  expected=$(jq -cer '[.metadata.uid,.status.containerStatuses[0].containerID]' "$evidence/$name/pod.json")
+  test "$(w get pod "$name" -o json | jq -cer '[.metadata.uid,.status.containerStatuses[0].containerID]')" = "$expected"
+  w exec "$name" -- sh -euc 'for v in home scratch; do test "$(cat "/mnt/$v/check")" = "$v"; printf %s "$v" > "/mnt/$v/recheck"; test "$(cat "/mnt/$v/recheck")" = "$v"; done'
+}
+
+stock_image=$(k -n topolvm-system get daemonset topolvm-node -o json | jq -er '.spec.template.spec.containers[]|select(.name=="topolvm-node")|.image')
+create_fixture storage-peer
+inspect_fixture storage-peer
+
 for variant in stock patched; do
   if [[ $variant == patched ]]; then
     k -n topolvm-system set image daemonset/topolvm-node topolvm-node=localhost/topolvm-node-ci:patched
     k -n topolvm-system rollout status daemonset/topolvm-node --timeout=180s
+    verify_peer
   fi
   k -n topolvm-system exec daemonset/topolvm-node -c topolvm-node -- /topolvm-node --version > "$evidence/$variant-version.txt"
   if [[ $variant == patched ]]; then
@@ -132,6 +155,17 @@ for variant in stock patched; do
   else
     grep -E ' 0\.41\.1$' "$evidence/$variant-version.txt"
   fi
-  for round in warm 1 2 3; do sample "$variant-$round"; done
+  for round in warm 1 2 3; do
+    name="$variant-$round"
+    create_fixture "$name"
+    inspect_fixture "$name"
+    reclaim_fixture "$name"
+  done
 done
+k -n topolvm-system set image daemonset/topolvm-node "topolvm-node=$stock_image"
+k -n topolvm-system rollout status daemonset/topolvm-node --timeout=180s
+k -n topolvm-system exec daemonset/topolvm-node -c topolvm-node -- /topolvm-node --version | grep -E ' 0\.41\.1$'
+verify_peer
+reclaim_fixture storage-peer
+printf '%s\n' '{"same_peer_pod_and_container_after_upgrade_and_rollback":true,"original_volumes_readable_writable_and_reclaimed":true}' > "$evidence/upgrade-and-rollback.json"
 python3 "$suite/publish-timings.py" "$evidence"
