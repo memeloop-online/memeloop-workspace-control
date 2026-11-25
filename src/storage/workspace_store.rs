@@ -81,12 +81,30 @@ struct WorkspaceCreationOptions<'a> {
 pub struct WorkspacePage {
     pub items: Vec<Workspace>,
     pub next_cursor: Option<String>,
-    /// Aggregate for every non-deleted workspace matching the organization and search query.
+    /// Aggregate for every visible non-deleted workspace matching the search query.
     /// This deliberately ignores the pagination cursor.
     pub total_count: u64,
     pub requested: crate::quota::QuotaResources,
     pub temporary_requested_gib: u64,
     pub state_counts: BTreeMap<String, u64>,
+}
+
+pub(super) fn template_filter_sql(
+    allowed_template_ids: Option<&[Uuid]>,
+    placeholder: char,
+    first: usize,
+) -> String {
+    let Some(ids) = allowed_template_ids else {
+        return String::new();
+    };
+    if ids.is_empty() {
+        return " AND 1 = 0".to_owned();
+    }
+    let placeholders = (first..first + ids.len())
+        .map(|index| format!("{placeholder}{index}"))
+        .collect::<Vec<_>>()
+        .join(",");
+    format!(" AND template_id IN ({placeholders})")
 }
 
 impl Database {

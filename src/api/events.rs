@@ -22,6 +22,8 @@ pub(super) struct EventQuery {
     pub organization_id: Uuid,
 }
 
+const EVENT_PAGE_SIZE: u32 = 100;
+
 struct EventStreamState {
     stream_guard: crate::observability::StreamGuard,
     database: Database,
@@ -30,7 +32,8 @@ struct EventStreamState {
     pending: VecDeque<EventRecord>,
     pending_bytes: u64,
     notifier: EventNotifier,
-    initial_query: bool,
+    query_now: bool,
+    allowed_template_ids: Option<Vec<Uuid>>,
 }
 
 #[utoipa::path(
@@ -66,7 +69,8 @@ pub(super) async fn stream(
             pending: VecDeque::new(),
             pending_bytes: 0,
             notifier,
-            initial_query: true,
+            query_now: true,
+            allowed_template_ids: actor.allowed_template_ids,
         },
         next_event,
     );
@@ -99,8 +103,8 @@ async fn next_event(
             };
             return Some((Ok(event), state));
         }
-        if state.initial_query {
-            state.initial_query = false;
+        if state.query_now {
+            state.query_now = false;
         } else if let Err(error) = state.notifier.wait().await {
             tracing::error!(error = %error, "PostgreSQL SSE notification listener failed; falling back to polling");
             state.notifier.fall_back_to_polling();
@@ -111,10 +115,16 @@ async fn next_event(
         }
         match state
             .database
-            .list_events(state.organization_id, state.cursor, 100)
+            .list_scoped_events(
+                state.organization_id,
+                state.cursor,
+                EVENT_PAGE_SIZE,
+                state.allowed_template_ids.as_deref(),
+            )
             .await
         {
             Ok(records) => {
+                state.query_now = records.len() == EVENT_PAGE_SIZE as usize;
                 let bytes = records.iter().map(serialized_event_bytes).sum::<u64>();
                 state.pending.extend(records);
                 state.pending_bytes = state.pending_bytes.saturating_add(bytes);
