@@ -9,7 +9,7 @@ use axum::{
     extract::{Path, Query, State},
     http::HeaderMap,
 };
-use k8s_openapi::api::core::v1::{Event, PersistentVolumeClaim, Pod};
+use k8s_openapi::api::core::v1::{PersistentVolumeClaim, Pod};
 use kube::{Api, Client, api::ListParams};
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
@@ -21,7 +21,7 @@ use crate::{
     config::InstallationId,
     kubernetes::{OWNER_INSTALLATION_LABEL, STORAGE_ROLE_LABEL, WORKSPACE_ID_LABEL},
     quota::Resources,
-    storage::{NewWorkspaceRuntimeIncident, WorkspaceRuntimeIncident},
+    storage::WorkspaceRuntimeIncident,
     workspaces::Workspace,
 };
 
@@ -39,7 +39,7 @@ use details::{
 };
 use pod_views::{
     active_pod_metrics, active_pod_names, active_pod_node_name, has_live_runtime, is_active_pod,
-    newest_events, object_workspace_id, pod_event, pod_metrics, pod_metrics_all, pod_runtime,
+    newest_events, object_workspace_id, pod_metrics, pod_metrics_all, pod_runtime,
     pod_scheduling_event,
 };
 pub(super) use storage_metrics::{
@@ -437,27 +437,28 @@ pub(super) async fn get(
         .observability
         .begin_upstream(crate::observability::UpstreamKind::Kubernetes);
     let namespace = workspace.runtime.namespace();
-    let names = crate::workspace_runtime::WorkspaceRuntimeNames::for_workspace(
-        &state.config.installation_id,
-        &workspace.runtime,
-        &workspace.short_id,
-    )
-    .map_err(|_| ApiError::BadRequest("workspace runtime identity is invalid"))?;
     let selector = format!(
         "{OWNER_INSTALLATION_LABEL}={},{WORKSPACE_ID_LABEL}={workspace_id}",
         state.config.installation_id,
     );
     let show_runtime = has_live_runtime(workspace.state);
-    let details = fetch_workspace_runtime_details(
-        &client,
-        namespace,
-        &names,
-        &selector,
-        &workspace,
-        show_runtime,
-        &state.config.installation_id.to_string(),
-    )
-    .await?;
+    let observed_now = unix_timestamp();
+    let workspace_ids = [workspace_id];
+    let installation_id = state.config.installation_id.to_string();
+    let (details, incidents) = tokio::join!(
+        fetch_workspace_runtime_details(
+            &client,
+            namespace,
+            &selector,
+            &workspace,
+            show_runtime,
+            &installation_id,
+        ),
+        state
+            .database
+            .list_workspace_runtime_incidents(&workspace_ids, observed_now, 50),
+    );
+    let details = details?;
     kubernetes_request.success();
     let storage_metrics = fetch_storage_metrics(
         state.config.prometheus_url.as_ref(),
@@ -465,20 +466,7 @@ pub(super) async fn get(
         &state.observability,
     )
     .await;
-    let observed_now = unix_timestamp();
-    let current_incidents = details
-        .events
-        .iter()
-        .filter_map(new_runtime_incident)
-        .collect::<Vec<_>>();
-    state
-        .database
-        .upsert_workspace_runtime_incidents(workspace_id, &current_incidents, observed_now)
-        .await?;
-    let mut incidents = state
-        .database
-        .list_workspace_runtime_incidents(&[workspace_id], observed_now, 50)
-        .await?;
+    let mut incidents = incidents?;
     let response = WorkspaceRuntimeResponse {
         allocated: workspace.template.resources,
         persistent_storage: storage_metrics.telemetry(
@@ -503,37 +491,10 @@ pub(super) async fn get(
         metrics: details.metrics,
         events: merge_current_events(
             incidents.remove(&workspace_id).unwrap_or_default(),
-            &details.events,
+            &details.scheduling_events,
         ),
     };
     Ok(Json(response))
-}
-
-fn new_runtime_incident(event: &PodEvent) -> Option<NewWorkspaceRuntimeIncident> {
-    if !event.details.is_informative(event.category) {
-        return None;
-    }
-    let observed_at = event
-        .observed_at
-        .as_deref()?
-        .parse::<k8s_openapi::jiff::Timestamp>()
-        .ok()?
-        .as_second();
-    Some(NewWorkspaceRuntimeIncident {
-        id: event.id.clone(),
-        details: event.details.clone(),
-        category: event.category,
-        observed_at,
-        last_observed_at: event
-            .last_observed_at
-            .as_deref()
-            .and_then(|value| value.parse::<k8s_openapi::jiff::Timestamp>().ok())
-            .map_or(observed_at, |time| time.as_second()),
-        count: event
-            .count
-            .and_then(|count| u32::try_from(count).ok())
-            .unwrap_or(1),
-    })
 }
 
 fn pod_event_from_incident(incident: WorkspaceRuntimeIncident) -> PodEvent {
