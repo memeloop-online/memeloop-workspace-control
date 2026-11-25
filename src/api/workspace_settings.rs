@@ -39,7 +39,7 @@ pub(super) struct UpdateWorkspaceSettingsRequest {
         ("Idempotency-Key" = String, Header, description = "Unique key for this request")
     ),
     responses(
-        (status = 200, description = "Stopped workspace settings updated", body = super::workspaces::WorkspaceResponse),
+        (status = 200, description = "Settings saved; an eligible memory increase applies asynchronously", body = super::workspaces::WorkspaceResponse),
         (status = 400, body = super::ErrorEnvelope),
         (status = 401, body = super::ErrorEnvelope),
         (status = 403, body = super::ErrorEnvelope),
@@ -95,6 +95,7 @@ pub(super) async fn update(
                 memory_mib: request.memory_mib,
                 gpu_count: request.gpu_count,
                 expected_generation: request.expected_generation,
+                allow_live_memory_increase: state.workspace_live_memory_resize_supported(),
                 actor_user_id: actor.user_id,
                 now,
             },

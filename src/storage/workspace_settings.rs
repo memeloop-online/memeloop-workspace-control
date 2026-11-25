@@ -10,12 +10,15 @@ use crate::{
     workspaces::{Workspace, WorkspaceState},
 };
 
+pub(crate) const LIVE_MEMORY_INCREASE: &str = "memory_limit_increase";
+
 pub struct WorkspaceSettingsUpdate {
     pub name: String,
     pub cpu_millis: u64,
     pub memory_mib: u64,
     pub gpu_count: u32,
     pub expected_generation: u64,
+    pub allow_live_memory_increase: bool,
     pub actor_user_id: Uuid,
     pub now: i64,
 }
@@ -35,6 +38,22 @@ impl Database {
                 pool,
                 installation_id,
             } => update_postgres(pool, installation_id, workspace_id, update).await,
+        }
+    }
+
+    pub(crate) async fn has_live_memory_increase(
+        &self,
+        id: Uuid,
+        generation: u64,
+    ) -> Result<bool, StorageError> {
+        let generation = as_i64(generation)?;
+        match self {
+            Self::Sqlite { pool, installation_id } => Ok(sqlx::query_scalar(
+                "SELECT EXISTS (SELECT 1 FROM jobs WHERE installation_id = ?1 AND workspace_id = ?2 AND kind = 'reconcile_workspace' AND json_extract(payload_json, '$.reason') = ?3 AND json_extract(payload_json, '$.generation') = ?4)",
+            ).bind(installation_id.as_str()).bind(id.to_string()).bind(LIVE_MEMORY_INCREASE).bind(generation).fetch_one(pool).await.map(|count: i64| count != 0)?),
+            Self::Postgres { pool, installation_id } => Ok(sqlx::query_scalar(
+                "SELECT EXISTS (SELECT 1 FROM jobs WHERE installation_id = $1 AND workspace_id = $2 AND kind = 'reconcile_workspace' AND payload_json::jsonb ->> 'reason' = $3 AND payload_json::jsonb ->> 'generation' = $4)",
+            ).bind(installation_id.as_str()).bind(id.to_string()).bind(LIVE_MEMORY_INCREASE).bind(generation.to_string()).fetch_one(pool).await?),
         }
     }
 }
@@ -57,8 +76,8 @@ async fn update_sqlite(
     super::workspace_storage_shrink::guard_sqlite(&mut tx, installation_id.as_str(), workspace_id)
         .await?;
     let old_state = workspace.state.as_str().to_owned();
-    let (yaml, compute_changed) = apply(&mut workspace, &snapshot_yaml, &update)?;
-    if compute_changed {
+    let (yaml, job_reason) = apply(&mut workspace, &snapshot_yaml, &update)?;
+    if job_reason.is_some() {
         admit_sqlite(&mut tx, installation_id.as_str(), &workspace).await?;
     }
     let affected = sqlx::query("UPDATE workspaces SET name = ?1, cpu_millis = ?2, memory_mib = ?3, gpu_count = ?4, template_snapshot_yaml = ?5, generation = ?6, updated_at = ?7 WHERE installation_id = ?8 AND id = ?9 AND generation = ?10 AND state = ?11")
@@ -69,10 +88,10 @@ async fn update_sqlite(
     if affected != 1 {
         return Err(StorageError::WorkspaceSettingsUpdateConflict);
     }
-    if compute_changed {
+    if let Some(reason) = job_reason {
         sqlx::query("INSERT INTO jobs (id, installation_id, kind, workspace_id, payload_json, status, available_at, lease_owner, lease_expires_at, attempts, created_at, updated_at) VALUES (?1, ?2, 'reconcile_workspace', ?3, ?4, 'pending', ?5, NULL, NULL, 0, ?5, ?5)")
             .bind(Uuid::now_v7().to_string()).bind(installation_id.as_str()).bind(workspace_id.to_string())
-            .bind(serde_json::json!({"generation":workspace.generation,"reason":"settings_updated"}).to_string())
+            .bind(settings_job_payload(&workspace, reason, update.now))
             .bind(update.now).execute(&mut *tx).await?;
     }
     sqlx::query("INSERT INTO audit_log (id, installation_id, actor_user_id, organization_id, workspace_id, action, metadata_json, created_at) VALUES (?1, ?2, ?3, ?4, ?5, 'workspace.settings_updated', ?6, ?7)")
@@ -84,7 +103,7 @@ async fn update_sqlite(
         &mut tx,
         installation_id.as_str(),
         &workspace,
-        Some("settings_updated"),
+        Some(job_reason.unwrap_or("settings_updated")),
         update.now,
     )
     .await?;
@@ -114,8 +133,8 @@ async fn update_postgres(
     )
     .await?;
     let old_state = workspace.state.as_str().to_owned();
-    let (yaml, compute_changed) = apply(&mut workspace, &snapshot_yaml, &update)?;
-    if compute_changed {
+    let (yaml, job_reason) = apply(&mut workspace, &snapshot_yaml, &update)?;
+    if job_reason.is_some() {
         admit_postgres(&mut tx, installation_id.as_str(), &workspace).await?;
     }
     let affected = sqlx::query("UPDATE workspaces SET name = $1, cpu_millis = $2, memory_mib = $3, gpu_count = $4, template_snapshot_yaml = $5, generation = $6, updated_at = $7 WHERE installation_id = $8 AND id = $9 AND generation = $10 AND state = $11")
@@ -126,10 +145,10 @@ async fn update_postgres(
     if affected != 1 {
         return Err(StorageError::WorkspaceSettingsUpdateConflict);
     }
-    if compute_changed {
+    if let Some(reason) = job_reason {
         sqlx::query("INSERT INTO jobs (id, installation_id, kind, workspace_id, payload_json, status, available_at, lease_owner, lease_expires_at, attempts, created_at, updated_at) VALUES ($1, $2, 'reconcile_workspace', $3, $4, 'pending', $5, NULL, NULL, 0, $5, $5)")
             .bind(Uuid::now_v7().to_string()).bind(installation_id.as_str()).bind(workspace_id.to_string())
-            .bind(serde_json::json!({"generation":workspace.generation,"reason":"settings_updated"}).to_string())
+            .bind(settings_job_payload(&workspace, reason, update.now))
             .bind(update.now).execute(&mut *tx).await?;
     }
     sqlx::query("INSERT INTO audit_log (id, installation_id, actor_user_id, organization_id, workspace_id, action, metadata_json, created_at) VALUES ($1, $2, $3, $4, $5, 'workspace.settings_updated', $6, $7)")
@@ -141,7 +160,7 @@ async fn update_postgres(
         &mut tx,
         installation_id.as_str(),
         &workspace,
-        Some("settings_updated"),
+        Some(job_reason.unwrap_or("settings_updated")),
         update.now,
     )
     .await?;
@@ -153,7 +172,7 @@ fn apply(
     workspace: &mut Workspace,
     snapshot_yaml: &str,
     update: &WorkspaceSettingsUpdate,
-) -> Result<(String, bool), StorageError> {
+) -> Result<(String, Option<&'static str>), StorageError> {
     if workspace.generation != update.expected_generation
         || !matches!(
             workspace.state,
@@ -170,10 +189,20 @@ fn apply(
     resources.cpu_millis = update.cpu_millis;
     resources.memory_mib = update.memory_mib;
     resources.gpu_count = update.gpu_count;
-    let compute_changed = resources != workspace.template.resources;
-    if compute_changed && workspace.state != WorkspaceState::Stopped {
+    let previous = workspace.template.resources;
+    let job_reason = if resources == previous {
+        None
+    } else if workspace.state == WorkspaceState::Stopped {
+        Some("settings_updated")
+    } else if update.allow_live_memory_increase
+        && resources.memory_mib > previous.memory_mib
+        && resources.cpu_millis == previous.cpu_millis
+        && resources.gpu_count == previous.gpu_count
+    {
+        Some(LIVE_MEMORY_INCREASE)
+    } else {
         return Err(StorageError::WorkspaceSettingsUpdateConflict);
-    }
+    };
     let mut snapshot = WorkspaceTemplateDocument::parse(snapshot_yaml)
         .map_err(|_| StorageError::InvalidWorkspace)?;
     snapshot.spec.resources = resources;
@@ -182,7 +211,7 @@ fn apply(
         .map_err(|_| StorageError::InvalidWorkspace)?;
     workspace.template = snapshot.spec.clone();
     workspace.name = name.to_owned();
-    if compute_changed {
+    if job_reason.is_some() {
         workspace.generation = workspace
             .generation
             .checked_add(1)
@@ -193,8 +222,16 @@ fn apply(
         snapshot
             .to_yaml()
             .map_err(|_| StorageError::InvalidWorkspace)?,
-        compute_changed,
+        job_reason,
     ))
+}
+
+fn settings_job_payload(workspace: &Workspace, reason: &str, now: i64) -> String {
+    let mut payload = serde_json::json!({"generation": workspace.generation, "reason": reason});
+    if reason == LIVE_MEMORY_INCREASE {
+        payload["requested_at"] = now.into();
+    }
+    payload.to_string()
 }
 
 fn as_i64(value: u64) -> Result<i64, StorageError> {

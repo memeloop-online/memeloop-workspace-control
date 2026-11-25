@@ -2,6 +2,8 @@ pub(super) const SCHEMA_VERSION: i64 = 33;
 
 pub(super) const MIGRATION_TABLE: &str = "CREATE TABLE IF NOT EXISTS schema_migrations (version BIGINT PRIMARY KEY, applied_at BIGINT NOT NULL)";
 
+pub(super) const MEMORY_RESIZE_EVENT_INDEX: &str = "CREATE INDEX IF NOT EXISTS events_workspace_memory_resize_idx ON events (installation_id, workspace_id, id DESC) WHERE kind IN ('workspace.memory_resize_failed', 'workspace.memory_resize_applied')";
+
 // OIDC tables are also applied additively to installations at schema 32.
 pub(super) const OIDC_SCHEMA: &[&str] = &[
     "CREATE TABLE oidc_identities (id TEXT PRIMARY KEY, installation_id TEXT NOT NULL, issuer TEXT NOT NULL, subject TEXT NOT NULL, user_id TEXT NOT NULL, scopes_json TEXT NOT NULL, created_at BIGINT NOT NULL, UNIQUE (installation_id, issuer, subject), UNIQUE (installation_id, user_id), FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE)",

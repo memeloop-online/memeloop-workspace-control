@@ -64,6 +64,9 @@ async fn migrate_sqlite(pool: &SqlitePool, applied_at: i64) -> Result<(), Storag
             .execute(&mut *transaction)
             .await?;
     }
+    sqlx::query(schema::MEMORY_RESIZE_EVENT_INDEX)
+        .execute(&mut *transaction)
+        .await?;
     transaction.commit().await?;
     Ok(())
 }
@@ -127,6 +130,9 @@ async fn migrate_postgres(
             .execute(&mut *transaction)
             .await?;
     }
+    sqlx::query(schema::MEMORY_RESIZE_EVENT_INDEX)
+        .execute(&mut *transaction)
+        .await?;
     transaction.commit().await?;
     Ok(())
 }

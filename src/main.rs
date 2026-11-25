@@ -303,6 +303,9 @@ fn app_state(
     if diagnostics_enabled {
         state.enable_diagnostics();
     }
+    if env_bool("MWC_WORKSPACE_LIVE_MEMORY_RESIZE", false)? {
+        state.enable_workspace_live_memory_resize();
+    }
     if let Ok(public_key) = std::env::var("MWC_SSH_JUMP_HOST_PUBLIC_KEY") {
         state.set_jump_host_public_key(&public_key)?;
     }

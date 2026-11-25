@@ -33,6 +33,7 @@ mod node_port_tests {
 mod coordinator_tests {
     mod delete_batching;
     mod gated_startup;
+    mod memory_resize;
     mod namespace_apply;
 
     use std::{

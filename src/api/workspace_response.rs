@@ -99,6 +99,7 @@ pub(super) async fn workspace_response(
     Ok(WorkspaceResponse {
         workspace,
         namespace,
+        live_memory_resize_supported: state.workspace_live_memory_resize_supported(),
         ssh_connection,
         ssh_host: connectable
             .then(|| internal_endpoint.as_ref().map(|(host, _)| host.clone()))

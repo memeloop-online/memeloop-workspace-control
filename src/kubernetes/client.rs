@@ -26,11 +26,15 @@ mod apply;
 mod delete;
 #[path = "client_home_volume.rs"]
 mod home_volume;
+#[path = "client_memory_resize.rs"]
+mod memory_resize;
 #[path = "client_scratch_recovery.rs"]
 mod scratch_recovery;
 #[path = "client_storage_shrink.rs"]
 mod storage_shrink;
 pub use home_volume::home_volume_capacity_bytes;
+pub(crate) use memory_resize::MemoryResize;
+pub(super) use memory_resize::retained_memory_revision;
 pub(crate) use storage_shrink::storage_shrink_image;
 pub(crate) use storage_shrink::{ShrinkPodStage, ShrinkUsage};
 
@@ -143,7 +147,11 @@ impl KubernetesCoordinator {
         };
         self.builder
             .verify_delete_ownership(&stateful_set.metadata, workspace.id)?;
-        let Some(applied_generation) = observed_workspace_generation(&stateful_set, expected)
+        let retained_revision = observe_applied_generation
+            .then(|| retained_memory_revision(&stateful_set))
+            .flatten();
+        let Some(applied_generation) =
+            observed_workspace_generation(&stateful_set, expected, retained_revision.is_some())
         else {
             return Ok(false);
         };
@@ -169,6 +177,7 @@ impl KubernetesCoordinator {
                 &pod,
                 applied_generation,
                 &names.resources.stateful_set,
+                retained_revision,
             )
             && workspace_connection_ready(&pod))
     }
@@ -222,11 +231,15 @@ pub(super) fn workspace_connection_ready(pod: &Pod) -> bool {
         })
 }
 
-fn observed_workspace_generation(set: &StatefulSet, expected: i32) -> Option<u64> {
+fn observed_workspace_generation(
+    set: &StatefulSet,
+    expected: i32,
+    retain_revision: bool,
+) -> Option<u64> {
     let (spec, status) = (set.spec.as_ref()?, set.status.as_ref()?);
     if spec.replicas != Some(expected)
         || set.metadata.deletion_timestamp.is_some()
-        || status.observed_generation? < set.metadata.generation?
+        || (!retain_revision && status.observed_generation? < set.metadata.generation?)
     {
         return None;
     }
@@ -240,7 +253,13 @@ fn observed_workspace_generation(set: &StatefulSet, expected: i32) -> Option<u64
         .ok()
 }
 
-fn current_workspace_pod(set: &StatefulSet, pod: &Pod, generation: u64, set_name: &str) -> bool {
+fn current_workspace_pod(
+    set: &StatefulSet,
+    pod: &Pod,
+    generation: u64,
+    set_name: &str,
+    retained_revision: Option<&str>,
+) -> bool {
     let (Some(uid), Some(revision)) = (
         set.metadata.uid.as_deref(),
         set.status
@@ -266,7 +285,11 @@ fn current_workspace_pod(set: &StatefulSet, pod: &Pod, generation: u64, set_name
                 })
             })
         && pod.metadata.labels.as_ref().is_some_and(|labels| {
-            labels.get("controller-revision-hash").map(String::as_str) == Some(revision)
+            labels
+                .get("controller-revision-hash")
+                .is_some_and(|pod_revision| {
+                    pod_revision == revision || Some(pod_revision.as_str()) == retained_revision
+                })
         })
 }
 

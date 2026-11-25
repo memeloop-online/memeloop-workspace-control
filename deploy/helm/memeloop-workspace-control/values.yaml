@@ -43,6 +43,8 @@ oidc:
 
 workspace:
   storageClassName: ""
+  # Opt in after verifying in-place Pod resize on the Kubernetes and CRI versions used by workspace nodes.
+  liveMemoryResize: false
   # Required CSI class for temporary build/cache storage. Each workspace uses one
   # Pod-owned generic ephemeral PVC with a template-selected capacity.
   scratchStorageClassName: mwc-local-scratch

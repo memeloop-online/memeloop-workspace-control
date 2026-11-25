@@ -187,7 +187,7 @@ fn workspace_storage_response(error: &StorageError) -> Option<ErrorResponse> {
         StorageError::WorkspaceSettingsUpdateConflict => response(
             StatusCode::CONFLICT,
             "workspace_settings_update_conflict",
-            "Workspace settings changed; refresh and stop before changing compute resources.",
+            "Refresh the workspace settings. Only a supported memory increase can change resources while it is running.",
         ),
         StorageError::InvalidWorkspace => response(
             StatusCode::BAD_REQUEST,

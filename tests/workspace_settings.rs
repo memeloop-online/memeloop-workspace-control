@@ -6,7 +6,7 @@ use memeloop_workspace_control::{
         WorkspaceSettingsUpdate,
     },
     templates::{WorkspaceTemplateDocument, WorkspaceTemplateSpec},
-    workspaces::{AccessMode, Workspace, WorkspaceAction, WorkspaceObservation},
+    workspaces::{AccessMode, Workspace, WorkspaceAction, WorkspaceObservation, WorkspaceState},
 };
 use uuid::Uuid;
 
@@ -17,6 +17,7 @@ fn update(workspace: &Workspace, cpu_millis: u64) -> WorkspaceSettingsUpdate {
         memory_mib: workspace.template.resources.memory_mib,
         gpu_count: workspace.template.resources.gpu_count,
         expected_generation: workspace.generation,
+        allow_live_memory_increase: false,
         actor_user_id: workspace.owner_id,
         now: 20,
     }
@@ -140,6 +141,75 @@ async fn exercise(database: Database) {
     ));
     assert_eq!(database.get_workspace(ready.id).await.unwrap(), renamed);
 
+    let mut extra_memory = update(&renamed, 1_000);
+    extra_memory.memory_mib = 3_072;
+    assert!(matches!(
+        database
+            .update_workspace_settings(ready.id, extra_memory)
+            .await,
+        Err(StorageError::WorkspaceSettingsUpdateConflict)
+    ));
+    let memory_quota = QuotaResources {
+        cpu_millis: 2_000,
+        memory_mib: 3_072,
+        disk_gib: 20,
+        ..Default::default()
+    };
+    database
+        .set_organization_quota(organization.id, memory_quota, 20)
+        .await
+        .unwrap();
+    database
+        .set_user_quota(user.user_id, memory_quota, 20)
+        .await
+        .unwrap();
+    let mut extra_memory = update(&renamed, 1_000);
+    extra_memory.allow_live_memory_increase = true;
+    extra_memory.memory_mib = 4_096;
+    assert!(matches!(
+        database
+            .update_workspace_settings(ready.id, extra_memory)
+            .await,
+        Err(StorageError::Quota(_))
+    ));
+    assert_eq!(database.get_workspace(ready.id).await.unwrap(), renamed);
+    assert_eq!(database.job_counts().await.unwrap().pending, jobs);
+    let mut extra_memory = update(&renamed, 1_000);
+    extra_memory.allow_live_memory_increase = true;
+    extra_memory.memory_mib = 3_072;
+    let enlarged = database
+        .update_workspace_settings(ready.id, extra_memory)
+        .await
+        .unwrap();
+    assert_eq!(enlarged.state, WorkspaceState::Ready);
+    assert_eq!(enlarged.generation, renamed.generation + 1);
+    assert_eq!(enlarged.template.resources.memory_mib, 3_072);
+    assert_eq!(
+        enlarged.template.pod_requests,
+        renamed.template.pod_requests
+    );
+    assert_eq!(database.job_counts().await.unwrap().pending, jobs + 1);
+    let events = database
+        .list_events(organization.id, None, 20)
+        .await
+        .unwrap();
+    assert!(events.iter().any(|event| {
+        event.workspace_id == Some(enlarged.id)
+            && event.payload["generation"] == enlarged.generation
+            && event.payload["action"] == "memory_limit_increase"
+    }));
+    for cpu in [1_000, 2_000] {
+        let mut forbidden = update(&enlarged, cpu);
+        forbidden.allow_live_memory_increase = true;
+        forbidden.memory_mib = if cpu == 1_000 { 2_048 } else { 4_096 };
+        assert!(matches!(
+            database
+                .update_workspace_settings(ready.id, forbidden)
+                .await,
+            Err(StorageError::WorkspaceSettingsUpdateConflict)
+        ));
+    }
+
     let stopping = database
         .request_workspace_action(ready.id, WorkspaceAction::Stop, user.user_id, 21)
         .await
@@ -158,7 +228,7 @@ async fn exercise(database: Database) {
     // Exactly the replacement allocation fits. Counting the previous 1-core allocation twice would reject it.
     let quota = QuotaResources {
         cpu_millis: 2_000,
-        memory_mib: 2_048,
+        memory_mib: 3_072,
         gpu_count: 0,
         disk_gib: 20,
         ..Default::default()

@@ -1,4 +1,4 @@
-use crate::workspaces::Workspace;
+use crate::workspaces::{Workspace, WorkspaceState};
 use k8s_openapi::api::{
     apps::v1::StatefulSet,
     core::v1::{ConfigMap, Namespace, PersistentVolumeClaim, Pod, Secret, Service, ServiceAccount},
@@ -16,7 +16,7 @@ use uuid::Uuid;
 use super::super::{DesiredResources, InjectionMaterialization};
 use super::{
     FIELD_MANAGER, KubernetesCoordinator, ReconcileError, restart_generation_is_stale,
-    verify_existing,
+    retained_memory_revision, verify_existing,
 };
 
 #[path = "client_apply/envoy_filter.rs"]
@@ -471,6 +471,22 @@ impl KubernetesCoordinator {
             )?;
             if existing.metadata.deletion_timestamp.is_some() {
                 return Err(ReconcileError::StatefulSetRecreationPending);
+            }
+            if retained_memory_revision(existing).is_some() {
+                let (Some(desired), Some(current)) = (&mut stateful_set.spec, &existing.spec)
+                else {
+                    return Err(ReconcileError::MissingPodTemplateMetadata);
+                };
+                // The opt-in resize switched this workspace to OnDelete. Explicit
+                // start/restart already replaces stale Pods using the new template.
+                // A Ready reconcile must leave the running and replacement revisions intact.
+                desired.update_strategy = current.update_strategy.clone();
+                if workspace.state == WorkspaceState::Ready {
+                    desired.template.clone_from(&current.template);
+                    if let Some(metadata) = &mut desired.template.metadata {
+                        metadata.creation_timestamp = None;
+                    }
+                }
             }
             preserve_claim_storage_classes(&mut stateful_set, existing);
         }

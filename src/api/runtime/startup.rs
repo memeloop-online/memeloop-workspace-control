@@ -33,6 +33,8 @@ pub(super) struct ContainerRuntime {
     state: &'static str,
     reason: Option<String>,
     exit_code: Option<i32>,
+    /// A limit confirmed by the kubelet, independent of metrics-server.
+    applied_memory_mib: Option<u64>,
 }
 
 fn condition(pod: &Pod, name: &str) -> Option<Timestamp> {
@@ -138,6 +140,13 @@ pub(super) fn container_runtime(status: &ContainerStatus) -> ContainerRuntime {
         },
         reason: safe_reason(reason).map(str::to_owned),
         exit_code: terminated.map(|state| state.exit_code),
+        applied_memory_mib: status
+            .resources
+            .as_ref()
+            .and_then(|resources| resources.limits.as_ref())
+            .and_then(|limits| limits.get("memory"))
+            .and_then(|quantity| crate::kubernetes::home_volume_capacity_bytes(&quantity.0))
+            .map(|bytes| bytes / 1_048_576),
     }
 }
 
