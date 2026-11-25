@@ -78,7 +78,7 @@ jobs:
       - name: Build the K3s Containerd daemon with the upstream cleanup patch (CI only)
         working-directory: ci-containerd-source
         env:
-          CGO_ENABLED: '0'
+          CGO_ENABLED: '1'
         run: |
           test "$(git rev-parse HEAD)" = "$CONTAINERD_BASE_SHA"
           test -z "$(git status --porcelain)"
