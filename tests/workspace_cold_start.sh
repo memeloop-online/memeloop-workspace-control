@@ -9,7 +9,8 @@ containers=()
 scratch_mounts=()
 success=false
 cleanup() {
-  for container in "${containers[@]}"; do
+  for ((index=${#containers[@]}-1; index>=0; index--)); do
+    container=${containers[index]}
     if [ "$success" != true ]; then
       docker logs "$container" 2>&1 || true
     fi
@@ -81,27 +82,10 @@ EOF
       ssh-keygen -q -t ed25519 -N "" -f /etc/ssh/platform/ssh_host_ed25519_key
     '
 
-  network=(--network none)
   buildkit_mount=()
   if [ "$enabled" = true ]; then
-    setup=$(jq -er '.pod.initContainers[] | select(.name == "buildkit-bootstrap") | .args[0]' "$fixture")
-    # Only scratch-init has run: the UID1000 bootstrap must create every child itself.
-    docker run --rm --network none --read-only --user 1000:1000 --cap-drop ALL \
-      --security-opt no-new-privileges --entrypoint sh \
-      -v "$root/scratch/build-cache:/var/lib/mwc-buildkit" \
-      "$buildkit_image" -ec 'test -z "$(find /var/lib/mwc-buildkit -mindepth 1 -print -quit)"'
-    docker run --rm --network none --read-only --user 1000:1000 --cap-drop ALL \
-      --security-opt no-new-privileges --entrypoint sh \
-      -v "$root/scratch/build-cache:/var/lib/mwc-buildkit" \
-      "$buildkit_image" -c "$setup"
-    containers+=("$buildkit_container")
-    docker run --detach --name "$buildkit_container" --network none --privileged \
-      -e TMPDIR=/var/lib/mwc-buildkit/tmp -e XDG_RUNTIME_DIR=/var/lib/mwc-buildkit/runtime \
-      -e BUILDKIT_HOST=tcp://127.0.0.1:1234 \
-      -v "$root/scratch/build-cache:/var/lib/mwc-buildkit" \
-      -v "$root/scratch/build-cache/tmp:/tmp" \
-      "$buildkit_image" --config /var/lib/mwc-buildkit/config/buildkitd.toml >/dev/null
-    network=(--network "container:$buildkit_container")
+    # Start the workspace with the prepared mount but no BuildKit daemon or client.
+    # A real, pinned SSH connection must work before starting the sidecar.
     buildkit_mount=(-v "$root/scratch/build-cache:/run/mwc-buildkit")
   fi
 
@@ -110,7 +94,7 @@ EOF
   rustup_home=/usr/local/rustup
   if [ "$enabled" = true ]; then rustup_home=/workspace/.rustup; fi
   containers+=("$workspace_container")
-  docker run --detach --name "$workspace_container" "${network[@]}" \
+  docker run --detach --name "$workspace_container" --network none \
     "${workspace_env[@]}" -e MWC_HOME_RESERVE_MIB=0 -e RUSTUP_HOME="$rustup_home" \
     --tmpfs /run/mwc-ssh:mode=0700 \
     -v "$root/scratch/tmp:/tmp" -v "$root/scratch/tmp:/var/tmp" \
@@ -180,6 +164,16 @@ EOF
     -i /run/mwc-ssh/ttyd_client_key workspace@127.0.0.1 \
     'printf "%s\n" "$RUSTUP_HOME" "$MWC_COLD_CONFIG" "$MWC_COLD_SECRET"')" = "$expected_environment"
   if [ "$enabled" = true ]; then
+    docker exec "$workspace_container" sh -ec 'test ! -e /run/mwc-buildkit/bin/buildctl'
+    mapfile -t buildkit_env < <(jq -r '.pod.containers[] | select(.name == "buildkitd") | .env[] | "-e", (.name + "=" + .value)' "$fixture")
+    setup=$(jq -er '.pod.containers[] | select(.name == "buildkitd") | .args[0]' "$fixture")
+    containers+=("$buildkit_container")
+    docker run --detach --name "$buildkit_container" --network "container:$workspace_container" \
+      --privileged --read-only --user 1000:1000 "${buildkit_env[@]}" \
+      -v "$root/scratch/build-cache:/var/lib/mwc-buildkit" \
+      -v "$root/scratch/build-cache:/home/user/.local/share/buildkit" \
+      -v "$root/scratch/build-cache/tmp:/tmp" \
+      --entrypoint sh "$buildkit_image" -c "$setup" >/dev/null
     ready=false
     for _attempt in $(seq 1 30); do
       if docker exec --user 1000:1000 "$workspace_container" \

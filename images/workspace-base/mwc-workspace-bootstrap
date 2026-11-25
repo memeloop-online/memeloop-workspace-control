@@ -11,7 +11,6 @@ runtime_dir=/run/mwc-ssh
 authorized_keys="$runtime_dir/authorized_keys"
 build_scratch=${MWC_BUILD_SCRATCH:-/var/lib/mwc/build-scratch}
 codex_scratch=/var/lib/mwc/codex-scratch
-buildkit_runtime=/run/mwc-buildkit
 manifest=/var/run/workspace-injections/config/workspace-files.json
 environment_manifest=/var/run/workspace-injections/config/workspace-environment.json
 kubeconfig="$runtime_dir/kubeconfig"
@@ -42,11 +41,6 @@ prepare_layout() {
         "$build_scratch" "$build_scratch/bin" "$build_scratch/tmp" "$build_scratch/cache" \
         "$build_scratch/cargo-target" "$build_scratch/cargo-registry" \
         "$build_scratch/cargo-git" "$codex_scratch"
-    if [ "${MWC_BUILDKIT_ENABLED:-false}" = true ]; then
-        install -d -m 0700 -o 1000 -g 1000 \
-            "$buildkit_runtime/bin" "$buildkit_runtime/config" "$buildkit_runtime/runtime" \
-            "$buildkit_runtime/state" "$buildkit_runtime/tmp"
-    fi
     install -d -m 0700 -o "$workspace_user" -g "$workspace_group" \
         "$codex_scratch/tmp" "$codex_scratch/dot-tmp"
     if [ "$home_has_data" = true ]; then

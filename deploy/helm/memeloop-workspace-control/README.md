@@ -44,6 +44,9 @@ jumpHost:
   enabled: false
 ```
 
+The optional `workspace.buildkitImage` must use the rootless Moby BuildKit
+image layout, including `/usr/bin/rootlesskit`, `buildkitd`, and `buildctl`.
+
 Install or update the release:
 
 ```bash

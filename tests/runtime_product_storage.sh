@@ -682,7 +682,7 @@ jq --arg name "$stock_pod" '
  {apiVersion:"v1",kind:"Pod",metadata:{name:$name},spec:{
   automountServiceAccountToken:false,securityContext:$product.spec.securityContext,
   volumes:[{name:"workspace-scratch",emptyDir:{}}],
-  initContainers:[$product.spec.initContainers[]|select(.name=="workspace-scratch-init" or .name=="buildkit-bootstrap")],
+  initContainers:[$product.spec.initContainers[]|select(.name=="workspace-scratch-init")],
   containers:[$product.spec.containers[]|select(.name=="buildkitd")]
  }}
 ' "$fixtures/mwc-native-buildkit-true.json" | kube apply -f -
