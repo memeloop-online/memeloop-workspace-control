@@ -10,7 +10,6 @@ case $1 in
     install -Dm 0644 "$src/mwc-scratch-mounts.service" /etc/systemd/system/mwc-scratch-mounts.service
     install -Dm 0644 "$src/30-mwc-scratch-mounts.conf" /etc/systemd/system/k3s.service.d/30-mwc-scratch-mounts.conf
     install -d -m 0750 "$logs"
-    printf '%s\n' 'existing-pod-log-directory' > "$logs/original-marker"
     stat -c '%d:%i' "$logs" > /var/lib/mwc-ci-original-log-inode
     cat > /etc/systemd/system/k3s.service <<'UNIT'
 [Unit]
@@ -45,8 +44,9 @@ for _ in {1..75}; do
   sleep 1
 done
 k wait --for=condition=Ready nodes --all --timeout=90s >&2
+# Kubelet owns the directory contents and may collect loose entries at boot.
+# Preserve the real directory inode and prove an ordinary Pod can log to it.
 test "$(stat -c '%d:%i' "$logs")" = "$(cat /var/lib/mwc-ci-original-log-inode)"
-test "$(cat "$logs/original-marker")" = existing-pod-log-directory
 if [[ $1 == mounted ]]; then
   test "$(findmnt -n -M "$bundle" -o PROPAGATION)" = private
   test "$(findmnt -n -M "$logs" -o TARGET)" = "$logs"
