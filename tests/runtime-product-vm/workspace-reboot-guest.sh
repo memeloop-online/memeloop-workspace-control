@@ -19,7 +19,11 @@ if [[ $1 == install ]]; then
   install -d -m 0700 "$state" "$state/wrapper"
   install -m 0755 "$src/k3s" /usr/local/bin/k3s
   install -Dm 0755 "$src/mwc-runtime-wrapper" /usr/local/libexec/mwc-runtime-wrapper
-  k version --client >&2
+  # The wrapper intentionally rejects symlinks on trusted paths. Resolve the
+  # bundled runc's versioned path before K3s starts the integrated containerd.
+  k3s ctr version --help >/dev/null
+  runc=$(realpath -e /var/lib/rancher/k3s/data/current/bin/runc)
+  "$runc" --version | grep -Fx 'runc version 1.4.2' >&2
   for kind in home scratch; do
     disk="/dev/disk/by-id/virtio-mwc-ci-$kind"
     if [[ $kind == home ]]; then size=12G; else size=6G; fi
@@ -32,10 +36,10 @@ if [[ $1 == install ]]; then
   lv=$(lvs --noheadings -o lv_uuid mwc-ci-scratch/pool | tr -d '[:space:]-')
   pool_name=$(dmsetup ls --target thin-pool | awk '$1 ~ /^mwc--ci--scratch-/ {print $1}')
   pool=$(dmsetup info -c --noheadings -o uuid "$pool_name" | tr -d '[:space:]')
-  [[ $pool == "LVM-$vg$lv" || $pool == "LVM-$vg$lv"-* ]]
-  jq -n --arg root "$root" --arg runtime "$runtime" --arg state "$state/wrapper" --arg ns "$namespace" \
-    --arg vg "$vg" --arg pool "$pool" --arg dmsetup "$(command -v dmsetup)" '
-    {real_runtime:"/var/lib/rancher/k3s/data/current/bin/runc",kubelet_root:"/var/lib/kubelet",
+  test "$pool" = "LVM-$vg$lv-tpool"
+  jq -n --arg real "$runc" --arg root "$root" --arg runtime "$runtime" --arg state "$state/wrapper" --arg ns "$namespace" \
+    --arg vg "$vg" --arg pool "$pool" --arg dmsetup "$(realpath -e "$(command -v dmsetup)")" '
+    {real_runtime:$real,kubelet_root:"/var/lib/kubelet",
      cri_root:($root+"/io.containerd.grpc.v1.cri"),cri_state_root:($runtime+"/io.containerd.grpc.v1.cri"),
      workspace_namespace:$ns,pod_log_root:"/var/log/pods",bundle_root:($runtime+"/io.containerd.runtime.v2.task/k8s.io"),
      snapshot_root:($root+"/io.containerd.snapshotter.v1.overlayfs/snapshots"),state_root:$state,
