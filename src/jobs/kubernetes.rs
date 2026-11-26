@@ -135,10 +135,17 @@ impl WorkspaceReconcileHandler {
         .await
         .map_err(job_error)?;
         let port_mappings = self.desired_port_mappings(workspace).await?;
-        self.coordinator
-            .reconcile_port_mappings(workspace, &port_mappings)
-            .await
-            .map_err(job_error)?;
+        // A new workspace with no mappings has no routes to restore. Mapping
+        // edits, including deletion during provisioning, enqueue their own cleanup.
+        if workspace.state != WorkspaceState::Provisioning
+            || workspace.generation != 1
+            || !port_mappings.is_empty()
+        {
+            self.coordinator
+                .reconcile_port_mappings(workspace, &port_mappings)
+                .await
+                .map_err(job_error)?;
+        }
 
         let reconciled_at = unix_timestamp()?;
         // Public mapping discovery is refreshed alongside observation, so a slow

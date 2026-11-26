@@ -191,6 +191,23 @@ impl HttpState {
             .entry(method.to_string())
             .or_default() += 1;
         let path = request.uri().path();
+        if method == Method::GET
+            && ["/services", "/ingresses", "/networkpolicies"]
+                .into_iter()
+                .any(|collection| path.ends_with(collection))
+        {
+            // This cohort never publishes a port. Workspace readiness must not
+            // depend on listing port mapping resources.
+            return Response::builder()
+                .status(StatusCode::FORBIDDEN)
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({"apiVersion":"v1","kind":"Status","status":"Failure",
+                    "reason":"Forbidden","code":403,"message":"mapping inventory unavailable"})
+                    .to_string(),
+                ))
+                .unwrap();
+        }
         if method == Method::GET && (path.ends_with("/pods") || path.ends_with("/statefulsets")) {
             let query: BTreeMap<_, _> =
                 url::form_urlencoded::parse(request.uri().query().unwrap_or("").as_bytes())
