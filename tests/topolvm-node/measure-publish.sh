@@ -7,7 +7,7 @@ test "$(readlink /proc/self/ns/mnt)" != "$(readlink /proc/1/ns/mnt)"
 base=${1:?fixture directory}
 measure=${2:-node}
 case "$measure" in
-  queue) driver=topolvm-node; workload=daemonset/$driver; baseline_version='0.41.1-mwc-queue-1'; candidate_version='0.41.1-mwc-queue-2' ;;
+  queue) driver=topolvm-node; workload=daemonset/$driver; baseline_version='0.41.1'; candidate_version='0.41.1-mwc-volume-workers' ;;
   node) driver=topolvm-node; workload=daemonset/$driver; baseline_version='0.41.1'; candidate_version='0.41.1-mwc-independent-volumes' ;;
   controller) driver=topolvm-controller; workload=deployment/$driver; baseline_version='0.41.1-mwc250ms'; candidate_version='0.41.1-mwc250ms-lv-metadata' ;;
   *) exit 2 ;;
@@ -99,7 +99,8 @@ k create namespace "$ns"
 w create serviceaccount fixture
 
 create_fixture() {
-  local name=$1 role
+  local name=$1 role grace=30
+  if [[ $measure == queue ]]; then grace=1; fi
   local dir="$evidence/$name"
   mkdir "$dir"
   date -u +%FT%T.%NZ > "$dir/request.txt"
@@ -107,8 +108,8 @@ create_fixture() {
     jq -n --arg role "$role" --arg n "$name-$role" \
       '{apiVersion:"v1",kind:"PersistentVolumeClaim",metadata:{name:$n},spec:{storageClassName:("mwc-ci-"+$role),accessModes:["ReadWriteOnce"],resources:{requests:{storage:"1Gi"}}}}' | w create -f -
   done
-  jq -n --arg n "$name" --arg image "$image" \
-    '{apiVersion:"v1",kind:"Pod",metadata:{name:$n},spec:{serviceAccountName:"fixture",automountServiceAccountToken:false,
+  jq -n --arg n "$name" --arg image "$image" --argjson grace "$grace" \
+    '{apiVersion:"v1",kind:"Pod",metadata:{name:$n},spec:{serviceAccountName:"fixture",automountServiceAccountToken:false,terminationGracePeriodSeconds:$grace,
       containers:[{name:"fixture",image:$image,imagePullPolicy:"IfNotPresent",command:["sleep","3600"],
       volumeMounts:[{name:"home",mountPath:"/mnt/home"},{name:"scratch",mountPath:"/mnt/scratch"}]}],
       volumes:[{name:"home",persistentVolumeClaim:{claimName:($n+"-home")}},{name:"scratch",persistentVolumeClaim:{claimName:($n+"-scratch")}}]}}' | w create -f -

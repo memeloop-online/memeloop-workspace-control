@@ -8,9 +8,9 @@ import sys
 
 MESSAGES = {
     'cr_created': 'created LogicalVolume CR',
-    'entered': 'benchmark: entered LV create',
-    'rpc_started': 'benchmark: starting CreateLV RPC',
-    'rpc_finished': 'benchmark: completed CreateLV RPC',
+    'entered': 'entered LV create',
+    'rpc_started': 'starting CreateLV RPC',
+    'rpc_finished': 'completed CreateLV RPC',
     'lv_ready': 'created new LV',
 }
 ROOT = pathlib.Path(sys.argv[1])
@@ -88,7 +88,7 @@ for variant in ('stock', 'patched'):
 
 verification = json.loads((ROOT / 'upgrade-and-rollback.json').read_text())
 assert all(verification.values())
-report = {'verification': verification, 'measurements': results, 'across_separate_pools_overlap_observed':
-          any(g['different_pool_rpcs_overlap'] for g in results['patched']['serial'] + results['patched']['parallel'])}
+assert any(g['different_pool_rpcs_overlap'] for g in results['patched']['parallel'])
+report = {'verification': verification, 'measurements': results, 'across_separate_pools_overlap_observed': True}
 (ROOT / 'queue-comparison.json').write_text(json.dumps(report, indent=2) + '\n')
 print(json.dumps({arm: r['parallel_medians_ms'] for arm, r in results.items()}))

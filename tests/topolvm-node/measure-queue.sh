@@ -1,18 +1,20 @@
 #!/usr/bin/env bash
 # Sourced only after measure-publish.sh verifies the GitHub-hosted private mount namespace.
-stock_image=localhost/topolvm-node-ci:baseline
 controller_image=localhost/topolvm-queue-ci:controller
-for ref in "$stock_image" "$controller_image"; do
-  "$k3s" crictl inspecti "$ref" | jq -er '.status.id'
-done > "$evidence/queue-input-images.txt"
+"$k3s" crictl inspecti "$controller_image" | jq -er '.status.id' > "$evidence/queue-controller-image.txt"
 k -n topolvm-system set image deploy/topolvm-controller "topolvm-controller=$controller_image"
 k -n topolvm-system rollout status deploy/topolvm-controller --timeout=180s
 k -n topolvm-system exec deploy/topolvm-controller -c topolvm-controller -- /topolvm-controller --version |
   grep -Fx 'topolvm-controller version 0.41.1-mwc250ms-lv-metadata'
 
+original_command=$(k -n topolvm-system get "$workload" -o json |
+  jq -cer --arg n "$driver" '.spec.template.spec.containers[]|select(.name==$n)|.command|select(.[0]=="/topolvm-node")')
 switch_node() {
-  local label=$1 ref=$2 version=$3
-  k -n topolvm-system set image "$workload" "$driver=$ref"
+  local label=$1 ref=$2 version=$3 command=$4
+  local patch
+  patch=$(jq -cn --arg name "$driver" --arg image "$ref" --argjson command "$command" \
+    '{spec:{template:{spec:{containers:[{name:$name,image:$image,command:$command}]}}}}')
+  k -n topolvm-system patch "$workload" --type=strategic -p "$patch"
   k -n topolvm-system rollout status "$workload" --timeout=180s
   k -n topolvm-system exec "$workload" -c "$driver" -- "/$driver" --version |
     grep -Fx "$driver version $version" > "$evidence/$label-version.txt"
@@ -40,13 +42,15 @@ test_group() {
   verify_peer
 }
 
-switch_node stock "$stock_image" "$baseline_version"
+debug_command=$(jq -c '.+["--zap-log-level=debug"]' <<< "$original_command")
+two_worker_command=$(jq -c '.+["--logical-volume-workers=2"]' <<< "$debug_command")
+switch_node stock "$candidate_image" "$candidate_version" "$debug_command"
 create_fixture storage-peer
 inspect_fixture storage-peer
 for variant in stock patched; do
   workers=1
   if [[ $variant == patched ]]; then
-    switch_node patched "$candidate_image" "$candidate_version"
+    switch_node patched "$candidate_image" "$candidate_version" "$two_worker_command"
     verify_peer
     workers=2
   fi
@@ -99,26 +103,34 @@ k get logicalvolume queue-too-large -o json > "$evidence/capacity-refusal.json"
 jq -e '.status.code==8 and (.status.volumeID // "")==""' "$evidence/capacity-refusal.json"
 k delete logicalvolume queue-too-large --timeout=90s
 
-# The peer retains 1 GiB in an 8 GiB virtual Home pool. Two distinct 4 GiB
-# requests fit individually but not together. Start both through the node.
-for suffix in a b; do
-  jq -nc --arg n "queue-capacity-$suffix" --arg node "$node" \
-    '{apiVersion:"topolvm.io/v1",kind:"LogicalVolume",metadata:{name:$n},
-      spec:{name:$n,nodeName:$node,size:"4Gi",deviceClass:"mwc-ci-home"}}'
-done | jq -s '{apiVersion:"v1",kind:"List",items:.}' | k create -f -
-for i in {1..60}; do
-  k get logicalvolume queue-capacity-a queue-capacity-b -o json > "$evidence/same-pool-capacity.json"
-  if jq -e 'all(.items[]; (.status.volumeID // "")!="" or .status.code==8)' "$evidence/same-pool-capacity.json" >/dev/null; then break; fi
-  sleep 1
-done
-handle=$(jq -er '[.items[]|select((.status.volumeID // "")!="")]|select(length==1)|.[0].status.volumeID' "$evidence/same-pool-capacity.json")
-jq -e '[.items[]|select(.status.code==8 and (.status.volumeID // "")=="")]|length==1' "$evidence/same-pool-capacity.json"
-lvs "mwc-ci-home/$handle"
-k delete logicalvolume queue-capacity-a queue-capacity-b --timeout=90s
-if lvs "mwc-ci-home/$handle" >/dev/null 2>&1; then exit 1; fi
+# The peer retains 1 GiB in each 8 GiB virtual pool. Two 4 GiB requests fit
+# individually but not together. Repeat with an explicit name and its alias.
+compete_for_pool() {
+  local tag=$1 vg=$2 first=$3 second=$4 suffix class i handle
+  for suffix in a b; do
+    class=$first
+    if [[ $suffix == b ]]; then class=$second; fi
+    jq -nc --arg n "queue-$tag-$suffix" --arg node "$node" --arg c "$class" \
+      '{apiVersion:"topolvm.io/v1",kind:"LogicalVolume",metadata:{name:$n},
+        spec:{name:$n,nodeName:$node,size:"4Gi",deviceClass:$c}}'
+  done | jq -s '{apiVersion:"v1",kind:"List",items:.}' | k create -f -
+  local record="$evidence/$tag-capacity.json"
+  for i in {1..60}; do
+    k get logicalvolume "queue-$tag-a" "queue-$tag-b" -o json > "$record"
+    if jq -e 'all(.items[]; (.status.volumeID // "")!="" or .status.code==8)' "$record" >/dev/null; then break; fi
+    sleep 1
+  done
+  handle=$(jq -er '[.items[] | select((.status.volumeID // "")!="")]|select(length==1)|.[0].status.volumeID' "$record")
+  jq -e '[.items[] | select(.status.code==8 and (.status.volumeID // "")=="")]|length==1' "$record"
+  lvs "$vg/$handle"
+  k delete logicalvolume "queue-$tag-a" "queue-$tag-b" --timeout=90s
+  if lvs "$vg/$handle" >/dev/null 2>&1; then exit 1; fi
+}
+compete_for_pool same-pool mwc-ci-home mwc-ci-home mwc-ci-home
+compete_for_pool alias mwc-ci-scratch mwc-ci-scratch ''
 
-switch_node rollback "$stock_image" "$baseline_version"
+switch_node rollback "$controller_image" "$baseline_version" "$original_command"
 verify_peer
 reclaim_fixture storage-peer
-printf '%s\n' '{"same_peer_pod_and_container_after_upgrade_and_rollback":true,"original_volumes_readable_writable_and_reclaimed":true,"full_xfs_recovered_in_original_pod":true,"oversized_lv_refused":true,"same_pool_competing_capacity_serialized":true}' > "$evidence/upgrade-and-rollback.json"
+printf '%s\n' '{"same_peer_pod_and_container_after_upgrade_and_rollback":true,"original_volumes_readable_writable_and_reclaimed":true,"full_xfs_recovered_in_original_pod":true,"oversized_lv_refused":true,"same_pool_competing_capacity_serialized":true,"default_alias_capacity_serialized":true}' > "$evidence/upgrade-and-rollback.json"
 python3 "$suite/queue-timings.py" "$evidence"

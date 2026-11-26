@@ -1,0 +1,166 @@
+diff --git a/internal/controller/logicalvolume_controller.go b/internal/controller/logicalvolume_controller.go
+--- a/internal/controller/logicalvolume_controller.go
++++ b/internal/controller/logicalvolume_controller.go
+@@ -3,6 +3,7 @@
+ import (
+ 	"context"
+ 	"fmt"
++	"sync"
+ 
+ 	"github.com/go-logr/logr"
+ 	"github.com/topolvm/topolvm"
+@@ -14,8 +15,10 @@
+ 	apierrs "k8s.io/apimachinery/pkg/api/errors"
+ 	"k8s.io/apimachinery/pkg/api/resource"
+ 	"k8s.io/apimachinery/pkg/types"
++	"k8s.io/utils/keymutex"
+ 	ctrl "sigs.k8s.io/controller-runtime"
+ 	"sigs.k8s.io/controller-runtime/pkg/client"
++	"sigs.k8s.io/controller-runtime/pkg/controller"
+ 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+ 	"sigs.k8s.io/controller-runtime/pkg/event"
+ 	crlog "sigs.k8s.io/controller-runtime/pkg/log"
+@@ -27,6 +30,8 @@
+ 	nodeName  string
+ 	vgService proto.VGServiceClient
+ 	lvService proto.LVServiceClient
++	pools keymutex.KeyMutex
++	defaultPool sync.RWMutex
+ }
+ 
+ //+kubebuilder:rbac:groups=topolvm.io,resources=logicalvolumes,verbs=get;list;watch;update;patch
+@@ -38,6 +43,7 @@
+ 		nodeName:  nodeName,
+ 		vgService: vgService,
+ 		lvService: lvService,
++		pools: keymutex.NewHashed(64),
+ 	}
+ }
+ 
+@@ -56,6 +62,18 @@
+ 	if lv.Spec.NodeName != r.nodeName {
+ 		log.Info("unfiltered logical value", "nodeName", lv.Spec.NodeName)
+ 		return ctrl.Result{}, nil
++	}
++
++	// lvmd checks free capacity immediately before allocation. Keep operations
++	// on one pool serialized, including the implicit name of the default pool.
++	if lv.Spec.DeviceClass == topolvm.DefaultDeviceClassName {
++		r.defaultPool.Lock()
++		defer r.defaultPool.Unlock()
++	} else {
++		r.defaultPool.RLock()
++		defer r.defaultPool.RUnlock()
++		r.pools.LockKey(lv.Spec.DeviceClass)
++		defer func() { _ = r.pools.UnlockKey(lv.Spec.DeviceClass) }()
+ 	}
+ 
+ 	if lv.Annotations != nil {
+@@ -134,14 +152,15 @@
+ }
+ 
+ // SetupWithManager sets up the controller with the Manager.
+-func (r *LogicalVolumeReconciler) SetupWithManager(mgr ctrl.Manager) error {
++func (r *LogicalVolumeReconciler) SetupWithManager(mgr ctrl.Manager, workers int) error {
+ 	builder := ctrl.NewControllerManagedBy(mgr)
+ 	if topolvm.UseLegacy() {
+ 		builder = builder.For(&topolvmlegacyv1.LogicalVolume{})
+ 	} else {
+ 		builder = builder.For(&topolvmv1.LogicalVolume{})
+ 	}
+-	return builder.WithEventFilter(&logicalVolumeFilter{r.nodeName}).Complete(r)
++	return builder.WithEventFilter(&logicalVolumeFilter{r.nodeName}).
++		WithOptions(controller.Options{MaxConcurrentReconciles: workers}).Complete(r)
+ }
+ 
+ func (r *LogicalVolumeReconciler) removeLVIfExists(ctx context.Context, log logr.Logger, lv *topolvmv1.LogicalVolume) error {
+@@ -183,6 +202,7 @@
+ 		return nil
+ 	}
+ 
++	log.V(1).Info("entered LV create", "name", lv.Name)
+ 	reqBytes := lv.Spec.Size.Value()
+ 
+ 	err := func() error {
+@@ -239,6 +259,7 @@
+ 			volume = resp.Snapshot
+ 		} else {
+ 			// Create a regular lv
++			log.V(1).Info("starting CreateLV RPC", "name", lv.Name)
+ 			resp, err := r.lvService.CreateLV(ctx, &proto.CreateLVRequest{
+ 				Name:                string(lv.UID),
+ 				DeviceClass:         lv.Spec.DeviceClass,
+@@ -252,6 +273,7 @@
+ 				lv.Status.Message = message
+ 				return err
+ 			}
++			log.V(1).Info("completed CreateLV RPC", "name", lv.Name)
+ 			volume = resp.Volume
+ 		}
+ 
+diff --git a/pkg/controller/logicalvolume_controller.go b/pkg/controller/logicalvolume_controller.go
+--- a/pkg/controller/logicalvolume_controller.go
++++ b/pkg/controller/logicalvolume_controller.go
+@@ -14,7 +14,8 @@
+ 	nodeName string,
+ 	vgService proto.VGServiceClient,
+ 	lvService proto.LVServiceClient,
++	workers int,
+ ) error {
+ 	reconciler := internalController.NewLogicalVolumeReconcilerWithServices(client, nodeName, vgService, lvService)
+-	return reconciler.SetupWithManager(mgr)
++	return reconciler.SetupWithManager(mgr, workers)
+ }
+diff --git a/cmd/topolvm-node/app/run.go b/cmd/topolvm-node/app/run.go
+--- a/cmd/topolvm-node/app/run.go
++++ b/cmd/topolvm-node/app/run.go
+@@ -120,7 +120,7 @@
+ 	}
+ 
+ 	if err := controller.SetupLogicalVolumeReconcilerWithServices(
+-		mgr, client, nodename, vgService, lvService); err != nil {
++		mgr, client, nodename, vgService, lvService, config.logicalVolumeWorkers); err != nil {
+ 		setupLog.Error(err, "unable to create controller", "controller", "LogicalVolume")
+ 		return err
+ 	}
+diff --git a/cmd/topolvm-node/app/root.go b/cmd/topolvm-node/app/root.go
+--- a/cmd/topolvm-node/app/root.go
++++ b/cmd/topolvm-node/app/root.go
+@@ -21,6 +21,7 @@
+ 	secureMetricsServer  bool
+ 	zapOpts              zap.Options
+ 	embedLvmd            bool
++	logicalVolumeWorkers int
+ 	lvmPath              string
+ 	lvmd                 lvmd.Config
+ 	profilingBindAddress string
+@@ -38,6 +39,9 @@
+ 
+ 	RunE: func(cmd *cobra.Command, args []string) error {
+ 		cmd.SilenceUsage = true
++		if config.logicalVolumeWorkers < 1 {
++			return fmt.Errorf("--logical-volume-workers must be positive")
++		}
+ 		return subMain(cmd.Context())
+ 	},
+ }
+@@ -59,6 +63,7 @@
+ 	fs.StringVar(&config.metricsAddr, "metrics-bind-address", ":8080", "The address the metric endpoint binds to.")
+ 	fs.BoolVar(&config.secureMetricsServer, "secure-metrics-server", false, "Secures the metrics server")
+ 	fs.String("nodename", "", "The resource name of the running node")
++	fs.IntVar(&config.logicalVolumeWorkers, "logical-volume-workers", 1, "Number of LogicalVolume reconcile workers on a node.")
+ 	fs.BoolVar(&config.embedLvmd, "embed-lvmd", false, "Runs LVMD locally by embedding it instead of calling it externally via gRPC")
+ 	fs.StringVar(&config.lvmPath, "lvm-path", "", "lvm command path on the host OS. This is deprecated and users should use lvm-command-prefix setting instead.")
+ 	fs.StringVar(&cfgFilePath, "config", filepath.Join("/etc", "topolvm", "lvmd.yaml"), "config file")
+diff --git a/internal/controller/logicalvolume_controller_test.go b/internal/controller/logicalvolume_controller_test.go
+--- a/internal/controller/logicalvolume_controller_test.go
++++ b/internal/controller/logicalvolume_controller_test.go
+@@ -98,7 +98,7 @@
+ 		lvService = MockLVServiceClient{}
+ 
+ 		reconciler := NewLogicalVolumeReconcilerWithServices(mgr.GetClient(), nodeNameBase+suffix, vgService, lvService)
+-		err = reconciler.SetupWithManager(mgr)
++		err = reconciler.SetupWithManager(mgr, 1)
+ 		Expect(err).NotTo(HaveOccurred())
+ 
+ 		ctx, cancel := context.WithCancel(ctx)
