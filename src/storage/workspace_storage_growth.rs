@@ -11,7 +11,7 @@ use super::{
 use crate::{
     kubernetes::storage_growth::{GrowthClaim, GrowthVolume},
     templates::WorkspaceTemplateDocument,
-    workspaces::WorkspaceState,
+    workspaces::{Workspace, WorkspaceState},
 };
 
 pub(crate) const STORAGE_GROWTH_JOB: &str = "workspace_storage_growth";
@@ -89,20 +89,10 @@ impl Database {
             ($pool:expr, $installation:expr, $decode:ident, $lock:expr, $admit:ident, $guard:ident) => {{
                 let (mut tx, mut workspace, _) =
                     locked_workspace!($pool, $installation, id, $decode, $lock);
-                if workspace.state != WorkspaceState::Ready
-                    || workspace.generation != generation
-                    || growth.volume.capacity(&workspace) != growth.previous_gib
-                {
-                    return Err(StorageError::WorkspaceStorageGrowthConflict);
-                }
+                growth.check_current(&workspace, generation)?;
                 super::workspace_storage_shrink::$guard(&mut tx, $installation.as_str(), id)
                     .await?;
-                let count: i64 = sqlx::query_scalar(ACTIVE)
-                    .bind($installation.as_str()).bind(id.to_string())
-                    .fetch_one(&mut *tx).await?;
-                if count != 0 {
-                    return Err(StorageError::WorkspaceStorageGrowthConflict);
-                }
+                $guard(&mut tx, $installation.as_str(), id).await?;
                 // Charge the requested Home size before CSI can allocate it. The snapshot
                 // and scratch size continue to describe the filesystem actually in use.
                 if matches!(growth.volume, GrowthVolume::Home) {
@@ -301,6 +291,16 @@ impl Database {
 }
 
 impl StorageGrowth {
+    fn check_current(&self, workspace: &Workspace, generation: u64) -> Result<(), StorageError> {
+        if workspace.state != WorkspaceState::Ready
+            || workspace.generation != generation
+            || self.volume.capacity(workspace) != self.previous_gib
+        {
+            return Err(StorageError::WorkspaceStorageGrowthConflict);
+        }
+        Ok(())
+    }
+
     fn status(&self, id: Uuid, status: String) -> StorageGrowthStatus {
         StorageGrowthStatus {
             id,
