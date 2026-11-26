@@ -447,8 +447,9 @@ impl Database {
     ) -> Result<StorageShrinkOperation, StorageError> {
         let placeholder = StorageShrinkOperation::new(workspace_id, request, actor_user_id, now);
         macro_rules! enqueue {
-            ($pool:expr, $installation:expr, $decode:ident, $suffix:expr) => {{
+            ($pool:expr, $installation:expr, $decode:ident, $suffix:expr, $growth_guard:ident) => {{
                 let (mut transaction, workspace, _) = storage_backend!($pool, $installation, $decode, $suffix, placeholder);
+                super::workspace_storage_growth::$growth_guard(&mut transaction, $installation.as_str(), workspace_id).await?;
                 let active: Option<String> = sqlx::query_scalar("SELECT operation_json FROM workspace_storage_shrinks WHERE installation_id = $1 AND workspace_id = $2 AND active = 1")
                     .bind($installation.as_str()).bind(workspace_id.to_string()).fetch_optional(&mut *transaction).await?;
                 if let Some(json) = active {
@@ -485,11 +486,17 @@ impl Database {
             Self::Sqlite {
                 pool,
                 installation_id,
-            } => enqueue!(pool, installation_id, decode_sqlite, ""),
+            } => enqueue!(pool, installation_id, decode_sqlite, "", guard_sqlite),
             Self::Postgres {
                 pool,
                 installation_id,
-            } => enqueue!(pool, installation_id, decode_postgres, " FOR UPDATE"),
+            } => enqueue!(
+                pool,
+                installation_id,
+                decode_postgres,
+                " FOR UPDATE",
+                guard_postgres
+            ),
         }
     }
 

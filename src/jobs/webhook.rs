@@ -103,7 +103,9 @@ impl JobHandler for ControlPlaneJobHandler {
                 })?;
                 Box::pin(workspace.reconcile_port_mapping_job(job)).await
             }
-            "reconcile_workspace" | "workspace_storage_shrink" => {
+            "reconcile_workspace"
+            | "workspace_storage_shrink"
+            | crate::storage::workspace_storage_growth::STORAGE_GROWTH_JOB => {
                 self.workspace
                     .as_ref()
                     .ok_or_else(|| {

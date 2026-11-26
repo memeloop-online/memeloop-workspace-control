@@ -74,6 +74,12 @@ pub enum StorageError {
     WorkspaceNotFound,
     #[error("workspace has an active storage migration; retry after it finishes")]
     WorkspaceStorageShrinkConflict,
+    #[error("workspace storage growth is already pending, or the workspace changed")]
+    WorkspaceStorageGrowthConflict,
+    #[error("storage growth requires a larger whole-GiB capacity")]
+    InvalidWorkspaceStorageGrowth,
+    #[error("online growth is unavailable for this storage class")]
+    WorkspaceStorageGrowthUnavailable,
     #[error(
         "at least one storage target must be positive, smaller than the current capacity, and larger than measured usage"
     )]

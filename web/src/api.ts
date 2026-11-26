@@ -24,6 +24,8 @@ import type {
   Role,
   ScalingStatus,
   ScalingSettingsPatch,
+  StorageGrowthStatus,
+  StorageGrowthVolume,
   StorageShrinkOperation,
   StorageShrinkRequest,
   StoredInjection,
@@ -272,6 +274,22 @@ export class ApiClient {
     return this.request(`/api/v1/workspaces/${workspaceId}/storage-shrink`, {
       method: "POST", body: JSON.stringify(input), idempotent: true,
     });
+  }
+
+  startStorageGrowth(workspaceId: string, input: {
+    volume: StorageGrowthVolume; capacity_gib: number; expected_generation: number;
+  }): Promise<StorageGrowthStatus> {
+    return this.request(`/api/v1/workspaces/${workspaceId}/storage-growth`, {
+      method: "POST", body: JSON.stringify(input), idempotent: true,
+    });
+  }
+
+  storageGrowth(workspaceId: string): Promise<StorageGrowthStatus | null> {
+    return this.request(`/api/v1/workspaces/${workspaceId}/storage-growth`);
+  }
+
+  workspaceDetail(workspaceId: string): Promise<WorkspaceResponse> {
+    return this.request(`/api/v1/workspaces/${workspaceId}`);
   }
 
   async storageShrinkOperation(workspaceId: string): Promise<StorageShrinkOperation | null> {

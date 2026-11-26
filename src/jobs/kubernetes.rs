@@ -18,6 +18,8 @@ use crate::{
     workspaces::{Workspace, WorkspaceObservation, WorkspaceState},
 };
 
+#[path = "storage_growth.rs"]
+mod storage_growth;
 #[path = "storage_shrink.rs"]
 mod storage_shrink;
 
@@ -667,6 +669,9 @@ fn checkpoint_error(
 
 impl JobHandler for WorkspaceReconcileHandler {
     async fn handle(&self, job: &ClaimedJob) -> Result<(), JobHandlerError> {
+        if job.kind == crate::storage::workspace_storage_growth::STORAGE_GROWTH_JOB {
+            return self.handle_storage_growth(job).await;
+        }
         if job.kind == "workspace_storage_shrink" {
             return self.handle_storage_shrink(job).await;
         }

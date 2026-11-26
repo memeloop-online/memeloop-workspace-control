@@ -75,6 +75,8 @@ async fn update_sqlite(
     let mut workspace = decode_sqlite(row, installation_id)?;
     super::workspace_storage_shrink::guard_sqlite(&mut tx, installation_id.as_str(), workspace_id)
         .await?;
+    super::workspace_storage_growth::guard_sqlite(&mut tx, installation_id.as_str(), workspace_id)
+        .await?;
     let old_state = workspace.state.as_str().to_owned();
     let (yaml, job_reason) = apply(&mut workspace, &snapshot_yaml, &update)?;
     if job_reason.is_some() {
@@ -127,6 +129,12 @@ async fn update_postgres(
     let snapshot_yaml: String = row.try_get("template_snapshot_yaml")?;
     let mut workspace = decode_postgres(row, installation_id)?;
     super::workspace_storage_shrink::guard_postgres(
+        &mut tx,
+        installation_id.as_str(),
+        workspace_id,
+    )
+    .await?;
+    super::workspace_storage_growth::guard_postgres(
         &mut tx,
         installation_id.as_str(),
         workspace_id,
@@ -238,7 +246,7 @@ fn as_i64(value: u64) -> Result<i64, StorageError> {
     i64::try_from(value).map_err(|_| StorageError::InvalidWorkspace)
 }
 
-async fn admit_sqlite(
+pub(super) async fn admit_sqlite(
     connection: &mut SqliteConnection,
     installation_id: &str,
     workspace: &Workspace,
@@ -275,7 +283,7 @@ async fn admit_sqlite(
     Ok(())
 }
 
-async fn admit_postgres(
+pub(super) async fn admit_postgres(
     connection: &mut PgConnection,
     installation_id: &str,
     workspace: &Workspace,

@@ -466,6 +466,17 @@ export interface WorkspaceStorageTelemetry {
   backing: "persistent_volume" | "ephemeral_volume" | "unknown";
 }
 
+export type StorageGrowthVolume = "home" | "temporary_storage";
+
+export interface StorageGrowthStatus {
+  id: string;
+  volume: StorageGrowthVolume;
+  previous_gib: number;
+  requested_gib: number;
+  status: "pending" | "running" | "completed" | "failed";
+  rejection: string | null;
+}
+
 export interface StorageShrinkRequest {
   home_gib?: number | null;
   temporary_storage_gib?: number | null;

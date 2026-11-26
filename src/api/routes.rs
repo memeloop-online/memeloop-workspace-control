@@ -10,7 +10,8 @@ use super::{
     openapi, organization_usage, organizations, plugins, port_mappings, ready, runtime, ssh,
     system_info, ui, user_quota, web_shell, webhooks, workspace_cpu_overcommit,
     workspace_home_capacity, workspace_home_pvc, workspace_image_update, workspace_placement,
-    workspace_scratch_resize, workspace_settings, workspace_storage_shrink, workspaces,
+    workspace_scratch_resize, workspace_settings, workspace_storage_growth,
+    workspace_storage_shrink, workspaces,
 };
 
 pub(super) fn router(state: Arc<AppState>) -> Router {
@@ -250,6 +251,10 @@ fn workspace_routes(router: ApiRouter) -> ApiRouter {
         .route(
             "/api/v1/workspaces/{workspace_id}/storage-shrink",
             get(workspace_storage_shrink::get).post(workspace_storage_shrink::create),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/storage-growth",
+            get(workspace_storage_growth::get).post(workspace_storage_growth::create),
         )
         .route(
             "/api/v1/workspaces/{workspace_id}/storage-shrink/confirm",

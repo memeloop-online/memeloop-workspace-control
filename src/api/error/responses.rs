@@ -296,6 +296,21 @@ fn port_mapping_response(error: &StorageError) -> Option<ErrorResponse> {
 
 fn storage_shrink_response(error: &StorageError) -> Option<ErrorResponse> {
     Some(match error {
+        StorageError::WorkspaceStorageGrowthConflict => response(
+            StatusCode::CONFLICT,
+            "workspace_storage_growth_conflict",
+            "refresh the workspace and wait for any current storage change to finish",
+        ),
+        StorageError::InvalidWorkspaceStorageGrowth => response(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "invalid_workspace_storage_growth",
+            "choose a larger capacity in whole GiB",
+        ),
+        StorageError::WorkspaceStorageGrowthUnavailable => response(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "workspace_storage_growth_unavailable",
+            "online growth is unavailable for this storage class",
+        ),
         StorageError::WorkspaceStorageShrinkConflict => response(
             StatusCode::CONFLICT,
             "workspace_storage_shrink_conflict",

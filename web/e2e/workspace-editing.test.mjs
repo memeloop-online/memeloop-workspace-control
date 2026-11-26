@@ -29,6 +29,8 @@ test("workspace settings and mapping editing retain drafts, stable addresses and
   const unexpected = [];
   const errors = [];
   let failNextSettings = true;
+  let growth = null;
+  let finishGrowth = false;
   try {
     const context = await browser.newContext();
     await context.addInitScript(({ organizationId }) => {
@@ -51,6 +53,14 @@ test("workspace settings and mapping editing retain drafts, stable addresses and
         else if (path === "/api/v1/me/profile") body = { display_name: "Fixture", avatar_url: null };
         else if (path === "/api/v1/organizations") body = { items: [{ id: organizationId, name: "Editing", created_at: 1_700_000_000 }], next_cursor: null };
         else if (path === "/api/v1/workspaces") body = { items: workspaces, next_cursor: null };
+        else if (path === "/api/v1/workspaces/ready-workspace") body = workspaces[0];
+        else if (path === "/api/v1/workspaces/ready-workspace/storage-growth") {
+          if (growth && finishGrowth) {
+            workspaces[0].workspace.resources.disk_gib = growth.requested_gib;
+            growth.status = "completed";
+          }
+          body = growth;
+        }
         else if (path === "/api/v1/workspace-runtimes") body = [];
         else if (path === `/api/v1/organizations/${organizationId}/quota`) body = null;
         else if (path === `/api/v1/organizations/${organizationId}/usage-summary`) body = { total_count: 2, state_counts: { ready: 1, stopped: 1 }, requested: resources, temporary_requested_gib: 20, actual: { cpu_millis: null, memory_mib: null, disk_bytes: null, temporary_bytes: null }, observed_at: null, availability: { cpu: "unknown", memory: "unknown", disk: "unknown", temporary: "unknown" }, coverage: { total_workspaces: 2, eligible_workspaces: 1, template_label_coverage: "complete" } };
@@ -62,7 +72,19 @@ test("workspace settings and mapping editing retain drafts, stable addresses and
         const input = request.postDataJSON();
         writes.push({ path, input });
         assert.ok(request.headers()["idempotency-key"]);
-        if (path.endsWith("/port-mappings")) {
+        if (path === "/api/v1/workspaces/ready-workspace/storage-growth") {
+          assert.equal(input.expected_generation, workspaces[0].workspace.generation);
+          if (input.volume === "home") {
+            assert.equal(input.capacity_gib, 24);
+            growth = { id: "fixture-growth", volume: input.volume, previous_gib: 20, requested_gib: 24, status: "pending", rejection: null };
+            status = 202;
+            body = growth;
+          } else {
+            assert.equal(input.volume, "temporary_storage");
+            status = 422;
+            body = { error: { code: "workspace_storage_growth_unavailable", message: "unsupported class" } };
+          }
+        } else if (path.endsWith("/port-mappings")) {
           const label = input.subdomain ?? "1a2b3c4d";
           body = { id: "mapping-created", internal_port: input.internal_port, display_name: input.display_name ?? null, subdomain: label, status: "ready", managed: false, purpose: "user", https_url: `https://p-${label}.example.test` };
           mappings.push(body);
@@ -110,6 +132,25 @@ test("workspace settings and mapping editing retain drafts, stable addresses and
     await dialog.getByRole("alert").waitFor();
     assert.equal(await dialog.getByLabel(messages.workspaceName, { exact: true }).inputValue(), "支付工作区");
     await Promise.all([page.waitForResponse((response) => response.url().endsWith("/settings") && response.status() === 200), dialog.getByRole("button", { name: messages.saveSettings, exact: true }).click()]);
+    await dialog.getByRole("heading", { name: messages.workspaceSettingsTitle.replace("{{name}}", "支付工作区") }).waitFor();
+    const disk = dialog.getByLabel(messages.storageGrowthDisk, { exact: true });
+    const growthTarget = dialog.getByLabel(messages.storageGrowthTarget, { exact: true });
+    const grow = dialog.getByRole("button", { name: messages.storageGrowthAction, exact: true });
+    await growthTarget.fill("24");
+    await grow.click();
+    await dialog.getByText(messages.storageGrowthPending.replace("{{disk}}", messages.homeStorage).replace("{{requested}}", "24"), { exact: true }).waitFor();
+    assert.equal(workspaces[0].workspace.resources.disk_gib, 20);
+    assert.equal(await disk.isDisabled(), true);
+    finishGrowth = true;
+    await dialog.getByText(messages.storageGrowthCompleted.replace("{{disk}}", messages.homeStorage).replace("{{requested}}", "24"), { exact: true }).waitFor();
+    assert.equal(await growthTarget.getAttribute("min"), "25");
+    assert.equal(workspaces[0].workspace.storage_policy.temporary_storage_gib, 10);
+    assert.equal(workspaces[0].workspace.state, "ready");
+    await disk.selectOption("temporary_storage");
+    await growthTarget.fill("12");
+    await grow.click();
+    await dialog.getByText(messages.storageGrowthUnavailable, { exact: true }).waitFor();
+    assert.equal(await growthTarget.inputValue(), "12");
     await dialog.getByRole("button", { name: messages.cancel, exact: true }).last().click();
     await page.getByRole("group", { name: "支付工作区", exact: true }).waitFor();
 

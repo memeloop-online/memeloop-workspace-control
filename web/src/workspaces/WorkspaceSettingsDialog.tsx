@@ -19,6 +19,7 @@ import type { ApiClient } from "../api";
 import { useI18n } from "../i18n";
 import type { WorkspaceResponse } from "../types";
 import { useWorkspaceStyles } from "./workspaceStyles";
+import { StorageGrowthControl } from "./StorageGrowthControl";
 import { formatBytesAsGiB } from "./usageSummaryPresentation";
 
 /** Matches the backend's 120 Unicode code point workspace-name limit. */
@@ -183,7 +184,7 @@ export function WorkspaceSettingsDialog({ api, item, canChangeState, canManageTe
     <Dialog open onOpenChange={(_, data) => { if (!data.open && !busy) onClose(); }}>
       <DialogSurface className={styles.dialogSurface}>
         <DialogBody>
-          <DialogTitle action={<Button appearance="subtle" icon={<DismissRegular />} aria-label={t("cancel")} disabled={busy} onClick={onClose} />}>{t("editParameters")}</DialogTitle>
+          <DialogTitle action={<Button appearance="subtle" icon={<DismissRegular />} aria-label={t("cancel")} disabled={busy} onClick={onClose} />}>{t("workspaceSettingsTitle", { name: workspace.name })}</DialogTitle>
           <DialogContent className={styles.dialogBody}>
             {!canChangeState && <Text role="status">{t("workspaceSettingsPermissionRequired")}</Text>}
             <section className={styles.dialogSection} aria-label={t("workspaceGeneralSettings")}>
@@ -230,7 +231,7 @@ export function WorkspaceSettingsDialog({ api, item, canChangeState, canManageTe
                   <Text>{currentTemporary} GiB · {t("workspaceTemporaryStorageHelp")}</Text>
                 </div>
               </dl>
-              {temporaryEditable ? <div className={styles.formGrid}>
+              {workspace.state === "ready" && canManageTemporaryStorage ? <StorageGrowthControl key={workspace.id} api={api} item={item} disabled={busy} onUpdated={onUpdated} /> : temporaryEditable ? <div className={styles.formGrid}>
                 <Field label={t("workspaceTemporaryStorageGiB")} validationState={!temporaryValid ? "error" : undefined} validationMessage={!temporaryValid ? t("workspaceSettingsTemporaryStorageInvalid") : undefined}>
                   <Input type="number" min={1} max={2048} step={1} value={draft.temporaryStorage} disabled={busy} onChange={(_, data) => setDraft((current) => ({ ...current, temporaryStorage: data.value }))} />
                 </Field>
