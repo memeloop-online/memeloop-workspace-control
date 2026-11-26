@@ -12,44 +12,24 @@ spec:
   groups:
     - name: {{ include "mwc.name" . }}.workspace-storage
       rules:
-        - record: mwc_workspace_persistent_storage_used_percent
+        {{- range $storage, $volume := dict "persistent" "workspace-data" "temporary" "workspace-scratch" }}
+        - record: mwc_workspace_{{ $storage }}_storage_used_percent
           expr: |
             100 * (
               max by (namespace, persistentvolumeclaim) (kubelet_volume_stats_used_bytes)
-              and on (namespace, persistentvolumeclaim)
-              max by (namespace, persistentvolumeclaim) (
-                kube_persistentvolumeclaim_labels{label_workspace_memeloop_dev_owner_installation="{{ .Values.installationId }}",label_workspace_memeloop_dev_workspace_id!="",label_workspace_memeloop_dev_storage_role="home"}
-              )
+              / on (namespace, persistentvolumeclaim)
+                max by (namespace, persistentvolumeclaim) (kubelet_volume_stats_capacity_bytes)
             )
-            / on (namespace, persistentvolumeclaim) (
-              max by (namespace, persistentvolumeclaim) (kubelet_volume_stats_capacity_bytes)
-              and on (namespace, persistentvolumeclaim)
-              max by (namespace, persistentvolumeclaim) (
-                kube_persistentvolumeclaim_labels{label_workspace_memeloop_dev_owner_installation="{{ .Values.installationId }}",label_workspace_memeloop_dev_workspace_id!="",label_workspace_memeloop_dev_storage_role="home"}
-              )
+            and on (namespace, persistentvolumeclaim)
+            max by (namespace, persistentvolumeclaim) (
+              kube_pod_spec_volumes_persistentvolumeclaims_info{volume="{{ $volume }}"}
+              and on (namespace, pod, uid)
+              kube_pod_labels{label_workspace_memeloop_dev_owner_installation="{{ $.Values.installationId }}",label_workspace_memeloop_dev_workspace_id!=""}
             )
           labels:
-            installation_id: {{ .Values.installationId | quote }}
-            storage: persistent
-        - record: mwc_workspace_temporary_storage_used_percent
-          expr: |
-            100 * (
-              max by (namespace, persistentvolumeclaim) (kubelet_volume_stats_used_bytes)
-              and on (namespace, persistentvolumeclaim)
-              max by (namespace, persistentvolumeclaim) (
-                kube_persistentvolumeclaim_labels{label_workspace_memeloop_dev_owner_installation="{{ .Values.installationId }}",label_workspace_memeloop_dev_workspace_id!="",label_workspace_memeloop_dev_storage_role="temporary"}
-              )
-            )
-            / on (namespace, persistentvolumeclaim) (
-              max by (namespace, persistentvolumeclaim) (kubelet_volume_stats_capacity_bytes)
-              and on (namespace, persistentvolumeclaim)
-              max by (namespace, persistentvolumeclaim) (
-                kube_persistentvolumeclaim_labels{label_workspace_memeloop_dev_owner_installation="{{ .Values.installationId }}",label_workspace_memeloop_dev_workspace_id!="",label_workspace_memeloop_dev_storage_role="temporary"}
-              )
-            )
-          labels:
-            installation_id: {{ .Values.installationId | quote }}
-            storage: temporary
+            installation_id: {{ $.Values.installationId | quote }}
+            storage: {{ $storage }}
+        {{- end }}
         - record: mwc_node_workspace_ephemeral_storage_requested_bytes
           expr: |
             sum by (node) (

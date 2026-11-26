@@ -1,0 +1,64 @@
+rule_files:
+  - /tmp/mwc-prometheus-rules.yaml
+evaluation_interval: 1m
+tests:
+  - interval: 1m
+    input_series:
+      # The active adopted Home has no MWC labels on the PVC. Its Pod owns the mount.
+      - series: 'kube_pod_labels{namespace="workspaces",pod="owned",uid="current",label_workspace_memeloop_dev_owner_installation="monitoring",label_workspace_memeloop_dev_workspace_id="owned-id"}'
+        values: '1+0x20'
+      - series: 'kube_pod_spec_volumes_persistentvolumeclaims_info{namespace="workspaces",pod="owned",uid="current",volume="workspace-data",persistentvolumeclaim="adopted-home"}'
+        values: '1+0x20'
+      - series: 'kube_pod_spec_volumes_persistentvolumeclaims_info{namespace="workspaces",pod="owned",uid="current",volume="workspace-scratch",persistentvolumeclaim="owned-scratch"}'
+        values: '1+0x20'
+      - series: 'kubelet_volume_stats_used_bytes{namespace="workspaces",persistentvolumeclaim="adopted-home"}'
+        values: '88+0x20'
+      - series: 'kubelet_volume_stats_capacity_bytes{namespace="workspaces",persistentvolumeclaim="adopted-home"}'
+        values: '100+0x20'
+      - series: 'kubelet_volume_stats_used_bytes{namespace="workspaces",persistentvolumeclaim="owned-scratch"}'
+        values: '96+0x20'
+      - series: 'kubelet_volume_stats_capacity_bytes{namespace="workspaces",persistentvolumeclaim="owned-scratch"}'
+        values: '100+0x20'
+      # A replaced Pod with the same name and one belonging to another installation are excluded.
+      - series: 'kube_pod_spec_volumes_persistentvolumeclaims_info{namespace="workspaces",pod="owned",uid="replaced",volume="workspace-data",persistentvolumeclaim="old-home"}'
+        values: '1+0x20'
+      - series: 'kubelet_volume_stats_used_bytes{namespace="workspaces",persistentvolumeclaim="old-home"}'
+        values: '99+0x20'
+      - series: 'kubelet_volume_stats_capacity_bytes{namespace="workspaces",persistentvolumeclaim="old-home"}'
+        values: '100+0x20'
+      - series: 'kube_pod_labels{namespace="workspaces",pod="foreign",uid="foreign",label_workspace_memeloop_dev_owner_installation="other",label_workspace_memeloop_dev_workspace_id="foreign-id"}'
+        values: '1+0x20'
+      - series: 'kube_pod_spec_volumes_persistentvolumeclaims_info{namespace="workspaces",pod="foreign",uid="foreign",volume="workspace-scratch",persistentvolumeclaim="foreign-scratch"}'
+        values: '1+0x20'
+      - series: 'kubelet_volume_stats_used_bytes{namespace="workspaces",persistentvolumeclaim="foreign-scratch"}'
+        values: '99+0x20'
+      - series: 'kubelet_volume_stats_capacity_bytes{namespace="workspaces",persistentvolumeclaim="foreign-scratch"}'
+        values: '100+0x20'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: MwcWorkspacePersistentStorageWarning
+        exp_alerts:
+          - exp_labels:
+              installation_id: monitoring
+              namespace: workspaces
+              persistentvolumeclaim: adopted-home
+              severity: warning
+              storage: persistent
+            exp_annotations:
+              summary: Workspace persistent storage is approaching capacity
+              description: workspaces/adopted-home usage has remained above 80%.
+      - eval_time: 20m
+        alertname: MwcWorkspaceTemporaryStorageCritical
+        exp_alerts:
+          - exp_labels:
+              installation_id: monitoring
+              namespace: workspaces
+              persistentvolumeclaim: owned-scratch
+              severity: critical
+              storage: temporary
+            exp_annotations:
+              summary: Workspace temporary storage is critically full
+              description: workspaces/owned-scratch usage has remained above 90%.
+      - eval_time: 20m
+        alertname: MwcWorkspacePersistentStorageCritical
+        exp_alerts: []
