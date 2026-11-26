@@ -161,13 +161,13 @@ jobs:
         run: |
           bash tests/runtime-product-vm/prepare-public-inputs.sh "$RUNNER_TEMP/product-storage-inputs"
           echo "MWC_PRODUCT_STORAGE_INPUTS=$RUNNER_TEMP/product-storage-inputs" >> "$GITHUB_ENV"
-      - name: Boot a real workspace again with both original PVCs
+      - name: Expand both workspace PVCs online and boot again with the same volumes
         run: |
           proof="$RUNNER_TEMP/workspace-node-reboot"
           mkdir -p artifacts/workspace-node-reboot
           status=0
           bash ops/scratch-runtime/ci/reboot.sh "$proof" workspace || status=$?
-          for file in boot-evidence.jsonl k3s-guest.log workspace-before.json workspace-after.json workspace-reclaimed.json containerd-after-rollback.txt; do
+          for file in boot-evidence.jsonl k3s-guest.log workspace-before.json workspace-grow.json workspace-after.json workspace-reclaimed.json containerd-after-rollback.txt; do
             if [[ -f "$proof/$file" ]]; then cp "$proof/$file" artifacts/workspace-node-reboot/; fi
           done
           rm -f "$proof/"{noble.img,home.raw,scratch.raw}
