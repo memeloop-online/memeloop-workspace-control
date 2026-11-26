@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeMap,
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -30,6 +30,7 @@ use super::{ApiError, AppState, auth::principal};
 mod details;
 mod memory_metrics;
 pub(super) mod organization_metrics;
+pub(super) mod pod_metrics;
 mod pod_views;
 mod startup;
 pub(super) mod storage_metrics;
@@ -37,9 +38,9 @@ pub(super) mod storage_metrics;
 use details::{
     WorkspaceStoragePvcIdentities, fetch_workspace_runtime_details, scratch_backing_from_pods,
 };
+use pod_metrics::observed_pod_metrics;
 use pod_views::{
-    active_pod_metrics, active_pod_names, active_pod_node_name, has_live_runtime, is_active_pod,
-    newest_events, object_workspace_id, pod_metrics, pod_metrics_all, pod_runtime,
+    has_live_runtime, is_active_pod, newest_events, object_workspace_id, pod_runtime,
     pod_scheduling_event,
 };
 pub(super) use storage_metrics::{
@@ -113,7 +114,6 @@ pub(super) struct PodEvent {
 }
 
 type PodRuntimeMap = BTreeMap<Uuid, Vec<PodRuntime>>;
-type ActivePodMap = BTreeMap<Uuid, BTreeSet<String>>;
 type PodMetricMap = BTreeMap<Uuid, Vec<PodMetric>>;
 type WorkspaceStoragePvcMap = BTreeMap<Uuid, WorkspaceStoragePvcIdentities>;
 type ScratchBackingMap = BTreeMap<Uuid, StorageBacking>;
@@ -121,7 +121,6 @@ type WorkspaceNodeNameMap = BTreeMap<Uuid, String>;
 
 struct KubernetesRuntimeBatch {
     pods: PodRuntimeMap,
-    active_pods: ActivePodMap,
     node_names: WorkspaceNodeNameMap,
     storage_pvcs: WorkspaceStoragePvcMap,
     scratch_backings: ScratchBackingMap,
@@ -154,8 +153,15 @@ pub(super) async fn list(
         .clone()
         .ok_or(ApiError::KubernetesUnavailable)?;
     let selector = runtime_selector(&state.config.installation_id, &workspaces);
-    let kubernetes_runtime =
-        fetch_kubernetes_runtime(&state.observability, client, &selector, &workspaces).await?;
+    let metrics = state.pod_metrics.snapshot();
+    let kubernetes_runtime = fetch_kubernetes_runtime(
+        &state.observability,
+        client,
+        &selector,
+        &workspaces,
+        metrics.as_ref().map(|latest| &latest.metrics),
+    )
+    .await?;
     let storage_metrics = state.storage_metrics.snapshot();
     let observed_now = unix_timestamp();
     let workspace_ids = workspaces
@@ -191,24 +197,14 @@ async fn fetch_kubernetes_runtime(
     client: Client,
     selector: &str,
     workspaces: &[Workspace],
+    observed_metrics: Option<&PodMetricMap>,
 ) -> Result<KubernetesRuntimeBatch, ApiError> {
     let request = observability.begin_upstream(crate::observability::UpstreamKind::Kubernetes);
     let pods = Api::<Pod>::all(client.clone());
     let pvcs = Api::<PersistentVolumeClaim>::all(client.clone());
     let params = ListParams::default().labels(selector);
-    let (pod_list, pvc_list, metric_result) = tokio::join!(
-        pods.list(&params),
-        pvcs.list(&params),
-        tokio::time::timeout(
-            std::time::Duration::from_secs(3),
-            pod_metrics_all(client.clone(), selector)
-        ),
-    );
-    let pod_list = pod_list.map_err(ApiError::Kubernetes)?;
-    let pvc_list = pvc_list.map_err(ApiError::Kubernetes)?;
-    let metric_result = metric_result
-        .map_err(|error| error.to_string())
-        .and_then(|result| result.map_err(|error| error.to_string()));
+    let (pod_list, pvc_list) =
+        tokio::try_join!(pods.list(&params), pvcs.list(&params)).map_err(ApiError::Kubernetes)?;
     let bound_homes = futures::future::try_join_all(workspaces.iter().filter_map(|workspace| {
         let client = &client;
         let claims = &pvc_list.items;
@@ -227,16 +223,19 @@ async fn fetch_kubernetes_runtime(
     for (id, identity) in bound_homes {
         storage_pvcs.entry(id).or_default().persistent = identity;
     }
-    let metrics_available = metric_result.is_ok();
-    let mut metrics = metric_result.unwrap_or_else(|error| {
-        tracing::debug!(%error, "metrics.k8s.io is unavailable");
-        BTreeMap::new()
-    });
-    for values in metrics.values_mut() {
-        memory_metrics::annotate(values, &pod_list.items, unix_timestamp());
-    }
+    let now = unix_timestamp();
+    let metrics = workspaces
+        .iter()
+        .filter_map(|workspace| {
+            let samples = observed_metrics?.get(&workspace.id)?;
+            Some((
+                workspace.id,
+                observed_pod_metrics(samples, &pod_list.items, now),
+            ))
+        })
+        .collect();
     request.success();
-    let (pods, active_pods, node_names, scratch_backings) = index_pods(&pod_list.items);
+    let (pods, node_names, scratch_backings) = index_pods(&pod_list.items);
     let mut scheduling_events = BTreeMap::<Uuid, Vec<PodEvent>>::new();
     for pod in &pod_list.items {
         if let (Some(id), Some(event)) = (
@@ -248,26 +247,17 @@ async fn fetch_kubernetes_runtime(
     }
     Ok(KubernetesRuntimeBatch {
         pods,
-        active_pods,
         node_names,
         storage_pvcs,
         scratch_backings,
         metrics,
-        metrics_available,
+        metrics_available: observed_metrics.is_some(),
         scheduling_events,
     })
 }
 
-fn index_pods(
-    pods: &[Pod],
-) -> (
-    PodRuntimeMap,
-    ActivePodMap,
-    WorkspaceNodeNameMap,
-    ScratchBackingMap,
-) {
+fn index_pods(pods: &[Pod]) -> (PodRuntimeMap, WorkspaceNodeNameMap, ScratchBackingMap) {
     let mut runtimes = PodRuntimeMap::new();
-    let mut active_names = ActivePodMap::new();
     let mut node_names = WorkspaceNodeNameMap::new();
     let mut scratch_backings = ScratchBackingMap::new();
     for pod in pods {
@@ -283,19 +273,13 @@ fn index_pods(
                     .entry(workspace_id)
                     .or_insert_with(|| node_name.clone());
             }
-            if let Some(name) = &pod.metadata.name {
-                active_names
-                    .entry(workspace_id)
-                    .or_default()
-                    .insert(name.clone());
-            }
             runtimes
                 .entry(workspace_id)
                 .or_default()
                 .push(pod_runtime(pod));
         }
     }
-    (runtimes, active_names, node_names, scratch_backings)
+    (runtimes, node_names, scratch_backings)
 }
 
 fn index_storage_pvcs(pvcs: Vec<PersistentVolumeClaim>) -> WorkspaceStoragePvcMap {
@@ -335,21 +319,10 @@ fn build_runtime_entries(
             let node_name = show_runtime
                 .then(|| kubernetes.node_names.remove(&workspace_id))
                 .flatten();
-            let active_pod_names = kubernetes
-                .active_pods
-                .remove(&workspace_id)
-                .unwrap_or_default();
             let (pods, metrics) = if show_runtime {
                 (
                     kubernetes.pods.remove(&workspace_id).unwrap_or_default(),
-                    active_pod_metrics(
-                        kubernetes
-                            .metrics
-                            .get(&workspace_id)
-                            .map(Vec::as_slice)
-                            .unwrap_or_default(),
-                        &active_pod_names,
-                    ),
+                    kubernetes.metrics.remove(&workspace_id).unwrap_or_default(),
                 )
             } else {
                 (Vec::new(), Vec::new())
@@ -433,6 +406,7 @@ pub(super) async fn get(
     let observed_now = unix_timestamp();
     let workspace_ids = [workspace_id];
     let installation_id = state.config.installation_id.to_string();
+    let metrics = state.pod_metrics.snapshot();
     let (details, incidents, memory_resize_failure) = tokio::join!(
         fetch_workspace_runtime_details(
             &client,
@@ -441,6 +415,13 @@ pub(super) async fn get(
             &workspace,
             show_runtime,
             &installation_id,
+            metrics.as_ref().map(|latest| {
+                latest
+                    .metrics
+                    .get(&workspace_id)
+                    .map(Vec::as_slice)
+                    .unwrap_or_default()
+            }),
         ),
         state
             .database

@@ -64,6 +64,7 @@ pub struct AppState {
     pub(super) plugins: PluginRuntime,
     organization_metrics: runtime::organization_metrics::OrganizationMetricsCache,
     storage_metrics: runtime::storage_metrics::StorageMetricsCache,
+    pod_metrics: runtime::pod_metrics::PodMetricsCache,
 }
 
 impl AppState {
@@ -86,6 +87,7 @@ impl AppState {
             jump_host_public_key: None,
             plugins,
             organization_metrics: Default::default(),
+            pod_metrics: Default::default(),
         }
     }
 
@@ -108,6 +110,7 @@ impl AppState {
             jump_host_public_key: None,
             plugins,
             organization_metrics: Default::default(),
+            pod_metrics: Default::default(),
         }
     }
 
@@ -167,6 +170,17 @@ impl AppState {
 
     pub fn observability(&self) -> Observability {
         self.observability.clone()
+    }
+
+    pub fn spawn_pod_metrics(
+        &self,
+        shutdown: tokio::sync::watch::Receiver<bool>,
+    ) -> Option<tokio::task::JoinHandle<()>> {
+        Some(tokio::spawn(self.pod_metrics.clone().collect(
+            self.kubernetes_client.clone()?,
+            self.config.installation_id.clone(),
+            shutdown,
+        )))
     }
 
     pub fn spawn_storage_metrics(
