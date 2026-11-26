@@ -7,6 +7,7 @@ test "$(readlink /proc/self/ns/mnt)" != "$(readlink /proc/1/ns/mnt)"
 base=${1:?fixture directory}
 measure=${2:-node}
 case "$measure" in
+  queue) driver=topolvm-node; workload=daemonset/$driver; baseline_version='0.41.1-mwc-queue-1'; candidate_version='0.41.1-mwc-queue-2' ;;
   node) driver=topolvm-node; workload=daemonset/$driver; baseline_version='0.41.1'; candidate_version='0.41.1-mwc-independent-volumes' ;;
   controller) driver=topolvm-controller; workload=deployment/$driver; baseline_version='0.41.1-mwc250ms'; candidate_version='0.41.1-mwc250ms-lv-metadata' ;;
   *) exit 2 ;;
@@ -26,7 +27,7 @@ daemon=
 watcher=
 loops=()
 chart_args=()
-if [[ $measure == controller ]]; then
+if [[ $measure == controller || $measure == queue ]]; then
   # The chart requires controller replicas to be on different hosts.
   chart_args+=(--set-string controller.updateStrategy.type=Recreate)
 fi
@@ -131,8 +132,8 @@ inspect_fixture() {
     printf '%s\t%s\t%s\n' "$role" "$pv" "$handle" >> "$dir/volume-ids.tsv"
   done
   k -n topolvm-system logs daemonset/topolvm-node -c topolvm-node --timestamps | awk -v uid="$uid" 'index($0, uid) && /NodePublishVolume/' > "$dir/publish.log"
-  if [[ $measure == controller ]]; then
-    k -n topolvm-system logs "$workload" -c "$driver" --timestamps > "$dir/create.log"
+  if [[ $measure == controller || $measure == queue ]]; then
+    k -n topolvm-system logs deploy/topolvm-controller -c topolvm-controller --timestamps > "$dir/create.log"
     k -n topolvm-system logs daemonset/topolvm-node -c topolvm-node --timestamps > "$dir/lv.log"
   fi
 }
@@ -150,7 +151,7 @@ reclaim_fixture() {
       sleep 1
     done
     if lvs "mwc-ci-$role/$handle" >/dev/null 2>&1; then return 1; fi
-    if [[ $measure == controller ]]; then
+    if [[ $measure == controller || $measure == queue ]]; then
       test -z "$(k get logicalvolumes.topolvm.io "$pv" --ignore-not-found -o name)"
     fi
   done < "$dir/volume-ids.tsv"
@@ -163,6 +164,12 @@ verify_peer() {
   test "$(w get pod "$name" -o json | jq -cer '[.metadata.uid,.status.containerStatuses[0].containerID]')" = "$expected"
   w exec "$name" -- sh -euc 'for v in home scratch; do test "$(cat "/mnt/$v/check")" = "$v"; printf %s "$v" > "/mnt/$v/recheck"; test "$(cat "/mnt/$v/recheck")" = "$v"; done'
 }
+
+if [[ $measure == queue ]]; then
+  # shellcheck source=/dev/null
+  source "$suite/measure-queue.sh"
+  exit 0
+fi
 
 if [[ $measure == controller ]]; then
   stock_image=localhost/topolvm-controller-ci:baseline
