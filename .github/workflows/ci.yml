@@ -439,8 +439,6 @@ jobs:
           grep -q 'clamp_min(delta(mwc_jobs{status="failed"}\[15m\]), 0) > 0' <<<"${rendered_monitoring}"
           grep -q 'alert: MwcJobsPendingTooOld' <<<"${rendered_monitoring}"
           grep -q 'kube_pod_labels{label_workspace_memeloop_dev_owner_installation="monitoring",label_workspace_memeloop_dev_workspace_id!=""}' <<<"${rendered_monitoring}"
-          grep -q 'kube_persistentvolumeclaim_labels{label_workspace_memeloop_dev_owner_installation="monitoring",label_workspace_memeloop_dev_workspace_id!="",label_workspace_memeloop_dev_storage_role="home"}' <<<"${rendered_monitoring}"
-          grep -q 'kube_persistentvolumeclaim_labels{label_workspace_memeloop_dev_owner_installation="monitoring",label_workspace_memeloop_dev_workspace_id!="",label_workspace_memeloop_dev_storage_role="temporary"}' <<<"${rendered_monitoring}"
           if grep -Eq '(by|without|group_left|group_right)[[:space:]]*\([^)]*(workspace_id|label_workspace_memeloop_dev_workspace_id)' \
             <<<"${rendered_monitoring}"; then
             echo "Prometheus rules propagate workspace UUIDs into output labels" >&2
@@ -465,6 +463,7 @@ jobs:
             | sed 's/^  //' > /tmp/mwc-prometheus-rules.yaml
           test -s /tmp/mwc-prometheus-rules.yaml
           "${promtool}" check rules /tmp/mwc-prometheus-rules.yaml
+          "${promtool}" test rules .github/tests/workspace-volume-alerts.yaml
           grep -q '>= 80' <<<"${rendered_monitoring}"
           grep -q '>= 90' <<<"${rendered_monitoring}"
           rendered_ports=$(linux-amd64/helm template ports \
