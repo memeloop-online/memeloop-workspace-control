@@ -1,0 +1,13 @@
+diff --git a/internal/driver/internal/k8s/logicalvolume_service.go b/internal/driver/internal/k8s/logicalvolume_service.go
+index 06af4d34486ac19c9dd8e503baf265a8cd8d903b..a40ae86e36773151aee9ea517cd314ccc34d498f 100644
+--- a/internal/driver/internal/k8s/logicalvolume_service.go
++++ b/internal/driver/internal/k8s/logicalvolume_service.go
+@@ -361,6 +361,8 @@ func (s *LogicalVolumeService) create(ctx context.Context, lv *topolvmv1.Logical
+ 			return err
+ 		}
+ 
++		lv.Labels = map[string]string{topolvm.CreatedbyLabelKey: topolvm.CreatedbyLabelValue}
++		lv.Finalizers = []string{topolvm.GetLogicalVolumeFinalizer()}
+ 		if err := s.writer.Create(ctx, lv); err != nil {
+ 			return err
+ 		}
