@@ -467,7 +467,7 @@ export function WorkspacePanel(props: Props) {
       item={settingsItem}
       canChangeState={canChangeState}
       canShrinkStorage={settingsItem ? canShrinkWorkspaceStorage(props.principal, settingsItem.workspace) : false}
-      canManageTemporaryStorage={canManageSystem(props.principal)}
+      canManageTemporaryStorage={canManageSystem(props.principal) && props.principal.allowed_template_ids === null}
       canChangePlacement={canChangePlacement}
       onChangePlacement={(target) => { setSettingsTargetId(null); setPlacementTarget(target); }}
       onShrinkStorage={(target) => { setSettingsTargetId(null); setShrinkTargetId(target.workspace.id); }}
