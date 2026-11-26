@@ -35,7 +35,8 @@ pub(crate) struct StorageGrowthStatus {
     pub rejection: Option<String>,
 }
 
-const ACTIVE: &str = "SELECT COUNT(*) FROM jobs WHERE installation_id = $1 +    AND workspace_id = $2 AND kind = 'workspace_storage_growth' AND status IN ('pending', 'running')";
+const ACTIVE: &str = "SELECT COUNT(*) FROM jobs WHERE installation_id = $1 \
+    AND workspace_id = $2 AND kind = 'workspace_storage_growth' AND status IN ('pending', 'running')";
 
 macro_rules! growth_guard {
     ($name:ident, $connection:ty) => {
@@ -147,7 +148,8 @@ impl Database {
         &self,
         workspace: Uuid,
     ) -> Result<Option<StorageGrowthStatus>, StorageError> {
-        const QUERY: &str = "SELECT id, payload_json, status FROM jobs WHERE installation_id = $1 +            AND workspace_id = $2 AND kind = 'workspace_storage_growth' ORDER BY id DESC LIMIT 1";
+        const QUERY: &str = "SELECT id, payload_json, status FROM jobs WHERE installation_id = $1 \
+            AND workspace_id = $2 AND kind = 'workspace_storage_growth' ORDER BY id DESC LIMIT 1";
         let workspace = workspace.to_string();
         let row: Option<(String, String, String)> = match self {
             Self::Sqlite {
