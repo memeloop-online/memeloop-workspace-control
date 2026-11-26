@@ -200,7 +200,7 @@ impl GateMock {
             return success();
         }
         if method == Method::POST {
-            if path.ends_with("/persistentvolumeclaims") {
+            if path.ends_with("/persistentvolumeclaims") || path.ends_with("/networkpolicies") {
                 let mut body: Value = serde_json::from_slice(
                     &request.into_body().collect().await.unwrap().to_bytes(),
                 )
@@ -216,10 +216,16 @@ impl GateMock {
                         return json_response(
                             StatusCode::CONFLICT,
                             json!({"apiVersion":"v1","kind":"Status","status":"Failure",
-                                "code":409,"reason":"AlreadyExists","message":"claim already exists"}),
+                                "code":409,"reason":"AlreadyExists","message":"object already exists"}),
                         );
                     };
                     entry.insert(body.clone());
+                }
+                if path.ends_with("/networkpolicies") {
+                    self.events
+                        .lock()
+                        .unwrap()
+                        .push(("APPLIED".to_owned(), object_path.clone()));
                 }
                 self.writes
                     .lock()

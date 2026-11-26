@@ -622,6 +622,7 @@ impl KubernetesCoordinator {
         namespace_name: &str,
         workspace: &Workspace,
         desired: &DesiredResources,
+        create_first: bool,
     ) -> Result<(), ReconcileError> {
         let workspace_id = workspace.id;
         let apply = PatchParams::apply(FIELD_MANAGER);
@@ -629,6 +630,23 @@ impl KubernetesCoordinator {
         let names = &runtime_names.resources;
         let network_policies =
             Api::<NetworkPolicy>::namespaced(self.client.clone(), namespace_name);
+        if create_first {
+            let create = PostParams {
+                field_manager: Some(FIELD_MANAGER.to_owned()),
+                ..PostParams::default()
+            };
+            match observe_apply_stage(
+                workspace,
+                "network_policy_create",
+                Box::pin(network_policies.create(&create, &desired.network_policy)),
+            )
+            .await
+            {
+                Ok(_) => return Ok(()),
+                Err(kube::Error::Api(error)) if error.code == 409 => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
         observe_apply_stage(
             workspace,
             "network_policy_metadata",

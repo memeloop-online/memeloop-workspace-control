@@ -166,7 +166,12 @@ impl KubernetesCoordinator {
                 let network_policy = Box::pin(observe_apply_stage(
                     workspace,
                     "network_policy",
-                    self.apply_network_policy(namespace, workspace, desired),
+                    self.apply_network_policy(
+                        namespace,
+                        workspace,
+                        desired,
+                        startup.overlap && startup.existing.is_none(),
+                    ),
                 ));
                 let gated_workload = async {
                     if startup.overlap {

@@ -164,12 +164,12 @@ async fn tokenless_workload_still_waits_for_network_isolation_before_early_creat
         .runtime_names(&workspace)
         .unwrap()
         .resources;
-    let policy = format!(
-        "/apis/networking.k8s.io/v1/namespaces/{}/networkpolicies/{}",
-        workspace.runtime.namespace(),
-        names.network_policy
+    let policies = format!(
+        "/apis/networking.k8s.io/v1/namespaces/{}/networkpolicies",
+        workspace.runtime.namespace()
     );
-    *mock.hold_request.lock().unwrap() = Some((Method::PATCH, policy.clone()));
+    let policy = format!("{policies}/{}", names.network_policy);
+    *mock.hold_request.lock().unwrap() = Some((Method::POST, policies));
     let task = tokio::spawn({
         let (coordinator, workspace) = (coordinator.clone(), workspace.clone());
         async move { coordinator.reconcile(&workspace).await }
