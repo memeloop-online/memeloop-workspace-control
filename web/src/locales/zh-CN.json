@@ -896,7 +896,7 @@
   "workspaceNameRequired": "请输入工作区名称。",
   "workspaceResourcesInvalid": "资源不能低于模板的最低请求值。",
   "shrinkStorage": "缩容存储",
-  "shrinkStorageTitle": "缩容工作区存储",
+  "shrinkStorageTitle": "缩容存储 · {{name}}",
   "shrinkStorageHelp": "可缩容 Home（持久磁盘）、临时存储，或两者同时缩容。工作区会先停止，数据离线复制并校验完成后自动恢复运行。校验通过前保留原卷；失败时自动回滚，不会销毁任何数据。",
   "shrinkStorageDowntime": "停机提示：从工作区停止开始，到复制完成并恢复之前，工作区不可用。",
   "shrinkStorageTargetGiB": "新大小 (GiB)",

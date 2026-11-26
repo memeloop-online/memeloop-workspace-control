@@ -179,7 +179,7 @@ export function StorageShrinkDialog({ api, item, runtime, onClose, onSettled }: 
     return usedBytes === null ? t("usageNotObserved") : `${t("shrinkStorageUsed")} ${formatBytesAsGiB(usedBytes)} GiB`;
   }
 
-  const title = t("shrinkStorageTitle");
+  const title = t("shrinkStorageTitle", { name: workspace.name });
   const closeButton = (
     <Button appearance="subtle" icon={<DismissRegular />} aria-label={t("cancel")} disabled={submitting} onClick={onClose} />
   );
@@ -274,9 +274,8 @@ export function StorageShrinkDialog({ api, item, runtime, onClose, onSettled }: 
       </Dialog>
       <ConfirmDialog
         open={reclaimConfirming}
-        title={t("shrinkStorageReclaim")}
+        title={`${t("shrinkStorageReclaim")} · ${workspace.name}`}
         description={t("shrinkStorageReclaimWarning")}
-        details={workspace.name}
         confirmLabel={t("shrinkStorageReclaimConfirm")}
         cancelLabel={t("cancel")}
         busy={reclaimSubmitting}

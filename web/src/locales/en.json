@@ -896,7 +896,7 @@
   "workspaceNameRequired": "Enter a workspace name.",
   "workspaceResourcesInvalid": "Resources cannot be below the template's minimum requests.",
   "shrinkStorage": "Shrink storage",
-  "shrinkStorageTitle": "Shrink workspace storage",
+  "shrinkStorageTitle": "Shrink storage · {{name}}",
   "shrinkStorageHelp": "Shrink the Home volume (persistent disk), the temporary storage, or both. The workspace stops while data is copied offline and verified, then starts again automatically. The original volumes are kept until verification succeeds; a failure rolls back without destroying any data.",
   "shrinkStorageDowntime": "Downtime notice: the workspace is unavailable from the moment it stops until the copy finishes and it resumes.",
   "shrinkStorageTargetGiB": "New size (GiB)",
