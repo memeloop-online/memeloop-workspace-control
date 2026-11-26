@@ -89,7 +89,7 @@ home=$(jq -er .names.home "$fixture")
 scratch=$(jq -er .names.scratch "$fixture")
 pod_json() { w get pod "$pod" -o json --request-timeout=5s; }
 workspace_ssh() {
-  timeout 20 ssh -F /dev/null -p 2222 -o BatchMode=yes -o StrictHostKeyChecking=yes -o HostKeyAlias=mwc-ci-workspace \
+  timeout "${SSH_TIMEOUT:-20}" ssh -F /dev/null -p 2222 -o BatchMode=yes -o StrictHostKeyChecking=yes -o HostKeyAlias=mwc-ci-workspace \
     -o GlobalKnownHostsFile=/dev/null -o "UserKnownHostsFile=$state/known-hosts" \
     -o IdentitiesOnly=yes -o ConnectTimeout=4 -i "$state/client" "user@$1" "${@:2}"
 }
@@ -186,6 +186,86 @@ case $1 in
     jq -n --arg boot "$(cat /proc/sys/kernel/random/boot_id)" --arg cid "$id" --arg pod "$uid" \
       --arg version "$cri_version" --argjson volumes "$volumes" \
       '{boot_id:$boot,container_id:$cid,pod_uid:$pod,volumes:$volumes,cri_version:$version,strict_ssh:true,buildkit:true}'
+    ;;
+  expand)
+    pod_identity() {
+      pod_json | jq -ce '{uid:.metadata.uid,revision:.metadata.labels["controller-revision-hash"],
+        ready:([.status.conditions[]|select(.type=="Ready")|.status]==["True"]),
+        containers:(.status.containerStatuses|map({name,containerID,restartCount}))}'
+    }
+    before=$(pod_identity)
+    test "$(jq -r .ready <<< "$before")" = true
+    address=$(pod_json | jq -er .status.podIP)
+    coproc GROW_SSH { SSH_TIMEOUT=170 workspace_ssh "$address" 'exec sh -s'; }
+    ssh_pid=$GROW_SSH_PID
+    exec {send}>&"${GROW_SSH[1]}" {recv}<&"${GROW_SSH[0]}"
+    ask() {
+      printf '%s\n' "$1" >&"$send"
+      IFS= read -r -t 10 -u "$recv" answer
+    }
+    measure='df -B1 --output=size /home/user /tmp | awk "NR>1" | xargs'
+    check_files='test "$(cat /home/user/ci-home-reboot)" = home-before-reboot &&
+      test "$(cat /var/lib/mwc/build-scratch/ci-scratch-reboot)" = scratch-before-reboot'
+    ask "$check_files && $measure"
+    read -r initial_home initial_scratch <<< "$answer"
+    ask 'export LC_ALL=C
+      free=$(df -B1 --output=avail /tmp | tail -1)
+      test "$free" -gt 134217728 && fallocate -l "$((free-16777216))" /tmp/ci-grow-fill &&
+        error=$(fallocate -l 33554432 /tmp/ci-grow-write 2>&1) || :
+      case "$error" in *"No space left on device"*) echo ENOSPC;; *) echo no_ENOSPC;; esac'
+    test "$answer" = ENOSPC
+    grow() {
+      local claim=$1 role=$2 pvc uid pv size target amount patch started
+      pvc=$(w get pvc "$claim" -o json)
+      uid=$(jq -er .metadata.uid <<< "$pvc")
+      pv=$(jq -er .spec.volumeName <<< "$pvc")
+      size=$(jq -er '.spec.resources.requests.storage | select(test("^[0-9]+Gi$"))' <<< "$pvc")
+      target="$((${size%Gi}+1))Gi"
+      patch=$(jq -nc --arg uid "$uid" --arg source "$size" --arg target "$target" '
+        [{op:"test",path:"/metadata/uid",value:$uid},
+         {op:"test",path:"/spec/resources/requests/storage",value:$source},
+         {op:"replace",path:"/spec/resources/requests/storage",value:$target}]')
+      started=$(date +%s%3N)
+      w patch pvc "$claim" --type=json -p "$patch" >&2
+      for _ in {1..65}; do
+        pvc=$(w get pvc "$claim" -o json --request-timeout=5s)
+        jq -e --arg uid "$uid" --arg pv "$pv" '.metadata.uid==$uid and .spec.volumeName==$pv' <<< "$pvc" >/dev/null
+        ask "$check_files && $measure"
+        read -r measured_home measured_scratch <<< "$answer"
+        if [[ $role == scratch ]]; then
+          test "$measured_home" = "$initial_home"
+          amount=$((measured_scratch-initial_scratch))
+        else
+          test "$measured_scratch" = "$grown_scratch"
+          amount=$((measured_home-initial_home))
+        fi
+        if (( amount >= 800000000 )) &&
+           jq -e --arg target "$target" '.status.capacity.storage==$target and ((.status.conditions//[])|length)==0' <<< "$pvc" >/dev/null; then
+          elapsed_ms=$(($(date +%s%3N)-started))
+          return
+        fi
+        sleep 1
+      done
+      return 1
+    }
+    grow "$scratch" scratch
+    grown_scratch=$measured_scratch
+    scratch_ms=$elapsed_ms
+    ask 'fallocate -l 33554432 /tmp/ci-grow-write && rm /tmp/ci-grow-write /tmp/ci-grow-fill && echo writable'
+    test "$answer" = writable
+    grow "$home" home
+    home_ms=$elapsed_ms
+    ask "$check_files && printf writable > /home/user/.ci-grow-writable && echo writable"
+    test "$answer" = writable
+    printf '%s\n' 'exit 0' >&"$send"
+    wait "$ssh_pid"
+    exec {send}>&- {recv}<&-
+    test "$(pod_identity)" = "$before"
+    workspace_ssh "$address" "$check_files && test \"\$(cat /home/user/.ci-grow-writable)\" = writable" </dev/null
+    jq -n --argjson scratch_ms "$scratch_ms" --argjson home_ms "$home_ms" '
+      {same_pod_and_containers:true,continuous_strict_ssh:true,new_strict_ssh:true,
+       both_claims_retain_identity:true,isolated_growth:true,write_after_ENOSPC:true,
+       scratch_expand_ms:$scratch_ms,home_expand_ms:$home_ms}'
     ;;
   reclaim)
     uid=$(pod_json | jq -er .metadata.uid)

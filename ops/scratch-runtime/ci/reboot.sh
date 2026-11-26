@@ -115,6 +115,7 @@ first_container=$(jq -er '.container_id' "$dir/boot-evidence.jsonl")
 if [[ $mode == workspace ]]; then
   workspace_step seed >&2
   workspace_step observe > "$dir/workspace-before.json"
+  workspace_step expand > "$dir/workspace-grow.json"
 fi
 second=$(reboot_guest "$first")
 step mounted ordinary-before-reboot "$first_container" | tee -a "$dir/boot-evidence.jsonl"
