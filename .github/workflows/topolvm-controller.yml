@@ -1,24 +1,28 @@
-name: TopoLVM controller polling
+name: TopoLVM controller provisioning
 
 on:
   pull_request:
     paths:
       - .github/workflows/topolvm-controller.yml
       - images/topolvm-controller/**
+      - tests/topolvm-controller/**
+      - tests/topolvm-node/measure-publish.sh
   push:
     branches:
       - main
     paths:
       - .github/workflows/topolvm-controller.yml
       - images/topolvm-controller/**
+      - tests/topolvm-controller/**
+      - tests/topolvm-node/measure-publish.sh
 
 permissions:
   contents: read
 
 jobs:
   controller-image:
-    runs-on: ubuntu-22.04
-    timeout-minutes: 30
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
     permissions:
       contents: read
       packages: write
@@ -39,22 +43,26 @@ jobs:
           git -C "$RUNNER_TEMP/topolvm" checkout --detach refs/tags/v0.41.1
           test "$(git -C "$RUNNER_TEMP/topolvm" rev-parse HEAD)" = "$UPSTREAM_COMMIT"
           mkdir -p "$RUNNER_TEMP/topolvm-controller"
-          git -C "$RUNNER_TEMP/topolvm" apply --check "$GITHUB_WORKSPACE/images/topolvm-controller/provisioning-poll.patch"
+          git -C "$RUNNER_TEMP/topolvm" apply --check "$GITHUB_WORKSPACE"/images/topolvm-controller/*.patch
           git -C "$RUNNER_TEMP/topolvm" apply "$GITHUB_WORKSPACE/images/topolvm-controller/provisioning-poll.patch"
-          gofmt -d "$RUNNER_TEMP/topolvm/internal/driver/internal/k8s/logicalvolume_service.go" "$RUNNER_TEMP/topolvm/internal/driver/internal/k8s/logicalvolume_service_test.go" > "$RUNNER_TEMP/gofmt.diff"
-          test ! -s "$RUNNER_TEMP/gofmt.diff"
 
-      - name: Test status observation and cancellation, then build only the controller
+      - name: Build both controllers and test status observation and cancellation
         run: |
           docker run --rm \
             --volume "$RUNNER_TEMP/topolvm:/src" \
             --volume "$RUNNER_TEMP/topolvm-controller:/out" \
+            --volume "$GITHUB_WORKSPACE/images/topolvm-controller/prepare-logical-volume.patch:/prepare.patch:ro" \
             --workdir /src \
             golang:1.25.7-bookworm \
             sh -ec '
-              go test -race -count=1 ./internal/driver/internal/k8s
               CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -buildvcs=false -trimpath \
                 -ldflags "-w -s -X github.com/topolvm/topolvm.Version=0.41.1-mwc250ms" \
+                -o /out/topolvm-controller-baseline ./cmd/topolvm-controller
+              git -c safe.directory=/src apply /prepare.patch
+              test -z "$(gofmt -l internal/driver/internal/k8s/logicalvolume_service.go internal/driver/internal/k8s/logicalvolume_service_test.go)"
+              go test -race -count=1 ./internal/driver/internal/k8s
+              CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -buildvcs=false -trimpath \
+                -ldflags "-w -s -X github.com/topolvm/topolvm.Version=0.41.1-mwc250ms-lv-metadata" \
                 -o /out/topolvm-controller ./cmd/topolvm-controller
             '
 
@@ -62,7 +70,7 @@ jobs:
 
       - name: Build and validate the controller-only overlay
         env:
-          PATCH_SHA256: ${{ hashFiles('images/topolvm-controller/provisioning-poll.patch') }}
+          PATCH_SHA256: ${{ hashFiles('images/topolvm-controller/*.patch') }}
         run: |
           mkdir -p "$RUNNER_TEMP/controller-image"
           cp "$RUNNER_TEMP/topolvm-controller/topolvm-controller" "$RUNNER_TEMP/controller-image/"
@@ -87,9 +95,9 @@ jobs:
             --build-arg "BASE_IMAGE=$BASE_IMAGE" \
             --build-arg "SOURCE_COMMIT=$UPSTREAM_COMMIT" \
             --build-arg "PATCH_SHA256=$PATCH_SHA256" \
-            --tag topolvm-controller-poll-ci \
+            --tag localhost/topolvm-controller-ci:patched \
             "$RUNNER_TEMP/controller-image"
-          docker run --rm --entrypoint /bin/sh topolvm-controller-poll-ci -ec '
+          docker run --rm --entrypoint /bin/sh localhost/topolvm-controller-ci:patched -ec '
             test -x /hypertopolvm
             test -x /topolvm-controller
             test ! -L /topolvm-controller
@@ -99,18 +107,43 @@ jobs:
             for binary in /csi-provisioner /csi-node-driver-registrar /csi-resizer /csi-snapshotter /livenessprobe; do
               test -x "$binary"
             done
-            /topolvm-controller --version | grep -F 0.41.1-mwc250ms
+            /topolvm-controller --version | grep -Fx "topolvm-controller version 0.41.1-mwc250ms-lv-metadata"
             /topolvm-node --version > /dev/null
             /lvmd --version > /dev/null
           '
           for binary in /hypertopolvm /topolvm-node /topolvm-scheduler /lvmd /csi-provisioner /csi-node-driver-registrar /csi-resizer /csi-snapshotter /livenessprobe; do
             binary_name=${binary#/}
-            docker run --rm --entrypoint /bin/sh topolvm-controller-poll-ci -ec "sha256sum '$binary' | cut -d' ' -f1" > "$RUNNER_TEMP/patched-$binary_name.sha"
+            docker run --rm --entrypoint /bin/sh localhost/topolvm-controller-ci:patched -ec "sha256sum '$binary' | cut -d' ' -f1" > "$RUNNER_TEMP/patched-$binary_name.sha"
             docker run --rm --entrypoint /bin/sh "$BASE_IMAGE" -ec "sha256sum '$binary' | cut -d' ' -f1" > "$RUNNER_TEMP/base-$binary_name.sha"
             diff -u "$RUNNER_TEMP/base-$binary_name.sha" "$RUNNER_TEMP/patched-$binary_name.sha"
           done
-          docker image inspect topolvm-controller-poll-ci --format '{{json .Config.Entrypoint}}|{{json .Config.Cmd}}' > "$RUNNER_TEMP/patched-entrypoint.txt"
+          docker image inspect localhost/topolvm-controller-ci:patched --format '{{json .Config.Entrypoint}}|{{json .Config.Cmd}}' > "$RUNNER_TEMP/patched-entrypoint.txt"
           diff -u "$RUNNER_TEMP/base-entrypoint.txt" "$RUNNER_TEMP/patched-entrypoint.txt"
+
+      - name: Compare thin volume provisioning and verify rollback
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends lvm2 thin-provisioning-tools xfsprogs
+          sudo modprobe dm_thin_pool
+          mkdir -p "$RUNNER_TEMP/controller-baseline"
+          cp images/topolvm-controller/Dockerfile "$RUNNER_TEMP/controller-baseline/"
+          cp "$RUNNER_TEMP/topolvm-controller/topolvm-controller-baseline" "$RUNNER_TEMP/controller-baseline/topolvm-controller"
+          docker build --build-arg "BASE_IMAGE=$BASE_IMAGE" -t localhost/topolvm-controller-ci:baseline "$RUNNER_TEMP/controller-baseline"
+          alpine=docker.io/library/alpine@sha256:4bcff63911fcb4448bd4fdacec207030997caf25e9bea4045fa6c8c44de311d1
+          docker pull "$alpine"
+          docker save -o "$RUNNER_TEMP/topolvm-controller-images.tar" localhost/topolvm-controller-ci:baseline localhost/topolvm-controller-ci:patched "$alpine"
+          proof="$RUNNER_TEMP/topolvm-controller-measure"
+          status=0
+          sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT unshare --mount --propagation private \
+            bash tests/topolvm-node/measure-publish.sh "$proof" controller || status=$?
+          sudo chown -R "$(id -u):$(id -g)" "$proof/evidence"
+          exit "$status"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: topolvm-controller-real-volumes-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/topolvm-controller-measure/evidence
+          if-no-files-found: ignore
 
       - name: Log in to GHCR for the main-branch image
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -133,7 +166,7 @@ jobs:
           build-args: |
             BASE_IMAGE=${{ env.BASE_IMAGE }}
             SOURCE_COMMIT=${{ env.UPSTREAM_COMMIT }}
-            PATCH_SHA256=${{ hashFiles('images/topolvm-controller/provisioning-poll.patch') }}
+            PATCH_SHA256=${{ hashFiles('images/topolvm-controller/*.patch') }}
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
@@ -144,7 +177,7 @@ jobs:
         if: success()
         env:
           IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
-          PATCH_SHA256: ${{ hashFiles('images/topolvm-controller/provisioning-poll.patch') }}
+          PATCH_SHA256: ${{ hashFiles('images/topolvm-controller/*.patch') }}
         run: |
           mkdir -p "$RUNNER_TEMP/topolvm-controller-provenance"
           binary_sha=$(sha256sum "$RUNNER_TEMP/topolvm-controller/topolvm-controller" | cut -d' ' -f1)

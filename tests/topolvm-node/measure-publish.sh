@@ -5,6 +5,13 @@ test "${GITHUB_ACTIONS:-}" = true
 test "${RUNNER_ENVIRONMENT:-}" = github-hosted
 test "$(readlink /proc/self/ns/mnt)" != "$(readlink /proc/1/ns/mnt)"
 base=${1:?fixture directory}
+measure=${2:-node}
+case "$measure" in
+  node) driver=topolvm-node; workload=daemonset/$driver; baseline_version='0.41.1'; candidate_version='0.41.1-mwc-independent-volumes' ;;
+  controller) driver=topolvm-controller; workload=deployment/$driver; baseline_version='0.41.1-mwc250ms'; candidate_version='0.41.1-mwc250ms-lv-metadata' ;;
+  *) exit 2 ;;
+esac
+candidate_image=localhost/$driver-ci:patched
 suite=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 evidence="$base/evidence"
 mkdir -p "$evidence"
@@ -16,15 +23,26 @@ ns=mwc-publish-ci
 node=mwc-publish-ci
 image=docker.io/library/alpine@sha256:4bcff63911fcb4448bd4fdacec207030997caf25e9bea4045fa6c8c44de311d1
 daemon=
+watcher=
 loops=()
+chart_args=()
+if [[ $measure == controller ]]; then
+  # The chart requires controller replicas to be on different hosts.
+  chart_args+=(--set-string controller.updateStrategy.type=Recreate)
+fi
 k() { KUBECONFIG="$base/kubeconfig" "$k3s" kubectl --request-timeout=10s "$@"; }
 w() { k -n "$ns" "$@"; }
 cleanup() {
   code=$?
   trap - EXIT
+  if [[ -n $watcher ]]; then
+    kill "$watcher" 2>/dev/null || true
+    wait "$watcher" 2>/dev/null || true
+  fi
   if [[ -n $daemon ]]; then
     if ((code)); then
       k get pods,pvc -A -o wide > "$evidence/failing-pods.txt" 2>&1 || true
+      k get events -A > "$evidence/failing-events.txt" 2>&1 || true
       k -n topolvm-system logs daemonset/topolvm-node -c topolvm-node --timestamps > "$evidence/failing-node.log" 2>&1 || true
     fi
     kill "$daemon" 2>/dev/null || true
@@ -68,14 +86,14 @@ for i in {1..60}; do
 done
 k wait --for=create "node/$node" --timeout=110s
 k wait --for=condition=Ready "node/$node" --timeout=110s
-"$k3s" ctr -n k8s.io images import --platform linux/amd64 "$base/../topolvm-node-images.tar"
+"$k3s" ctr -n k8s.io images import --platform linux/amd64 "$base/../$driver-images.tar"
 for i in {1..30}; do
-  if "$k3s" crictl inspecti localhost/topolvm-node-ci:patched >/dev/null 2>&1; then break; fi
+  if "$k3s" crictl inspecti "$candidate_image" >/dev/null 2>&1; then break; fi
   sleep 1
 done
-"$k3s" crictl inspecti localhost/topolvm-node-ci:patched | jq -er '.status.id' > "$evidence/candidate-image.txt"
+"$k3s" crictl inspecti "$candidate_image" | jq -er '.status.id' > "$evidence/candidate-image.txt"
 KUBECONFIG="$base/kubeconfig" "$base/linux-amd64/helm" install topolvm "$base/topolvm.tgz" \
-  -n topolvm-system --create-namespace -f "$suite/../runtime-product-vm/topolvm-values.yaml" --wait --timeout 5m
+  -n topolvm-system --create-namespace -f "$suite/../runtime-product-vm/topolvm-values.yaml" "${chart_args[@]}" --wait --timeout 5m
 k create namespace "$ns"
 w create serviceaccount fixture
 
@@ -113,6 +131,10 @@ inspect_fixture() {
     printf '%s\t%s\t%s\n' "$role" "$pv" "$handle" >> "$dir/volume-ids.tsv"
   done
   k -n topolvm-system logs daemonset/topolvm-node -c topolvm-node --timestamps | awk -v uid="$uid" 'index($0, uid) && /NodePublishVolume/' > "$dir/publish.log"
+  if [[ $measure == controller ]]; then
+    k -n topolvm-system logs "$workload" -c "$driver" --timestamps > "$dir/create.log"
+    k -n topolvm-system logs daemonset/topolvm-node -c topolvm-node --timestamps > "$dir/lv.log"
+  fi
 }
 
 reclaim_fixture() {
@@ -128,6 +150,9 @@ reclaim_fixture() {
       sleep 1
     done
     if lvs "mwc-ci-$role/$handle" >/dev/null 2>&1; then return 1; fi
+    if [[ $measure == controller ]]; then
+      test -z "$(k get logicalvolumes.topolvm.io "$pv" --ignore-not-found -o name)"
+    fi
   done < "$dir/volume-ids.tsv"
   if findmnt -rno TARGET | awk -v uid="$uid" 'index($0, uid) {found=1} END {exit !found}'; then return 1; fi
 }
@@ -139,22 +164,30 @@ verify_peer() {
   w exec "$name" -- sh -euc 'for v in home scratch; do test "$(cat "/mnt/$v/check")" = "$v"; printf %s "$v" > "/mnt/$v/recheck"; test "$(cat "/mnt/$v/recheck")" = "$v"; done'
 }
 
-stock_image=$(k -n topolvm-system get daemonset topolvm-node -o json | jq -er '.spec.template.spec.containers[]|select(.name=="topolvm-node")|.image')
+if [[ $measure == controller ]]; then
+  stock_image=localhost/topolvm-controller-ci:baseline
+  "$k3s" crictl inspecti "$stock_image" | jq -er '.status.id' > "$evidence/baseline-image.txt"
+  k -n topolvm-system set image "$workload" "$driver=$stock_image"
+  k -n topolvm-system rollout status "$workload" --timeout=180s
+  KUBECONFIG="$base/kubeconfig" "$k3s" kubectl get logicalvolumes.topolvm.io \
+    --watch --output-watch-events -o json > "$evidence/logicalvolume-watch.json" & watcher=$!
+else
+  stock_image=$(k -n topolvm-system get "$workload" -o json | jq -er --arg driver "$driver" '.spec.template.spec.containers[]|select(.name==$driver)|.image')
+fi
 create_fixture storage-peer
 inspect_fixture storage-peer
 
 for variant in stock patched; do
   if [[ $variant == patched ]]; then
-    k -n topolvm-system set image daemonset/topolvm-node topolvm-node=localhost/topolvm-node-ci:patched
-    k -n topolvm-system rollout status daemonset/topolvm-node --timeout=180s
+    k -n topolvm-system set image "$workload" "$driver=$candidate_image"
+    k -n topolvm-system rollout status "$workload" --timeout=180s
     verify_peer
-  fi
-  k -n topolvm-system exec daemonset/topolvm-node -c topolvm-node -- /topolvm-node --version > "$evidence/$variant-version.txt"
-  if [[ $variant == patched ]]; then
-    grep -F '0.41.1-mwc-independent-volumes' "$evidence/$variant-version.txt"
+    version=$candidate_version
   else
-    grep -E ' 0\.41\.1$' "$evidence/$variant-version.txt"
+    version=$baseline_version
   fi
+  k -n topolvm-system exec "$workload" -c "$driver" -- "/$driver" --version > "$evidence/$variant-version.txt"
+  grep -Fx "$driver version $version" "$evidence/$variant-version.txt"
   for round in warm 1 2 3; do
     name="$variant-$round"
     create_fixture "$name"
@@ -162,10 +195,17 @@ for variant in stock patched; do
     reclaim_fixture "$name"
   done
 done
-k -n topolvm-system set image daemonset/topolvm-node "topolvm-node=$stock_image"
-k -n topolvm-system rollout status daemonset/topolvm-node --timeout=180s
-k -n topolvm-system exec daemonset/topolvm-node -c topolvm-node -- /topolvm-node --version | grep -E ' 0\.41\.1$'
+k -n topolvm-system set image "$workload" "$driver=$stock_image"
+k -n topolvm-system rollout status "$workload" --timeout=180s
+k -n topolvm-system exec "$workload" -c "$driver" -- "/$driver" --version | grep -Fx "$driver version $baseline_version"
 verify_peer
 reclaim_fixture storage-peer
 printf '%s\n' '{"same_peer_pod_and_container_after_upgrade_and_rollback":true,"original_volumes_readable_writable_and_reclaimed":true}' > "$evidence/upgrade-and-rollback.json"
-python3 "$suite/publish-timings.py" "$evidence"
+if [[ $measure == controller ]]; then
+  kill "$watcher" 2>/dev/null || true
+  wait "$watcher" 2>/dev/null || true
+  watcher=
+  python3 "$suite/../topolvm-controller/prepare-timings.py" "$evidence"
+else
+  python3 "$suite/publish-timings.py" "$evidence"
+fi
