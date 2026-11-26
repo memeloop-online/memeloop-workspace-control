@@ -404,7 +404,7 @@ async fn workspace_runtime_identity_uses_the_product_namespace() {
 }
 
 #[tokio::test]
-async fn template_deletion_requires_disabled_unreferenced_template() {
+async fn enabled_template_can_be_deleted_only_when_unreferenced() {
     let database = database().await;
     let admin = database
         .create_user_with_initial_key(
@@ -443,10 +443,6 @@ async fn template_deletion_requires_disabled_unreferenced_template() {
         102,
     )
     .await;
-    assert!(matches!(
-        database.delete_workspace_template(template_id, true).await,
-        Err(StorageError::TemplateMustBeDisabled)
-    ));
     database
         .create_workspace(
             CreateWorkspace {
@@ -466,10 +462,6 @@ async fn template_deletion_requires_disabled_unreferenced_template() {
         )
         .await
         .unwrap();
-    database
-        .set_workspace_template_enabled(template_id, false, true, 104)
-        .await
-        .unwrap();
     assert!(matches!(
         database.delete_workspace_template(template_id, true).await,
         Err(StorageError::TemplateInUse)
@@ -485,14 +477,11 @@ async fn template_deletion_requires_disabled_unreferenced_template() {
         105,
     )
     .await;
-    database
-        .set_workspace_template_enabled(unused_id, false, true, 106)
-        .await
-        .unwrap();
-    database
+    let deleted = database
         .delete_workspace_template(unused_id, true)
         .await
         .unwrap();
+    assert!(deleted.enabled);
     assert!(matches!(
         database.get_workspace_template(unused_id).await,
         Err(StorageError::TemplateNotFound)

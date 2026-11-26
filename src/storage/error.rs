@@ -166,8 +166,6 @@ pub enum StorageError {
     PluginCapacityExceeded,
     #[error("too many active plugin inspections")]
     TooManyPluginInspections,
-    #[error("workspace template must be disabled before deletion")]
-    TemplateMustBeDisabled,
     #[error("workspace template is referenced by one or more workspaces")]
     TemplateInUse,
     #[error("cluster-access templates require a system administrator")]
