@@ -9,7 +9,6 @@ pub(super) struct WorkspaceStoragePvcIdentities {
 pub(super) struct WorkspaceRuntimeDetails {
     pub(super) storage_pvcs: WorkspaceStoragePvcIdentities,
     pub(super) scratch_backing: StorageBacking,
-    pub(super) metrics_available: bool,
     pub(super) node_name: Option<String>,
     pub(super) pods: Vec<PodRuntime>,
     pub(super) metrics: Vec<PodMetric>,
@@ -23,7 +22,7 @@ pub(super) async fn fetch_workspace_runtime_details(
     workspace: &Workspace,
     show_runtime: bool,
     installation_id: &str,
-    observed_metrics: Option<&[PodMetric]>,
+    observed_metrics: &[PodMetric],
 ) -> Result<WorkspaceRuntimeDetails, ApiError> {
     let pods_api = Api::<Pod>::namespaced(client.clone(), namespace);
     let params = ListParams::default().labels(selector);
@@ -68,18 +67,13 @@ pub(super) async fn fetch_workspace_runtime_details(
     };
 
     let metrics = if show_runtime {
-        observed_pod_metrics(
-            observed_metrics.unwrap_or_default(),
-            &pod_list.items,
-            unix_timestamp(),
-        )
+        observed_pod_metrics(observed_metrics, &pod_list.items, unix_timestamp())
     } else {
         Vec::new()
     };
     Ok(WorkspaceRuntimeDetails {
         storage_pvcs,
         scratch_backing: scratch_backing_from_pods(&pod_list.items),
-        metrics_available: observed_metrics.is_some(),
         node_name: show_runtime
             .then(|| active_pod_node_name(&pod_list.items))
             .flatten(),
@@ -281,13 +275,13 @@ mod tests {
                 &workspace,
                 true,
                 "test",
-                None,
+                &[],
             ),
         )
         .await
         .expect("independent runtime reads must start together")
         .unwrap();
-        assert!(!details.metrics_available);
+        assert!(details.metrics.is_empty());
         assert_eq!(
             details.storage_pvcs.persistent,
             StorageIdentity::from_claim(&PersistentVolumeClaim {

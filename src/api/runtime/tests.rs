@@ -248,7 +248,7 @@ async fn runtime_batch_returns_while_optional_metrics_request_is_blocked() {
     .await
     .expect("Pod and PVC state must return independently of metrics-server")
     .unwrap();
-    assert!(!observed.metrics_available);
+    assert!(observed.metrics.is_empty());
     assert!(observed.pods.is_empty());
     stop.send(true).unwrap();
     collector.await.unwrap();

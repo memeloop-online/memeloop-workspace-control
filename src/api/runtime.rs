@@ -56,6 +56,7 @@ pub(super) struct WorkspaceRuntimeResponse {
     allocated: Resources,
     persistent_storage: StorageTelemetry,
     temporary_storage: StorageTelemetry,
+    /// Whether the workspace has fresh CPU or memory samples for an active Pod.
     metrics_available: bool,
     /// The node hosting the workspace's active Pod, when it has been scheduled.
     node_name: Option<String>,
@@ -125,7 +126,6 @@ struct KubernetesRuntimeBatch {
     storage_pvcs: WorkspaceStoragePvcMap,
     scratch_backings: ScratchBackingMap,
     metrics: PodMetricMap,
-    metrics_available: bool,
     scheduling_events: BTreeMap<Uuid, Vec<PodEvent>>,
 }
 
@@ -251,7 +251,6 @@ async fn fetch_kubernetes_runtime(
         storage_pvcs,
         scratch_backings,
         metrics,
-        metrics_available: observed_metrics.is_some(),
         scheduling_events,
     })
 }
@@ -355,7 +354,7 @@ fn build_runtime_entries(
                         scratch_backing,
                         observed_now,
                     ),
-                    metrics_available: kubernetes.metrics_available,
+                    metrics_available: !metrics.is_empty(),
                     node_name,
                     memory_resize_failure: None,
                     pods,
@@ -415,13 +414,11 @@ pub(super) async fn get(
             &workspace,
             show_runtime,
             &installation_id,
-            metrics.as_ref().map(|latest| {
-                latest
-                    .metrics
-                    .get(&workspace_id)
-                    .map(Vec::as_slice)
-                    .unwrap_or_default()
-            }),
+            metrics
+                .as_ref()
+                .and_then(|latest| latest.metrics.get(&workspace_id))
+                .map(Vec::as_slice)
+                .unwrap_or_default(),
         ),
         state
             .database
@@ -459,7 +456,7 @@ pub(super) async fn get(
             },
             observed_now,
         ),
-        metrics_available: details.metrics_available,
+        metrics_available: !details.metrics.is_empty(),
         node_name: details.node_name,
         memory_resize_failure: memory_resize_failure?,
         pods: details.pods,
