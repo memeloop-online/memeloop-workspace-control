@@ -564,13 +564,23 @@ async fn failed_route_or_approval_never_releases_the_startup_gate() {
 
 #[tokio::test]
 async fn failed_access_or_isolation_prevents_early_workload_creation() {
-    for suffix in ["-admin", "-ingress"] {
+    for failed_network_policy in [false, true] {
         let mut workspace = workspace(workspace_id());
         workspace.state = WorkspaceState::Provisioning;
         workspace.template.cluster_access = true;
         let mock = Arc::new(GateMock::default());
         mock.hold_files.store(true, Ordering::SeqCst);
-        *mock.fail_suffix.lock().unwrap() = Some(suffix.to_owned());
+        if failed_network_policy {
+            *mock.fail_request.lock().unwrap() = Some((
+                Method::POST,
+                format!(
+                    "/apis/networking.k8s.io/v1/namespaces/{}/networkpolicies",
+                    workspace.runtime.namespace()
+                ),
+            ));
+        } else {
+            *mock.fail_suffix.lock().unwrap() = Some("-admin".to_owned());
+        }
         let coordinator = coordinator(mock.clone());
         tokio::time::timeout(Duration::from_secs(3), coordinator.reconcile(&workspace))
             .await
