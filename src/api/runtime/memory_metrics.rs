@@ -8,7 +8,7 @@ use k8s_openapi::{api::core::v1::Pod, jiff::Timestamp};
 use super::{PodMetric, pod_views::is_active_pod};
 use crate::kubernetes::home_volume_capacity_bytes;
 
-const STALE_AFTER_SECONDS: i64 = 120;
+pub(super) const STALE_AFTER_SECONDS: i64 = 120;
 
 pub(super) fn annotate(metrics: &mut [PodMetric], pods: &[Pod], now: i64) {
     for metric in metrics {

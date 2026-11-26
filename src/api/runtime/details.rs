@@ -1,4 +1,4 @@
-use super::*;
+use super::{pod_views::active_pod_node_name, *};
 
 #[derive(Debug, Clone, Default)]
 pub(super) struct WorkspaceStoragePvcIdentities {
@@ -9,7 +9,6 @@ pub(super) struct WorkspaceStoragePvcIdentities {
 pub(super) struct WorkspaceRuntimeDetails {
     pub(super) storage_pvcs: WorkspaceStoragePvcIdentities,
     pub(super) scratch_backing: StorageBacking,
-    pub(super) metrics_available: bool,
     pub(super) node_name: Option<String>,
     pub(super) pods: Vec<PodRuntime>,
     pub(super) metrics: Vec<PodMetric>,
@@ -23,6 +22,7 @@ pub(super) async fn fetch_workspace_runtime_details(
     workspace: &Workspace,
     show_runtime: bool,
     installation_id: &str,
+    observed_metrics: &[PodMetric],
 ) -> Result<WorkspaceRuntimeDetails, ApiError> {
     let pods_api = Api::<Pod>::namespaced(client.clone(), namespace);
     let params = ListParams::default().labels(selector);
@@ -42,17 +42,9 @@ pub(super) async fn fetch_workspace_runtime_details(
         }
         Ok::<_, ApiError>(identities)
     };
-    let (pod_list, storage_pvcs, metric_result) = tokio::join!(
-        pods_api.list(&params),
-        storage,
-        tokio::time::timeout(
-            std::time::Duration::from_secs(3),
-            pod_metrics(client.clone(), namespace, selector),
-        ),
-    );
+    let (pod_list, storage_pvcs) = tokio::join!(pods_api.list(&params), storage);
     let pod_list = pod_list.map_err(ApiError::Kubernetes)?;
     let storage_pvcs = storage_pvcs?;
-    let active_pod_names = active_pod_names(&pod_list.items);
     let pods = if show_runtime {
         pod_list
             .items
@@ -74,30 +66,14 @@ pub(super) async fn fetch_workspace_runtime_details(
         Vec::new()
     };
 
-    let metric_result = metric_result
-        .map_err(|error| error.to_string())
-        .and_then(|result| result.map_err(|error| error.to_string()));
-    let (metrics_available, mut metrics) = match metric_result {
-        Ok(metrics) => (
-            true,
-            if show_runtime {
-                active_pod_metrics(&metrics, &active_pod_names)
-            } else {
-                Vec::new()
-            },
-        ),
-        Err(error) => {
-            tracing::debug!(%error, "metrics.k8s.io is unavailable");
-            (false, Vec::new())
-        }
+    let metrics = if show_runtime {
+        observed_pod_metrics(observed_metrics, &pod_list.items, unix_timestamp())
+    } else {
+        Vec::new()
     };
-
-    super::memory_metrics::annotate(&mut metrics, &pod_list.items, unix_timestamp());
-
     Ok(WorkspaceRuntimeDetails {
         storage_pvcs,
         scratch_backing: scratch_backing_from_pods(&pod_list.items),
-        metrics_available,
         node_name: show_runtime
             .then(|| active_pod_node_name(&pod_list.items))
             .flatten(),
@@ -240,7 +216,7 @@ mod tests {
             created_at: 1,
             updated_at: 1,
         };
-        let barrier = Arc::new(tokio::sync::Barrier::new(3));
+        let barrier = Arc::new(tokio::sync::Barrier::new(2));
         let paths = Arc::new(std::sync::Mutex::new(Vec::new()));
         let service = tower::service_fn({
             let paths = paths.clone();
@@ -255,16 +231,13 @@ mod tests {
                         "/api/v1/namespaces/workspaces/persistentvolumeclaims" => {
                             ("v1", "PersistentVolumeClaimList")
                         }
-                        "/apis/metrics.k8s.io/v1beta1/namespaces/workspaces/pods" => {
-                            ("metrics.k8s.io/v1beta1", "PodMetricsList")
-                        }
                         "/api/v1/namespaces/workspaces/persistentvolumeclaims/adopted-home" => {
                             ("v1", "PersistentVolumeClaim")
                         }
                         other => panic!("unexpected runtime request: {other}"),
                     };
                     let body = if kind == "PersistentVolumeClaim" {
-                        assert_eq!(paths.lock().unwrap().len(), 4);
+                        assert_eq!(paths.lock().unwrap().len(), 3);
                         serde_json::json!({
                             "apiVersion": version, "kind": kind,
                             "metadata": {"namespace":"workspaces", "name":"adopted-home", "uid":"home-uid"},
@@ -302,12 +275,13 @@ mod tests {
                 &workspace,
                 true,
                 "test",
+                &[],
             ),
         )
         .await
         .expect("independent runtime reads must start together")
         .unwrap();
-        assert!(details.metrics_available);
+        assert!(details.metrics.is_empty());
         assert_eq!(
             details.storage_pvcs.persistent,
             StorageIdentity::from_claim(&PersistentVolumeClaim {
@@ -325,7 +299,7 @@ mod tests {
             details.scheduling_events[0].details.scheduling_blockers,
             vec![crate::runtime_incidents::SchedulingBlocker::CpuCapacity]
         );
-        assert_eq!(paths.lock().unwrap().len(), 4);
+        assert_eq!(paths.lock().unwrap().len(), 3);
     }
 
     #[test]

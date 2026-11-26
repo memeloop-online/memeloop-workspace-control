@@ -71,6 +71,7 @@ async fn serve(config: AppConfig, database: Database) -> Result<(), Box<dyn std:
         plugins,
     )?;
     let storage_metrics_handle = state.spawn_storage_metrics(shutdown_tx.subscribe());
+    let pod_metrics_handle = state.spawn_pod_metrics(shutdown_tx.subscribe());
     let incident_handle = incident_client.map(|client| {
         let database = database.clone();
         let shutdown = shutdown_tx.subscribe();
@@ -113,7 +114,7 @@ async fn serve(config: AppConfig, database: Database) -> Result<(), Box<dyn std:
         .await;
     let _ = shutdown_tx.send(true);
     await_background_tasks(worker_handle, internal_handle, kubernetes_background_handle).await?;
-    for handle in [incident_handle, storage_metrics_handle]
+    for handle in [incident_handle, storage_metrics_handle, pod_metrics_handle]
         .into_iter()
         .flatten()
     {

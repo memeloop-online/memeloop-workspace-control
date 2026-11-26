@@ -1,17 +1,12 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use k8s_openapi::api::core::v1::Pod;
-use kube::{
-    Api,
-    api::ListParams,
-    core::{ApiResource, DynamicObject, GroupVersionKind},
-};
 use uuid::Uuid;
 
 use crate::{kubernetes::WORKSPACE_ID_LABEL, workspaces::WorkspaceState};
 
 use super::RuntimeEventCategory;
-use super::{PodEvent, PodMetric, PodRuntime};
+use super::{PodEvent, PodRuntime};
 
 /// Returns whether a workspace state can have a live runtime to display.
 ///
@@ -38,13 +33,6 @@ pub(super) fn is_active_pod(pod: &Pod) -> bool {
         )
 }
 
-pub(super) fn active_pod_names(pods: &[Pod]) -> BTreeSet<String> {
-    pods.iter()
-        .filter(|pod| is_active_pod(pod))
-        .filter_map(|pod| pod.metadata.name.clone())
-        .collect()
-}
-
 /// Returns the node hosting the first active Pod that has been scheduled.
 ///
 /// A workspace normally has one active Pod (the ordinal-zero StatefulSet
@@ -54,17 +42,6 @@ pub(super) fn active_pod_node_name(pods: &[Pod]) -> Option<String> {
     pods.iter()
         .filter(|pod| is_active_pod(pod))
         .find_map(|pod| pod.spec.as_ref()?.node_name.clone())
-}
-
-pub(super) fn active_pod_metrics(
-    metrics: &[PodMetric],
-    active_pod_names: &BTreeSet<String>,
-) -> Vec<PodMetric> {
-    metrics
-        .iter()
-        .filter(|metric| active_pod_names.contains(&metric.pod))
-        .cloned()
-        .collect()
 }
 
 pub(super) fn pod_runtime(pod: &Pod) -> PodRuntime {
@@ -144,83 +121,12 @@ pub(super) fn newest_events(events: &mut Vec<PodEvent>, limit: usize) {
     events.truncate(limit);
 }
 
-pub(super) async fn pod_metrics(
-    client: kube::Client,
-    namespace: &str,
-    selector: &str,
-) -> Result<Vec<PodMetric>, kube::Error> {
-    let resource = pod_metrics_resource();
-    let list = Api::<DynamicObject>::namespaced_with(client, namespace, &resource)
-        .list(&ListParams::default().labels(selector))
-        .await?;
-    Ok(list.items.into_iter().flat_map(metrics_from_pod).collect())
-}
-
-pub(super) async fn pod_metrics_all(
-    client: kube::Client,
-    selector: &str,
-) -> Result<BTreeMap<Uuid, Vec<PodMetric>>, kube::Error> {
-    let resource = pod_metrics_resource();
-    let list = Api::<DynamicObject>::all_with(client, &resource)
-        .list(&ListParams::default().labels(selector))
-        .await?;
-    let mut metrics = BTreeMap::<Uuid, Vec<PodMetric>>::new();
-    for pod in list.items {
-        let Some(workspace_id) = object_workspace_id(&pod.metadata.labels) else {
-            continue;
-        };
-        metrics
-            .entry(workspace_id)
-            .or_default()
-            .extend(metrics_from_pod(pod));
-    }
-    Ok(metrics)
-}
-
 pub(super) fn object_workspace_id(labels: &Option<BTreeMap<String, String>>) -> Option<Uuid> {
     labels
         .as_ref()?
         .get(WORKSPACE_ID_LABEL)?
         .parse::<Uuid>()
         .ok()
-}
-
-fn pod_metrics_resource() -> ApiResource {
-    ApiResource::from_gvk(&GroupVersionKind::gvk("metrics.k8s.io", "v1beta1", "Pod"))
-}
-
-fn metrics_from_pod(pod: DynamicObject) -> Vec<PodMetric> {
-    let pod_name = pod.metadata.name.unwrap_or_default();
-    let observed_at = pod
-        .data
-        .get("timestamp")
-        .and_then(|value| value.as_str())
-        .map(str::to_owned);
-    pod.data
-        .get("containers")
-        .and_then(|value| value.as_array())
-        .into_iter()
-        .flatten()
-        .map(|container| PodMetric {
-            memory_limit: None,
-            memory_used_percent: None,
-            observed_at: observed_at.clone(),
-            pod: pod_name.clone(),
-            container: container
-                .get("name")
-                .and_then(|value| value.as_str())
-                .unwrap_or_default()
-                .to_owned(),
-            cpu: container
-                .pointer("/usage/cpu")
-                .and_then(|value| value.as_str())
-                .map(str::to_owned),
-            memory: container
-                .pointer("/usage/memory")
-                .and_then(|value| value.as_str())
-                .map(str::to_owned),
-        })
-        .collect()
 }
 
 #[cfg(test)]
@@ -235,10 +141,9 @@ mod tests {
     use crate::workspaces::WorkspaceState;
 
     use super::{
-        PodEvent, RuntimeEventCategory, active_pod_metrics, active_pod_names, active_pod_node_name,
-        has_live_runtime, newest_events, pod_scheduling_event,
+        PodEvent, RuntimeEventCategory, active_pod_node_name, has_live_runtime, newest_events,
+        pod_scheduling_event,
     };
-    use crate::api::runtime::PodMetric;
 
     fn timestamp(value: &str) -> Timestamp {
         value.parse().expect("valid test timestamp")
@@ -315,31 +220,6 @@ mod tests {
     }
 
     #[test]
-    fn completed_and_terminating_pods_do_not_supply_runtime_metrics() {
-        let running = pod("running", Some("Running"), false);
-        let completed = pod("completed", Some("Succeeded"), false);
-        let failed = pod("failed", Some("Failed"), false);
-        let terminating = pod("terminating", Some("Running"), true);
-        let active = active_pod_names(&[running, completed, failed, terminating]);
-        assert_eq!(active.into_iter().collect::<Vec<_>>(), vec!["running"]);
-
-        let metrics = active_pod_metrics(
-            &[
-                metric("running"),
-                metric("completed"),
-                metric("terminating"),
-            ],
-            &active_pod_names(&[
-                pod("running", Some("Running"), false),
-                pod("completed", Some("Succeeded"), false),
-                pod("terminating", Some("Running"), true),
-            ]),
-        );
-        assert_eq!(metrics.len(), 1);
-        assert_eq!(metrics[0].pod, "running");
-    }
-
-    #[test]
     fn only_scheduled_active_pods_supply_a_node_name() {
         let mut running = pod("running", Some("Running"), false);
         running.spec = Some(k8s_openapi::api::core::v1::PodSpec {
@@ -383,18 +263,6 @@ mod tests {
                 ..PodStatus::default()
             }),
             ..Pod::default()
-        }
-    }
-
-    fn metric(pod: &str) -> PodMetric {
-        PodMetric {
-            pod: pod.to_owned(),
-            container: "workspace".to_owned(),
-            cpu: Some("1m".to_owned()),
-            memory: Some("1Mi".to_owned()),
-            memory_limit: None,
-            memory_used_percent: None,
-            observed_at: None,
         }
     }
 }
