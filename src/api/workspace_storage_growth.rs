@@ -29,7 +29,7 @@ use crate::{
 
 #[derive(Debug, Deserialize, Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
-pub(super) struct Request {
+pub(super) struct StorageGrowthRequest {
     volume: GrowthVolume,
     capacity_gib: u64,
     expected_generation: u64,
@@ -38,7 +38,7 @@ pub(super) struct Request {
 #[utoipa::path(
     post,
     path = "/api/v1/workspaces/{workspace_id}/storage-growth",
-    request_body = Request,
+    request_body = StorageGrowthRequest,
     params(("workspace_id" = Uuid, Path), ("Idempotency-Key" = String, Header)),
     responses(
         (status = 202, body = StorageGrowthStatus),
@@ -52,7 +52,7 @@ pub(super) async fn create(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Path(id): Path<Uuid>,
-    Json(request): Json<Request>,
+    Json(request): Json<StorageGrowthRequest>,
 ) -> Result<Response, ApiError> {
     let actor = principal(&state, &headers).await?;
     if !actor.may_manage_system() || actor.has_template_restriction() {
@@ -108,7 +108,7 @@ async fn enqueue(
     state: &AppState,
     id: Uuid,
     actor: Uuid,
-    request: &Request,
+    request: &StorageGrowthRequest,
     now: i64,
 ) -> Result<StorageGrowthStatus, ApiError> {
     let workspace = state.database.get_workspace(id).await?;

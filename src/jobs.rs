@@ -207,7 +207,7 @@ impl<H: JobHandler> JobWorker<H> {
     ) -> Result<(), StorageError> {
         tracing::warn!(job_id = %job.id, attempts = job.attempts, error = %error, "job execution failed");
         if matches!(error, JobHandlerError::Rejected(_)) || job.attempts >= MAX_JOB_ATTEMPTS {
-            tracing::error!(job_id = %job.id, attempts = job.attempts, "job reached the retry limit");
+            tracing::error!(job_id = %job.id, attempts = job.attempts, "job failed permanently");
             self.handler.on_terminal_failure(job, now).await?;
             self.database.fail_job(job.id, &self.lease_owner, now).await
         } else {

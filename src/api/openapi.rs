@@ -110,7 +110,7 @@ use super::{
         crate::storage::StorageShrinkVolume,
         crate::storage::StorageVolumeIdentity,
         workspace_storage_shrink::ConfirmStorageShrinkRequest,
-        workspace_storage_growth::Request,
+        workspace_storage_growth::StorageGrowthRequest,
         crate::kubernetes::storage_growth::GrowthVolume,
         crate::storage::workspace_storage_growth::StorageGrowthStatus,
         crate::storage::Organization,

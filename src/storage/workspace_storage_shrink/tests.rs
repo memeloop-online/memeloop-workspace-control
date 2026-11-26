@@ -120,6 +120,7 @@ fn request(workspace: &Workspace) -> StorageShrinkRequest {
 async fn growth_reserves_home_and_commits_the_applied_size_without_a_new_revision() {
     use crate::{
         kubernetes::storage_growth::{GrowthClaim, GrowthVolume},
+        quota::QuotaResources,
         storage::{StorageError, workspace_storage_growth::StorageGrowth},
     };
     let (database, stopped, admin) = stopped_workspace().await;
@@ -148,7 +149,27 @@ async fn growth_reserves_home_and_commits_the_applied_size_without_a_new_revisio
         requested_gib: 80,
         rejection: None,
     };
+    let quota = |disk_gib| QuotaResources {
+        disk_gib,
+        cpu_millis: 1_000,
+        memory_mib: 2_048,
+        ..QuotaResources::default()
+    };
     database
+        .set_organization_quota(ready.organization_id, quota(79), 9)
+        .await
+        .unwrap();
+    assert!(matches!(
+        database
+            .enqueue_storage_growth(ready.id, ready.generation, admin, growth(), 9)
+            .await,
+        Err(StorageError::Quota(_))
+    ));
+    database
+        .set_organization_quota(ready.organization_id, quota(90), 9)
+        .await
+        .unwrap();
+    let operation = database
         .enqueue_storage_growth(ready.id, ready.generation, admin, growth(), 9)
         .await
         .unwrap();
@@ -200,6 +221,57 @@ async fn growth_reserves_home_and_commits_the_applied_size_without_a_new_revisio
     assert_eq!(finished.generation, ready.generation);
     assert_eq!(finished.state, WorkspaceState::Ready);
     assert_eq!(finished.updated_at, 11);
+    // A later admission refusal releases exactly its reservation and records
+    // the terminal reason durably before the runner changes the job status.
+    sqlx::query("UPDATE jobs SET status = 'completed' WHERE id = ?1")
+        .bind(operation.id.to_string())
+        .execute(pool)
+        .await
+        .unwrap();
+    let mut rejected = StorageGrowth {
+        previous_gib: 80,
+        requested_gib: 88,
+        ..growth()
+    };
+    let job = database
+        .enqueue_storage_growth(
+            ready.id,
+            ready.generation,
+            admin,
+            StorageGrowth {
+                previous_gib: 80,
+                requested_gib: 88,
+                ..growth()
+            },
+            13,
+        )
+        .await
+        .unwrap();
+    sqlx::query("UPDATE jobs SET status = 'running' WHERE id = ?1")
+        .bind(job.id.to_string())
+        .execute(pool)
+        .await
+        .unwrap();
+    database
+        .reject_storage_growth(ready.id, job.id, &mut rejected, "admission refused")
+        .await
+        .unwrap();
+    let reserved: i64 = sqlx::query_scalar("SELECT disk_gib FROM workspaces WHERE id = ?1")
+        .bind(ready.id.to_string())
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    assert_eq!(reserved, 80);
+    assert_eq!(
+        database
+            .latest_storage_growth(ready.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .rejection
+            .as_deref(),
+        Some("admission refused")
+    );
 }
 
 fn binding(name: &str, capacity_gib: u64) -> WorkspaceHomeVolumeBinding {

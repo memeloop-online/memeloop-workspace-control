@@ -103,16 +103,11 @@ impl Database {
                 if count != 0 {
                     return Err(StorageError::WorkspaceStorageGrowthConflict);
                 }
-                match growth.volume {
-                    GrowthVolume::Home => workspace.template.resources.disk_gib = growth.requested_gib,
-                    GrowthVolume::TemporaryStorage => {
-                        workspace.template.storage_policy.temporary_storage_gib = growth.requested_gib;
-                    }
-                }
-                $admit(&mut tx, $installation.as_str(), &workspace).await?;
                 // Charge the requested Home size before CSI can allocate it. The snapshot
                 // and scratch size continue to describe the filesystem actually in use.
                 if matches!(growth.volume, GrowthVolume::Home) {
+                    workspace.template.resources.disk_gib = growth.requested_gib;
+                    $admit(&mut tx, $installation.as_str(), &workspace).await?;
                     sqlx::query("UPDATE workspaces SET disk_gib = $1 WHERE installation_id = $2 AND id = $3")
                         .bind(growth.requested_gib as i64).bind($installation.as_str())
                         .bind(id.to_string()).execute(&mut *tx).await?;
