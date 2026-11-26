@@ -25,6 +25,11 @@ image=docker.io/library/alpine@sha256:4bcff63911fcb4448bd4fdacec207030997caf25e9
 daemon=
 watcher=
 loops=()
+chart_args=()
+if [[ $measure == controller ]]; then
+  # The chart requires controller replicas to be on different hosts.
+  chart_args+=(--set-string controller.updateStrategy.type=Recreate)
+fi
 k() { KUBECONFIG="$base/kubeconfig" "$k3s" kubectl --request-timeout=10s "$@"; }
 w() { k -n "$ns" "$@"; }
 cleanup() {
@@ -37,6 +42,7 @@ cleanup() {
   if [[ -n $daemon ]]; then
     if ((code)); then
       k get pods,pvc -A -o wide > "$evidence/failing-pods.txt" 2>&1 || true
+      k get events -A > "$evidence/failing-events.txt" 2>&1 || true
       k -n topolvm-system logs daemonset/topolvm-node -c topolvm-node --timestamps > "$evidence/failing-node.log" 2>&1 || true
     fi
     kill "$daemon" 2>/dev/null || true
@@ -87,7 +93,7 @@ for i in {1..30}; do
 done
 "$k3s" crictl inspecti "$candidate_image" | jq -er '.status.id' > "$evidence/candidate-image.txt"
 KUBECONFIG="$base/kubeconfig" "$base/linux-amd64/helm" install topolvm "$base/topolvm.tgz" \
-  -n topolvm-system --create-namespace -f "$suite/../runtime-product-vm/topolvm-values.yaml" --wait --timeout 5m
+  -n topolvm-system --create-namespace -f "$suite/../runtime-product-vm/topolvm-values.yaml" "${chart_args[@]}" --wait --timeout 5m
 k create namespace "$ns"
 w create serviceaccount fixture
 
