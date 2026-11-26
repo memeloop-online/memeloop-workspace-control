@@ -99,6 +99,8 @@ async fn update_sqlite(
 ) -> Result<(), StorageError> {
     super::workspace_storage_shrink::guard_sqlite(connection, installation_id, workspace.id)
         .await?;
+    super::workspace_storage_growth::guard_sqlite(connection, installation_id, workspace.id)
+        .await?;
     ensure_stopped_at_generation(workspace, update.expected_generation)?;
     let previous_storage_gib = workspace.template.storage_policy.temporary_storage_gib;
     let snapshot_yaml = apply_resize(
@@ -139,6 +141,8 @@ async fn update_postgres(
     update: ScratchResize,
 ) -> Result<(), StorageError> {
     super::workspace_storage_shrink::guard_postgres(connection, installation_id, workspace.id)
+        .await?;
+    super::workspace_storage_growth::guard_postgres(connection, installation_id, workspace.id)
         .await?;
     ensure_stopped_at_generation(workspace, update.expected_generation)?;
     let previous_storage_gib = workspace.template.storage_policy.temporary_storage_gib;

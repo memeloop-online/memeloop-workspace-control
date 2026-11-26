@@ -113,11 +113,25 @@ impl KubernetesCoordinator {
         workspace: &Workspace,
     ) -> Result<(), super::ReconcileError> {
         if let Some(binding) = workspace.scratch_volume_binding.as_ref() {
-            self.shrink_claim(workspace, binding, true)
-                .await
-                .map_err(|_| super::ReconcileError::InvalidScratchVolumeBinding {
-                    claim_name: binding.claim_name.clone(),
-                })?;
+            let invalid = || super::ReconcileError::InvalidScratchVolumeBinding {
+                claim_name: binding.claim_name.clone(),
+            };
+            let claim = Api::<PersistentVolumeClaim>::namespaced(
+                self.client.clone(),
+                workspace.runtime.namespace(),
+            )
+            .get_opt(&binding.claim_name)
+            .await?
+            .ok_or_else(invalid)?;
+            self.builder
+                .verify_delete_ownership(&claim.metadata, workspace.id)?;
+            let (requested, applied) =
+                super::super::storage_growth::claim_sizes(&claim, &binding.claim_uid)
+                    .map_err(|_| invalid())?;
+            let minimum = binding.capacity_gib * (1 << 30);
+            if requested < minimum || applied < minimum {
+                return Err(invalid());
+            }
         }
         Ok(())
     }

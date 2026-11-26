@@ -475,6 +475,8 @@ impl KubernetesCoordinator {
             }
             keep_resize_strategy(workspace.state, &mut stateful_set, existing)?;
             preserve_claim_storage_classes(&mut stateful_set, existing);
+            self.preserve_expanded_home_template(workspace, &mut stateful_set, existing)
+                .await?;
         }
         self.verify_home_volume_binding(workspace).await?;
         sync_offline_memory_limit(
@@ -541,6 +543,75 @@ impl KubernetesCoordinator {
                 if restart_generation_is_stale(&pod, workspace.generation) {
                     pods.delete(&pod_name, &DeleteParams::default()).await?;
                 }
+            }
+        }
+        Ok(())
+    }
+
+    async fn preserve_expanded_home_template(
+        &self,
+        workspace: &Workspace,
+        desired: &mut StatefulSet,
+        existing: &StatefulSet,
+    ) -> Result<(), ReconcileError> {
+        let names = self.builder.runtime_names(workspace)?.resources;
+        let data = &names.data_claim_template;
+        let Some(resources) = existing
+            .spec
+            .as_ref()
+            .and_then(|spec| spec.volume_claim_templates.as_ref())
+            .and_then(|claims| {
+                claims
+                    .iter()
+                    .find(|claim| claim.metadata.name.as_ref() == Some(data))
+            })
+            .and_then(|claim| claim.spec.as_ref())
+            .and_then(|spec| spec.resources.as_ref())
+        else {
+            return Ok(());
+        };
+        let Some(target) = desired
+            .spec
+            .as_mut()
+            .and_then(|spec| spec.volume_claim_templates.as_mut())
+            .and_then(|claims| {
+                claims
+                    .iter_mut()
+                    .find(|claim| claim.metadata.name.as_ref() == Some(data))
+            })
+            .and_then(|claim| claim.spec.as_mut())
+        else {
+            return Ok(());
+        };
+        let storage = |resources: &k8s_openapi::api::core::v1::VolumeResourceRequirements| {
+            resources
+                .requests
+                .as_ref()
+                .and_then(|res| res.get("storage"))
+                .and_then(|quantity| super::home_volume_capacity_bytes(&quantity.0))
+        };
+        let Some((before, after)) =
+            storage(resources).zip(target.resources.as_ref().and_then(storage))
+        else {
+            return Ok(());
+        };
+        if after <= before {
+            return Ok(());
+        }
+        let claims = Api::<PersistentVolumeClaim>::namespaced(
+            self.client.clone(),
+            workspace.runtime.namespace(),
+        );
+        if let Some(claim) = claims.get_opt(&names.data_pvc_ordinal_zero()).await? {
+            self.builder
+                .verify_delete_ownership(&claim.metadata, workspace.id)?;
+            if super::super::storage_growth::matches_applied_growth(
+                &claim,
+                workspace.template.resources.disk_gib,
+            ) {
+                // The existing claim already has this size. The immutable template
+                // is only a seed for a newly created claim, not the current quota.
+                target.resources = Some(resources.clone());
             }
         }
         Ok(())

@@ -116,6 +116,92 @@ fn request(workspace: &Workspace) -> StorageShrinkRequest {
     }
 }
 
+#[tokio::test]
+async fn growth_reserves_home_and_commits_the_applied_size_without_a_new_revision() {
+    use crate::{
+        kubernetes::storage_growth::{GrowthClaim, GrowthVolume},
+        storage::{StorageError, workspace_storage_growth::StorageGrowth},
+    };
+    let (database, stopped, admin) = stopped_workspace().await;
+    let starting = database
+        .request_workspace_action(stopped.id, WorkspaceAction::Start, admin, 7)
+        .await
+        .unwrap();
+    let ready = database
+        .record_workspace_observation(
+            starting.id,
+            starting.generation,
+            WorkspaceObservation::Ready,
+            admin,
+            8,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    let growth = || StorageGrowth {
+        claim: GrowthClaim {
+            name: "data".to_owned(),
+            uid: "claim-uid".to_owned(),
+        },
+        volume: GrowthVolume::Home,
+        previous_gib: 60,
+        requested_gib: 80,
+        rejection: None,
+    };
+    database
+        .enqueue_storage_growth(ready.id, ready.generation, admin, growth(), 9)
+        .await
+        .unwrap();
+    let Database::Sqlite { pool, .. } = &database else {
+        unreachable!()
+    };
+    let reserved: i64 = sqlx::query_scalar("SELECT disk_gib FROM workspaces WHERE id = ?1")
+        .bind(ready.id.to_string())
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    assert_eq!(reserved, 80);
+    assert_eq!(
+        database
+            .get_workspace(ready.id)
+            .await
+            .unwrap()
+            .template
+            .resources
+            .disk_gib,
+        60
+    );
+    assert!(matches!(
+        database
+            .enqueue_storage_growth(ready.id, ready.generation, admin, growth(), 10)
+            .await,
+        Err(StorageError::WorkspaceStorageGrowthConflict)
+    ));
+    assert!(matches!(
+        database
+            .enqueue_storage_shrink(ready.id, request(&ready), admin, 10)
+            .await,
+        Err(StorageError::WorkspaceStorageGrowthConflict)
+    ));
+    database
+        .apply_storage_growth(ready.id, &growth(), 11)
+        .await
+        .unwrap();
+    database
+        .apply_storage_growth(ready.id, &growth(), 12)
+        .await
+        .unwrap();
+    let finished = database.get_workspace(ready.id).await.unwrap();
+    assert_eq!(finished.template.resources.disk_gib, 80);
+    assert_eq!(
+        finished.template.storage_policy.temporary_storage_gib,
+        ready.template.storage_policy.temporary_storage_gib
+    );
+    assert_eq!(finished.generation, ready.generation);
+    assert_eq!(finished.state, WorkspaceState::Ready);
+    assert_eq!(finished.updated_at, 11);
+}
+
 fn binding(name: &str, capacity_gib: u64) -> WorkspaceHomeVolumeBinding {
     WorkspaceHomeVolumeBinding {
         namespace: crate::workspace_runtime::WORKSPACE_NAMESPACE.to_owned(),

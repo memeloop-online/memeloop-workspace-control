@@ -18,6 +18,7 @@ mod ownership;
 mod port_mappings;
 mod request_client;
 mod resource_helpers;
+pub(crate) mod storage_growth;
 mod ttyd_mtls;
 mod workload;
 mod workspace_pod;

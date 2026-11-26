@@ -8,7 +8,7 @@ use super::{
     organization_usage, organizations, plugins, port_mappings, runtime, ssh, system, user_quota,
     web_shell, webhooks, workspace_cpu_overcommit, workspace_home_capacity, workspace_home_pvc,
     workspace_image_update, workspace_placement, workspace_scratch_resize, workspace_settings,
-    workspace_storage_shrink, workspaces,
+    workspace_storage_growth, workspace_storage_shrink, workspaces,
 };
 
 #[derive(OpenApi)]
@@ -80,6 +80,8 @@ use super::{
         workspace_home_capacity::update,
         workspace_scratch_resize::update,
         workspace_storage_shrink::create,
+        workspace_storage_growth::create,
+        workspace_storage_growth::get,
         workspace_storage_shrink::get,
         workspace_storage_shrink::confirm,
         workspace_storage_shrink::retry,
@@ -108,6 +110,9 @@ use super::{
         crate::storage::StorageShrinkVolume,
         crate::storage::StorageVolumeIdentity,
         workspace_storage_shrink::ConfirmStorageShrinkRequest,
+        workspace_storage_growth::Request,
+        crate::kubernetes::storage_growth::GrowthVolume,
+        crate::storage::workspace_storage_growth::StorageGrowthStatus,
         crate::storage::Organization,
         crate::storage::OrganizationPage,
         crate::storage::UserSummary,
