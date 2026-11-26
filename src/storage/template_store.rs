@@ -302,7 +302,7 @@ impl Database {
                 let template = ensure_template_access(current, allow_cluster_access)?;
                 let referenced = sqlx::query_scalar::<_, i64>("SELECT EXISTS(SELECT 1 FROM workspaces WHERE installation_id = ?1 AND template_id = ?2)")
                     .bind(installation_id.as_str()).bind(template_id.to_string()).fetch_one(&mut *transaction).await? != 0;
-                ensure_template_deletable(template.enabled, referenced)?;
+                ensure_template_unreferenced(referenced)?;
                 sqlx::query(
                     "DELETE FROM workspace_templates WHERE installation_id = ?1 AND id = ?2",
                 )
@@ -323,7 +323,7 @@ impl Database {
                 let template = ensure_template_access(current, allow_cluster_access)?;
                 let referenced = sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM workspaces WHERE installation_id = $1 AND template_id = $2)")
                     .bind(installation_id.as_str()).bind(template_id.to_string()).fetch_one(&mut *transaction).await?;
-                ensure_template_deletable(template.enabled, referenced)?;
+                ensure_template_unreferenced(referenced)?;
                 sqlx::query(
                     "DELETE FROM workspace_templates WHERE installation_id = $1 AND id = $2",
                 )
@@ -351,10 +351,7 @@ fn ensure_template_access(
     Ok(template)
 }
 
-fn ensure_template_deletable(enabled: bool, referenced: bool) -> Result<(), StorageError> {
-    if enabled {
-        return Err(StorageError::TemplateMustBeDisabled);
-    }
+fn ensure_template_unreferenced(referenced: bool) -> Result<(), StorageError> {
     if referenced {
         return Err(StorageError::TemplateInUse);
     }

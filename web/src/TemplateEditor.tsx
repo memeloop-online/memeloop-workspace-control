@@ -220,7 +220,7 @@ export function TemplateEditor({ api, organizationId, templates, canGrantCluster
             {selected && <Button type="button" appearance="secondary" disabled={saving} onClick={startNew}>{t("cancel")}</Button>}
             <SaveButton type="submit" icon={<SaveRegular />} disabled={saving}>{saving ? t("saving") : selectedId ? t("saveChanges") : t("createTemplate")}</SaveButton>
             {selected && <Button type="button" appearance="secondary" disabled={saving} onClick={() => void toggle(selected)}>{selected.enabled ? t("disable") : t("enable")}</Button>}
-            {selected && !selected.enabled && <Button type="button" appearance="subtle" icon={<DeleteRegular />} disabled={saving} onClick={() => setPendingAction({ kind: "delete", template: selected })}>{t("deleteTemplate")}</Button>}
+            {selected && <Button type="button" appearance="subtle" icon={<DeleteRegular />} disabled={saving} onClick={() => setPendingAction({ kind: "delete", template: selected })}>{t("deleteTemplate")}</Button>}
           </div>}>
             {!selected && <Text size={200} className={styles.muted}>{t("saveTemplateBeforeInjections")}</Text>}
           </AdminToolbar>
@@ -235,6 +235,9 @@ export function TemplateEditor({ api, organizationId, templates, canGrantCluster
 }
 
 function errorMessage(error: unknown, t: ReturnType<typeof useI18n>["t"]) {
+  if (error instanceof Error && "code" in error && error.code === "template_in_use") {
+    return t("templateInUse");
+  }
   if (error instanceof TemplateDraftError) {
     if (error.code === "resource_request_exceeds_limit") return t("resourceRequestExceedsLimit");
     if (error.code === "invalid_node_pool_placement") return t("invalidNodePoolPlacement");
