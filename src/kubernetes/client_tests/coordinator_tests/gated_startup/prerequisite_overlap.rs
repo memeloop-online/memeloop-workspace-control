@@ -106,11 +106,17 @@ async fn access_and_isolation_must_finish_before_early_workload_creation() {
         } else {
             "/apis/networking.k8s.io/v1"
         };
-        let held = format!(
-            "{prefix}/namespaces/{}/{kind}/{name}",
+        let collection = format!(
+            "{prefix}/namespaces/{}/{kind}",
             workspace.runtime.namespace()
         );
-        *mock.hold_request.lock().unwrap() = Some((Method::PATCH, held));
+        let resource = format!("{collection}/{name}");
+        let request = if kind == "networkpolicies" {
+            (Method::POST, collection)
+        } else {
+            (Method::PATCH, resource.clone())
+        };
+        *mock.hold_request.lock().unwrap() = Some(request);
         let task = tokio::spawn({
             let coordinator = coordinator.clone();
             let workspace = workspace.clone();
@@ -122,7 +128,50 @@ async fn access_and_isolation_must_finish_before_early_workload_creation() {
         mock.release_request.add_permits(1);
         task.await.unwrap().unwrap();
         assert_eq!(workload_patch_count(&mock), 1);
+        if kind == "networkpolicies" {
+            assert!(
+                !mock
+                    .events
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(
+                        |(operation, path)| (operation == "GET" || operation == "PATCH")
+                            && path == &resource
+                    )
+            );
+        }
     }
+}
+
+#[tokio::test]
+async fn a_foreign_network_policy_blocks_the_first_workload_without_modifying_it() {
+    let workspace = provisioning_workspace();
+    let mock = Arc::new(GateMock::default());
+    let coordinator = coordinator(mock.clone());
+    let names = coordinator
+        .builder
+        .runtime_names(&workspace)
+        .unwrap()
+        .resources;
+    let policy = format!(
+        "/apis/networking.k8s.io/v1/namespaces/{}/networkpolicies/{}",
+        workspace.runtime.namespace(),
+        names.network_policy,
+    );
+    let foreign = json!({"apiVersion":"v1", "kind":"PartialObjectMetadata", "metadata":{
+        "labels":ownership_labels("another-installation", workspace.id)
+    }});
+    mock.objects
+        .lock()
+        .unwrap()
+        .insert(policy.clone(), foreign.clone());
+
+    let error = coordinator.reconcile(&workspace).await.unwrap_err();
+    assert!(matches!(error, ReconcileError::Ownership(_)));
+    assert_eq!(mock.objects.lock().unwrap().get(&policy), Some(&foreign));
+    assert_eq!(workload_patch_count(&mock), 0);
+    assert!(mock.object("-startup-gate").is_none());
 }
 
 #[tokio::test]
