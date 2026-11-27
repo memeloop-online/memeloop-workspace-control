@@ -6,6 +6,7 @@ use k8s_openapi::{
     api::core::v1::{ConfigMap, Secret},
 };
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::injections::{
@@ -184,20 +185,34 @@ pub(super) fn build(
     for (index, item) in resolved.iter().enumerate() {
         data.insert(index, item)?;
     }
-    data.config_files.insert(
-        "workspace-files.json".to_owned(),
-        serde_json::to_string(&FileManifest {
-            version: 1,
-            files: data.files,
-        })?,
+    let files = serde_json::to_string(&FileManifest {
+        version: 1,
+        files: data.files,
+    })?;
+    let environment = serde_json::to_string(&EnvironmentManifest {
+        version: 1,
+        environment: data.environment,
+    })?;
+    // ConfigMap and Secret mounts update independently. Hash the public layout only:
+    // old values for the same slot are safe, values from a different layout are not.
+    let layout = format!(
+        "{:x}",
+        Sha256::new()
+            .chain_update(files.as_bytes())
+            .chain_update(b"\0")
+            .chain_update(environment.as_bytes())
+            .finalize()
     );
-    data.config_files.insert(
-        "workspace-environment.json".to_owned(),
-        serde_json::to_string(&EnvironmentManifest {
-            version: 1,
-            environment: data.environment,
-        })?,
+    data.secret_files.insert(
+        "injection-layout".to_owned(),
+        ByteString(layout.as_bytes().to_vec()),
     );
+    data.config_files
+        .insert("injection-layout".to_owned(), layout);
+    data.config_files
+        .insert("workspace-files.json".to_owned(), files);
+    data.config_files
+        .insert("workspace-environment.json".to_owned(), environment);
 
     Ok(InjectionMaterialization {
         environment_secret: Secret {
