@@ -255,5 +255,6 @@ jobs:
         env:
           REPOSITORY: ${{ steps.release.outputs.repository }}
           DIGEST: ${{ steps.push.outputs.digest }}
-        run: printf 'Verified scratch runtime: `%s@%s`\n' "$REPOSITORY" "$DIGEST" >> "$GITHUB_STEP_SUMMARY"
+        run: |
+          printf 'Verified scratch runtime: `%s@%s`\n' "$REPOSITORY" "$DIGEST" >> "$GITHUB_STEP_SUMMARY"
           if-no-files-found: error
