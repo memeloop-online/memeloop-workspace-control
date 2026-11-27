@@ -298,6 +298,75 @@ async fn injection_job_updates_four_inputs_without_reconciling_renderer_drift_or
 }
 
 #[tokio::test]
+async fn live_projection_is_refreshed_once_after_both_file_inputs_are_applied() {
+    let mut workspace = workspace(workspace_id());
+    workspace.state = WorkspaceState::Ready;
+    let mock = Arc::new(GateMock {
+        file_input_versions: Some(("12", "21")),
+        ..GateMock::default()
+    });
+    let coordinator = coordinator(mock.clone());
+    seed_workload(&mock, &coordinator, &workspace);
+    let names = coordinator
+        .builder
+        .runtime_names(&workspace)
+        .unwrap()
+        .resources;
+    let pod_path = format!(
+        "/api/v1/namespaces/{}/pods/{}",
+        workspace.runtime.namespace(),
+        names.pod_ordinal_zero()
+    );
+    let pod = json!({
+        "apiVersion":"v1", "kind":"Pod", "metadata":{
+            "uid":"original-pod", "resourceVersion":"77",
+            "labels":ownership_labels("public-a", workspace.id),
+            "annotations":{"retained":"value"}
+        },
+        "spec":{"containers":[{"name":"workspace","image":"original"}]}
+    });
+    mock.objects
+        .lock()
+        .unwrap()
+        .insert(pod_path.clone(), pod.clone());
+    let inputs = input_paths(&coordinator, &workspace);
+    let injections = coordinator.builder.build(&workspace).unwrap().injections;
+    for _ in 0..2 {
+        coordinator
+            .reconcile_injections(&workspace, &injections)
+            .await
+            .unwrap();
+    }
+
+    let patches = mock.patches.lock().unwrap();
+    let mut pod_writes = patches
+        .iter()
+        .enumerate()
+        .filter(|(_, (path, _))| path == &pod_path);
+    let (pod_write_index, (_, patch)) = pod_writes.next().unwrap();
+    assert!(pod_writes.next().is_none());
+    assert_eq!(
+        *patch,
+        json!({"metadata":{"uid":"original-pod","resourceVersion":"77","annotations":{
+            "workspace.memeloop.dev/injection-projection-revision":"12/21"
+        }}})
+    );
+    assert!(inputs.iter().all(|input| {
+        patches[..pod_write_index]
+            .iter()
+            .any(|(path, _)| path == input)
+    }));
+    assert!(
+        patches
+            .iter()
+            .all(|(path, _)| path == &pod_path || inputs.contains(path))
+    );
+    let updated = mock.object(&pod_path).unwrap();
+    assert_eq!(updated["spec"], pod["spec"]);
+    assert_eq!(updated["metadata"]["annotations"]["retained"], "value");
+}
+
+#[tokio::test]
 async fn injection_only_apply_preserves_existing_transport_and_rejects_unknown_encoding() {
     for (gate, encoding, compressed, valid) in [
         (false, None, false, true),

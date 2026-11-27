@@ -25,6 +25,7 @@ struct GateMock {
     lose_approval_response: AtomicBool,
     hold_files: AtomicBool,
     release_files: Semaphore,
+    file_input_versions: Option<(&'static str, &'static str)>,
     workload_applied: Notify,
     workload_reads: AtomicUsize,
     approval_reads: AtomicUsize,
@@ -49,6 +50,7 @@ impl Default for GateMock {
             lose_approval_response: AtomicBool::new(false),
             hold_files: AtomicBool::default(),
             release_files: Semaphore::new(0),
+            file_input_versions: None,
             workload_applied: Notify::new(),
             workload_reads: AtomicUsize::new(0),
             approval_reads: AtomicUsize::new(0),
@@ -289,6 +291,32 @@ impl GateMock {
             .lock()
             .unwrap()
             .push((path.clone(), body.clone()));
+        if path.contains("/pods/") {
+            assert!(metadata_only);
+            let mut objects = self.objects.lock().unwrap();
+            let pod = objects.get_mut(&path).unwrap();
+            assert_eq!(pod["metadata"]["uid"], body["metadata"]["uid"]);
+            assert_eq!(
+                pod["metadata"]["resourceVersion"],
+                body["metadata"]["resourceVersion"]
+            );
+            pod["metadata"]["annotations"]
+                .as_object_mut()
+                .unwrap()
+                .extend(body["metadata"]["annotations"].as_object().unwrap().clone());
+            return json_response(
+                StatusCode::OK,
+                json!({"apiVersion":"meta.k8s.io/v1", "kind":"PartialObjectMetadata",
+                    "metadata":pod["metadata"]}),
+            );
+        }
+        if let Some((secret, config)) = self.file_input_versions {
+            if path.ends_with("-files-secret") {
+                body["metadata"]["resourceVersion"] = json!(secret);
+            } else if path.ends_with("-files-config") {
+                body["metadata"]["resourceVersion"] = json!(config);
+            }
+        }
         body["metadata"]["uid"] = json!(format!("{}-uid", path.rsplit('/').next().unwrap()));
         self.objects
             .lock()

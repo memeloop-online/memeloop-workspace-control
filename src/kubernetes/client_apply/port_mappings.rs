@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
 use k8s_openapi::api::{
-    core::v1::{ConfigMap, Pod, Service},
+    core::v1::{ConfigMap, Service},
     networking::v1::{Ingress, NetworkPolicy},
 };
 use kube::{
@@ -112,34 +112,12 @@ impl KubernetesCoordinator {
             )
             .await?;
         }
-        // Updating existing Pod metadata prompts kubelet to refresh its projected ConfigMap.
-        // This is asynchronous and changes neither Pod identity nor its StatefulSet template.
-        let pods = Api::<Pod>::namespaced(self.client.clone(), workspace.runtime.namespace());
-        let pod_name = runtime.resources.pod_ordinal_zero();
-        if let Some(pod) = pods.get_opt(&pod_name).await? {
-            self.builder
-                .verify_delete_ownership(&pod.metadata, workspace.id)?;
-            let hash = format!("{:x}", Sha256::digest(contents.as_bytes()));
-            let key = "workspace.memeloop.dev/port-mappings-hash";
-            if pod
-                .metadata
-                .annotations
-                .as_ref()
-                .and_then(|annotations| annotations.get(key))
-                != Some(&hash)
-            {
-                let patch = serde_json::json!({"metadata": {"uid":pod.metadata.uid, "resourceVersion":pod.metadata.resource_version, "annotations":{(key): hash}}});
-                match pods
-                    .patch(&pod_name, &PatchParams::default(), &Patch::Merge(&patch))
-                    .await
-                {
-                    Ok(_) => {}
-                    Err(kube::Error::Api(error)) if error.code == 404 => {}
-                    Err(error) => return Err(error.into()),
-                }
-            }
-        }
-        Ok(())
+        self.refresh_projected_inputs(
+            workspace,
+            "workspace.memeloop.dev/port-mappings-hash",
+            format!("{:x}", Sha256::digest(contents.as_bytes())),
+        )
+        .await
     }
 
     async fn apply_desired_port_mappings(
