@@ -284,7 +284,8 @@ test("workspace settings and mapping editing retain drafts, stable addresses and
     assert.equal("display_name" in createWrite.input, false);
     assert.deepEqual(unexpected, []);
     assert.deepEqual(errors, []);
-    assert.equal(writes.filter(({ path }) => path.endsWith("/temporary-storage"))[0].input.expected_generation, 2);
+    const stoppedSettingsWrites = writes.filter(({ path }) => /^\/api\/v1\/workspaces\/stopped-workspace\/(settings|temporary-storage)$/.test(path));
+    assert.deepEqual(stoppedSettingsWrites.map(({ input }) => input.expected_generation), [2, 3]);
     await context.close();
   } finally { await browser.close(); }
 });
