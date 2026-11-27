@@ -352,21 +352,27 @@ prepare() {
 }
 
 update_storage_banner() {
-    used_percent=$(df -P "$workspace_root" | awk 'NR == 2 {gsub(/%/, "", $5); print $5}')
+    read -r used_percent used_kib available_kib <<EOF
+$(df -Pk "$workspace_root" | awk 'NR == 2 {gsub(/%/, "", $5); print $5, $3, $4}')
+EOF
     warning=80
     critical=90
-    reserve=${MWC_HOME_RESERVE_MIB:-1024}
+    reserve_mib=${MWC_HOME_RESERVE_MIB:-1024}
+    reserve_kib=$((reserve_mib * 1024))
     if [ "$used_percent" -ge "$critical" ] && [ -f "$reserve_file" ]; then
-        unlink "$reserve_file"
-        : > "$runtime_dir/reserve-released"
+        release_home_reserve
         used_percent=$(df -P "$workspace_root" | awk 'NR == 2 {gsub(/%/, "", $5); print $5}')
-    elif [ "$used_percent" -lt "$warning" ] && [ ! -e "$runtime_dir/reserve-released" ] \
-        && [ -d "$state_dir" ] && [ ! -f "$reserve_file" ] \
-        && command -v fallocate >/dev/null 2>&1; then
-        if fallocate -l "${reserve}MiB" "$reserve_file" 2>/dev/null; then
-            chmod 000 "$reserve_file"
+    elif [ "${1:-}" = rearm ] && [ "$reserve_mib" -gt 0 ] \
+        && [ "$(((used_kib + reserve_kib) * 100))" \
+            -le "$(((used_kib + available_kib) * (warning - 1)))" ] \
+        && [ -d "$state_dir" ] && [ ! -e "$reserve_file" ] && [ ! -L "$reserve_file" ]; then
+        # Re-create after cleanup or online growth. Leave at least the warning headroom
+        # available to the user and keep allocation off the SSH startup path.
+        if runuser -u "$workspace_user" -- sh -c \
+            'umask 077; fallocate -l "$1" "$2" && chmod 000 "$2"' \
+            sh "${reserve_mib}MiB" "$reserve_file" 2>/dev/null; then
+            rm -f "$runtime_dir/reserve-released"
         fi
-        used_percent=$(df -P "$workspace_root" | awk 'NR == 2 {gsub(/%/, "", $5); print $5}')
     fi
     if [ -e "$runtime_dir/injection-failed" ]; then
         printf '文件注入未能完全更新，系统会自动重试；请检查 Home 存储空间和目标目录权限。\n' \
@@ -387,16 +393,20 @@ update_storage_banner() {
 
 release_reserve_if_critical() {
     used_percent=$(df -P "$workspace_root" | awk 'NR == 2 {gsub(/%/, "", $5); print $5}')
-    critical=90
-    if [ "$used_percent" -ge "$critical" ] && [ -f "$reserve_file" ]; then
-        unlink "$reserve_file"
+    if [ "$used_percent" -ge 90 ] && [ -f "$reserve_file" ]; then
+        release_home_reserve
+    fi
+}
+
+release_home_reserve() {
+    if runuser -u "$workspace_user" -- unlink "$reserve_file"; then
         : > "$runtime_dir/reserve-released"
     fi
 }
 
 storage_pressure_monitor() {
     while :; do
-        update_storage_banner
+        update_storage_banner rearm
         sleep 60
     done
 }
