@@ -111,8 +111,60 @@ impl KubernetesCoordinator {
         let compress_files = startup_gate::uses_compressed_files(&existing)?;
         // Projected inputs update files and new SSH sessions without reconciling the Pod
         // template, whose renderer may have changed since this workspace was created.
-        self.apply_injections(workspace, injections, compress_files)
+        if let Some(revision) = self
+            .apply_injections(workspace, injections, compress_files)
+            .await?
+        {
+            self.refresh_projected_inputs(
+                workspace,
+                "workspace.memeloop.dev/injection-projection-revision",
+                revision,
+            )
+            .await?;
+        }
+        Ok(())
+    }
+
+    // Changing live Pod metadata wakes kubelet's projection sync without touching its template.
+    async fn refresh_projected_inputs(
+        &self,
+        workspace: &Workspace,
+        annotation: &str,
+        revision: String,
+    ) -> Result<(), ReconcileError> {
+        let pod_name = self
+            .builder
+            .runtime_names(workspace)?
+            .resources
+            .pod_ordinal_zero();
+        let pods = Api::<Pod>::namespaced(self.client.clone(), workspace.runtime.namespace());
+        let Some(pod) = pods.get_metadata_opt(&pod_name).await? else {
+            return Ok(());
+        };
+        self.builder
+            .verify_delete_ownership(&pod.metadata, workspace.id)?;
+        if pod.metadata.deletion_timestamp.is_some()
+            || pod
+                .metadata
+                .annotations
+                .as_ref()
+                .and_then(|annotations| annotations.get(annotation))
+                == Some(&revision)
+        {
+            return Ok(());
+        }
+        let patch = serde_json::json!({"metadata":{
+            "uid":pod.metadata.uid, "resourceVersion":pod.metadata.resource_version,
+            "annotations":{(annotation):revision}
+        }});
+        match pods
+            .patch_metadata(&pod_name, &PatchParams::default(), &Patch::Merge(&patch))
             .await
+        {
+            Ok(_) => Ok(()),
+            Err(kube::Error::Api(error)) if error.code == 404 => Ok(()),
+            Err(error) => Err(error.into()),
+        }
     }
 
     pub(super) async fn apply_desired(
@@ -717,7 +769,7 @@ impl KubernetesCoordinator {
         workspace: &Workspace,
         materialization: &InjectionMaterialization,
         compress_files: bool,
-    ) -> Result<(), ReconcileError> {
+    ) -> Result<Option<String>, ReconcileError> {
         let workspace_id = workspace.id;
         let runtime_names = self.builder.runtime_names(workspace)?;
         let names = &runtime_names.resources;
@@ -741,7 +793,7 @@ impl KubernetesCoordinator {
         };
         // These projected inputs are independent. Join all writes before startup approval
         // or updates to existing workloads, retaining the ownership check for every object.
-        tokio::try_join!(
+        let (_, file_secret_version, _, file_config_version) = tokio::try_join!(
             self.apply_owned(
                 &secrets,
                 &names.environment_secret,
@@ -767,7 +819,10 @@ impl KubernetesCoordinator {
                 workspace_id,
             ),
         )?;
-        Ok(())
+        // Use server revisions rather than putting hashes of secret values in Pod metadata.
+        Ok(file_secret_version
+            .zip(file_config_version)
+            .map(|(secret, config)| format!("{secret}/{config}")))
     }
 
     async fn apply_owned<K>(
@@ -776,7 +831,7 @@ impl KubernetesCoordinator {
         name: &str,
         desired: &K,
         workspace_id: Uuid,
-    ) -> Result<(), ReconcileError>
+    ) -> Result<Option<String>, ReconcileError>
     where
         K: Clone + Debug + DeserializeOwned + Serialize + k8s_openapi::Resource,
     {
@@ -792,7 +847,7 @@ impl KubernetesCoordinator {
             self.builder
                 .verify_delete_ownership(&existing.metadata, workspace_id)?;
         }
-        observe_request(
+        let applied = observe_request(
             workspace_id,
             K::KIND,
             name,
@@ -804,7 +859,7 @@ impl KubernetesCoordinator {
             ),
         )
         .await?;
-        Ok(())
+        Ok(applied.metadata.resource_version)
     }
 }
 
