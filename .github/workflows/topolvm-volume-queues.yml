@@ -86,8 +86,17 @@ jobs:
             | {reused_layers:$n, new_layer_bytes:.layers[-1].size, new_layer:.layers[-1].digest}
           ' "$out/manifest.json" | tee "$out/layer-reuse.json"
           skopeo copy "oci-archive:$archive" "docker-daemon:$NODE_IMAGE"
-          test "$(docker image inspect "$NODE_IMAGE" --format '{{.Id}}')" = "$(cat "$out/config-digest.txt")"
-          docker run --rm --entrypoint /bin/sh "$NODE_IMAGE" -ec 'test -x /topolvm-node && test ! -L /topolvm-node'
+          config=$(docker image inspect "$NODE_IMAGE" --format '{{.Id}}')
+          if [[ "$config" != "$(cat "$out/config-digest.txt")" ]]; then
+            echo "::error::Docker loaded $config instead of the OCI archive's config digest"
+            exit 1
+          fi
+          docker run --rm --entrypoint /bin/sh "$NODE_IMAGE" -ec '
+            if [ ! -x /topolvm-node ] || [ -L /topolvm-node ]; then
+              echo "Expected a regular node executable; found:" >&2
+              ls -l /topolvm-node >&2
+              exit 1
+            fi'
           docker run --rm --entrypoint /topolvm-node "$NODE_IMAGE" --version |
             grep -Fx 'topolvm-node version 0.41.1-mwc-volume-workers'
           binaries() {
