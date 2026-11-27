@@ -148,6 +148,7 @@ struct SetView {
 #[derive(Clone)]
 struct PodView {
     uid: String,
+    node: Option<String>,
     generation: u64,
     owner_uid: String,
     revision: Option<String>,
@@ -167,6 +168,15 @@ impl WorkspaceObservations {
     pub fn with_job_wakeup(mut self, job_wakeup: Arc<Notify>) -> Self {
         self.job_wakeup = job_wakeup;
         self
+    }
+
+    /// Live node of the owned Ready Pod, when the existing watches have observed it.
+    pub(crate) fn ready_workspace_node(&self, workspace_id: Uuid) -> Option<String> {
+        self.state
+            .lock()
+            .expect("workspace observations lock poisoned")
+            .ready_workspace_node(workspace_id)
+            .map(str::to_owned)
     }
 
     /// Called after the atomic park and workspace-lease release. Fetch the exact
@@ -663,6 +673,13 @@ impl State {
         self.ready_checks.insert(id, ticket);
     }
 
+    fn ready_workspace_node(&self, id: Uuid) -> Option<&str> {
+        if !self.runtime_ready(id) {
+            return None;
+        }
+        self.pods.get(&id)?.node.as_deref()
+    }
+
     fn runtime_ready(&self, id: Uuid) -> bool {
         let Some(set) = self.sets.get(&id) else {
             return false;
@@ -1109,6 +1126,7 @@ impl ObservedResource for Pod {
             id,
             PodView {
                 uid,
+                node: object.spec.and_then(|spec| spec.node_name),
                 generation,
                 owner_uid,
                 revision: object

@@ -226,7 +226,7 @@ pub enum ConfigError {
     InvalidPrometheusUrl,
 }
 
-fn valid_ssh_host(host: &str) -> bool {
+pub(crate) fn valid_ssh_host(host: &str) -> bool {
     if host.parse::<std::net::IpAddr>().is_ok() {
         return true;
     }

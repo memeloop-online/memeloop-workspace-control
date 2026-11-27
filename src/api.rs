@@ -1,11 +1,15 @@
-use std::sync::Arc;
+use std::{collections::BTreeMap, sync::Arc};
 
 use axum::Router;
 use sha2::{Digest, Sha256};
 
 use crate::{
-    config::AppConfig, crypto::EnvelopeCipher, observability::Observability,
-    plugins::PluginRuntime, storage::Database,
+    config::{AppConfig, valid_ssh_host},
+    crypto::EnvelopeCipher,
+    kubernetes::WorkspaceObservations,
+    observability::Observability,
+    plugins::PluginRuntime,
+    storage::Database,
 };
 
 mod admin;
@@ -48,6 +52,11 @@ pub use error::{ApiError, ErrorBody, ErrorEnvelope};
 use openapi::openapi;
 use system::{health, ready, system_info};
 
+struct SshNodeHosts {
+    observations: WorkspaceObservations,
+    hosts: BTreeMap<String, String>,
+}
+
 #[derive(Clone)]
 pub struct AppState {
     pub(super) config: AppConfig,
@@ -60,6 +69,7 @@ pub struct AppState {
     diagnostics_enabled: bool,
     workspace_live_memory_resize: bool,
     kubernetes_client: Option<kube::Client>,
+    ssh_node_hosts: Option<Arc<SshNodeHosts>>,
     jump_host_public_key: Option<crate::storage::WorkspaceSshPublicIdentity>,
     pub(super) plugins: PluginRuntime,
     organization_metrics: runtime::organization_metrics::OrganizationMetricsCache,
@@ -84,6 +94,7 @@ impl AppState {
             diagnostics_enabled: false,
             workspace_live_memory_resize: false,
             kubernetes_client: None,
+            ssh_node_hosts: None,
             jump_host_public_key: None,
             plugins,
             organization_metrics: Default::default(),
@@ -107,6 +118,7 @@ impl AppState {
             diagnostics_enabled: false,
             workspace_live_memory_resize: false,
             kubernetes_client: None,
+            ssh_node_hosts: None,
             jump_host_public_key: None,
             plugins,
             organization_metrics: Default::default(),
@@ -140,6 +152,27 @@ impl AppState {
 
     pub fn set_kubernetes_client(&mut self, client: kube::Client) {
         self.kubernetes_client = Some(client);
+    }
+
+    /// Publish configured direct SSH hosts for nodes seen by the existing Pod watch.
+    pub fn set_ssh_node_hosts(
+        &mut self,
+        observations: WorkspaceObservations,
+        hosts: BTreeMap<String, String>,
+    ) -> Result<(), &'static str> {
+        if !hosts.is_empty() && self.config.internal_ssh_host.is_none() {
+            return Err("SSH node hosts require MWC_INTERNAL_SSH_HOST");
+        }
+        if hosts.values().any(|host| !valid_ssh_host(host)) {
+            return Err("SSH node hosts must use IP addresses or lower-case DNS hostnames");
+        }
+        self.ssh_node_hosts = (!hosts.is_empty()).then(|| {
+            Arc::new(SshNodeHosts {
+                observations,
+                hosts,
+            })
+        });
+        Ok(())
     }
 
     pub fn set_jump_host_public_key(&mut self, value: &str) -> Result<(), ssh_key::Error> {

@@ -63,6 +63,8 @@ workspace:
     clientCaSecretName: ""
   # Stable Tailnet node DNS name or IP. Enables per-workspace, auto-assigned SSH NodePorts.
   internalSshHost: ""
+  # Optional direct Tailnet host per Kubernetes node name. Other nodes use internalSshHost.
+  internalSshNodeHosts: {}
   egress:
     # Select only the DNS Pods that internet_only templates may query on UDP/TCP 53.
     dnsNamespace: kube-system

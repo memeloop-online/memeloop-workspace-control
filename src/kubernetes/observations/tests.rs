@@ -30,6 +30,36 @@ fn ready_set() -> SetView {
 }
 
 #[test]
+fn ssh_route_follows_only_the_owned_ready_pod() {
+    let id = job().workspace_id;
+    let mut state = State::default();
+    state.sets.insert(id, ready_set());
+    assert_eq!(state.ready_workspace_node(id), None);
+    state.pods.insert(
+        id,
+        PodView {
+            uid: "pod-a".into(),
+            node: Some("first-node".into()),
+            generation: 7,
+            owner_uid: "old-set".into(),
+            revision: Some("revision-a".into()),
+            ready: true,
+        },
+    );
+    assert_eq!(state.ready_workspace_node(id), None);
+    state.pods.get_mut(&id).unwrap().owner_uid = "set-a".into();
+    assert_eq!(state.ready_workspace_node(id), Some("first-node"));
+    let pod = state.pods.get_mut(&id).unwrap();
+    pod.ready = false;
+    pod.node = Some("second-node".into());
+    assert_eq!(state.ready_workspace_node(id), None);
+    state.pods.get_mut(&id).unwrap().ready = true;
+    assert_eq!(state.ready_workspace_node(id), Some("second-node"));
+    state.pods.remove(&id);
+    assert_eq!(state.ready_workspace_node(id), None);
+}
+
+#[test]
 fn running_workload_accepts_only_the_revision_retained_for_resize() {
     let job = job();
     let mut state = State::default();
@@ -42,6 +72,7 @@ fn running_workload_accepts_only_the_revision_retained_for_resize() {
         job.workspace_id,
         PodView {
             uid: "pod-a".into(),
+            node: None,
             generation: 7,
             owner_uid: "set-a".into(),
             revision: Some("revision-a".into()),
@@ -214,6 +245,7 @@ fn pod_ready_fallback_requires_current_controller_revision_and_generation() {
         job.workspace_id,
         PodView {
             uid: "pod-a".into(),
+            node: None,
             generation: 7,
             owner_uid: "old-set".into(),
             revision: Some("revision-a".into()),
@@ -387,6 +419,7 @@ fn aggregate_catching_up_keeps_the_pod_ready_identity() {
         job.workspace_id,
         PodView {
             uid: "pod-a".into(),
+            node: None,
             generation: 7,
             owner_uid: "set-a".into(),
             revision: Some("revision-a".into()),
@@ -411,6 +444,7 @@ fn replaced_ready_pod_is_a_new_edge_even_when_aggregate_stays_ready() {
         job.workspace_id,
         PodView {
             uid: "pod-a".into(),
+            node: None,
             generation: 7,
             owner_uid: "set-a".into(),
             revision: Some("revision-a".into()),

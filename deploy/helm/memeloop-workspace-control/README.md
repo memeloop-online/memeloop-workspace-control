@@ -93,7 +93,7 @@ are present:
 
 | Feature | Main values |
 | --- | --- |
-| Internal SSH | `workspace.internalSshHost` |
+| Internal SSH | `workspace.internalSshHost`, optional `workspace.internalSshNodeHosts` |
 | Public SSH | `public.sshHost`, `jumpHost.*`, `higress.*` |
 | Web terminal | `public.webShellDomain`, `public.webShellOrigin`, `workspace.ttydMtls.*`, `higress.ttydMtls.*` |
 | Port mappings | `public.portMappingDomain`, `higress.extAuthPluginUrl` |

@@ -18,7 +18,10 @@ Internal deployments can publish a per-workspace SSH port through
 the standard OpenSSH jump host in `images/ssh-jump`. Authentication uses the
 caller's key pair. Copy the connection details from the workspace page. Public
 connections use the jump host; internal connections use the configured host
-and assigned workspace port.
+and assigned workspace port. Set `workspace.internalSshNodeHosts` to map a
+Kubernetes node name to its reachable private DNS name or address when clients
+should connect directly to that node. MWC uses the node of the running Pod;
+workspaces on other nodes keep the shared host. The port and host key stay the same.
 
 Inject additional public keys into the workspace with `ssh_public_key`
 injection items (see [Credentials and files](./credentials-and-files.md)).

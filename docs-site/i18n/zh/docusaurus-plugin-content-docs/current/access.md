@@ -15,7 +15,9 @@ sidebar_position: 5
 内网部署可通过 `workspace.internalSshHost` 发布每个工作区的 SSH 端口；公网
 部署可通过 `images/ssh-jump` 中的标准 OpenSSH 跳板机转发连接。认证使用
 调用方自己的密钥对。从工作区页面复制连接信息：公网连接使用跳板机，内网连接
-使用配置的主机和系统分配的工作区端口。
+使用配置的主机和系统分配的工作区端口。管理员可以用 `workspace.internalSshNodeHosts`
+为 Kubernetes 节点配置可直连的内网域名或地址。MWC 按运行中 Pod 的实际节点选择入口；
+未配置的节点继续使用共享入口。端口和主机密钥不变。
 
 可用 `ssh_public_key` 类型的注入项向工作区注入额外公钥（见
 [凭据与文件](./credentials-and-files.md)）。
