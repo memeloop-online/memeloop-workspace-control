@@ -1005,6 +1005,8 @@
   "saveTemporaryStorage": "Save temporary storage",
   "settingsStorageSaved": "Temporary storage updated. The workspace stays stopped.",
   "workspaceSettingsConflict": "Settings changed. Refresh and try again. Stop the workspace before other compute changes.",
+  "workspaceSettingsDraftStale": "Workspace settings changed. Reloading discards your unsaved changes.",
+  "workspaceSettingsReload": "Reload settings",
   "workspaceSettingsQuotaExceeded": "These resources exceed the available quota.",
   "apiKeyNameTooLong": "API key names can contain up to 80 characters.",
   "workspaceTemporaryStorageBoundVolume": "This workspace uses a retained temporary volume. Use the storage adjustment workflow to reduce it; direct resizing is unavailable."
