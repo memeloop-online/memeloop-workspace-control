@@ -368,9 +368,11 @@ EOF
         && [ -d "$state_dir" ] && [ ! -e "$reserve_file" ] && [ ! -L "$reserve_file" ]; then
         # Re-create after cleanup or online growth. Leave at least the warning headroom
         # available to the user and keep allocation off the SSH startup path.
-        if runuser -u "$workspace_user" -- sh -c \
-            'umask 077; fallocate -l "$1" "$2" && chmod 000 "$2"' \
-            sh "${reserve_mib}MiB" "$reserve_file" 2>/dev/null; then
+        if (
+            umask 077
+            runuser -u "$workspace_user" -- fallocate -l "${reserve_mib}MiB" "$reserve_file" &&
+                runuser -u "$workspace_user" -- chmod 000 "$reserve_file"
+        ) 2>/dev/null; then
             rm -f "$runtime_dir/reserve-released"
         fi
     fi
