@@ -198,6 +198,7 @@ jobs:
           name: rust-product-topolvm-${{ github.run_id }}-${{ github.run_attempt }}
           path: artifacts/
           retention-days: 14
+          if-no-files-found: error
   publish-runtime-bundle:
     needs: rust-topolvm
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -257,4 +258,3 @@ jobs:
           DIGEST: ${{ steps.push.outputs.digest }}
         run: |
           printf 'Verified scratch runtime: `%s@%s`\n' "$REPOSITORY" "$DIGEST" >> "$GITHUB_STEP_SUMMARY"
-          if-no-files-found: error
