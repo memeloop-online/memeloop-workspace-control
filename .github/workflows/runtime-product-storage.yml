@@ -32,6 +32,7 @@ jobs:
           bash -n tests/runtime_product_storage.sh
           bash -n tests/runtime-product-vm/prepare-public-inputs.sh
           bash -n tests/runtime-product-vm/workspace-reboot-guest.sh
+          bash -n ops/scratch-runtime/stage-release.sh
           python3 -m py_compile tests/runtime_product_storage_bdi.py tests/runtime-product-vm/*.py
       - uses: dtolnay/rust-toolchain@1.98.0
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
@@ -92,6 +93,8 @@ jobs:
           git diff --check
           make VERSION=v2.3.2-k3s2-shim-cleanup REVISION="$CONTAINERD_BASE_SHA+$CONTAINERD_CLEANUP_SHA" bin/containerd
           install -m 0755 bin/containerd "$RUNNER_TEMP/product-storage-bin/containerd-shim-cleanup"
+          mkdir -p "$RUNNER_TEMP/containerd-licenses"
+          cp LICENSE NOTICE "$RUNNER_TEMP/containerd-licenses/"
       - name: Build exact renderer fixtures and probe (CI only)
         run: |
           mkdir -p artifacts "$RUNNER_TEMP/product-storage-fixtures" "$RUNNER_TEMP/product-storage-bin"
@@ -107,10 +110,11 @@ jobs:
           cp "$RUNNER_TEMP/product-storage-bin/"* input-bundle/bin/
           cp "$RUNNER_TEMP/product-storage-fixtures/"*.json input-bundle/fixtures/
           cp "$RUNNER_TEMP/wrapper-release/"{SHA256SUMS,artifact-identity.json} input-bundle/wrapper-release/
+          cp -a "$RUNNER_TEMP/containerd-licenses" input-bundle/
           jq -n --arg renderer "$PRODUCT_RENDERER_SHA" --arg wrapper "$WRAPPER_SHA" \
             --arg harness "$(git rev-parse HEAD)" --arg run "$GITHUB_RUN_ID" --arg attempt "$GITHUB_RUN_ATTEMPT" \
             '{renderer_sha:$renderer,wrapper_sha:$wrapper,harness_sha:$harness,run_id:$run,run_attempt:$attempt}' > input-bundle/source-shas.json
-          (cd input-bundle && sha256sum bin/* fixtures/* wrapper-release/* source-shas.json > SHA256SUMS)
+          (cd input-bundle && sha256sum bin/* fixtures/* wrapper-release/* containerd-licenses/* source-shas.json > SHA256SUMS)
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: product-storage-inputs-${{ github.run_id }}-${{ github.run_attempt }}
@@ -179,6 +183,14 @@ jobs:
             unshare --mount --propagation private bash tests/runtime_product_storage.sh || status=$?
           sudo chown -R "$(id -u):$(id -g)" artifacts
           exit "$status"
+      - name: Package the runtime files from this passing CSI run
+        run: |
+          bash ops/scratch-runtime/stage-release.sh
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: scratch-runtime-bundle-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/scratch-runtime-oci/
+          if-no-files-found: error
       - name: Preserve actual evidence, including failed prerequisites
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -186,4 +198,62 @@ jobs:
           name: rust-product-topolvm-${{ github.run_id }}-${{ github.run_attempt }}
           path: artifacts/
           retention-days: 14
+  publish-runtime-bundle:
+    needs: rust-topolvm
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      attestations: write
+      contents: read
+      id-token: write
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: scratch-runtime-bundle-${{ github.run_id }}-${{ github.run_attempt }}
+          path: scratch-runtime-oci
+      - name: Verify release bytes and identity
+        id: release
+        run: |
+          archive=scratch-runtime-oci/mwc-scratch-runtime-linux-amd64.tar.gz
+          extracted="$RUNNER_TEMP/verified-runtime"
+          mkdir "$extracted"
+          tar -xzf "$archive" -C "$extracted"
+          (cd "$extracted" && sha256sum --strict -c SHA256SUMS)
+          jq -e --arg sha "$GITHUB_SHA" --arg run "$GITHUB_RUN_ID" --arg attempt "$GITHUB_RUN_ATTEMPT" \
+            '.renderer_sha==$sha and .harness_sha==$sha and .run_id==$run and .run_attempt==$attempt' "$extracted/identity.json"
+          echo "repository=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        id: push
+        with:
+          context: scratch-runtime-oci
+          file: ops/scratch-runtime/release.Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.release.outputs.repository }}:scratch-runtime-${{ github.sha }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          provenance: false
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ steps.release.outputs.repository }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+      - name: Record the immutable runtime bundle
+        env:
+          REPOSITORY: ${{ steps.release.outputs.repository }}
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: printf 'Verified scratch runtime: `%s@%s`\n' "$REPOSITORY" "$DIGEST" >> "$GITHUB_STEP_SUMMARY"
           if-no-files-found: error
