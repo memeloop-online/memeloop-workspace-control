@@ -26,6 +26,7 @@ test("workspace settings and mapping editing retain drafts, stable addresses and
   const workspaces = [item("ready-workspace", "ready"), item("stopped-workspace", "stopped")];
   const mappings = [{ id: "mapping-one", internal_port: 3000, display_name: "Application", subdomain: "mapping-one", status: "stopped", managed: false, purpose: "user", https_url: "https://p-mapping-one.example.test" }];
   const writes = [];
+  const detailReads = [];
   const unexpected = [];
   const errors = [];
   let failNextSettings = true;
@@ -53,7 +54,11 @@ test("workspace settings and mapping editing retain drafts, stable addresses and
         else if (path === "/api/v1/me/profile") body = { display_name: "Fixture", avatar_url: null };
         else if (path === "/api/v1/organizations") body = { items: [{ id: organizationId, name: "Editing", created_at: 1_700_000_000 }], next_cursor: null };
         else if (path === "/api/v1/workspaces") body = { items: workspaces, next_cursor: null };
-        else if (path === "/api/v1/workspaces/ready-workspace") body = workspaces[0];
+        else if (/^\/api\/v1\/workspaces\/[^/]+$/.test(path)) {
+          const id = path.split("/").at(-1);
+          detailReads.push(id);
+          body = workspaces.find(({ workspace }) => workspace.id === id);
+        }
         else if (path === "/api/v1/workspaces/ready-workspace/storage-growth") {
           if (growth && finishGrowth) {
             workspaces[0].workspace.resources.disk_gib = growth.requested_gib;
@@ -98,6 +103,8 @@ test("workspace settings and mapping editing retain drafts, stable addresses and
           const target = workspaces.find(({ workspace }) => workspace.id === match[1]);
           if (match[2] === "settings" && failNextSettings) {
             failNextSettings = false;
+            assert.equal(input.expected_generation, 1);
+            target.workspace.generation += 1; // Another client wrote before the next list refresh.
             status = 409; body = { error: { code: "workspace_settings_update_conflict", message: "stale workspace" } };
           } else {
             assert.equal(input.expected_generation, target.workspace.generation);
@@ -129,8 +136,15 @@ test("workspace settings and mapping editing retain drafts, stable addresses and
     assert.equal(await dialog.getByLabel(messages.workspaceCpuMillis, { exact: true }).isDisabled(), true);
     await dialog.getByLabel(messages.workspaceName, { exact: true }).fill("支付工作区");
     await dialog.getByRole("button", { name: messages.saveSettings, exact: true }).click();
-    await dialog.getByRole("alert").waitFor();
+    await dialog.getByText(messages.workspaceSettingsDraftStale, { exact: true }).waitFor();
     assert.equal(await dialog.getByLabel(messages.workspaceName, { exact: true }).inputValue(), "支付工作区");
+    assert.equal(await dialog.getByRole("button", { name: messages.saveSettings, exact: true }).isDisabled(), true);
+    assert.deepEqual(detailReads, []);
+    await dialog.getByRole("button", { name: messages.workspaceSettingsReload, exact: true }).click();
+    await dialog.getByText(messages.workspaceSettingsDraftStale, { exact: true }).waitFor({ state: "hidden" });
+    assert.deepEqual(detailReads, ["ready-workspace"]);
+    assert.equal(await dialog.getByLabel(messages.workspaceName, { exact: true }).inputValue(), "ready-workspace");
+    await dialog.getByLabel(messages.workspaceName, { exact: true }).fill("支付工作区");
     await Promise.all([page.waitForResponse((response) => response.url().endsWith("/settings") && response.status() === 200), dialog.getByRole("button", { name: messages.saveSettings, exact: true }).click()]);
     await dialog.getByRole("heading", { name: messages.workspaceSettingsTitle.replace("{{name}}", "支付工作区") }).waitFor();
     const disk = dialog.getByLabel(messages.storageGrowthDisk, { exact: true });
@@ -156,13 +170,34 @@ test("workspace settings and mapping editing retain drafts, stable addresses and
 
     await page.getByRole("group", { name: "stopped-workspace", exact: true }).getByRole("button", { name: messages.editParameters, exact: true }).click();
     dialog = page.getByRole("dialog");
-    await dialog.getByLabel(messages.workspaceCpuMillis, { exact: true }).fill("3000");
-    await Promise.all([page.waitForResponse((response) => response.url().endsWith("/settings") && response.status() === 200), dialog.getByRole("button", { name: messages.saveSettings, exact: true }).click()]);
+    const stopped = workspaces[1].workspace;
+    await dialog.getByLabel(messages.workspaceName, { exact: true }).fill("unsaved rename");
     await dialog.getByLabel(messages.workspaceTemporaryStorageGiB, { exact: true }).fill("12");
+    const writesBeforeRefresh = writes.length;
+    stopped.resources.cpu_millis = 3000;
+    stopped.generation += 1;
+    await dialog.getByText(messages.workspaceSettingsDraftStale, { exact: true }).waitFor({ timeout: 20_000 });
+    assert.equal(await dialog.getByLabel(messages.workspaceCpuMillis, { exact: true }).inputValue(), "2000");
+    assert.equal(await dialog.getByLabel(messages.workspaceName, { exact: true }).inputValue(), "unsaved rename");
+    assert.equal(await dialog.getByRole("button", { name: messages.saveSettings, exact: true }).isDisabled(), true);
+    assert.equal(await dialog.getByRole("button", { name: messages.saveTemporaryStorage, exact: true }).isDisabled(), true);
+    assert.equal(writes.length, writesBeforeRefresh);
+    await dialog.getByRole("button", { name: messages.workspaceSettingsReload, exact: true }).click();
+    await dialog.getByText(messages.workspaceSettingsDraftStale, { exact: true }).waitFor({ state: "hidden" });
+    assert.equal(await dialog.getByLabel(messages.workspaceCpuMillis, { exact: true }).inputValue(), "3000");
+    assert.equal(await dialog.getByLabel(messages.workspaceTemporaryStorageGiB, { exact: true }).inputValue(), "10");
+    await dialog.getByLabel(messages.workspaceMemoryMiB, { exact: true }).fill("6144");
+    await dialog.getByLabel(messages.workspaceTemporaryStorageGiB, { exact: true }).fill("12");
+    await Promise.all([page.waitForResponse((response) => response.url().endsWith("/settings") && response.status() === 200), dialog.getByRole("button", { name: messages.saveSettings, exact: true }).click()]);
+    assert.equal(await dialog.getByLabel(messages.workspaceTemporaryStorageGiB, { exact: true }).inputValue(), "12");
+    await dialog.getByLabel(messages.workspaceName, { exact: true }).fill("another unsaved rename");
     await dialog.getByRole("button", { name: messages.saveTemporaryStorage, exact: true }).click();
     await dialog.getByText(messages.settingsStorageSaved, { exact: true }).waitFor();
     assert.equal(workspaces[1].workspace.state, "stopped");
     assert.equal(workspaces[1].workspace.resources.cpu_millis, 3000);
+    assert.equal(workspaces[1].workspace.resources.memory_mib, 6144);
+    assert.equal(workspaces[1].workspace.name, "stopped-workspace");
+    assert.equal(await dialog.getByLabel(messages.workspaceName, { exact: true }).inputValue(), "another unsaved rename");
     await dialog.getByRole("button", { name: messages.cancel, exact: true }).last().click();
 
     await page.getByRole("group", { name: "stopped-workspace", exact: true }).getByRole("button", { name: messages.portMappings, exact: true }).click();

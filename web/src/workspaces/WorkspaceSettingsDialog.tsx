@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Button,
   Caption1,
@@ -64,19 +64,19 @@ function draftFor(item: WorkspaceResponse): Draft {
 
 /**
  * Edits workspace settings. An eligible memory increase can apply while
- * running. Settings and temporary storage save separately: each response
- * carries the newest generation, so a later save never uses a stale
- * precondition, and a failed storage save cannot undo a saved rename.
+ * running. The draft keeps the generation it was based on. Only reloading
+ * the draft or saving one of its sections can advance that generation.
  */
 export function WorkspaceSettingsDialog({ api, item, canChangeState, canManageTemporaryStorage, canChangePlacement, canShrinkStorage, onChangePlacement, onShrinkStorage, onUpdated, onClose }: Props) {
   const { t } = useI18n();
   const styles = useWorkspaceStyles();
   const workspaceId = item?.workspace.id ?? null;
-  const generation = useRef(item?.workspace.generation ?? 0);
-  generation.current = item?.workspace.generation ?? 0;
+  const [draftGeneration, setDraftGeneration] = useState(item?.workspace.generation ?? 0);
   const [draft, setDraft] = useState<Draft>(() => item ? draftFor(item) : { name: "", cpu: "", memory: "", gpu: "", temporaryStorage: "" });
   const [savingSettings, setSavingSettings] = useState(false);
   const [savingStorage, setSavingStorage] = useState(false);
+  const [reloading, setReloading] = useState(false);
+  const [saveConflict, setSaveConflict] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [storageNotice, setStorageNotice] = useState<string | null>(null);
   const [memoryObservation, setMemoryObservation] = useState<{ id: string; generation: number; applied: number | null; failed: boolean } | null>(null);
@@ -86,8 +86,9 @@ export function WorkspaceSettingsDialog({ api, item, canChangeState, canManageTe
 
   useEffect(() => {
     if (!item) return;
-    generation.current = item.workspace.generation;
+    setDraftGeneration(item.workspace.generation);
     setDraft(draftFor(item));
+    setSaveConflict(false);
     setError(null);
     setStorageNotice(null);
   }, [workspaceId]);
@@ -118,7 +119,8 @@ export function WorkspaceSettingsDialog({ api, item, canChangeState, canManageTe
   if (!item) return null;
   const workspace = item.workspace;
   const stopped = workspace.state === "stopped";
-  const busy = savingSettings || savingStorage;
+  const busy = savingSettings || savingStorage || reloading;
+  const stale = draftGeneration !== settingsGeneration || saveConflict;
   const nameLength = codePointLength(draft.name.trim());
   const nameTooLong = nameLength > WORKSPACE_NAME_MAX_CODE_POINTS;
   const nameInvalid = draft.name.trim().length === 0 || nameTooLong;
@@ -145,7 +147,7 @@ export function WorkspaceSettingsDialog({ api, item, canChangeState, canManageTe
   const temporaryEditable = stopped && canManageTemporaryStorage && !workspace.scratch_volume_binding;
 
   async function saveSettings() {
-    if (!canChangeState || !settingsValid || !settingsChanged || busy) return;
+    if (!canChangeState || !settingsValid || !settingsChanged || busy || stale) return;
     setSavingSettings(true); setError(null); setStorageNotice(null);
     try {
       const updated = await api.updateWorkspaceSettings(workspace.id, {
@@ -153,31 +155,54 @@ export function WorkspaceSettingsDialog({ api, item, canChangeState, canManageTe
         cpu_millis: stopped ? cpu : workspace.resources.cpu_millis,
         memory_mib: stopped || liveResizeEligible ? memory : workspace.resources.memory_mib,
         gpu_count: stopped ? gpu : workspace.resources.gpu_count,
-        expected_generation: generation.current,
+        expected_generation: draftGeneration,
       });
-      generation.current = updated.workspace.generation;
+      setDraftGeneration(updated.workspace.generation);
+      setDraft((current) => ({ ...draftFor(updated), temporaryStorage: current.temporaryStorage }));
       onUpdated(updated);
     } catch (errorValue) {
-      // The draft stays intact; the caller refreshes authoritative data.
-      setError(messageOf(errorValue, t));
+      handleSaveError(errorValue);
     } finally { setSavingSettings(false); }
   }
 
   async function saveTemporaryStorage() {
-    if (!temporaryEditable || !temporaryValid || !temporaryChanged || busy) return;
+    if (!temporaryEditable || !temporaryValid || !temporaryChanged || busy || stale) return;
     setSavingStorage(true); setError(null); setStorageNotice(null);
     try {
       const updated = await api.updateWorkspaceTemporaryStorage(workspace.id, {
         temporary_storage_gib: temporary,
-        expected_generation: generation.current,
+        expected_generation: draftGeneration,
       });
-      generation.current = updated.workspace.generation;
+      setDraftGeneration(updated.workspace.generation);
       setDraft((current) => ({ ...current, temporaryStorage: String(updated.workspace.storage_policy.temporary_storage_gib) }));
       onUpdated(updated);
       setStorageNotice(t("settingsStorageSaved"));
     } catch (errorValue) {
-      setError(messageOf(errorValue, t));
+      handleSaveError(errorValue);
     } finally { setSavingStorage(false); }
+  }
+
+  function handleSaveError(failure: unknown) {
+    const code = (failure as { code?: string } | null)?.code;
+    if (code === "workspace_settings_update_conflict" || code === "workspace_temporary_storage_update_conflict") {
+      setSaveConflict(true);
+    } else {
+      setError(messageOf(failure, t));
+    }
+  }
+
+  async function reloadSettings() {
+    setReloading(true); setError(null);
+    try {
+      const updated = await api.workspaceDetail(workspace.id);
+      setDraft(draftFor(updated));
+      setDraftGeneration(updated.workspace.generation);
+      setSaveConflict(false);
+      setStorageNotice(null);
+      onUpdated(updated);
+    } catch (failure) {
+      setError(messageOf(failure, t));
+    } finally { setReloading(false); }
   }
 
   return (
@@ -236,7 +261,7 @@ export function WorkspaceSettingsDialog({ api, item, canChangeState, canManageTe
                   <Input type="number" min={1} max={2048} step={1} value={draft.temporaryStorage} disabled={busy} onChange={(_, data) => setDraft((current) => ({ ...current, temporaryStorage: data.value }))} />
                 </Field>
                 <div className={`${styles.formActions} ${styles.formWide}`}>
-                  <Button appearance="secondary" icon={<SaveRegular />} disabled={!temporaryValid || !temporaryChanged || busy} onClick={() => void saveTemporaryStorage()}>{savingStorage ? t("saving") : t("saveTemporaryStorage")}</Button>
+                  <Button appearance="secondary" icon={<SaveRegular />} disabled={!temporaryValid || !temporaryChanged || busy || stale} onClick={() => void saveTemporaryStorage()}>{savingStorage ? t("saving") : t("saveTemporaryStorage")}</Button>
                 </div>
               </div> : <Caption1 className={styles.summaryLabel}>{!stopped ? t("workspaceTemporaryStorageNeedsStop") : workspace.scratch_volume_binding ? t("workspaceTemporaryStorageBoundVolume") : t("workspaceTemporaryStorageAdminOnly")}</Caption1>}
               <Caption1 className={styles.summaryLabel}>{t("workspaceShrinkStorageHint")}</Caption1>
@@ -246,13 +271,17 @@ export function WorkspaceSettingsDialog({ api, item, canChangeState, canManageTe
               </div>
               <Caption1 className={styles.summaryLabel}>{t("workspaceLocationChangeHelp")}</Caption1>
             </section>
+            {stale && <div>
+              <Text role="alert">{t("workspaceSettingsDraftStale")}</Text>{" "}
+              <Button appearance="subtle" disabled={busy} onClick={() => void reloadSettings()}>{t("workspaceSettingsReload")}</Button>
+            </div>}
             {error && <Text role="alert">{error}</Text>}
             {storageNotice && <Text role="status">{storageNotice}</Text>}
             {savingSettings && <Spinner size="tiny" label={t("saving")} />}
           </DialogContent>
           <DialogActions className={styles.dialogActions}>
             <Button appearance="secondary" disabled={busy} onClick={onClose}>{t("cancel")}</Button>
-            <Button appearance="primary" icon={<SaveRegular />} disabled={!canChangeState || !settingsValid || !settingsChanged || busy} onClick={() => void saveSettings()}>{savingSettings ? t("saving") : t("saveSettings")}</Button>
+            <Button appearance="primary" icon={<SaveRegular />} disabled={!canChangeState || !settingsValid || !settingsChanged || busy || stale} onClick={() => void saveSettings()}>{savingSettings ? t("saving") : t("saveSettings")}</Button>
           </DialogActions>
         </DialogBody>
       </DialogSurface>
@@ -262,7 +291,6 @@ export function WorkspaceSettingsDialog({ api, item, canChangeState, canManageTe
 
 function messageOf(error: unknown, t: ReturnType<typeof useI18n>["t"]): string {
   const code = (error as { code?: string } | null)?.code;
-  if (code === "workspace_settings_update_conflict" || code === "workspace_temporary_storage_update_conflict") return t("workspaceSettingsConflict");
   if (code === "quota_exceeded") return t("workspaceSettingsQuotaExceeded");
   if (code === "invalid_workspace") return t("workspaceResourcesInvalid");
   return error instanceof Error ? error.message : t("operationFailed");

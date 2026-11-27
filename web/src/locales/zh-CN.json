@@ -1005,6 +1005,8 @@
   "saveTemporaryStorage": "保存临时存储",
   "settingsStorageSaved": "临时存储已更新，工作区保持停止状态。",
   "workspaceSettingsConflict": "工作区设置已变化，请刷新后重试。其他计算资源变更需要先停止工作区。",
+  "workspaceSettingsDraftStale": "工作区设置已变化。重新加载会丢弃未保存的修改。",
+  "workspaceSettingsReload": "重新加载设置",
   "workspaceSettingsQuotaExceeded": "所选资源超出了可用配额。",
   "apiKeyNameTooLong": "API 密钥名称最多 80 个字符。",
   "workspaceTemporaryStorageBoundVolume": "此工作区使用保留的临时卷，缩容请使用存储调整流程，暂不支持在此直接改容量。"

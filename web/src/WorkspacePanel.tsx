@@ -369,7 +369,9 @@ export function WorkspacePanel(props: Props) {
     if (organizationRef.current !== updated.workspace.organization_id) return;
     if (scopeRef.current !== scope) return;
     ++generation.current; requestActive.current = false; setLoading(false);
-    setItems((current) => current.map((item) => item.workspace.id === updated.workspace.id ? updated : item));
+    setItems((current) => current.map((item) =>
+      item.workspace.id === updated.workspace.id && updated.workspace.generation >= item.workspace.generation ? updated : item,
+    ));
   }
 
   async function refreshAfterShrink() {
