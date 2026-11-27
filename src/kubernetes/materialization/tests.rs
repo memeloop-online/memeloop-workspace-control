@@ -64,6 +64,30 @@ fn environment_manifest_references_projected_data_without_plaintext() {
 }
 
 #[test]
+fn projection_layout_pairs_independent_mounts_without_exposing_secret_values() {
+    let marker = |value: &str, insert_before: bool| {
+        let mut items = vec![resolved_environment(
+            InjectionValue::Utf8(value.to_owned()),
+            true,
+        )];
+        if insert_before {
+            let mut other = resolved_environment(InjectionValue::Utf8("other".to_owned()), false);
+            other.item.target = "OTHER_SETTING".to_owned();
+            items.insert(0, other);
+        }
+        let materialized = build(&runtime(), &BTreeMap::new(), &items).unwrap();
+        let config = materialized.file_config_map.data.unwrap();
+        let secret = materialized.file_secret.data.unwrap();
+        let layout = config["injection-layout"].clone();
+        assert_eq!(secret["injection-layout"].0, layout.as_bytes());
+        layout
+    };
+
+    assert_eq!(marker("first", false), marker("second", false));
+    assert_ne!(marker("first", false), marker("first", true));
+}
+
+#[test]
 fn rustup_home_injections_do_not_override_the_image_environment() {
     for sensitive in [false, true] {
         let excluded_value = "excluded-image-toolchain-home";

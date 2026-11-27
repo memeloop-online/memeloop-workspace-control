@@ -11,8 +11,9 @@ runtime_dir=/run/mwc-ssh
 authorized_keys="$runtime_dir/authorized_keys"
 build_scratch=${MWC_BUILD_SCRATCH:-/var/lib/mwc/build-scratch}
 codex_scratch=/var/lib/mwc/codex-scratch
-manifest=/var/run/workspace-injections/config/workspace-files.json
-environment_manifest=/var/run/workspace-injections/config/workspace-environment.json
+config_projection=/var/run/workspace-injections/config
+secret_projection=/var/run/workspace-injections/secret
+platform_projection=/etc/workspace-platform
 kubeconfig="$runtime_dir/kubeconfig"
 runtime_sshd_config="$runtime_dir/sshd_config"
 reserve_file="$state_dir/storage-reserve"
@@ -233,6 +234,7 @@ decode_injected_dictionary() {
 # Entry fields are assigned together from jq's fixed names and quoted scalar values below.
 # shellcheck disable=SC2154
 sync_injected_files() (
+    manifest="$injection_config/workspace-files.json"
     # Keep the previous warning and authorized keys until this complete attempt succeeds.
     # A subshell isolates the temporary paths from the serve process and its other monitors.
     attempt_dir=$(mktemp -d "$runtime_dir/.injection-sync.XXXXXX") || {
@@ -246,7 +248,7 @@ sync_injected_files() (
         : > "$runtime_dir/injection-failed"
         exit 0
     fi
-    if [ -r "$manifest" ]; then
+    if [ -n "$injection_config" ] && { [ "$injection_config" != "$config_projection" ] || [ -r "$manifest" ]; }; then
         # Materialize the entries first: POSIX pipelines otherwise hide a jq parse failure
         # behind a successful while loop, incorrectly clearing an existing warning.
         if ! jq -c '.files | if type == "array" then .[] else error("invalid files manifest") end' \
@@ -268,8 +270,8 @@ sync_injected_files() (
             [ -n "$owner" ] || owner=$workspace_user
             [ -n "$group" ] || group=$workspace_group
             case "$object" in
-                secret) source=/var/run/workspace-injections/secret/$data_key ;;
-                config_map) source=/var/run/workspace-injections/config/$data_key ;;
+                secret) source="$injection_secret/$data_key" ;;
+                config_map) source="$injection_config/$data_key" ;;
                 *) : > "$injection_attempt_failed"; continue ;;
             esac
             case "$encoding" in
@@ -300,7 +302,7 @@ sync_injected_files() (
                 sync_injected_file "$source" "$target" "$numeric_mode" "$owner" "$group"
             fi
         done < "$attempt_dir/files"
-    elif [ -e "$manifest" ]; then
+    elif [ -n "$injection_config" ] && [ -e "$manifest" ]; then
         : > "$injection_attempt_failed"
     fi
     if [ -e "$injection_attempt_failed" ] \
@@ -312,6 +314,27 @@ sync_injected_files() (
         rm -f "$runtime_dir/injection-failed"
     fi
 )
+
+projection_path() {
+    epoch=$(readlink "$1/..data") || epoch=
+    printf '%s\n' "$1${epoch:+/$epoch}"
+}
+
+capture_projections() {
+    # Read a whole atomic-writer epoch, even if kubelet changes ..data during this attempt.
+    injection_config=$(projection_path "$config_projection")
+    injection_secret=$(projection_path "$secret_projection")
+    platform_config=$(projection_path "$platform_projection")
+}
+
+injection_layout_ready() {
+    if [ "$injection_config" = "$config_projection" ] \
+        && [ ! -e "$injection_config/workspace-files.json" ] \
+        && [ ! -e "$injection_config/workspace-environment.json" ]; then
+        return 0
+    fi
+    cmp -s "$injection_config/injection-layout" "$injection_secret/injection-layout"
+}
 
 prepare() {
     prepare_layout
@@ -342,12 +365,22 @@ prepare() {
         /etc/ssh/platform/ssh_host_ed25519_key.pub \
         "$runtime_dir/ssh_host_ed25519_key.pub"
 
-    sync_injected_files
+    capture_projections
+    if ! injection_layout_ready; then
+        # Start the listener with its existing configuration (or only the platform keys at
+        # first boot) while the independent injection mounts converge.
+        injection_config=
+    fi
+    if [ -n "$injection_config" ] || [ ! -e "$authorized_keys" ]; then
+        sync_injected_files
+    fi
     chmod 0600 "$runtime_dir/ttyd_client_key"
     printf 'localhost,127.0.0.1 ' > "$runtime_dir/known_hosts"
     cat "$runtime_dir/ssh_host_ed25519_key.pub" >> "$runtime_dir/known_hosts"
     chmod 0644 "$runtime_dir/known_hosts"
-    prepare_runtime_sshd_config
+    if [ -n "$injection_config" ] || [ ! -s "$runtime_sshd_config" ]; then
+        prepare_runtime_sshd_config
+    fi
     update_storage_banner
 }
 
@@ -414,20 +447,32 @@ storage_pressure_monitor() {
 }
 
 injection_sync_monitor() {
+    previous=
+    elapsed=15
     while :; do
-        sleep 15
+        sleep 1
+        current=$(stat -c '%n %i' "$config_projection/..data" "$secret_projection/..data" \
+            "$platform_projection/..data" 2>/dev/null) || :
+        elapsed=$((elapsed + 1))
+        if [ "$current" = "$previous" ] && [ "$elapsed" -lt 15 ]; then continue; fi
+        previous=$current
+        elapsed=0
+        capture_projections
+        if ! injection_layout_ready; then continue; fi
         sync_injected_files
-        # Environment injection cannot alter an existing process environment, but reloading sshd
-        # applies changed SetEnv values to subsequent SSH sessions.
-        prepare_runtime_sshd_config
+        # A failed render must keep the last configuration and leave the monitor running.
+        # Wait separately so shell errexit still applies inside the rendering job.
+        prepare_runtime_sshd_config &
+        wait "$!" || :
     done
 }
 
 prepare_runtime_sshd_config() (
+    environment_manifest="$injection_config/workspace-environment.json"
     metadata=$(mktemp "$runtime_dir/.environment-metadata.XXXXXX")
     temporary_config="$metadata.sshd_config"
     trap 'rm -f "$metadata" "$temporary_config"' EXIT
-    install -m 0600 -o root -g root /etc/workspace-platform/sshd_config "$temporary_config"
+    install -m 0600 -o root -g root "$platform_config/sshd_config" "$temporary_config"
     # OpenSSH only consumes the first SetEnv directive. Merge runtime values into the
     # controller-generated platform assignments so every SSH session receives them.
     assignments=$(sed -n 's/^SetEnv //p' "$temporary_config")
@@ -438,15 +483,15 @@ prepare_runtime_sshd_config() (
     fi
     port_mappings_file=/etc/workspace-platform/port-mappings.json
     port_mappings_json='[]'
-    if [ -r "$port_mappings_file" ]; then
-        port_mappings_json=$(jq -c . "$port_mappings_file")
+    if [ -r "$platform_config/port-mappings.json" ]; then
+        port_mappings_json=$(jq -c . "$platform_config/port-mappings.json")
     fi
     # The file updates through its projected ConfigMap; JSON is a per-login snapshot.
     # Replace existing platform assignments before merging into the single SetEnv line.
     assignments=$(printf '%s' "$assignments" | sed 's/ "MWC_PORT_MAPPINGS_FILE=[^"]*"//g')
     escaped=$(printf 'MWC_PORT_MAPPINGS_JSON=%s' "$port_mappings_json" | sed 's/\\/\\\\/g; s/"/\\"/g')
     assignments="$assignments \"MWC_PORT_MAPPINGS_FILE=$port_mappings_file\" \"$escaped\""
-    if [ -r "$environment_manifest" ]; then
+    if [ -n "$injection_config" ] && { [ "$injection_config" != "$config_projection" ] || [ -e "$environment_manifest" ]; }; then
         # These three nonempty metadata fields are generated identifiers, never values.
         # Parse the complete list before consuming it so jq failures cannot be hidden.
         jq -r '.environment[] | [.name, .object, .data_key] | @tsv' \
@@ -466,8 +511,8 @@ prepare_runtime_sshd_config() (
                 ;;
         esac
         case "$object" in
-            secret) source=/var/run/workspace-injections/secret/$data_key ;;
-            config_map) source=/var/run/workspace-injections/config/$data_key ;;
+            secret) source="$injection_secret/$data_key" ;;
+            config_map) source="$injection_config/$data_key" ;;
             *) echo "invalid environment injection object" >&2; exit 1 ;;
         esac
         value=$(cat "$source")
@@ -478,6 +523,10 @@ prepare_runtime_sshd_config() (
         printf 'SetEnv %s\n' "${assignments# }" >> "$temporary_config"
     fi
     if ! cmp -s "$temporary_config" "$runtime_sshd_config"; then
+        [ -d "$platform_config" ]
+        if [ -s "$runtime_dir/sshd.pid" ]; then
+            /usr/sbin/sshd -t -f "$temporary_config"
+        fi
         mv -f "$temporary_config" "$runtime_sshd_config"
         if [ -s "$runtime_dir/sshd.pid" ]; then
             kill -HUP "$(cat "$runtime_dir/sshd.pid")" 2>/dev/null || true

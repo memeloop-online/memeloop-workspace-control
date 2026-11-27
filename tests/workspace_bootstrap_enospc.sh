@@ -79,8 +79,11 @@ test "$(stat -c %U:%G /workspace/.codex/skills/user-skill/SKILL.md)" = root:root
 # A failed injection must keep SSH keys available and recover on the next complete sync,
 # without requiring a workspace restart. All data below belongs to this isolated fixture.
 rm -f /workspace/fill
-install -d /var/run/workspace-injections/config
 injection_config=/var/run/workspace-injections/config
+injection_secret=/var/run/workspace-injections/secret
+install -d "$injection_config" "$injection_secret"
+printf '%s' fixture-layout > "$injection_config/injection-layout"
+cp "$injection_config/injection-layout" "$injection_secret/injection-layout"
 printf '%s\n' old > "$injection_config/recovery-file"
 cp /etc/ssh/platform/ssh_host_ed25519_key.pub "$injection_config/recovery-key"
 cat > "$injection_config/workspace-files.json" <<'EOF'
@@ -355,7 +358,7 @@ reload_ssh() {
         -p 2222 workspace@localhost 'printf "%s" "$MWC_RELOAD_VALUE"'
 }
 wait_for_reload_value() {
-    for attempt in $(seq 1 25); do
+    for attempt in $(seq 1 "${3:-25}"); do
         if [ "$(reload_ssh "$1" 2>/dev/null)" = "$2" ]; then return; fi
         sleep 1
     done
@@ -407,11 +410,23 @@ test "$(grep -c 'Received SIGHUP' /tmp/sshd-reload.log)" = 1
 
 # Mapping discovery updates through the existing projection/monitor, without Pod replacement.
 # New logins receive a snapshot; a file pointer is authoritative for existing agents.
-cat > /etc/workspace-platform/port-mappings.json <<'EOF_MAPPING'
+rotate_projection() {
+    ln -s "$2" "$1/..data.next"
+    mv -Tf "$1/..data.next" "$1/..data"
+}
+platform=/etc/workspace-platform
+mkdir "$platform/..empty" "$platform/..mapped"
+cp "$platform/sshd_config" "$platform/..empty/sshd_config"
+cp "$platform/sshd_config" "$platform/..mapped/sshd_config"
+printf '[]\n' > "$platform/..empty/port-mappings.json"
+cat > "$platform/..mapped/port-mappings.json" <<'EOF_MAPPING'
 [{"id":"fixture","internal_port":9000,"display_name":"中文 \"quoted\" \\path $HOME","https_url":"https://short.apps.example","status":"configured","managed":false}]
 EOF_MAPPING
+rotate_projection "$platform" ..mapped
+ln -sfn ..data/sshd_config "$platform/sshd_config"
+ln -sfn ..data/port-mappings.json "$platform/port-mappings.json"
 expected_mappings=$(jq -c . /etc/workspace-platform/port-mappings.json)
-for attempt in $(seq 1 25); do
+for attempt in $(seq 1 7); do
     observed=$(ssh -i /tmp/reload-client -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=2 \
         -o StrictHostKeyChecking=yes -o HostKeyAlias=localhost \
         -o UserKnownHostsFile=/run/mwc-ssh/known_hosts -p 2222 workspace@localhost \
@@ -427,8 +442,8 @@ sleep 16
 test "$(stat -c %i /run/mwc-ssh/sshd_config)" = "$metadata_inode"
 test "$(grep -c 'Received SIGHUP' /tmp/sshd-reload.log)" = "$metadata_hups"
 
-printf '[]\n' > /etc/workspace-platform/port-mappings.json
-for attempt in $(seq 1 25); do
+rotate_projection "$platform" ..empty
+for attempt in $(seq 1 7); do
     observed=$(ssh -i /tmp/reload-client -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=2 \
         -o StrictHostKeyChecking=yes -o HostKeyAlias=localhost \
         -o UserKnownHostsFile=/run/mwc-ssh/known_hosts -p 2222 workspace@localhost \
@@ -437,3 +452,62 @@ for attempt in $(seq 1 25); do
     sleep 1
 done
 test "$observed" = '[]'
+
+# The same numbered Secret slot belongs to a different variable in the next layout.
+# Rotate the two ..data links separately, as kubelet does.
+for epoch in ..old ..new; do
+    mkdir "$injection_config/$epoch" "$injection_secret/$epoch"
+    cp "$injection_config/recovery-file" "$injection_config/recovery-key" \
+        "$injection_config/workspace-files.json" "$injection_config/$epoch/"
+    printf '%s' "$epoch" > "$injection_config/$epoch/injection-layout"
+    cp "$injection_config/$epoch/injection-layout" "$injection_secret/$epoch/injection-layout"
+done
+printf '%s' after-reload > "$injection_secret/..old/env-0000"
+printf '%s' other-variable > "$injection_secret/..old/env-0001"
+cat > "$injection_config/..old/workspace-environment.json" <<'EOF'
+{"environment":[{"name":"MWC_RELOAD_VALUE","object":"secret","data_key":"env-0000"},
+                {"name":"MWC_OTHER_VALUE","object":"secret","data_key":"env-0001"}]}
+EOF
+sed 's/env-0000/slot/; s/env-0001/env-0000/; s/slot/env-0001/' \
+    "$injection_config/..old/workspace-environment.json" > "$injection_config/..new/workspace-environment.json"
+rotate_projection "$injection_config" ..old
+rotate_projection "$injection_secret" ..old
+for attempt in $(seq 1 7); do
+    if grep -q 'MWC_OTHER_VALUE=other-variable' /run/mwc-ssh/sshd_config; then break; fi
+    sleep 1
+done
+grep -q 'MWC_OTHER_VALUE=other-variable' /run/mwc-ssh/sshd_config
+wait_for_reload_value /tmp/reload-client after-reload 7
+cp /run/mwc-ssh/sshd_config /tmp/matched-sshd-config
+timeout 30 ssh -i /tmp/reload-client -o IdentitiesOnly=yes -o BatchMode=yes \
+    -o StrictHostKeyChecking=yes -o HostKeyAlias=localhost \
+    -o UserKnownHostsFile=/run/mwc-ssh/known_hosts -p 2222 workspace@localhost \
+    'echo "$MWC_RELOAD_VALUE"; while [ ! -e /tmp/resume-held-ssh ]; do sleep 1; done; echo "$MWC_RELOAD_VALUE"' \
+    > /tmp/held-ssh-output &
+held_ssh=$!
+for attempt in $(seq 1 7); do
+    if grep -qx after-reload /tmp/held-ssh-output; then break; fi
+    sleep 1
+done
+grep -qx after-reload /tmp/held-ssh-output
+rotate_projection "$injection_config" ..new
+sleep 2
+cmp /tmp/matched-sshd-config /run/mwc-ssh/sshd_config
+test "$(reload_ssh /tmp/reload-client)" = after-reload
+
+# Even a failed render must keep serving and let the next projection wake the monitor.
+printf '%s' second-variable > "$injection_secret/..new/env-0000"
+rotate_projection "$injection_secret" ..new
+for attempt in $(seq 1 7); do
+    if grep -Fq '/..new/env-0001:' /tmp/sshd-reload.log; then break; fi
+    sleep 1
+done
+grep -Fq '/..new/env-0001:' /tmp/sshd-reload.log
+cmp /tmp/matched-sshd-config /run/mwc-ssh/sshd_config
+cp -a "$injection_secret/..new" "$injection_secret/..complete"
+printf '%s' paired-value > "$injection_secret/..complete/env-0001"
+rotate_projection "$injection_secret" ..complete
+wait_for_reload_value /tmp/reload-client paired-value 7
+touch /tmp/resume-held-ssh
+wait "$held_ssh"
+test "$(grep -cx after-reload /tmp/held-ssh-output)" = 2

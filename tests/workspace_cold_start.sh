@@ -37,6 +37,8 @@ for enabled in false true; do
   chmod 0555 "$root/config/mwc-workspace-bootstrap"
   printf '%s' 'config value with spaces' > "$root/injections/config/session-config"
   printf '%s' 'secret-value' > "$root/injections/secret/session-secret"
+  printf '%s' cold-layout > "$root/injections/config/injection-layout"
+  cp "$root/injections/config/injection-layout" "$root/injections/secret/injection-layout"
   cat > "$root/injections/config/workspace-environment.json" <<'EOF'
 {"environment":[
   {"name":"MWC_COLD_CONFIG","object":"config_map","data_key":"session-config"},
