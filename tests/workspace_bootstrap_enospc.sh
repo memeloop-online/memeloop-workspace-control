@@ -337,6 +337,8 @@ test -s /workspace/.codex/auth.json
 
 # Exercise the real serve monitor and listener: unchanged polls preserve the configuration
 # inode and never HUP, environment changes reach new sessions, and key updates are hot-read.
+test -e /run/mwc-ssh/reserve-released
+test ! -e /workspace/.mwc/storage-reserve
 printf '%s' before-reload > "$injection_config/reload-value"
 cat > "$injection_config/workspace-environment.json" <<'EOF'
 {"environment":[{"name":"MWC_RELOAD_VALUE","object":"config_map","data_key":"reload-value"}]}
@@ -361,6 +363,15 @@ wait_for_reload_value() {
     return 1
 }
 wait_for_reload_value /run/mwc-ssh/ttyd_client_key before-reload
+# When there is enough free space again, the serve monitor re-arms the released reserve.
+for attempt in $(seq 1 10); do
+    if [ ! -e /run/mwc-ssh/reserve-released ]; then break; fi
+    sleep 1
+done
+test ! -e /run/mwc-ssh/reserve-released
+test "$(stat -c '%s:%a' /workspace/.mwc/storage-reserve)" = 1048576:0
+test "$(df -P /workspace | awk 'NR == 2 {gsub(/%/, "", $5); print $5}')" -lt 80
+test -s /workspace/.codex/sessions/keep
 config_inode=$(stat -c %i /run/mwc-ssh/sshd_config)
 injected_identity=$(stat -c '%i:%y' /workspace/recovery-file)
 sleep 16
