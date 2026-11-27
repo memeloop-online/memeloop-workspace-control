@@ -51,7 +51,12 @@ async fn serve(config: AppConfig, database: Database) -> Result<(), Box<dyn std:
     }
     let (shutdown_tx, _) = tokio::sync::watch::channel(false);
     let job_wakeup = Arc::new(Notify::new());
-    let (kubernetes_client, workspace_handler, kubernetes_background_handle) = kubernetes_runtime(
+    let KubernetesRuntime {
+        client: kubernetes_client,
+        handler: workspace_handler,
+        observations,
+        background: kubernetes_background_handle,
+    } = kubernetes_runtime(
         &config,
         &database,
         &cipher,
@@ -61,7 +66,7 @@ async fn serve(config: AppConfig, database: Database) -> Result<(), Box<dyn std:
     )
     .await?;
     let incident_client = kubernetes_client.clone();
-    let state = app_state(
+    let mut state = app_state(
         &config,
         database.clone(),
         cipher.clone(),
@@ -70,6 +75,7 @@ async fn serve(config: AppConfig, database: Database) -> Result<(), Box<dyn std:
         diagnostics_enabled,
         plugins,
     )?;
+    configure_ssh_node_hosts(&mut state, observations)?;
     let storage_metrics_handle = state.spawn_storage_metrics(shutdown_tx.subscribe());
     let pod_metrics_handle = state.spawn_pod_metrics(shutdown_tx.subscribe());
     let incident_handle = incident_client.map(|client| {
@@ -129,6 +135,14 @@ type WorkerHandle =
     tokio::task::JoinHandle<Result<(), memeloop_workspace_control::jobs::JobWorkerError>>;
 type KubernetesBackgroundHandle = tokio::task::JoinHandle<()>;
 
+#[derive(Default)]
+struct KubernetesRuntime {
+    client: Option<kube::Client>,
+    handler: Option<WorkspaceReconcileHandler>,
+    observations: Option<WorkspaceObservations>,
+    background: Option<KubernetesBackgroundHandle>,
+}
+
 async fn start_internal_listener(
     address: Option<std::net::SocketAddr>,
     mut state: AppState,
@@ -180,16 +194,9 @@ async fn kubernetes_runtime(
     enabled: bool,
     shutdown: tokio::sync::watch::Receiver<bool>,
     job_wakeup: Arc<Notify>,
-) -> Result<
-    (
-        Option<kube::Client>,
-        Option<WorkspaceReconcileHandler>,
-        Option<KubernetesBackgroundHandle>,
-    ),
-    Box<dyn std::error::Error>,
-> {
+) -> Result<KubernetesRuntime, Box<dyn std::error::Error>> {
     if !enabled {
-        return Ok((None, None, None));
+        return Ok(KubernetesRuntime::default());
     }
     let workspace_cipher = cipher.clone().ok_or_else(|| {
         io::Error::new(
@@ -234,6 +241,7 @@ async fn kubernetes_runtime(
     let background_client = client.clone();
     let background_database = database.clone();
     let observer_shutdown = shutdown.clone();
+    let route_observations = observations.clone();
     let background_handle = tokio::spawn(async move {
         tokio::join!(
             observations.run_until_shutdown(background_client, stream_client, observer_shutdown),
@@ -246,7 +254,12 @@ async fn kubernetes_runtime(
             }
         );
     });
-    Ok((Some(client), Some(handler), Some(background_handle)))
+    Ok(KubernetesRuntime {
+        client: Some(client),
+        handler: Some(handler),
+        observations: Some(route_observations),
+        background: Some(background_handle),
+    })
 }
 
 fn job_worker(
@@ -312,6 +325,27 @@ fn app_state(
     }
     configure_internal_auth(&mut state, kubernetes_enabled || diagnostics_enabled)?;
     Ok(state)
+}
+
+fn configure_ssh_node_hosts(
+    state: &mut AppState,
+    observations: Option<WorkspaceObservations>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if let (Some(observations), Some(hosts)) = (
+        observations,
+        std::env::var_os("MWC_INTERNAL_SSH_NODE_HOSTS_JSON"),
+    ) {
+        let hosts = serde_json::from_str(hosts.to_str().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "invalid MWC_INTERNAL_SSH_NODE_HOSTS_JSON",
+            )
+        })?)?;
+        state
+            .set_ssh_node_hosts(observations, hosts)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+    }
+    Ok(())
 }
 
 fn configure_internal_auth(

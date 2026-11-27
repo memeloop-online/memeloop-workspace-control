@@ -118,6 +118,10 @@ spec:
             - name: MWC_INTERNAL_SSH_HOST
               value: {{ .Values.workspace.internalSshHost | quote }}
             {{- end }}
+            {{- with .Values.workspace.internalSshNodeHosts }}
+            - name: MWC_INTERNAL_SSH_NODE_HOSTS_JSON
+              value: {{ . | toJson | quote }}
+            {{- end }}
             {{- if .Values.monitoring.prometheusUrl }}
             - name: MWC_PROMETHEUS_URL
               value: {{ .Values.monitoring.prometheusUrl | quote }}

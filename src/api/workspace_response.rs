@@ -206,6 +206,11 @@ async fn ssh_endpoint(
         .kubernetes_client
         .clone()
         .ok_or(ApiError::KubernetesUnavailable)?;
+    let direct_host = state.ssh_node_hosts.as_ref().and_then(|routes| {
+        let node = routes.observations.ready_workspace_node(workspace.id)?;
+        routes.hosts.get(&node)
+    });
+    let host = direct_host.unwrap_or(host);
     Ok(
         crate::kubernetes::workspace_ssh_node_port(
             client,
