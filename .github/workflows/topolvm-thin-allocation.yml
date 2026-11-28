@@ -1,0 +1,90 @@
+name: TopoLVM thin allocation
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/topolvm-thin-allocation.yml
+      - images/topolvm-node/thin-allocation-report.patch
+      - tests/topolvm-node/thin_allocation_test.go
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/topolvm-thin-allocation.yml
+      - images/topolvm-node/thin-allocation-report.patch
+      - tests/topolvm-node/thin_allocation_test.go
+
+permissions:
+  contents: read
+
+jobs:
+  compare:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      TOPOLVM_SHA: 2d0c5174afb93856d9fc5105e7c04ed50b65628f
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: topolvm/topolvm
+          ref: ${{ env.TOPOLVM_SHA }}
+          path: topolvm-source
+          persist-credentials: false
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5
+        with:
+          go-version-file: topolvm-source/go.mod
+          cache: false
+      - name: Prepare thin storage
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends lvm2 thin-provisioning-tools
+          sudo modprobe dm_thin_pool
+          mkdir -p "$RUNNER_TEMP/lvm-evidence"
+          cat > "$RUNNER_TEMP/lvm-evidence/trace-lvm" <<'SH'
+          #!/bin/sh
+          printf '%s\n' "$1" >> "$MWC_LVM_TRACE"
+          exec lvm "$@"
+          SH
+          chmod +x "$RUNNER_TEMP/lvm-evidence/trace-lvm"
+      - name: Build both cases at the same source revision
+        working-directory: topolvm-source
+        run: |
+          test "$(git rev-parse HEAD)" = "$TOPOLVM_SHA"
+          out="$RUNNER_TEMP/lvm-evidence"
+          cp "$GITHUB_WORKSPACE/tests/topolvm-node/thin_allocation_test.go" internal/lvmd/mwc_allocation_test.go
+          test -z "$(gofmt -l internal/lvmd/mwc_allocation_test.go)"
+          go test -c -o "$out/baseline" ./internal/lvmd
+          git apply --unidiff-zero "$GITHUB_WORKSPACE/images/topolvm-node/thin-allocation-report.patch"
+          test -z "$(gofmt -l internal/lvmd/{command/lvm,lvservice,pool}.go)"
+          go test -c -o "$out/candidate" ./internal/lvmd
+      - name: Measure thin allocation and verify native capacity and resize
+        run: |
+          out="$RUNNER_TEMP/lvm-evidence"
+          touch "$out/lvm.trace"
+          for arm in baseline candidate candidate baseline; do
+            sudo env "MWC_TRACE_LVM=$out/trace-lvm" "MWC_LVM_TRACE=$out/lvm.trace" \
+              "$out/$arm" -test.run '^TestMWCThinAllocationReport$' -test.v | tee -a "$out/$arm.log"
+          done
+          sudo "$out/candidate" -test.run '^TestLVService_(ThinLV|ThickLV|ThinSnapshots)$' -test.v | tee "$out/regression.log"
+          python3 - "$out" <<'PY'
+          import json, pathlib, re, statistics, sys
+          p = pathlib.Path(sys.argv[1])
+          result = {}
+          for arm, expected in (('baseline', 'vgs,lvs,lvs,lvcreate,lvs'), ('candidate', 'lvs,lvcreate,lvs')):
+              rows = re.findall(r'MWC_ALLOC (\d+) (\S+)', (p / f'{arm}.log').read_text())
+              assert len(rows) == 24 and {seq for _, seq in rows} == {expected}, (arm, rows)
+              elapsed = sorted(int(us) / 1000 for us, _ in rows)
+              result[arm] = {'count': len(rows), 'lvm_commands': expected.split(','), 'median_ms': statistics.median(elapsed), 'elapsed_ms': elapsed}
+          (p / 'allocation-comparison.json').write_text(json.dumps(result, indent=2) + '\n')
+          print(json.dumps({arm: d['median_ms'] for arm, d in result.items()}))
+          PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: topolvm-thin-allocation-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/lvm-evidence/*.log
+            ${{ runner.temp }}/lvm-evidence/allocation-comparison.json
+          if-no-files-found: ignore
