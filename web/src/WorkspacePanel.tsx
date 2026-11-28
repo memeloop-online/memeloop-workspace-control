@@ -110,7 +110,7 @@ export function WorkspacePanel(props: Props) {
   const canConnect = hasApiKeyScope(props.principal, "connect_workspace");
   const canChangeState = hasApiKeyScope(props.principal, "change_workspace_state");
   const canDelete = hasApiKeyScope(props.principal, "delete_workspace");
-  const canChangePlacement = canManageSystem(props.principal);
+  const canManagePlacementAndTemporaryStorage = canManageSystem(props.principal) && props.principal.allowed_template_ids === null;
 
   useEffect(() => {
     const timer = window.setTimeout(() => setDebouncedSearch(search), 250);
@@ -460,7 +460,7 @@ export function WorkspacePanel(props: Props) {
     <div ref={listAnchorRef} className={styles.list} aria-busy={props.busy || loading}>
       {workspaces.length === 0 && loading && <div className={styles.empty} role="status"><Spinner label={t("loadingWorkspaces")} /></div>}
       {workspaces.length === 0 && !loading && scopeIsCurrent && <div className={styles.empty}>{debouncedSearch.trim() ? t("noMatchingWorkspaces") : t("noWorkspaces")}</div>}
-      {workspaces.map((item) => <WorkspaceCard key={item.workspace.id} api={props.api} item={item} runtime={runtime[item.workspace.id]} nodePools={nodePools} busyAction={activeAction?.workspaceId === item.workspace.id ? activeAction.action : null} onAction={requestAction} onOpenShell={openShell} onRequestRuntime={refreshRuntime} onError={props.onError} canConnect={canConnect} canChangeState={canChangeState} canDelete={canDelete} canChangePlacement={canChangePlacement} canShrinkStorage={canShrinkWorkspaceStorage(props.principal, item.workspace)} onChangePlacement={setPlacementTarget} onShrinkStorage={(target) => setShrinkTargetId(target.workspace.id)} onEditSettings={(target) => setSettingsTargetId(target.workspace.id)} templateName={templates.find((template) => template.id === item.workspace.template_id)?.name} />)}
+      {workspaces.map((item) => <WorkspaceCard key={item.workspace.id} api={props.api} item={item} runtime={runtime[item.workspace.id]} nodePools={nodePools} busyAction={activeAction?.workspaceId === item.workspace.id ? activeAction.action : null} onAction={requestAction} onOpenShell={openShell} onRequestRuntime={refreshRuntime} onError={props.onError} canConnect={canConnect} canChangeState={canChangeState} canDelete={canDelete} canChangePlacement={canManagePlacementAndTemporaryStorage} canShrinkStorage={canShrinkWorkspaceStorage(props.principal, item.workspace)} onChangePlacement={setPlacementTarget} onShrinkStorage={(target) => setShrinkTargetId(target.workspace.id)} onEditSettings={(target) => setSettingsTargetId(target.workspace.id)} templateName={templates.find((template) => template.id === item.workspace.template_id)?.name} />)}
     </div>
     <WorkspacePlacementDialog item={placementTarget} nodePools={nodePools} busy={placementBusy} onClose={() => !placementBusy && setPlacementTarget(null)} onConfirm={(nextNodePool) => placementTarget && void submitPlacement(placementTarget, nextNodePool)} />
     <StorageShrinkDialog api={props.api} item={shrinkItem} runtime={shrinkItem ? runtime[shrinkItem.workspace.id] : undefined} onClose={() => setShrinkTargetId(null)} onSettled={refreshAfterShrink} />
@@ -469,8 +469,8 @@ export function WorkspacePanel(props: Props) {
       item={settingsItem}
       canChangeState={canChangeState}
       canShrinkStorage={settingsItem ? canShrinkWorkspaceStorage(props.principal, settingsItem.workspace) : false}
-      canManageTemporaryStorage={canManageSystem(props.principal) && props.principal.allowed_template_ids === null}
-      canChangePlacement={canChangePlacement}
+      canManageTemporaryStorage={canManagePlacementAndTemporaryStorage}
+      canChangePlacement={canManagePlacementAndTemporaryStorage}
       onChangePlacement={(target) => { setSettingsTargetId(null); setPlacementTarget(target); }}
       onShrinkStorage={(target) => { setSettingsTargetId(null); setShrinkTargetId(target.workspace.id); }}
       onUpdated={applyWorkspaceUpdate}
