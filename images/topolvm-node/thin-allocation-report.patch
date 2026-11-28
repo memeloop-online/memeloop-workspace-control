@@ -1,0 +1,60 @@
+diff --git a/internal/lvmd/command/lvm.go b/internal/lvmd/command/lvm.go
+index 691e17c..395a093 100644
+--- a/internal/lvmd/command/lvm.go
++++ b/internal/lvmd/command/lvm.go
+@@ -243,0 +244,17 @@ func (vg *VolumeGroup) FindPool(ctx context.Context, name string) (*ThinPool, er
++// ReadThinPoolForAllocation reads the pool and all its members in one LVM report.
++// The returned pool uses fresh LVM queries for any later operation.
++func ReadThinPoolForAllocation(ctx context.Context, vgName, poolName string) (*ThinPool, *ThinPoolUsage, error) {
++	lvs, err := getLVReport(ctx, vgName)
++	if err != nil {
++		return nil, nil, err
++	}
++	group := &VolumeGroup{state: vg{name: vgName}, reportLvs: lvs}
++	pool, err := group.FindPool(ctx, poolName)
++	if err != nil {
++		return nil, nil, err
++	}
++	usage, err := pool.Usage(ctx)
++	group.reportLvs = nil
++	return pool, usage, err
++}
++
+diff --git a/internal/lvmd/lvservice.go b/internal/lvmd/lvservice.go
+index d595516..25e7872 100644
+--- a/internal/lvmd/lvservice.go
++++ b/internal/lvmd/lvservice.go
+@@ -45 +45 @@ func (s *lvService) CreateLV(ctx context.Context, req *proto.CreateLVRequest) (*
+-	pool, err := storagePoolForDeviceClass(ctx, dc)
++	pool, free, err := storagePoolForAllocation(ctx, dc)
+@@ -47 +47 @@ func (s *lvService) CreateLV(ctx context.Context, req *proto.CreateLVRequest) (*
+-		return nil, status.Errorf(codes.Internal, "failed to get pool from device class: %v", err)
++		return nil, status.Errorf(codes.Internal, "failed to inspect allocation pool: %v", err)
+@@ -52,4 +51,0 @@ func (s *lvService) CreateLV(ctx context.Context, req *proto.CreateLVRequest) (*
+-	free, err := pool.Free(ctx)
+-	if err != nil {
+-		return nil, status.Errorf(codes.Internal, "failed to get free bytes: %v", err)
+-	}
+diff --git a/internal/lvmd/pool.go b/internal/lvmd/pool.go
+index 4dc3498..f2e1038 100644
+--- a/internal/lvmd/pool.go
++++ b/internal/lvmd/pool.go
+@@ -36,0 +37,18 @@ func storagePoolForDeviceClass(ctx context.Context, dc *lvmdTypes.DeviceClass) (
++func storagePoolForAllocation(ctx context.Context, dc *lvmdTypes.DeviceClass) (storagePool, uint64, error) {
++	if dc.Type == lvmdTypes.TypeThin {
++		config := dc.ThinPoolConfig
++		pool, usage, err := command.ReadThinPoolForAllocation(ctx, dc.VolumeGroup, config.Name)
++		if err != nil {
++			return nil, 0, err
++		}
++		free, err := usage.FreeBytes(config.OverprovisionRatio)
++		return &thinPoolAdapter{pool, config.OverprovisionRatio}, free, err
++	}
++	pool, err := storagePoolForDeviceClass(ctx, dc)
++	if err != nil {
++		return nil, 0, err
++	}
++	free, err := pool.Free(ctx)
++	return pool, free, err
++}
++

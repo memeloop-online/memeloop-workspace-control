@@ -10,6 +10,7 @@ case "$measure" in
   queue) driver=topolvm-node; workload=daemonset/$driver; baseline_version='0.41.1'; candidate_version='0.41.1-mwc-volume-workers' ;;
   node) driver=topolvm-node; workload=daemonset/$driver; baseline_version='0.41.1'; candidate_version='0.41.1-mwc-independent-volumes' ;;
   controller) driver=topolvm-controller; workload=deployment/$driver; baseline_version='0.41.1-mwc250ms'; candidate_version='0.41.1-mwc250ms-lv-metadata' ;;
+  lvmd) driver=lvmd; workload=daemonset/topolvm-lvmd-0; baseline_version='0.41.1'; candidate_version='0.41.1-mwc-thin-allocation' ;;
   *) exit 2 ;;
 esac
 candidate_image=localhost/$driver-ci:patched
@@ -100,7 +101,7 @@ w create serviceaccount fixture
 
 create_fixture() {
   local name=$1 role grace=30
-  if [[ $measure == queue ]]; then grace=1; fi
+  if [[ $measure == queue || $measure == lvmd ]]; then grace=1; fi
   local dir="$evidence/$name"
   mkdir "$dir"
   date -u +%FT%T.%NZ > "$dir/request.txt"
@@ -152,7 +153,7 @@ reclaim_fixture() {
       sleep 1
     done
     if lvs "mwc-ci-$role/$handle" >/dev/null 2>&1; then return 1; fi
-    if [[ $measure == controller || $measure == queue ]]; then
+    if [[ $measure == controller || $measure == queue || $measure == lvmd ]]; then
       test -z "$(k get logicalvolumes.topolvm.io "$pv" --ignore-not-found -o name)"
     fi
   done < "$dir/volume-ids.tsv"
@@ -169,6 +170,12 @@ verify_peer() {
 if [[ $measure == queue ]]; then
   # shellcheck source=/dev/null
   source "$suite/measure-queue.sh"
+  exit 0
+fi
+
+if [[ $measure == lvmd ]]; then
+  # shellcheck source=/dev/null
+  source "$suite/measure-lvmd.sh"
   exit 0
 fi
 
